@@ -2,7 +2,7 @@
 
 `renderNetworkPlan(input: unknown): NetworkPlan` 生成确定的、可审阅的结构化资源与阶段计划。它只处理内存数据，不读取主机状态，不执行命令，不生成 nftables 规则文本或 CLI，不安装软件，不改动本机网络，也不授予浏览器调用特权网络操作的能力。所有失败均抛出固定的 `NetworkPlanError`，其 `code` 与 `message` 都是 `NETWORK_PLAN_INVALID`，不附带输入值、路径或底层异常。
 
-已有[受保护的网关候选预览](config.md)把完整网络部署绑定到核心内容代次，[固定规则渲染器](rules.md)生成受限 nft 批次和 ip 参数，真实四角色隔离路径已验证。尚未挂接持久网络事务、systemd 运行适配或管理入口，也没有已安装的特权 executor。现有显式代理候选不能直接满足本计划的 TUN、专用 DNS 与出口 mark 要求。本模块不构成网关实现完成或设备验收通过。
+已有[受保护的网关候选预览](config.md)把完整网络部署绑定到核心内容代次，[固定规则渲染器](rules.md)生成受限 nft 批次和 ip 参数，真实四角色隔离路径已验证。[cgroup 只读身份观察](identity.md)补充固定核心与管理服务的独立来源核验。尚未挂接持久网络事务、systemd 运行适配或管理入口，也没有已安装的特权 executor。现有显式代理候选不能直接满足本计划的 TUN、专用 DNS 与出口 mark 要求。本模块不构成网关实现完成或设备验收通过。
 
 ## 输入契约
 
@@ -67,7 +67,7 @@ const plan = renderNetworkPlan({
 
 核心单元固定为 `coproxy-mihomo.service`，其 systemd `ControlGroup` 必须精确为 `/system.slice/coproxy-mihomo.service`，运行在 cgroup v2 中。未来 helper 必须将 boot ID、PID 启动时间、该单元的精确 ControlGroup 路径及当前 cgroup 内核身份一起绑定并回读，确认成员仅为受绑定核心进程、目录由 root 控制且未委派，共享服务 UID 无法迁移进程或加入外部成员。核心重启或 cgroup 重建后，旧内核身份不能继续授权。
 
-管理与核心当前可能共享服务 UID，nftables 无法直接按 PID 匹配包；仅检查 PID、UID、二进制再按 UID 放行不能满足此契约。helper 必须证明 `nft socket-cgroup-v2` 或等效的逐 socket 来源机制可用，并验证每个获例外的 socket 确实来自该精确绑定的核心 cgroup，在首包前应用受限 mark。`coproxy-management.service` 即使 UID 相同，其 socket 也不得获得核心上游或 DNS 回复例外。等效机制必须提供同样的逐 socket 来源证据，不支持或无法证明时保持阻断，禁止降级成 UID 匹配。规则已实现 cgroup 表达式；尚未实现生产 cgroup 管理与身份回读。
+管理与核心当前可能共享服务 UID，nftables 无法直接按 PID 匹配包；仅检查 PID、UID、二进制再按 UID 放行不能满足此契约。helper 必须证明 `nft socket-cgroup-v2` 或等效的逐 socket 来源机制可用，并验证每个获例外的 socket 确实来自该精确绑定的核心 cgroup，在首包前应用受限 mark。`coproxy-management.service` 即使 UID 相同，其 socket 也不得获得核心上游或 DNS 回复例外。等效机制必须提供同样的逐 socket 来源证据，不支持或无法证明时保持阻断，禁止降级成 UID 匹配。规则已实现 cgroup 表达式，只读 observer 已实现固定路径、成员、权限与内核身份回读；实际部署及完整逐 socket 隔离仍待验证。
 
 LAN DNS 仅允许明确入口接口、路由器 MAC，源为终端 `/32` 或路由器 `/32`，目的精确为网关 IPv4 与专用端口的 UDP/TCP。其他源访问该监听应丢弃，其他目的不能借 DNS 例外通过。监听不得 wildcard bind，须由同一核心 PID 拥有；通过本代证据前保持 LAN 阻断。独立允许显式绑定 `127.0.0.1`、从 `lo` 访问该精确监听的本地 UDP/TCP 探针，用于激活前验证，不构成客户端放行。bootstrap 独立，采用真实地址解析。路由器仍负责只交付选中终端的公网解析并保留本地域／无点名称；该计划不拦截任意目的 DNS，不宣称验证了 DoH／DoT。
 
