@@ -2,13 +2,15 @@
 
 Coproxy 面向 Linux 网关，提供可通过浏览器管理的局域网代理、DNS 与分流能力。终端通过接入路由器统一使用服务，无需逐台安装代理客户端；软件不绑定个人设备或当前调试网络。
 
-当前已开始实现离线配置编译：将部署边界、用户策略和节点快照编译为仅回环监听的显式代理候选，生成稳定内容摘要；尚无运行服务、发行包或已通过的设备联调。首选评估 Mihomo 与 MetaCubeXD Server／Agent 的组合，并用完整替代方案对照关键能力；最终组件和版本在验证后冻结，不将候选写成已交付功能。
+当前已实现首批开发基础：受保护的离线配置编译、不可变候选存储、持久化应用事务和开发 CLI。CLI 可编译、调用指定核心作语法校验、暂存候选及读取状态；尚无真实运行适配器、网页服务、发行包或已通过的设备联调。首选评估 Mihomo 与 MetaCubeXD Server／Agent 的组合；最终组件和版本在验证后冻结，不将候选写成已交付功能。
 
-配置编译 API 与限制见 [配置模块](packages/config/README.md)。开发基线为 Node.js 22.18 或更高版本，使用原生 TypeScript 类型擦除；首批源码没有第三方运行依赖，无需执行依赖安装。Linux 检查命令为 `npm run test:config`；类型擦除不执行 TypeScript 静态类型检查。
+开发基线为 Node.js 22.18 或更高版本，使用原生 TypeScript 类型擦除；首批源码没有第三方运行依赖，无需执行依赖安装。运行 `npm run cli -- help` 查看入口，具体用法和针对性检查见[首批开发与验证](docs/development.md)。类型擦除不执行 TypeScript 静态类型检查。
 
 ## 项目文档
 
 - [项目目标与技术方案](docs/project-plan.md)：范围、开源选型、架构、实施阶段与验收要求。
+- [首批开发与验证](docs/development.md)：已实现范围、CLI、针对性检查和后续关卡。
+- [配置模块](packages/config/README.md)与[事务模块](packages/transaction/README.md)：内部 API、保护边界和恢复约束。
 - [与接入路由器的协作](docs/router-cooperation.md)：通用职责、流量和解析边界，以及本机联调资料的范围说明。
 - [协作规则](AGENTS.md)：源码归属、本地资料和提交约定。
 
