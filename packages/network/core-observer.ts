@@ -9,7 +9,7 @@ import { verifyBinary } from '../runtime/settings.ts';
 import { parseUnitState } from '../runtime/systemd.ts';
 import type { RuntimeSettings, RuntimeUnitState } from '../runtime/types.ts';
 import { loadGatewayCandidate } from './candidate.ts';
-import { runNetworkCommand } from './command.ts';
+import { NetworkCommandError, runNetworkCommand } from './command.ts';
 import { CORE_CONTROL_GROUP } from './identity.ts';
 import { renderNetworkPlan, type NetworkPlanInput } from './plan.ts';
 import type { GatewayCoreSettings } from './runtime.ts';
@@ -21,6 +21,8 @@ export interface GatewayCoreFacts {
 }
 export interface GatewayCoreObservation {
   scope: 'production' | 'fixture'; verified: boolean; checkedAt: number;
+  /** False forbids recovery mutations while a read command may still be alive. */
+  commandsSettled: boolean;
   reason: null | 'NETWORK_CORE_UNVERIFIED'; facts: GatewayCoreFacts | null; terminalPath: 'unverified';
 }
 export interface GatewayCoreFileMetadata {
@@ -235,11 +237,14 @@ async function observe(input: GatewayCoreSettings, deployment: NetworkPlanInput,
     checkedAt = reader.now();
     if (!Number.isSafeInteger(started) || !Number.isSafeInteger(checkedAt) || started <= 0 || checkedAt < started || checkedAt - started > 5000 ||
       JSON.stringify(before) !== JSON.stringify(after)) fail();
-    return { scope, verified: true, checkedAt, reason: null, terminalPath: 'unverified', facts: {
+    return { scope, verified: true, commandsSettled: true, checkedAt, reason: null, terminalPath: 'unverified', facts: {
       generation: plan.deployment.generation, planSha256: plan.sha256, bootId: after.bootId, corePid: after.pid,
       corePidStartTime: after.startTime, serviceUid: settings.serviceUid, binarySha256: settings.binarySha256,
       unitSha256: settings.unitSha256, coreUnitControlGroup: CORE_CONTROL_GROUP } };
-  } catch { return { scope, verified: false, checkedAt, reason: 'NETWORK_CORE_UNVERIFIED', facts: null, terminalPath: 'unverified' }; }
+  } catch (error) {
+    return { scope, verified: false, commandsSettled: !(error instanceof NetworkCommandError && error.childSettled === false),
+      checkedAt, reason: 'NETWORK_CORE_UNVERIFIED', facts: null, terminalPath: 'unverified' };
+  }
 }
 /** Root-only read-only unit/process/credential observation plus one authenticated loopback request. */
 export async function observeGatewayCore(input: GatewayCoreSettings, deployment: NetworkPlanInput): Promise<GatewayCoreObservation> {

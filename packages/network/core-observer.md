@@ -4,6 +4,8 @@
 
 成功返回 `scope: production`、`verified: true`、毫秒 `checkedAt` 及 `facts`，绑定配置 generation、完整 plan SHA-256、boot ID、PID/start time、服务 UID、实际核心 binary SHA-256、unit SHA-256 和精确 `/system.slice/coproxy-mihomo.service`。任何失败均返回 `verified: false`、`facts: null` 和固定 `NETWORK_CORE_UNVERIFIED`，没有原始命令、凭据、配置、路径诊断或嵌套异常。
 
+结果还包含脱敏的 `commandsSettled`。默认及正常检查失败时为 `true`；只有固定命令传输抛出 `NetworkCommandError` 且 `childSettled: false` 时为 `false`。此时读工具可能仍存活，驱动不得并行执行恢复写入。该字段只说明读命令是否收敛，不改变 `verified` 或 scope，也不暴露异常内容。
+
 观察重新生成受审阅的 gateway runtime plan，核验 runtime settings、独立 core home 与 unit 摘要。通过固定、root 控制且祖先不可写的 `/usr/bin/systemctl` 只读查询完整单位状态与 ControlGroup，要求 loaded/active/running、无 job、无 drop-in、无需 daemon reload、精确数字 User、单位文件路径和 ControlGroup。生产另外复用 `assertManagedUnit` 的实际单位文件摘要核验及 `verifyBinary` 的流式二进制摘要核验；所有路径祖先、文件类型、权限、硬链接和实际运行 executable inode/字节均独立检查。
 
 核心的四类 UID 必须全部匹配。观察者与核心的 user/net/pid/cgroup namespace 必须与 PID 1 一致；观察者 mount namespace 也必须与 PID 1 一致，服务允许因 systemd 沙箱拥有独立 mount namespace。检查真实 procfs magic、完整 proc 根挂载以及所读取路径没有被其他挂载覆盖。PID start time、进程状态、cgroup 成员路径和精确完整命令行均须匹配，命令行只接受受信 binary、`-d` 独立 core home、`-f` 固定 systemd credential 路径。

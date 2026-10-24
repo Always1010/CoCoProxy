@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { posix } from 'node:path';
 import test from 'node:test';
 import { canonicalJson } from '../packages/config/index.ts';
+import { NetworkCommandError } from '../packages/network/command.ts';
 import { validateGatewayCandidate } from '../packages/network/candidate.ts';
 import { compileGatewayPreview, GATEWAY_CORE_SHA256 } from '../packages/network/config.ts';
 import { observeGatewayCore, observeGatewayCoreFixture, type GatewayCoreFixtureReader,
@@ -112,6 +113,7 @@ function unverified(value: GatewayCoreObservation): void {
 test('gateway core observer binds unit, live executable, exact command, service credential and authenticated controller', async () => {
   const f = fixture(), value = await f.observe();
   assert.equal(value.verified, true); assert.equal(value.scope, 'fixture'); assert.equal(value.checkedAt, f.model.finishedAt);
+  assert.equal(value.commandsSettled, true);
   assert.deepEqual(value.facts, { generation: f.preview.candidate.id, planSha256: f.preview.networkPlan.sha256, bootId: boot,
     corePid: pid, corePidStartTime: '12345678', serviceUid: 12345, binarySha256: GATEWAY_CORE_SHA256,
     unitSha256: f.runtime.settings.unitSha256, coreUnitControlGroup: CORE_CONTROL_GROUP });
@@ -202,7 +204,15 @@ test('gateway core observer rejects unsupported privilege and unsafe host views 
 test('gateway observer errors and malformed fixture readers remain fixed failures with fixture provenance', async () => {
   const f = fixture();
   f.reader.version = async () => { throw new Error(secret); };
-  unverified(await f.observe());
+  const failedVersion = await f.observe(); unverified(failedVersion); assert.equal(failedVersion.commandsSettled, true);
+  for (const error of [new NetworkCommandError(secret), new NetworkCommandError(secret, false),
+    Object.assign(new Error(secret), { childSettled: false })]) {
+    const failed = fixture(); let commands = 0;
+    failed.reader.command = async () => { commands++; throw error; };
+    const value = await failed.observe(); unverified(value);
+    assert.equal(value.commandsSettled, !(error instanceof NetworkCommandError && error.childSettled === false));
+    assert.equal(commands, 1); assert.equal(failed.calls.includes('version'), false);
+  }
   unverified(await observeGatewayCoreFixture(f.settings, f.preview.networkPlan.deployment, undefined as unknown as GatewayCoreFixtureReader));
   if (process.platform !== 'linux' || process.geteuid?.() !== 0) {
     const production = await observeGatewayCore(f.settings, f.preview.networkPlan.deployment);

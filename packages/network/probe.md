@@ -12,6 +12,8 @@ UDP 与 TCP 均要求收到有效 DNS 响应，校验 ID、完整问题、IN/A�
 
 结果中的 `verified` 只说明本次 DNS UDP/TCP 和核心 TUN 的局部事实，始终保留 `terminalPath: 'unverified'`。它不证明节点可达、上游代理承载、客户端抓取/回程、socket mark、ARP、邻居或防火墙资源正确，也不能独自构成 `NetworkEvidence`。
 
+结果另含脱敏的 `commandsSettled`，默认为 `true`；解析、procfs 读取、DNS 交换或普通检查失败仍为 `true`。只有固定 `ip` 命令传输抛出 `NetworkCommandError` 且 `childSettled: false` 时为 `false`，表示读工具可能仍存活，驱动不得并行执行恢复写入。该字段不改变 `verified`、固定失败原因或 scope，也不携带异常原文。
+
 `observeNetworkReadinessFixture` 接受可选受信 reader/transport seam；所有结果固定 `scope: 'fixture'`。省略 seam 时执行真实 proc/ip/socket 操作，允许隔离 user/net namespace 的同 UID 内核 fixture 读取 FD，不要求主机 euid 0。该入口专用的真实 `ip` 读取还允许 UID 65534（新 user namespace 中未映射的主机 root）；仍要求固定 canonical executable 路径、无符号链接的目录/文件类型、禁止组或其他用户写入，且命令参数固定。生产入口始终要求 `ip` 及其祖先 UID 为 0，不接受该例外。这是测试入口，不能升级为生产证据。自定义 reader 必须按约定有界，不能由外部 JSON 创建。proc 挂载检查只禁止覆盖实际读取的受保护路径，正常且不相关的 `binfmt_misc` 挂载允许存在。单元测试只用合成配置；需要额外隔离 Linux 内核实验验证生产传输和实际 proc/ip 读回。
 
 格式依据：[RFC 1035](https://www.rfc-editor.org/rfc/rfc1035.html)、[Linux procfs 文档](https://docs.kernel.org/filesystems/proc.html)、[Linux TUN/TAP 文档](https://docs.kernel.org/networking/tuntap.html)。

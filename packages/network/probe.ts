@@ -4,7 +4,7 @@ import { constants } from 'node:fs';
 import { lstat, open, opendir, readlink, realpath, stat, statfs } from 'node:fs/promises';
 import { createConnection, isIP } from 'node:net';
 import { dirname } from 'node:path';
-import { runNetworkCommand } from './command.ts';
+import { NetworkCommandError, runNetworkCommand } from './command.ts';
 import { NETWORK_TUN_ADDRESS, renderNetworkPlan, type NetworkPlan } from './plan.ts';
 import type { NetworkIdentity } from './transaction.ts';
 
@@ -20,6 +20,8 @@ export type NetworkProbeIdentity = Pick<NetworkIdentity, 'corePid' | 'corePidSta
 export interface NetworkProbeObservation {
   scope: 'production' | 'fixture';
   verified: boolean;
+  /** False forbids recovery mutations while a read command may still be alive. */
+  commandsSettled: boolean;
   checkedAt: number;
   reason: null | 'NETWORK_PROBE_UNVERIFIED';
   checks: { dnsSocketsOwned: boolean; dnsUdpQuery: boolean; dnsTcpQuery: boolean; tunOwned: boolean };
@@ -324,7 +326,7 @@ function response(packet: Buffer, expected: ReturnType<typeof query>, ipv4: stri
 async function observe(plan: NetworkPlan, identity: NetworkProbeIdentity, input: NetworkProbeOptions,
   reader: NetworkProbeFixtureReader, scope: NetworkProbeObservation['scope']): Promise<NetworkProbeObservation> {
   const started = Date.now();
-  let verified = false;
+  let verified = false, commandsSettled = true;
   try {
     const options = validate(plan, identity, input);
     const before = await snapshot(plan, identity, reader, options);
@@ -336,8 +338,11 @@ async function observe(plan: NetworkPlan, identity: NetworkProbeIdentity, input:
     const after = await snapshot(plan, identity, reader, options);
     if (before !== after || Date.now() < started || Date.now() - started > 12_000) fail();
     verified = true;
-  } catch { /* Never retain raw procfs, deployment name, DNS packet or nested cause. */ }
-  return { scope, verified, checkedAt: Date.now(), reason: verified ? null : 'NETWORK_PROBE_UNVERIFIED',
+  } catch (error) {
+    // Never retain raw procfs, deployment name, DNS packet or nested cause.
+    commandsSettled = !(error instanceof NetworkCommandError && error.childSettled === false);
+  }
+  return { scope, verified, commandsSettled, checkedAt: Date.now(), reason: verified ? null : 'NETWORK_PROBE_UNVERIFIED',
     checks: { dnsSocketsOwned: verified, dnsUdpQuery: verified, dnsTcpQuery: verified, tunOwned: verified }, terminalPath: 'unverified' };
 }
 

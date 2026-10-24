@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { NetworkCommandError } from '../packages/network/command.ts';
 import { GATEWAY_CORE_SHA256 } from '../packages/network/config.ts';
 import { observeNetworkLink, observeNetworkLinkFixture, type NetworkLinkFixtureReader, type NetworkLinkOptions } from '../packages/network/link.ts';
 import { renderNetworkPlan } from '../packages/network/plan.ts';
@@ -61,6 +62,7 @@ test('two stable read-only rounds prove exact ethernet link, current neighbour a
   const { fixture, commands } = reader();
   const result = await observeNetworkLinkFixture(plan, options, fixture);
   assert.equal(result.scope, 'fixture'); assert.equal(result.verified, true);
+  assert.equal(result.commandsSettled, true);
   assert.equal(result.checkedAt, 1010); assert.equal(result.reason, null);
   assert.equal(result.planSha256, plan.sha256); assert.equal(result.generation, plan.deployment.generation);
   assert.ok(Object.values(result.checks).every(value => value === true));
@@ -177,7 +179,18 @@ test('malformed, duplicate, oversized or structurally ambiguous JSON never becom
     const fixture = reader().fixture; fixture.command = async () => output;
     const result = await observeNetworkLinkFixture(plan, options, fixture);
     assert.equal(result.verified, false);
+    assert.equal(result.commandsSettled, true);
     assert.equal(result.scope, 'fixture');
+  }
+  for (const error of [new NetworkCommandError('synthetic-private'), new NetworkCommandError('synthetic-private', false),
+    Object.assign(new Error('synthetic-private'), { childSettled: false })]) {
+    const fixture = reader().fixture; let commands = 0;
+    fixture.command = async () => { commands++; throw error; };
+    const result = await observeNetworkLinkFixture(plan, options, fixture);
+    assert.equal(result.scope, 'fixture'); assert.equal(result.verified, false);
+    assert.equal(result.commandsSettled, !(error instanceof NetworkCommandError && error.childSettled === false));
+    assert.equal(result.reason, 'NETWORK_LINK_UNVERIFIED'); assert.equal(commands, 1);
+    assert.doesNotMatch(JSON.stringify(result), /synthetic-private/);
   }
 });
 
