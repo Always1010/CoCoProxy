@@ -58,9 +58,9 @@ export function renderGatewayRuntimePlan(input: unknown) {
     const unit = [
       '[Unit]',
       'Description=Coproxy protected gateway core',
-      'Requires=coproxy-network.service',
-      'After=coproxy-network.service',
-      'BindsTo=coproxy-network.service',
+      'Requires=coproxy-network.service coproxy-management.service',
+      'After=coproxy-network.service coproxy-management.service',
+      'BindsTo=coproxy-network.service coproxy-management.service',
       '',
       '[Service]',
       'Type=exec',

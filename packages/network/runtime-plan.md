@@ -21,7 +21,9 @@ systemd 255 对单个 unit 的全部 credential 实施累计 1 MB 限制。管�
 
 核心进程通过 `LoadCredential` 取得 root 私有 selected 文件的启动快照，直接执行固定二进制 `-d <coreHome> -f %d/core-config`；无需遍历 root state，不使用旧 Node launcher。systemd 在启动时读取 credential，并在只读、仅服务身份与 root 可访问的位置提供它；`%d` 表示 credential 目录。路径内容按 systemd 的字符串、specifier 和命令环境展开规则转义，只有固定 `%d` 保留为 specifier。这些行为依据 [systemd 255 的 credential 文档](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html#Credentials)和 [specifier 文档](https://www.freedesktop.org/software/systemd/man/255/systemd.unit.html#Specifiers)。
 
-unit 明确 Requires/After/BindsTo `coproxy-network.service`，`Restart=no`，没有自动启用的 Install 段。网关 helper 负责阻断、选择快照及核心启动/重启的唯一顺序。BindsTo 与 After 能在依赖单元不再 active 时停止核心，但它们不证明网络 guard、核心 cgroup 来源与运行证据已经建立；这些仍由 helper 的持久事务完成，见 [systemd 依赖文档](https://www.freedesktop.org/software/systemd/man/255/systemd.unit.html#BindsTo=)。
+unit 明确 Requires/After/BindsTo `coproxy-network.service coproxy-management.service`，`Restart=no`，没有自动启用的 Install 段。网关 helper 负责阻断、选择快照及核心启动/重启的唯一顺序。BindsTo 与 After 让核心只能随两个依赖单元保持 active；管理进程退出导致管理单元 inactive 或失败时，systemd 自行停止核心，不依赖管理进程再发送停核命令。管理 cgroup 和运行证据仍须由 observer/helper 独立核验；依赖绑定不证明网络 guard、核心 cgroup 来源与运行证据已经建立。这些仍由 helper 的持久事务完成，见 [systemd 255 依赖文档](https://www.freedesktop.org/software/systemd/man/255/systemd.unit.html#BindsTo=)。
+
+启动时核心排在 helper 和管理单元之后；同一停止事务按相反顺序先停核心。此处没有给 helper 增加 `After=coproxy-management.service`，避免管理单元将来排在 helper 之后时形成排序环；管理单元的部署与启动顺序须单独校验，见 [systemd 255 排序文档](https://www.freedesktop.org/software/systemd/man/255/systemd.unit.html#Before=)。依赖变化会改变完整 unit 的 `unitSha256`，部署须重新生成 runtime settings 和候选 metadata；既有摘要不能继续代表更新后的 unit。
 
 unit 使用非 root User，仅赋予 NET_ADMIN、NET_RAW，设置 NoNewPrivileges、PrivateTmp、ProtectSystem、ProtectHome、ProtectControlGroups、内核保护及限制 namespaces 等。ReadWritePaths 只有 coreHome；UMask 为 0077，KillMode 为 control-group，启动与停止超时各为 10 秒。stdout/stderr 送 journal，使用经过官方文档核验的 `LogRateLimitIntervalSec=30s` 和 `LogRateLimitBurst=200`；这是 journal 消息速率限制，不是日志总存储额度，见 [日志速率文档](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html#LogRateLimitIntervalSec=)。
 
