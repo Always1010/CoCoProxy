@@ -25,6 +25,8 @@
     "test:network-candidate": "node --experimental-strip-types --test tests/network-candidate.test.ts",
     "test:network-runtime-plan": "node --experimental-strip-types --test tests/network-runtime-plan.test.ts",
     "test:network-runtime": "node --experimental-strip-types --test tests/network-runtime.test.ts",
+    "test:network-management-observer": "node --experimental-strip-types --test tests/network-management-observer.test.ts",
+    "test:network-driver": "node --experimental-strip-types --test tests/network-driver.test.ts",
     "test:network-core-observer": "node --experimental-strip-types --test tests/network-core-observer.test.ts",
     "test:network-observer": "node --experimental-strip-types --test tests/network-observer.test.ts",
     "test:network-command": "node --experimental-strip-types --test tests/network-command.test.ts",
