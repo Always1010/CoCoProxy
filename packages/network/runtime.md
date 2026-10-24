@@ -1,6 +1,6 @@
 # 网关核心的持久监管入口
 
-`GatewayCoreRuntime` 是独立于显式代理 runtime 的核心生命周期组件。它使用[严格网关候选](candidate.md)、[固定 unit 计划](runtime-plan.md)和[持久命令屏障](fenced-command.md)，由唯一网关 helper 在其外层网络锁内调用。它尚未被管理服务、CLI 或完整 `NetworkDriver` 自动接入，也不单独证明网关就绪。
+`GatewayCoreRuntime` 是独立于显式代理 runtime 的核心生命周期组件。它使用[严格网关候选](candidate.md)、[固定 unit 计划](runtime-plan.md)和[持久命令屏障](fenced-command.md)，由[固定驱动组合](driver.md)在协调器的外层网络锁内调用。管理服务、CLI 和特权 helper 入口尚待接入；该组件不单独证明网关就绪。
 
 生产入口为 `GatewayCoreRuntime.production({ runtime, coreHome })`。`runtime` 是固定计划生成的 `RuntimeSettings`，其完整字段与 unit 摘要必须等于重新生成的结果；不能用另一份 unit 的 hash 随意启用此 profile。入口要求 Linux root。实际操作还核验与 PID 1 相同的 user/net namespace、root 所有且不可被其他身份写入的二进制／控制工具／unit 与全部祖先、root 私有 state、服务 UID 私有独立 coreHome、固定核心 SHA、unit 的加载文件／用户／drop-in／reload 状态，以及固定 ControlGroup。目录和文件均须由部署流程预先准备，本组件不安装、修复权限或创建账户。
 
@@ -34,4 +34,4 @@ root-owned 私有 `gateway-core-state.json` 保存 schema、scope、revision、�
 
 `test:network-runtime-plan` 另在已有 Linux `systemd-analyze` 可用时，实际解析普通及含空格／引号／反斜线／specifier 的路径；该检查只读解析临时 unit，不安装、不 reload、不启动服务。缺少工具时明确跳过，不能计为语法验证通过。
 
-后续完整驱动仍须连接资源恢复、受信代次切换、详细进程与两个固定服务的 cgroup 身份、逐 socket mark／来源、本机链路和路由器邻居，以及真实 DNS/TUN 探针。安装后的 systemd credential 快照与实际进程也须独立核验，不能由本组件的已选代次推导成功。
+固定驱动组合已连接资源恢复、受信配置代次切换、详细进程与两个固定服务的 cgroup 身份、逐 socket mark／来源、本机链路和路由器邻居，以及 DNS/TUN 探针；组合测试仍使用 fixture。安装后的 systemd credential 快照与实际进程须独立验收，不能由本组件的已选代次推导成功。

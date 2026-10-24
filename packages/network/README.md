@@ -2,13 +2,13 @@
 
 `renderNetworkPlan(input: unknown): NetworkPlan` 生成确定的、可审阅的结构化资源与阶段计划。它只处理内存数据，不读取主机状态，不执行命令，不生成 nftables 规则文本或 CLI，不安装软件，不改动本机网络，也不授予浏览器调用特权网络操作的能力。所有失败均抛出固定的 `NetworkPlanError`，其 `code` 与 `message` 都是 `NETWORK_PLAN_INVALID`，不附带输入值、路径或底层异常。
 
-已有[受保护的网关候选预览](config.md)把完整网络部署绑定到核心内容代次，[固定规则渲染器](rules.md)生成受限 nft 批次和 ip 参数，真实四角色隔离路径已验证。[cgroup 只读身份观察](identity.md)补充固定核心与管理服务的独立来源核验，[DNS/TUN 实际探针](probe.md)检查核心 FD、精确监听和两种传输的真实 DNS 查询，[持久事务协调器](transaction.md)实现启用意图、操作 fence、证据门槛与启动恢复阻断。协调器仍需真实 native driver，尚未接入 systemd 运行适配或管理入口，也没有已安装的特权 executor。现有显式代理候选不能直接满足本计划的 TUN、专用 DNS 与出口 mark 要求。本模块不构成网关实现完成或设备验收通过。
+已有[受保护的网关候选预览](config.md)把完整网络部署绑定到核心内容代次，[固定规则渲染器](rules.md)生成受限 nft 批次和 ip 参数，真实四角色隔离路径已验证。[cgroup 只读身份观察](identity.md)补充固定核心与管理服务的独立来源核验，[DNS/TUN 实际探针](probe.md)检查核心 FD、精确监听和两种传输的真实 DNS 查询，[持久事务协调器](transaction.md)实现启用意图、操作 fence、证据门槛与启动恢复阻断。[固定生产驱动组合](driver.md)已连接这些组件与 systemd 核心监管并通过 fixture 组合测试，管理入口和特权 executor 的部署仍待完成。现有显式代理候选不能直接满足本计划的 TUN、专用 DNS 与出口 mark 要求。本模块不构成网关实现完成或设备验收通过。
 
 [内核资源回读校验](readback.md)严格比较固定 nft 表／链／规则的 AST 与 handle，并检查 RPDB 和专用路由的合法存在状态。它只验证输入结构与受信基准一致，不把同名或同配置当作所有权证明；外部 nft／RPDB／自定义表冲突保持拒绝。
 
-[原生资源会话](native.md)已把固定批次、真实提交 echo、逐步 ip 操作和独立内核回读连起来，并接入四角色隔离测试。持久模式通过私有资源凭据、命令启动屏障、跨进程锁与 revision CAS，在核验归属后恢复 blocked；完整主机预检、迁移和生产 driver 仍待完成。
+[原生资源会话](native.md)已把固定批次、真实提交 echo、逐步 ip 操作和独立内核回读连起来，并接入四角色隔离测试。持久模式通过私有资源凭据、命令启动屏障、跨进程锁与 revision CAS，在核验归属后恢复 blocked，并支持固定保护范围的配置代次重绑定。[主机预检](host.md)另只读检查旁路及生产视图，完整生产服务组合正向仍待验收。
 
-[私有网关候选](candidate.md)在不可变内容摘要之外重编译完整配置及网络计划，并独立核对可信部署；显式代理 loader 保持拒绝网关 profile。[网关核心 unit 计划](runtime-plan.md)和[持久核心监管入口](runtime.md)补充 root 选择状态、systemd credential、固定单元操作及未知 job 的明确停止恢复。它们还未接入完整协调器或安装服务，不能由选中代次和 unit running 推导网络 ready。
+[私有网关候选](candidate.md)在不可变内容摘要之外重编译完整配置及网络计划，并独立核对可信部署；显式代理 loader 保持拒绝网关 profile。[网关核心 unit 计划](runtime-plan.md)和[持久核心监管入口](runtime.md)补充 root 选择状态、systemd credential、固定单元操作及旧 worker／job 的独立收敛。驱动已在协调器下连接监管入口，尚未安装服务，不能由选中代次和 unit running 推导网络 ready。
 
 ## 输入契约
 

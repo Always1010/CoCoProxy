@@ -1,6 +1,6 @@
 # Coproxy 软件架构
 
-本文记录模块边界与开发方向；验证方法和范围见 development.md。当前已完成回环显式代理、管理网页与受控事务的集成源码，固定核心及六种协议已通过真实回环检查。透明网关配置、规则、持久资源会话和实际 DNS/TUN 探针已通过四角色隔离内核验证，持久协调器及 cgroup 只读观察已实现；完整生产驱动、运行适配接入、systemd 安装和真实设备联调仍待完成。
+本文记录模块边界与开发方向；验证方法和范围见 development.md。当前已完成回环显式代理、管理网页与受控事务的集成源码，固定核心及六种协议已通过真实回环检查。透明网关配置、规则、持久资源会话和实际 DNS/TUN 探针已通过四角色隔离内核验证，固定生产驱动组合已连接持久协调器、核心监管与运行观察并通过 fixture 测试；特权 helper／管理入口、持续故障与关闭生命周期、systemd 安装和真实设备联调仍待完成。
 
 ## 模块与唯一归属
 
@@ -16,7 +16,7 @@
 | packages/management | 独立认证、会话与受保护的草稿/来源/事务接口 | 已挂载 Nitro Server，HTTP／WS 共用会话和运行代次边界 |
 | 管理服务与界面 | 复用 MetaCubeXD 界面与 Nitro Server，挂载自有认证及事务 | 登录、策略／订阅、候选与冲突流程已通过浏览器回环验证；原 Agent 监管禁用 |
 | packages/deployment、发行装配脚本 | 纯生成服务与权限计划；选择固定提交及运行依赖，记录载荷摘要 | 生成器及真实 systemd 语法检查已通过；实际安装另行授权 |
-| packages/network 与网络执行服务 | 受管来源、TUN 路由、出口、防护和资源恢复 | 计划、核心预览、规则、探针、回读、命令屏障、持久资源会话和协调器已实现；完整 driver 及运行适配待接入 |
+| packages/network 与网络执行服务 | 受管来源、TUN 路由、出口、防护和资源恢复 | 固定驱动组合连接计划、规则、探针、资源会话、协调器与核心监管；生产 helper、管理与持续故障流程待接入 |
 
 全部配置应用由同一事务入口负责，订阅更新、网页编辑和后台任务不能分别改写运行配置。运行适配选择 systemd 为核心唯一监管者，启动器直接 exec 替换自身；接入上游时适配其 supervisor，不保留第二条自动拉起路径。管理后端只申请受限的生命周期操作。网络执行服务是本端自有 nft 和策略路由资源的唯一管理者；若采用核心自动网络机制，必须重新明确资源归属，不能同时管理同一资源。
 
@@ -32,13 +32,13 @@
 
 [网络资源契约](../packages/network/README.md) 将单终端输入、固定资源归属、mark 保留位、三张带黑洞默认的路由表、受限 DNS、经路由器的出口／回程、持久 guard 和故障阻断编成确定摘要计划。[固定规则渲染器](../packages/network/rules.md)生成 nft 批次与 ip 参数，按 blocked、core-only、active 阶段推进。先阻断，再准备资源，再核验核心身份并仅开放核心探针，最后依据同代 TUN、实际 DNS、cgroup 与路由证据激活；不能按共享服务 UID 放行核心出口。隔离测试已证明转发语义，但尚未挂接持久事务或管理入口；计划中的接管与真实终端路径仍为未验证。
 
-[持久网络协调器](../packages/network/transaction.md)另实现 revision CAS、逐操作持久 fence、证据绑定与启动门闩。历史 ready 不能免除恢复：新实例先确认旧操作收敛、重申阻断，再等待显式应用。未知驱动异常不会触发并行恢复。该协调器没有默认替身或已连接的 native driver；实际内核资源归属、收敛与读回，以及核心配置事务的统一写入边界，仍须由特权服务实现。[cgroup observer](../packages/network/identity.md)只补充固定路径与成员身份，不证明 binary/unit、socket 历史来源或整个网关就绪。
+[持久网络协调器](../packages/network/transaction.md)另实现 revision CAS、逐操作持久 fence、证据绑定与启动门闩。历史 ready 不能免除恢复：新实例先确认旧操作收敛、重申阻断，再等待显式应用。未知驱动异常不会触发并行恢复。[固定生产驱动组合](../packages/network/driver.md)已连接原生资源、核心监管和完整运行观察，生产入口没有替身注入；特权服务仍须提供认证入口、部署及唯一 authority。组合测试使用 fixture，不代表实际服务已部署。[cgroup observer](../packages/network/identity.md)只补充固定路径与成员身份，不证明 binary/unit、socket 历史来源或整个网关就绪。
 
-[原生资源会话](../packages/network/native.md)通过受限命令执行固定 nft/ip 操作，核对成功提交 echo、完整 AST／handle 与每步 RPDB／路由状态。持久模式将工具／namespace 身份、规则基准、清单和 pending 意图保存于私有资源凭据，使用跨进程锁和 revision CAS；工具取得持久启动 ACK 后才执行。重启先核验旧进程组与实际资源，只恢复到 blocked，拒绝从历史 ready 直接授权；丢失 echo 的未知变化及跨 boot／namespace 迁移仍安全拒绝。它还须与上述协调器和唯一核心监管者连接，不能当作完整生产恢复。[DNS/TUN 探针](../packages/network/probe.md)另从真实 FD、接口与 UDP/TCP 查询取得局部事实，不推导整条终端路径。
+[原生资源会话](../packages/network/native.md)通过受限命令执行固定 nft/ip 操作，核对成功提交 echo、完整 AST／handle 与每步 RPDB／路由状态。持久模式将工具／namespace 身份、规则基准、清单和 pending 意图保存于私有资源凭据，使用跨进程锁和 revision CAS；工具取得持久启动 ACK 后才执行。重启先核验旧进程组与实际资源，只恢复到 blocked，拒绝从历史 ready 直接授权；丢失 echo 的未知变化及跨 boot／namespace 迁移仍安全拒绝。驱动已连接协调器和唯一核心监管者，但实际系统服务下的组合恢复尚待验收。[DNS/TUN 探针](../packages/network/probe.md)另从真实 FD、接口与 UDP/TCP 查询取得局部事实，不推导整条终端路径。
 
-[网关核心监管入口](../packages/network/runtime.md)另使用完整重编译的私有网关候选、root-owned 选择与操作 journal、固定 systemctl 的启动屏障，以及独立 manager job/PID/cgroup 收敛核验。其独立 unit 通过 systemd credential 向非 root 核心传递配置快照，关闭自动重启，要求每次 stop/start 前证明 blocked。[详细运行观察](../packages/network/core-observer.md)补充实际 executable、精确 argv、核心 mount view 中的 credential 代次与认证 controller 监听归属。监管组件已通过明确 fixture 模型的持久协议测试和实际 unit 语法解析，观察组件已通过合成 reader 验证；尚未安装服务或与完整网络驱动连接，不能据此授权生产转发。
+[网关核心监管入口](../packages/network/runtime.md)另使用完整重编译的私有网关候选、root-owned 选择与操作 journal、固定 systemctl 的启动屏障，以及独立 manager job/PID/cgroup 收敛核验。其独立 unit 通过 systemd credential 向非 root 核心传递配置快照，关闭自动重启，要求每次 stop/start 前证明 blocked。旧 worker 收敛入口不发新 stop/start，供协调器在持久 settling 后调用。[详细运行观察](../packages/network/core-observer.md)补充实际 executable、精确 argv、核心 mount view 中的 credential 代次与认证 controller 监听归属。监管组件已通过 fixture 持久协议测试和实际 unit 语法解析，观察组件已通过合成 reader 验证；尚未安装服务，不能据此授权生产转发。
 
-[socket 来源观察](../packages/network/sockets.md)通过 INET_DIAG 将核心/管理 FD 与实际 socket mark、UID、cgroup ID 交叉核对，并要求两个专用 UID 无额外进程；缺失属性、未知 FD 和未连接 UDP 都不能补造成就绪事实。[链路观察](../packages/network/link.md)另核对接口、网关地址、carrier、当前邻居及带 mark 的出口路由。[运行证据组合器](../packages/network/observer.md)已将核心、cgroup、socket、DNS/TUN、链路与资源回读连接起来，并在前后重新核验核心及管理身份；计划、规则和协调器共同绑定独立管理 UID，生产启用拒绝历史缺省身份。四角色隔离测试已读取真实核心 socket mark/cgroup 与真实 iproute2 输出；该环境复用既有 UID/cgroup，只证明局部内核事实。[主机预检](../packages/network/host.md)另只读验证可信初始主机视图、转发参数及旁路机制；完整正向目前来自合成 reader。资源会话已支持 blocked 下同保护参数的代次重绑定，协调器恢复先持久记录 settling 再显式收敛旧操作。完整生产驱动仍须将这些组件与唯一核心监管者、管理入口及持续故障观察连接。
+[socket 来源观察](../packages/network/sockets.md)通过 INET_DIAG 将核心/管理 FD 与实际 socket mark、UID、cgroup ID 交叉核对，并要求两个专用 UID 无额外进程；缺失属性、未知 FD 和未连接 UDP 都不能补造成就绪事实。[链路观察](../packages/network/link.md)另核对接口、网关地址、carrier、当前邻居及带 mark 的出口路由。[运行证据组合器](../packages/network/observer.md)已将核心、cgroup、socket、DNS/TUN、链路与资源回读连接起来，并在前后重新核验核心及管理身份；计划、规则和协调器共同绑定独立管理 UID，生产启用拒绝历史缺省身份。四角色隔离测试已读取真实核心 socket mark/cgroup 与真实 iproute2 输出；该环境复用既有 UID/cgroup，只证明局部内核事实。[主机预检](../packages/network/host.md)另只读验证可信初始主机视图、转发参数及旁路机制；完整正向目前来自合成 reader。资源会话已支持 blocked 下同保护参数的代次重绑定，协调器恢复先持久记录 settling 再显式收敛旧操作。固定生产驱动已连接这些组件与唯一核心监管者；管理入口、持续故障处理及关闭生命周期仍待完成。
 
 AlwayRoute 负责受管来源、外部代理开关、基础网络和独立关闭恢复。Coproxy 只负责收到流量后的接管、DNS、分流与自身状态，不写路由器配置。首轮通过本地诊断对齐必要语义，再按实际缺口增加带认证的最小只读接口。
 
