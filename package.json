@@ -19,6 +19,8 @@
     "test:runtime": "node --experimental-strip-types --test tests/runtime-evidence.test.ts tests/runtime-plan.test.ts tests/runtime-systemd.test.ts",
     "test:management": "node --experimental-strip-types --test tests/management-auth.test.ts tests/management.test.ts tests/controller.test.ts",
     "test:subscription-yaml": "node --experimental-strip-types --test tests/subscription-yaml.test.ts",
+    "test:management-live": "node --experimental-strip-types --test tests/management-server-live.test.ts",
+    "test:overlay": "node --experimental-strip-types --test tests/metacubexd-overlay.test.ts",
     "test:core-live": "node --experimental-strip-types --test tests/mihomo-live.test.ts",
     "test:git-tree": "node --experimental-strip-types --test tests/git-tree.test.ts"
   }

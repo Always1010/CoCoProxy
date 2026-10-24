@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "source-reviewed-not-integrated",
+  "status": "management-ui-loopback-verified",
   "reviewedOn": "2026-10-25",
   "management": {
     "repository": "https://github.com/MetaCubeX/metacubexd",
@@ -19,8 +19,13 @@
     "uiBuildVerified": true,
     "serverBuildVerified": true,
     "upstreamTypecheckVerified": false,
-    "buildWarnings": ["font-provider-metadata-unavailable", "large-ui-chunks"],
-    "runtimeVerified": false
+    "buildWarnings": ["large-ui-chunks", "unused-upstream-imports"],
+    "runtimeVerified": true,
+    "runtimeScope": "loopback-management-login-draft-stage-conflict-logout-only",
+    "adaptedUiTypecheckVerified": true,
+    "adaptedUiTypeScript": "5.9.3",
+    "browserWorkflowVerified": true,
+    "systemdIntegrationVerified": false
   },
   "coreCandidate": {
     "repository": "https://github.com/MetaCubeX/mihomo",
@@ -33,10 +38,12 @@
     "binarySha256": "8c73570d9a5f388bc2f58eee0b347ccfab84fb3cf1a0f8f2cf5eac7005fbcdc0",
     "downloadedAssetVerified": true,
     "runtimeVerified": true,
-    "runtimeScope": "loopback-http-proxy-and-localhost-dns-only",
+    "runtimeScope": "loopback-http-proxy-localhost-dns-and-controller-only",
     "syntaxVerified": true,
     "explicitProxySmokeVerified": true,
-    "loopbackDnsSmokeVerified": true
+    "loopbackDnsSmokeVerified": true,
+    "controllerProxyHttpVerified": true,
+    "controllerProxyTrafficStreamVerified": true
   },
   "compatibilityVerified": false
 }
