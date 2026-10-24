@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { types } from 'node:util';
 
+export const NETWORK_TUN_ADDRESS = '198.18.0.1/30';
+
 /** Deliberately contains no supplied value, property path, or nested cause. */
 export class NetworkPlanError extends Error {
   readonly code = 'NETWORK_PLAN_INVALID';
@@ -149,6 +151,7 @@ function buildPlan(input: unknown) {
     nftables: { family: 'inet', guardTable: 'coproxy_guard', dataTable: 'coproxy_data',
       guardChains: ['input_guard', 'forward_guard', 'output_guard'], dataChains: ['classify_ingress', 'classify_output', 'classify_return'] },
     tunInterface: tun.interface,
+    tunIPv4Address: NETWORK_TUN_ADDRESS,
     routeProtocol: 186,
     tables,
     priorities,
@@ -241,6 +244,7 @@ function buildPlan(input: unknown) {
       'same-uid-management-unit-and-sockets-excluded-from-core-upstream-exception',
       'core-generation-candidate-binary-unit-uid-match-with-no-extra-watchdog',
       'tun-name-available-or-exclusively-owned-and-persistent-guard-restored-before-core-restart',
+      'fixed-tun-ipv4-prefix-does-not-overlap-any-existing-link-route-or-policy-path',
     ],
     onFailure: 'leave-previous-state-unchanged-no-first-activation',
   } as const;
@@ -251,7 +255,7 @@ function buildPlan(input: unknown) {
       'exact-core-unit-controlgroup-v2-path-and-kernel-id-match-bound-boot-pid-start-time',
       'per-socket-core-cgroup-origin-enforcement-read-back-and-same-uid-management-exclusion-proven',
       'same-core-pid-owns-exact-gateway-ipv4-dns-tcp-and-udp-listener',
-      'same-core-pid-owns-up-tun-interface-with-exact-name-and-mtu',
+      'same-core-pid-owns-up-tun-interface-with-exact-name-ipv4-address-and-mtu',
       'core-egress-mark-applied-before-first-packet-and-guard-mark-classification-confirmed',
       'owned-guard-blackholes-rules-egress-and-return-routes-read-back-match',
       'router-neighbour-link-and-generation-still-current',
