@@ -36,7 +36,7 @@
 
 [原生资源会话](../packages/network/native.md)通过受限命令执行固定 nft/ip 操作，核对成功提交 echo、完整 AST／handle 与每步 RPDB／路由状态。持久模式将工具／namespace 身份、规则基准、清单和 pending 意图保存于私有资源凭据，使用跨进程锁和 revision CAS；工具取得持久启动 ACK 后才执行。重启先核验旧进程组与实际资源，只恢复到 blocked，拒绝从历史 ready 直接授权；丢失 echo 的未知变化及跨 boot／namespace 迁移仍安全拒绝。它还须与上述协调器和唯一核心监管者连接，不能当作完整生产恢复。[DNS/TUN 探针](../packages/network/probe.md)另从真实 FD、接口与 UDP/TCP 查询取得局部事实，不推导整条终端路径。
 
-[网关核心监管入口](../packages/network/runtime.md)另使用完整重编译的私有网关候选、root-owned 选择与操作 journal、固定 systemctl 的启动屏障，以及独立 manager job/PID/cgroup 收敛核验。其独立 unit 通过 systemd credential 向非 root 核心传递配置快照，关闭自动重启，要求每次 stop/start 前证明 blocked。该组件已通过明确 fixture 模型的持久协议测试和实际 unit 语法解析，尚未安装或与完整网络驱动连接；逐 socket mark／来源、详细运行身份和物理链路／邻居仍须补齐后才能授权生产转发。
+[网关核心监管入口](../packages/network/runtime.md)另使用完整重编译的私有网关候选、root-owned 选择与操作 journal、固定 systemctl 的启动屏障，以及独立 manager job/PID/cgroup 收敛核验。其独立 unit 通过 systemd credential 向非 root 核心传递配置快照，关闭自动重启，要求每次 stop/start 前证明 blocked。[详细运行观察](../packages/network/core-observer.md)补充实际 executable、精确 argv、核心 mount view 中的 credential 代次与认证 controller 监听归属。监管组件已通过明确 fixture 模型的持久协议测试和实际 unit 语法解析，观察组件已通过合成 reader 验证；尚未安装服务或与完整网络驱动连接，不能据此授权生产转发。
 
 AlwayRoute 负责受管来源、外部代理开关、基础网络和独立关闭恢复。Coproxy 只负责收到流量后的接管、DNS、分流与自身状态，不写路由器配置。首轮通过本地诊断对齐必要语义，再按实际缺口增加带认证的最小只读接口。
 

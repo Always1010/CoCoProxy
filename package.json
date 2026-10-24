@@ -25,6 +25,7 @@
     "test:network-candidate": "node --experimental-strip-types --test tests/network-candidate.test.ts",
     "test:network-runtime-plan": "node --experimental-strip-types --test tests/network-runtime-plan.test.ts",
     "test:network-runtime": "node --experimental-strip-types --test tests/network-runtime.test.ts",
+    "test:network-core-observer": "node --experimental-strip-types --test tests/network-core-observer.test.ts",
     "test:network-command": "node --experimental-strip-types --test tests/network-command.test.ts",
     "test:network-fenced-command": "node --experimental-strip-types --test tests/network-fenced-command.test.ts",
     "test:network-resource-journal": "node --experimental-strip-types --test tests/network-resource-journal.test.ts",

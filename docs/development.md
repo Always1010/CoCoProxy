@@ -74,6 +74,7 @@ npm run test:network-config
 npm run test:network-candidate
 npm run test:network-runtime-plan
 npm run test:network-runtime
+npm run test:network-core-observer
 npm run test:network-command
 npm run test:network-fenced-command
 npm run test:network-resource-journal
@@ -98,7 +99,9 @@ npm run test:overlay
 
 `test:network-candidate` 验证私有网关候选的完整重编译、可信 plan／核心绑定、hash-valid 篡改拒绝和私有读取，并确认显式 loader 仍拒绝网关 profile。`test:network-runtime-plan` 核验 root state 与独立 coreHome、credential 路径、有限权限、禁用自动重启及 systemd 转义；Linux 已有 systemd-analyze 时还实际只读解析两个路径变体，没有工具时明确跳过。`test:network-runtime` 使用真实私有文件与锁、明确的 systemd/worker fixture 模型验证 stop/选择/start 的持久协议、manager 收敛、blocked 门槛、恢复只 stop、输入大小与错误边界。它们不安装单元，不代表生产 systemd lifecycle、credential 实际快照或完整 driver 已验收。
 
-`test:network-identity` 用合成 reader 验证固定 cgroup 的完整 64 位身份、namespace、权限、唯一成员、覆挂与读取竞态；fixture 始终保持 fixture 来源。Linux 固定 unit 下的正向生产观察仍需独立部署后验收，不能把跳过项计为通过。`test:network-transaction` 使用明确 fixture driver 验证持久意图、逐操作 fence、30 秒证据、CAS、启动恢复和未知操作收敛；Linux 非 root 子项实际模拟目录写入失败，并强制终止变更中的独立进程，确认只恢复阻断。它们不执行 nft、ip 或 systemd，也不替代 native driver 验收。
+`test:network-core-observer` 验证[详细运行事实观察](../packages/network/core-observer.md)：固定 systemd 状态、运行 executable、精确 argv、核心实际 mount view 中的 credential 代次，以及认证 controller 的监听归属与前后稳定性。使用合成 reader，不安装服务，也不替代真实固定 unit 的生产正向观察。
+
+`test:network-identity` 用合成 reader 验证固定 cgroup 的完整 64 位身份、namespace、权限、唯一成员、覆挂与读取竞态，支持独立管理 UID；fixture 始终保持 fixture 来源。Linux 固定 unit 下的正向生产观察仍需独立部署后验收，不能把跳过项计为通过。`test:network-transaction` 使用明确 fixture driver 验证持久意图、逐操作 fence、30 秒证据、CAS、启动恢复和未知操作收敛；Linux 非 root 子项实际模拟目录写入失败，并强制终止变更中的独立进程，确认只恢复阻断。它们不执行 nft、ip 或 systemd，也不替代 native driver 验收。
 
 `test:network-probe` 检查严格 DNS 报文、精确 socket/TUN 所有权、PID/namespace 变化与固定错误；单元层使用合成 reader。`test:network-readback` 检查 nft AST/handle、完整提交 echo、RPDB、专用路由、pre-core detached 注记及外部资源拒绝。其纯解析结果不能替代真实命令输出或受保护的所有权回执。
 
