@@ -185,6 +185,12 @@ function buildPlan(input: unknown) {
     requireSameCorePid: true, wildcardBind: 'forbidden',
     replies: { sourceIPv4: gatewayIPv4, sourcePort: dnsPort, destinations: [clientCIDR, routerCIDR],
       markRole: 'egress', nextHop: routerIPv4, clientNeighbourResolution: 'forbidden' },
+    localProbe: { interface: 'lo', sourceIPv4: '127.0.0.1', destinationIPv4: gatewayIPv4,
+      port: dnsPort, protocols: ['udp', 'tcp'], clientCaptureException: false },
+    tcpHandshake: { phase: 'active-only', proof: 'exact-dns-original-syn-core-listener-cgroup',
+      conntrackTag: marks.egress, mask: marks.mask, preserveOtherBits: true,
+      replyAlternative: 'exact-dns-reply-uid-socket-mark-conntrack-proof-and-synack-only',
+      newSynMustReproveListener: true, packetMarkRestore: false },
     bootstrap: 'independent-of-router-forwarded-dns', resolverMode: 'real-ip',
   } as const;
   const guard = {
@@ -230,6 +236,7 @@ function buildPlan(input: unknown) {
       'exclusive-network-lock-and-current-generation-cas',
       'owned-resources-absent-or-exactly-matching-owned-plan-no-foreign-collisions',
       'all-rule-priorities-tables-protocol-and-mark-bits-exclusively-reserved',
+      'packet-and-conntrack-mark-mask-has-no-foreign-writer-or-stale-untrusted-dns-proof',
       'existing-rpdb-nft-hooks-conntrack-and-marks-cannot-bypass-owned-guard',
       'ingress-link-address-prefix-and-router-neighbour-mac-match',
       'router-delivers-original-client-source-and-excludes-gateway-origin',
@@ -255,6 +262,8 @@ function buildPlan(input: unknown) {
       'exact-core-unit-controlgroup-v2-path-and-kernel-id-match-bound-boot-pid-start-time',
       'per-socket-core-cgroup-origin-enforcement-read-back-and-same-uid-management-exclusion-proven',
       'same-core-pid-owns-exact-gateway-ipv4-dns-tcp-and-udp-listener',
+      'actual-loopback-bound-udp-and-tcp-dns-query-succeeds-after-core-only-egress-authorization',
+      'dns-tcp-synack-alternative-bound-to-verified-listener-original-flow-and-existing-egress-socket-mark',
       'same-core-pid-owns-up-tun-interface-with-exact-name-ipv4-address-and-mtu',
       'core-egress-mark-applied-before-first-packet-and-guard-mark-classification-confirmed',
       'owned-guard-blackholes-rules-egress-and-return-routes-read-back-match',
@@ -277,6 +286,13 @@ function buildPlan(input: unknown) {
       clientNeighbourResolution: 'forbidden' },
     preserveUnreservedMarkBits: true, snat: false,
   } as const;
+  const coreIdentityEvidence = {
+    binding,
+    required: ['core-process-live-and-pid-start-time-uid-binary-unit-generation-confirmed',
+      'exact-core-unit-controlgroup-v2-path-and-kernel-id-match-bound-boot-pid-start-time',
+      'core-and-management-cgroups-root-controlled-no-foreign-members-or-delegation'],
+    onMissingStaleOrMismatch: 'remain-blocked',
+  } as const;
   const phases = [
     { id: 'persist-guard', after: ['preflight'], operations: [{ kind: 'persist-and-install-guard', guard }],
       completion: 'durable-intent-and-kernel-guard-read-back-match-before-any-other-mutation' },
@@ -286,7 +302,12 @@ function buildPlan(input: unknown) {
       { kind: 'prepare-egress-and-return-routes', routes: egressRoutes },
       { kind: 'stage-inactive-classification', classification, markActions },
     ], completion: 'capture-table-still-blackhole-and-forward-guard-still-blocked' },
-    { id: 'await-core-evidence', after: ['prepare-blocked'], operations: [{ kind: 'require-fresh-bound-evidence', evidence }],
+    { id: 'authorize-core-egress', after: ['prepare-blocked'], operations: [
+      { kind: 'require-fresh-core-identity', evidence: coreIdentityEvidence },
+      { kind: 'activate-core-egress-only', socketBinding: coreSocketBinding, localDnsProbe: dns.localProbe,
+        clientForwarding: 'blocked', clientDns: 'blocked', captureRoute: 'absent' },
+    ], completion: 'only-verified-core-egress-and-loopback-dns-probes-allowed-client-still-blocked' },
+    { id: 'await-core-evidence', after: ['authorize-core-egress'], operations: [{ kind: 'require-fresh-bound-evidence', evidence }],
       completion: 'every-required-evidence-item-matches-current-generation-and-plan' },
     { id: 'activate-capture', after: ['await-core-evidence'], operations: [
       { kind: 'recheck-evidence-under-exclusive-lock', evidence },
@@ -308,7 +329,7 @@ function buildPlan(input: unknown) {
   } as const;
   const body = {
     schemaVersion: 1, kind: 'coproxy-network-plan', sensitive: true,
-    deployment, binding, ownership, markActions, dns, guard, blackholes, rules,
+    deployment, binding, coreIdentityEvidence, ownership, markActions, dns, guard, blackholes, rules,
     egressRoutes, captureRoute, preflight, evidence, phases, faultPolicy,
     status: { executable: false, applied: false, core: 'unverified', dns: 'unverified',
       capture: 'unverified', terminalPath: 'unverified', router: 'external-precondition' },
