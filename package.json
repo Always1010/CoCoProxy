@@ -28,6 +28,7 @@
     "test:network-management-observer": "node --experimental-strip-types --test tests/network-management-observer.test.ts",
     "test:network-driver": "node --experimental-strip-types --test tests/network-driver.test.ts",
     "test:network-watchdog": "node --experimental-strip-types --test tests/network-watchdog.test.ts",
+    "test:network-helper-http": "node --experimental-strip-types --test tests/network-helper-http.test.ts",
     "test:network-core-observer": "node --experimental-strip-types --test tests/network-core-observer.test.ts",
     "test:network-observer": "node --experimental-strip-types --test tests/network-observer.test.ts",
     "test:network-command": "node --experimental-strip-types --test tests/network-command.test.ts",
