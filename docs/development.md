@@ -1,6 +1,6 @@
 # 首批开发与验证
 
-当前实现是显式代理配置编译、不可变候选存储、配置事务状态机与开发 CLI。没有真实运行适配器、网页服务或 LAN 接管；不把通过测试替身得到的结果作为真实核心或终端验收。
+当前实现是显式代理配置编译、版本化草稿、不可变候选存储、配置事务状态机与开发 CLI。没有真实运行适配器、网页服务或 LAN 接管；不把通过测试替身得到的结果作为真实核心或终端验收。
 
 ## 环境与命令
 
@@ -13,6 +13,9 @@ npm run cli -- help
 npm run cli -- compile --input examples/explicit-proxy.json --output "$PWD/.local/runtime/mihomo.json"
 npm run cli -- stage --input examples/explicit-proxy.json --state-dir "$PWD/.local/runtime/store"
 npm run cli -- status --state-dir "$PWD/.local/runtime/store"
+npm run cli -- draft-save --input examples/explicit-proxy.json --state-dir "$PWD/.local/runtime/store" --expected-revision 0
+npm run cli -- draft-status --state-dir "$PWD/.local/runtime/store"
+npm run cli -- draft-stage --state-dir "$PWD/.local/runtime/store" --expected-revision 1
 ```
 
 compile 要求显式绝对输出路径，生成私有文件且不覆盖已有目标。stage 只保存不可变候选；status 是只读的历史状态，没有状态文件时返回空状态。公共输出只含摘要、状态和固定错误码，不打印生成配置或核心原始诊断。所有实际配置和运行状态均应在私有区域，不能提交。
@@ -25,13 +28,16 @@ npm run cli -- validate --input /absolute/private/input.json --mihomo-bin /absol
 
 此命令只调用核心的 -t 模式，在权限受限的临时工作目录内校验，不启动服务。默认超时 15 秒、输出总量 64 KiB；超时终止原进程组并设置最终截止，临时内容在结束后清理。原始诊断可能含凭据，因此不输出。必须信任显式指定的二进制；该包装器不是恶意进程沙箱，不能保证清除自行脱离进程组的恶意后代。
 
-CLI 入口只支持 compile、validate、stage、status。事务模块的 apply/recover 是供后续真实运行适配器调用的内部 API，目前不作为 CLI 命令开放，不提供模拟成功的生产适配器。
+草稿保存使用严格 revision 检查，与运行代次分开；首次保存使用 expected-revision 0。draft-stage 捕获指定保存版本并暂存对应候选，返回 stagedRevision，不应用配置。捕获后其他人可以继续保存新草稿，暂存回执仍指捕获的版本。公开的 draft-status 只有摘要与版本，私有输入不打印。
+
+CLI 入口提供上述编译、校验、候选和草稿命令。事务模块的 apply/recover 是供后续真实运行适配器调用的内部 API，目前不作为 CLI 命令开放，不提供模拟成功的生产适配器。
 
 ## 针对性检查
 
 ```sh
 npm run test:config
 npm run test:transaction
+npm run test:drafts
 npm run test:mihomo
 npm run test:cli
 ```
