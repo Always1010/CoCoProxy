@@ -24,6 +24,7 @@
     "test:network-config": "node --experimental-strip-types --test tests/network-config.test.ts",
     "test:network-command": "node --experimental-strip-types --test tests/network-command.test.ts",
     "test:network-fenced-command": "node --experimental-strip-types --test tests/network-fenced-command.test.ts",
+    "test:network-resource-journal": "node --experimental-strip-types --test tests/network-resource-journal.test.ts",
     "test:network-rules": "node --experimental-strip-types --test tests/network-rules.test.ts",
     "test:network-kernel": "node --experimental-strip-types --test tests/network-kernel-live.test.ts",
     "test:network-identity": "node --experimental-strip-types --test tests/network-identity.test.ts",
