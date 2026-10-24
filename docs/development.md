@@ -1,10 +1,12 @@
 # 首批开发与验证
 
-当前实现是显式代理配置编译、版本化草稿、订阅节点快照、不可变候选存储、配置事务状态机、systemd 核心运行适配源码与开发 CLI。服务尚未安装，真实核心、网页服务和 LAN 接管仍未验收；不把通过测试替身得到的结果作为真实核心或终端验收。
+当前已实现配置、草稿、来源、事务、systemd 运行适配源码、管理认证与事务 Fetch 接口和开发 CLI。固定核心已通过独立回环检查；服务尚未安装，网页集成和 LAN 接管仍未验收，不把测试替身结果作为真实核心或终端验收。
 
 ## 环境与命令
 
 使用 Node.js 22.18 或更高版本的原生 TypeScript 类型擦除；首批代码没有第三方依赖，无需 npm install。类型擦除只加载代码，不执行静态类型检查。Linux 运行检查在明确的独立项目工作区完成，不能用其他操作系统的结果替代 Linux 文件权限、锁和进程行为验证。
+
+严格检查工具以 `tooling/package-lock.json` 固定 TypeScript 5.9.3、Node 22 类型和 pnpm 10.34.1。在获准的项目目录执行 `npm ci --prefix tooling --ignore-scripts --no-audit --no-fund`，再运行 `npm run typecheck`。这不替换系统 Node 或包管理器；node_modules、缓存和上游构建产物不参与源码同步及提交。
 
 以下命令从仓库根目录执行。样本只使用合成节点、文档专用 IP 和示例凭据，适合离线编译，不是可联网的部署配置。
 
@@ -63,9 +65,15 @@ npm run test:subscriptions
 npm run test:mihomo
 npm run test:cli
 npm run test:runtime
+npm run test:management
+npm run test:git-tree
 ```
 
 按修改范围选择命令。配置测试覆盖保护边界和稳定摘要；事务测试覆盖完整性、CAS、回滚、中断、跨进程锁、Linux 死锁核验和权限；草稿与订阅测试覆盖保存/刷新并发、旧回包、失败数据保留和输入完整性，HTTPS 测试用已有 openssl 生成临时证书并执行实际 TLS 握手；核心包装器测试使用明确的可执行测试替身；CLI 测试验证真实命令行进程、私有输出和不伪报运行状态。不能用这些测试宣称协议节点、核心实际语法、网关接管、DNS 或终端出口已验收。
+
+真实核心另由显式命令执行：`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo npm run test:core-live`。未提供路径时该项跳过，不下载程序；提供的二进制必须匹配 review.json 中已审阅的解压后摘要。测试执行真实 `-t`、PID/控制端口核验、回环 HTTP 转发和 UDP/TCP localhost DNS；只用高位 loopback 端口和临时私有目录，不安装服务或修改系统网络，不代表外部节点、WAN DNS 或透明接管验收。
+
+管理模块的 API、认证和剩余挂载关卡见[管理说明](../packages/management/README.md)。普通接口测试使用显式运行替身；真实核心测试与上游构建均单列，不能混为同一种证据。
 
 ## 后续实施顺序
 
