@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "six-protocol-loopback-verified",
+  "status": "six-protocol-and-vless-reality-loopback-verified",
   "reviewedOn": "2026-10-25",
   "server": {
     "repository": "https://github.com/SagerNet/sing-box",
@@ -18,7 +18,10 @@
   },
   "clientReview": "../metacubexd/review.json",
   "scope": "official-core-to-core-ipv4-loopback-only",
-  "tlsVerification": "synthetic-self-signed-test-certificate-with-explicit-skip-cert-verify",
+  "tlsVerification": {
+    "trojanHysteria2Tuic": "synthetic-self-signed-test-certificate-with-explicit-skip-cert-verify",
+    "vlessReality": "official-reality-public-key-authentication-without-client-skip-cert-verify"
+  },
   "protocols": {
     "vmess": { "variant": "aead-tcp", "httpNonceVerified": true, "udpEchoVerified": true, "wrongCredentialHttpRejected": true, "wrongCredentialUdpRejected": true, "wrongCredentialOriginsUntouched": true },
     "vless": { "variant": "plain-tcp", "httpNonceVerified": true, "udpEchoVerified": true, "wrongCredentialHttpRejected": true, "wrongCredentialUdpRejected": true, "wrongCredentialOriginsUntouched": true },
@@ -34,6 +37,28 @@
   "syntheticOriginEgressAllowlist": true,
   "strictTypecheckVerified": true,
   "testResult": { "passed": 7, "failed": 0, "skipped": 0 },
+  "reality": {
+    "variant": "vless-reality-basic-tcp-without-vision-flow",
+    "testFile": "tests/protocol-reality-live.test.ts",
+    "runtimeVerified": true,
+    "httpNonceVerified": true,
+    "udpEchoVerified": true,
+    "wrongUuidHttpAndUdpRejected": true,
+    "wrongPublicKeyHttpAndUdpRejected": true,
+    "wrongShortIdHttpAndUdpRejected": true,
+    "negativeCredentialOriginsUntouched": true,
+    "syntheticHandshakeTarget": "node-tls13-x25519-ipv4-loopback",
+    "handshakeTargetContactVerified": true,
+    "clientSkipCertVerifyConfigured": false,
+    "productionTrustChainVerified": false,
+    "testResult": { "passed": 5, "failed": 0, "skipped": 0 },
+    "reviewedImplementationSources": [
+      "https://github.com/SagerNet/sing-box/blob/v1.14.4/option/tls.go",
+      "https://github.com/SagerNet/sing-box/blob/v1.14.4/common/tls/reality_server.go",
+      "https://github.com/MetaCubeX/mihomo/blob/v1.19.33/adapter/outbound/vless.go",
+      "https://github.com/MetaCubeX/mihomo/blob/v1.19.33/component/tls/reality.go"
+    ]
+  },
   "wanLanVerified": false,
   "productionSubscriptionVerified": false,
   "gatewayDeploymentVerified": false

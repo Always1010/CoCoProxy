@@ -84,7 +84,7 @@ npm run test:overlay
 
 真实核心另由显式命令执行：`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo npm run test:core-live`。未提供路径时该项跳过，不下载程序；提供的二进制必须匹配 review.json 中已审阅的解压后摘要。测试执行真实 `-t`、PID/控制端口核验、回环 HTTP 转发和 UDP/TCP localhost DNS；只用高位 loopback 端口和临时私有目录，不安装服务或修改系统网络，不代表外部节点、WAN DNS 或透明接管验收。
 
-`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo COPROXY_TEST_SING_BOX=/absolute/private/reviewed/sing-box npm run test:protocol-live` 另执行 VMess AEAD/TCP、VLESS/TCP、Trojan/TLS、Shadowsocks aes-128-gcm、Hysteria2 和 TUIC v5 的真实协议测试。每种协议都验证正确凭据下 HTTP nonce 与 UDP echo 可达，以及错误凭据下两者均不能到达源站；没有 DIRECT 回退。两个可执行文件都必须匹配固定审阅摘要。测试只使用本机临时端口、合成节点和临时证书，不涉及外部订阅、生产信任链、系统服务或网络配置。范围和已执行结果见[协议联调记录](../integrations/protocol-fixture/README.md)。
+`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo COPROXY_TEST_SING_BOX=/absolute/private/reviewed/sing-box npm run test:protocol-live` 另执行 VMess AEAD/TCP、VLESS/TCP、Trojan/TLS、Shadowsocks aes-128-gcm、Hysteria2 和 TUIC v5 的真实协议测试。每种协议都验证正确凭据下 HTTP nonce 与 UDP echo 可达，以及错误凭据下两者均不能到达源站；没有 DIRECT 回退。相同环境变量下，`npm run test:protocol-reality-live` 独立验证 VLESS REALITY：正确凭据通过 HTTP／UDP，错误 UUID、公钥和 short ID 分别无法触达源站，合成 TLS 1.3 握手目标仅在回环提供。两个可执行文件都必须匹配固定审阅摘要。测试只使用本机临时端口、合成节点和临时证书，不涉及外部订阅、生产信任链、系统服务或网络配置；REALITY 不涵盖 Vision flow。范围和已执行结果见[协议联调记录](../integrations/protocol-fixture/README.md)。
 
 管理模块的 API 与认证见[管理说明](../packages/management/README.md)，上游源码、overlay 装配和构建命令见[适配记录](../integrations/metacubexd/README.md)。`test:management` 使用回环 HTTP/WS 与显式运行替身；`test:management-live` 另以 `COPROXY_TEST_SERVER` 指向已构建 Server。提供 `COPROXY_TEST_PLAYWRIGHT`（已安装模块绝对路径）和 `COPROXY_TEST_BROWSER`（浏览器可执行文件绝对路径）时，才运行浏览器子项；缺任一参数会明确跳过，不能计为浏览器验收。可将截图写入显式 `COPROXY_TEST_ARTIFACTS` 私有目录，含当前地址的截图只留本地。
 
