@@ -3,7 +3,7 @@ import { ManagementError } from '@coproxy/packages/management/http.ts'
 import { getCoproxy } from '../lib/coproxy'
 
 // systemd and the explicit Coproxy transaction own the core lifecycle.
-export default defineNitroPlugin((app) => {
+export default defineNitroPlugin(async (app) => {
   // h3 caches this adapter options object. Nitro passes it to crossws/node.
   Object.assign(app.h3App.websocket, {
     serverOptions: { maxPayload: 4096, perMessageDeflate: false },
@@ -27,4 +27,12 @@ export default defineNitroPlugin((app) => {
       },
     },
   })
+  try {
+    const recovered = await (await getCoproxy()).recoverStartup()
+    if (!recovered.recovered) console.error('COPROXY_STARTUP_RECOVERY_INCOMPLETE')
+  } catch {
+    // Serve the management shell and fixed unavailable errors; no second core
+    // supervisor or periodic automatic retry is started after failed recovery.
+    console.error('COPROXY_STARTUP_RECOVERY_UNAVAILABLE')
+  }
 })

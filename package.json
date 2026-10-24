@@ -17,7 +17,7 @@
     "test:mihomo": "node --experimental-strip-types --test tests/mihomo.test.ts",
     "test:cli": "node --experimental-strip-types --test tests/cli.test.ts",
     "test:runtime": "node --experimental-strip-types --test tests/runtime-evidence.test.ts tests/runtime-plan.test.ts tests/runtime-systemd.test.ts",
-    "test:management": "node --experimental-strip-types --test tests/management-auth.test.ts tests/management.test.ts tests/controller.test.ts",
+    "test:management": "node --experimental-strip-types --test tests/management-auth.test.ts tests/management.test.ts tests/management-startup.test.ts tests/controller.test.ts",
     "test:protocol-live": "node --experimental-strip-types --test tests/protocol-live.test.ts",
     "test:subscription-yaml": "node --experimental-strip-types --test tests/subscription-yaml.test.ts",
     "test:management-live": "node --experimental-strip-types --test tests/management-server-live.test.ts",

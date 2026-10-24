@@ -54,7 +54,7 @@ test('built management server gates HTTP and all WS upgrades, and browser preser
     await writeFile(settingsPath, JSON.stringify({ schemaVersion: 1, origin, credentialPath, runtimeSettingsPath,
       deployment: { mixedPort: 17890, controllerPort: 19090, dnsPort: 15353, controllerSecret: secret, bootstrapResolvers: ['192.0.2.53'] } }), { mode: 0o600 });
     const child = spawn(process.execPath, [entry!], { env: { ...process.env, NITRO_HOST: '127.0.0.1', NITRO_PORT: new URL(origin).port,
-      COPROXY_MANAGEMENT_CONFIG: settingsPath, CONTROL_TOKEN: secret, GITHUB_TOKEN: secret }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      COPROXY_MANAGEMENT_CONFIG: settingsPath, CONTROL_TOKEN: secret, GITHUB_TOKEN: secret }, cwd: '/', stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let outputBytes = 0;
     for (const stream of [child.stdout!, child.stderr!]) stream.on('data', chunk => {
       outputBytes += chunk.length; if (outputBytes > 256 * 1024) child.kill('SIGTERM');

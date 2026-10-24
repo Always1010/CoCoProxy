@@ -8,6 +8,7 @@ import { loadAdminCredential } from './auth.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { decodeNodeSnapshot } from '../subscriptions/yaml.ts';
 import { createControllerProxy } from './controller.ts';
+import { recoverManagementStartup } from './startup.ts';
 import { createManagementApplication } from './application.ts';
 import { createManagementGateway, exactRecord, managementOrigin, ManagementError } from './http.ts';
 
@@ -82,6 +83,6 @@ export async function loadManagementGateway(path: string) {
       runtime, sourceClient, sourceDecoder: decodeNodeSnapshot });
     const gateway = createManagementGateway({ origin: settings.origin, credential }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
-    return { ...gateway, controller };
+    return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime) };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }

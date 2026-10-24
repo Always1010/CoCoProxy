@@ -44,7 +44,9 @@ policy 可能包含管理员编辑的节点凭据，因此仍是敏感的已认�
 
 ## 生产构造与集成关卡
 
-`loadManagementService(absolutePrivateSettingsPath)` 返回 Fetch 处理器；`loadManagementGateway` 额外提供共享 `authorize` 与 `controller` 给 Server 的 WebSocket 适配层。schemaVersion 1 私有配置包含 `origin`、`credentialPath`、`runtimeSettingsPath`、`deployment`，可选 `subscriptionPolicy`、`controllerPolicy`，合成格式见 examples/management-settings.json。运行设置沿用 runtime 模块；订阅策略沿用受限 HTTPS 许可字段，不接受可执行 resolver。工厂使用真实 `SystemdMihomoRuntime`，读取配置不会创建状态目录、监听网络或操作服务。
+`loadManagementService(absolutePrivateSettingsPath)` 返回 Fetch 处理器；`loadManagementGateway` 额外提供共享 `authorize`、`controller` 与 `recoverStartup` 给 Server 适配层。schemaVersion 1 私有配置包含 `origin`、`credentialPath`、`runtimeSettingsPath`、`deployment`，可选 `subscriptionPolicy`、`controllerPolicy`，合成格式见 examples/management-settings.json。运行设置沿用 runtime 模块；订阅策略沿用受限 HTTPS 许可字段，不接受可执行 resolver。工厂使用真实 `SystemdMihomoRuntime`，仅加载配置不会创建状态目录、监听网络或操作服务。
+
+Server 的异步启动插件等待 `recoverStartup()` 完成一次检查。空状态或已完成事务只读返回；未完成事务或持久故障交由既有 `TransactionManager.recover()` 在共同文件锁下恢复，可能停止未提交核心或重新启动上一确认核心。它不捕获新草稿、不提交新代次、不添加周期重试或第二个监管器。恢复失败保留事务／故障，管理端仍可检查并显式重试；日志只输出固定错误码。锁冲突不触发并行恢复。`tests/management-startup.test.ts` 验证这些分支，真实 Server 检查另验证从 `/` 工作目录启动，所有配置和入口必须为绝对路径。
 
 Server overlay 替换了上游原控制 router、自动启动、刷新调度和 token 注入；桌面 endpoint/sync 插件也已禁用。客户端固定同源 `/api/clash`，不会获取核心密钥或选择任意控制器。部署必须使用专用可信 origin，后端只绑定 loopback；HTTPS 终止代理须覆盖 Host/转发协议头并拒绝不可信转发头。管理与核心的私有状态要求相容的服务身份和权限，systemctl 授权仅针对审阅的核心单元，具体安装另行实施。
 
