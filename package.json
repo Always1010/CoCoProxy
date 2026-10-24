@@ -20,6 +20,7 @@
     "test:management": "node --experimental-strip-types --test tests/management-auth.test.ts tests/management.test.ts tests/management-startup.test.ts tests/controller.test.ts",
     "test:deployment": "node --experimental-strip-types --test tests/deployment-plan.test.ts",
     "test:release-stage": "node --experimental-strip-types --test tests/release-stage.test.ts",
+    "test:network-plan": "node --experimental-strip-types --test tests/network-plan.test.ts",
     "test:protocol-live": "node --experimental-strip-types --test tests/protocol-live.test.ts",
     "test:subscription-yaml": "node --experimental-strip-types --test tests/subscription-yaml.test.ts",
     "test:management-live": "node --experimental-strip-types --test tests/management-server-live.test.ts",
