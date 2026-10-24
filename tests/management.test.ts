@@ -154,6 +154,9 @@ test('authenticated saves pin server deployment, stage captures a revision and o
   assert.equal(injected.status, 400);
   const protectedPolicy = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy: { ...policy, tun: { enable: true } } });
   assert.equal(protectedPolicy.status, 400);
+  const networkBypass = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy: { ...policy,
+    iptables: { enable: true, 'inbound-interface': 'synthetic0', 'dns-redirect': true } } });
+  assert.equal(networkBypass.status, 400);
   const saved = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy });
   const metadata = await saved.json();
   assert.equal(metadata.revision, 1);
@@ -184,10 +187,12 @@ test('authenticated saves pin server deployment, stage captures a revision and o
   const mismatch = await call('/api/coproxy/apply', 'POST', { generation: foreign.id, expectedActive: staged.generation });
   assert.equal(mismatch.status, 409);
   assert.equal((await mismatch.json()).error.code, 'DEPLOYMENT_MISMATCH');
-  const invalidConfig = { ...compileConfig({ schemaVersion: 1, deployment, policy }).config, listeners: [] };
-  const invalidDigest = createHash('sha256').update(canonicalJson(invalidConfig)).digest('hex');
-  await new FileTransactionStore(f.state).stage({ id: invalidDigest, sha256: invalidDigest, config: invalidConfig });
-  assert.equal((await call('/api/coproxy/apply', 'POST', { generation: invalidDigest, expectedActive: staged.generation })).status, 400);
+  for (const bypass of [{ listeners: [] }, { iptables: { enable: true } }]) {
+    const invalidConfig = { ...compileConfig({ schemaVersion: 1, deployment, policy }).config, ...bypass };
+    const invalidDigest = createHash('sha256').update(canonicalJson(invalidConfig)).digest('hex');
+    await new FileTransactionStore(f.state).stage({ id: invalidDigest, sha256: invalidDigest, config: invalidConfig });
+    assert.equal((await call('/api/coproxy/apply', 'POST', { generation: invalidDigest, expectedActive: staged.generation })).status, 400);
+  }
   assert.deepEqual(f.events, ['validate', 'activate', 'confirm']);
   const privateConfig = JSON.parse(await readFile(join(f.state, 'candidates', staged.generation + '.json'), 'utf8'));
   assert.equal(privateConfig.secret, secret);
