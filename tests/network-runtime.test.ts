@@ -55,11 +55,12 @@ async function fixture(t: test.TestContext, controllerSecret = secret) {
     blockedFailureAt: 0,
     blockedCalls: 0,
     inspectHook: undefined as ((token: string, settle: boolean, value: FencedCommandInspection) => Promise<FencedCommandInspection>) | undefined,
+    showHook: undefined as (() => Promise<void>) | undefined,
     commandHook: undefined as ((action: Action) => Promise<void>) | undefined,
   };
   const dependencies: GatewayRuntimeFixtureDependencies = {
     async preflight() { calls.push('preflight'); },
-    async show() { calls.push('show'); return structuredClone(model.observed); },
+    async show() { calls.push('show'); await model.showHook?.(); return structuredClone(model.observed); },
     async candidate(settings, generation, plan) { calls.push('candidate'); return loadGatewayCandidate(settings, generation, plan); },
     async validate(candidate, options) {
       calls.push('validate'); assert.equal(candidate.id, preview.candidate.id); assert.equal(options.binaryPath, proposed.settings.binaryPath);
@@ -161,6 +162,102 @@ test('gateway read-only settlement refuses unknown workers and manager jobs with
   assert.deepEqual(await f.journal(), prior); assert.deepEqual(f.commands, ['stop', 'start']);
 });
 
+test('gateway settlement preflight and explicit settlement do not initialize missing journals or storage', linux, async t => {
+  const f = await fixture(t);
+  for (const missingRoot of [false, true]) {
+    if (missingRoot) await rm(f.proposed.settings.stateDirectory, { recursive: true });
+    const before = await tree(f.parent);
+    await f.runtime.preflightSettlement(); await f.runtime.settlePending();
+    assert.equal(await tree(f.parent), before);
+    f.model.observed.state.jobPending = true;
+    await assert.rejects(f.runtime.preflightSettlement(), failed);
+    await assert.rejects(f.runtime.settlePending(), failed);
+    assert.equal(await tree(f.parent), before);
+    f.model.observed.state.jobPending = false;
+  }
+  assert.deepEqual(f.commands, []); assert.equal(f.calls.includes('inspect:settle'), false);
+});
+
+test('gateway checks the old receipt before every settlement path can signal a worker', linux, async t => {
+  for (const kind of ['unknown-worker', 'uncertain', 'wrong-token', 'wrong-command', 'wrong-context', 'wrong-result-worker'] as const) {
+    await t.test(kind, async child => {
+      const f = await fixture(child); f.model.commandFailure = 'start';
+      await assert.rejects(f.runtime.ensure(f.preview.networkPlan.deployment, f.blocked), failed);
+      const before = await tree(f.proposed.settings.stateDirectory);
+      f.model.inspectHook = async (_token, settle, value) => {
+        assert.equal(settle, false, 'unverified worker must never reach the signaling seam');
+        value.state = kind === 'uncertain' ? 'uncertain' : 'running';
+        if (kind === 'unknown-worker') return { state: 'running' };
+        if (kind === 'wrong-token') value.receipt!.token = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+        if (kind === 'wrong-command') value.receipt!.commandSHA = '0'.repeat(64);
+        if (kind === 'wrong-context') value.receipt!.netNS = 'net:[1]';
+        if (kind === 'wrong-result-worker') value.result!.worker.startTime = '999';
+        return value;
+      };
+      f.calls.length = 0;
+      for (const operation of [() => f.runtime.preflightSettlement(), () => f.runtime.settlePending(),
+        () => f.runtime.ensure(f.preview.networkPlan.deployment, f.blocked), () => f.runtime.recoverStopped(f.blocked)]) {
+        await assert.rejects(operation(), failed);
+        assert.equal(await tree(f.proposed.settings.stateDirectory), before);
+      }
+      assert.equal(f.calls.includes('inspect:settle'), false); assert.deepEqual(f.commands, ['stop', 'start']);
+    });
+  }
+});
+
+test('gateway explicit settlement terminates only the bound worker, waits for its manager job and retains the durable pending', linux, async t => {
+  const f = await fixture(t); f.model.commandFailure = 'start';
+  await assert.rejects(f.runtime.ensure(f.preview.networkPlan.deployment, f.blocked), failed);
+  const old = await f.journal(), before = await tree(f.proposed.settings.stateDirectory), blockedCalls = f.model.blockedCalls;
+  const receipt = f.inspections.get(old.pending!.token)!; receipt.state = 'running'; delete receipt.result;
+  f.model.observed.state.jobPending = true;
+  let signaled = false, managerReads = 0;
+  f.model.inspectHook = async (token, settle, value) => {
+    assert.equal(token, old.pending!.token);
+    if (settle) { signaled = true; f.inspections.get(token)!.state = 'settled'; value.state = 'settled'; }
+    return value;
+  };
+  f.model.showHook = async () => {
+    if (signaled && ++managerReads === 3) f.model.observed.state.jobPending = false;
+  };
+  f.calls.length = 0;
+  await f.runtime.preflightSettlement();
+  assert.equal(signaled, false); assert.deepEqual(f.calls, ['preflight', 'inspect:readonly', 'show']);
+  await assert.rejects(f.runtime.assertSettled(), failed);
+  await f.runtime.settlePending();
+  assert.equal(signaled, true); assert.equal(managerReads, 3);
+  assert.ok(f.calls.indexOf('inspect:readonly') < f.calls.indexOf('inspect:settle'));
+  assert.ok(f.calls.lastIndexOf('inspect:readonly') > f.calls.indexOf('inspect:settle'));
+  assert.equal(await tree(f.proposed.settings.stateDirectory), before);
+  assert.deepEqual(await f.journal(), old); assert.equal(f.model.blockedCalls, blockedCalls);
+  assert.deepEqual(f.commands, ['stop', 'start']);
+  await f.runtime.assertSettled();
+});
+
+test('gateway settlement fails boundedly on a persistent manager job or changed worker binding without clearing pending', linux, async t => {
+  for (const changedWorker of [false, true]) {
+    const f = await fixture(t); f.model.commandFailure = 'start';
+    await assert.rejects(f.runtime.ensure(f.preview.networkPlan.deployment, f.blocked), failed);
+    const old = await f.journal(), before = await tree(f.proposed.settings.stateDirectory);
+    f.model.observed.state.jobPending = !changedWorker;
+    if (changedWorker) {
+      f.inspections.get(old.pending!.token)!.state = 'running';
+      f.model.inspectHook = async (_token, settle, value) => {
+        if (settle) {
+          value.state = 'settled'; value.receipt!.startTime = '999';
+          value.result!.worker.startTime = '999';
+        }
+        return value;
+      };
+    }
+    const started = performance.now();
+    await assert.rejects(f.runtime.settlePending(), failed);
+    assert.ok(performance.now() - started < 5000, 'manager settlement has a short fixed bound');
+    assert.equal(await tree(f.proposed.settings.stateDirectory), before);
+    assert.deepEqual(await f.journal(), old); assert.deepEqual(f.commands, ['stop', 'start']);
+  }
+});
+
 test('gateway issue requires a bound successful worker result and confirmed manager completion', linux, async t => {
   for (const kind of ['absent', 'no-result', 'failed-result', 'wrong-token', 'wrong-command', 'wrong-context',
     'wrong-result-token', 'wrong-result-command', 'wrong-result-worker', 'job', 'live-pid', 'populated-cgroup'] as const) {
@@ -194,7 +291,7 @@ test('gateway explicit recovery never starts and preserves an old pending until 
   await assert.rejects(f.runtime.ensure(f.preview.networkPlan.deployment, f.blocked), failed);
   const old = await f.journal(), raw = await readFile(f.journalPath, 'utf8'), selected = await readFile(f.proposed.selectedPath, 'utf8');
   f.model.inspectHook = async (token, settle, value) => {
-    assert.equal(token, old.pending!.token); assert.equal(settle, true); return { ...value, state: 'uncertain' };
+    assert.equal(token, old.pending!.token); assert.equal(settle, false); return { ...value, state: 'uncertain' };
   };
   await assert.rejects(f.runtime.recoverStopped(f.blocked), failed);
   assert.equal(await readFile(f.journalPath, 'utf8'), raw); assert.deepEqual(f.commands, ['stop', 'start']);

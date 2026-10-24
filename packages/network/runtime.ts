@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readFile, readlink, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { types } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { canonicalJson } from '../config/index.ts';
 import { assertManagedUnit } from '../runtime/observer.ts';
 import { parseUnitState } from '../runtime/systemd.ts';
@@ -185,16 +186,32 @@ export class GatewayCoreRuntime {
   }
   private async inspectPending(state: Journal, settle: boolean): Promise<FencedCommandInspection | null> {
     if (!state.pending) return null;
-    const value = await this.deps.inspect(state.pending.token, settle);
-    if (!['absent', 'settled'].includes(value.state)) fail();
+    // A signal must never precede the journal/receipt binding proof. In particular,
+    // a syntactically valid receipt for another command is not recovery authority.
+    const before = await this.deps.inspect(state.pending.token, false);
+    this.checkPendingInspection(state.pending, before);
+    if (before.state === 'uncertain') fail();
+    if (!settle || before.state !== 'running') {
+      if (before.state === 'running') fail();
+      return before;
+    }
+    const value = await this.deps.inspect(state.pending.token, true);
+    this.checkPendingInspection(state.pending, value);
+    if (!value.receipt || !sameFencedIdentity(before.receipt!, value.receipt) || value.state !== 'settled') fail();
+    const after = await this.deps.inspect(state.pending.token, false);
+    this.checkPendingInspection(state.pending, after);
+    if (!after.receipt || !sameFencedIdentity(before.receipt!, after.receipt) || after.state !== 'settled') fail();
+    return after;
+  }
+  private checkPendingInspection(expected: Pending, value: FencedCommandInspection): void {
+    if (!['absent', 'settled', 'running', 'uncertain'].includes(value.state) ||
+      (value.state === 'absent' ? value.receipt !== undefined || value.result !== undefined : !value.receipt)) fail();
     if (value.receipt) {
-      const expected = state.pending;
       if (value.receipt.token !== expected.token || value.receipt.commandSHA !== expected.commandSHA || ['bootID', 'userNS', 'netNS', 'uid'].some(key =>
         value.receipt![key as keyof typeof expected.context] !== expected.context[key as keyof typeof expected.context])) fail();
       if (value.result && (value.result.token !== expected.token || value.result.commandSHA !== expected.commandSHA ||
         !sameFencedIdentity(value.result.worker, value.receipt))) fail();
     }
-    return value;
   }
   private async locked<T>(operation: () => Promise<T>): Promise<T> {
     if (this.busy) fail(); this.busy = true;
@@ -247,6 +264,53 @@ export class GatewayCoreRuntime {
       if ((await this.deps.show()).state.jobPending) fail();
     });
   }
+  /** Read-only recovery authority check; it does not require a candidate or kill a worker. */
+  async preflightSettlement(): Promise<void> {
+    return this.observing(async () => {
+      await this.deps.preflight();
+      const state = await this.read();
+      if (state?.pending) {
+        const inspection = await this.deps.inspect(state.pending.token, false);
+        this.checkPendingInspection(state.pending, inspection);
+        if (inspection.state === 'uncertain') fail();
+      }
+      if ((await this.deps.show()).state.jobPending && !state?.pending) fail();
+    });
+  }
+  private async settleOld(state: Journal): Promise<void> {
+    const before = await this.inspectPending(state, true);
+    // systemctl clients and manager jobs have independent lifetimes. Only a
+    // journal-bound old operation can explain a job; never cancel an arbitrary job.
+    for (let attempt = 0; (await this.deps.show()).state.jobPending; attempt++) {
+      if (!state.pending || attempt === 10) fail();
+      await delay(100);
+    }
+    const after = await this.inspectPending(state, false);
+    if (before?.receipt ? !after?.receipt || !sameFencedIdentity(before.receipt, after.receipt) : after?.receipt) fail();
+  }
+  /** Caller has durably fenced settlement under the unique outer network lock.
+   * Only the bound old worker may be terminated; no fresh business operation is issued. */
+  async settlePending(): Promise<void> {
+    return this.observing(async () => {
+      if (this.busy) fail();
+      await this.deps.preflight();
+      const state = await this.read();
+      if (!state?.pending) {
+        if ((await this.deps.show()).state.jobPending) fail();
+        return;
+      }
+      // exclusive() initializes storage. Settlement is permitted to use existing
+      // storage only, including the candidates directory that this lock expects.
+      await inspectPrivateDirectory(this.store.root);
+      await inspectPrivateDirectory(join(this.store.root, 'candidates'));
+      await this.locked(async () => {
+        if (JSON.stringify(await this.read()) !== JSON.stringify(state)) fail();
+        await this.settleOld(state);
+        if (JSON.stringify(await this.read()) !== JSON.stringify(state)) fail();
+        await this.inspectPending(state, false);
+      });
+    });
+  }
   private async observing<T>(operation: () => Promise<T>): Promise<T> {
     try { return await operation(); }
     catch (error) { if (error instanceof NetworkDriverError) throw error; return fail(); }
@@ -262,7 +326,7 @@ export class GatewayCoreRuntime {
       await assertBlocked();
       let state = await this.read() ?? { schemaVersion: 1 as const, scope: this.scope, revision: 0, settingsSHA: this.settingsSHA, selected: null, pending: null };
       await privateDirectory(join(this.store.root, 'commands'));
-      await this.inspectPending(state, true);
+      await this.settleOld(state);
       state = await this.issue(state, 'stop', assertBlocked);
       await atomicWrite(this.store.root, 'selected-core.json', canonicalJson(target.candidate.config));
       state = await this.write({ ...state, selected: plan.generation });
@@ -277,7 +341,7 @@ export class GatewayCoreRuntime {
       await this.deps.preflight(); await this.deps.show(); await assertBlocked();
       const state = await this.read() ?? { schemaVersion: 1 as const, scope: this.scope, revision: 0, settingsSHA: this.settingsSHA, selected: null, pending: null };
       await privateDirectory(join(this.store.root, 'commands'));
-      await this.inspectPending(state, true);
+      await this.settleOld(state);
       await this.issue(state, 'stop', assertBlocked);
     });
   }
