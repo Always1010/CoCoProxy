@@ -77,6 +77,7 @@ npm run test:network-runtime
 npm run test:network-management-observer
 npm run test:network-driver
 npm run test:network-watchdog
+npm run test:network-helper-http
 npm run test:network-core-observer
 npm run test:network-observer
 npm run test:network-command
@@ -112,6 +113,8 @@ npm run test:overlay
 `test:network-management-observer` 验证[固定管理服务 PID 来源](../packages/network/management-observer.md)的受信 systemctl/unit、实际进程 UID、namespace、启动时间与前后稳定性，并拒绝调用者自报 PID。`test:network-driver` 验证[固定驱动组合](../packages/network/driver.md)的生命周期和恢复顺序；Linux 子项连接真实协调器与持久文件，核验操作屏障、未知失败拒绝直接重试和显式恢复。核心、资源与观察依赖仍是 fixture，不代替生产两个服务和完整网络组合验收。
 
 `test:network-watchdog` 验证[同进程运行监测](../packages/network/watchdog.md)的启动恢复、串行检查、故障后保持阻断与停止恢复。协调器运行检查另验证原激活身份不被替换、健康检查不写 journal／revision、参数和 CAS 拒绝不撤销原健康实例，以及 busy 检查不会撤销另一成功检查的授权。真实内核测试还验证 TUN 消失导致旧资源会话失效后，从持久凭据重新打开并恢复 blocked；不把 fixture 监测与隔离资源验证合并为生产服务验收。
+
+`test:network-helper-http` 使用真实回环 HTTP 与合成 handler 验证[helper 传输边界](../packages/network/helper-http.md)：令牌摘要认证、精确路径与 Host、浏览器头拒绝、规范有界 JSON、请求体期限、并发上限、业务请求断开后继续及关闭等待。候选编译、可信根配置和 helper 主程序尚待接入；传输层不宣称生产 driver 已安装。
 
 `test:network-observer` 验证[组合运行证据](../packages/network/observer.md)的完整来源、核心及管理身份稳定性、同代 plan 绑定、30 秒窗口、资源阶段及未收敛错误传播。生产入口固定组合真实读取函数，fixture 才能注入依赖；固定服务下的生产正向观察尚待部署后验收。各有命令的底层观察另返回 `commandsSettled`，缺失或未收敛时组合器保留驱动 fence，不把普通失败当成工具已退出。
 
