@@ -1,6 +1,6 @@
 # 管理认证与事务接口
 
-本模块提供可挂载的 Fetch 请求处理器，复用草稿、订阅、不可变候选和应用事务。它不创建监听器、不启动核心；当前尚未挂载到 MetaCubeXD Server，也没有交付网页登录页或控制器 HTTP/WebSocket 代理。不能将单独通过的接口测试当作网页集成完成。
+本模块提供可挂载的 Fetch 请求处理器，复用草稿、订阅、不可变候选和应用事务。适配后的 MetaCubeXD Server 已挂载该处理器并接入登录页和控制器 HTTP/WebSocket 代理；加载本模块不会监听或启动核心。实际浏览器回环检查覆盖管理流程，systemd 安装和真实服务应用仍待部署验证。
 
 ## 身份、会话与请求边界
 
@@ -36,7 +36,7 @@ HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Stric
 | GET/PUT `/api/coproxy/sources/:id` | 读取摘要；PUT `{expectedRevision,url}` 保存来源 |
 | POST `/api/coproxy/sources/:id/refresh` | `{expectedRevision}`；按部署许可策略刷新，不自动应用 |
 
-除最小 health 外均要求管理会话；所有路径不接受查询参数。未知路由和原有 `/api/control/**` 在本处理器中返回 404，没有兼容的直接 start、配置热写、脚本、升级、WebDAV 或 geo 下载旁路。
+除最小 health 外均要求管理会话；上表路径不接受查询参数。未知路由和原有 `/api/control/**` 返回 404，没有兼容的直接 start、配置热写、脚本、升级、WebDAV 或 geo 下载旁路。
 
 浏览器不能提交 deployment 或 HTTPS 获取策略。`createManagementApplication` 在可信启动参数中捕获部署参数，保存时注入；读取或暂存不匹配的历史草稿会报告冲突。应用已有候选时，用固定部署重新编译并要求完整代次一致，不能只信任内容 hash 或部分监听字段。draft/source revision、generation、expectedActive 分别承担保存、捕获和运行 CAS，互不替代。
 
@@ -44,9 +44,17 @@ policy 可能包含管理员编辑的节点凭据，因此仍是敏感的已认�
 
 ## 生产构造与集成关卡
 
-`loadManagementService(absolutePrivateSettingsPath)` 读取 schemaVersion 1 的私有配置，字段为 `origin`、`credentialPath`、`runtimeSettingsPath`、`deployment`，可选 `subscriptionPolicy`。运行设置沿用 runtime 模块；订阅策略沿用受限 HTTPS 许可字段，不接受可执行 resolver。工厂使用真实 `SystemdMihomoRuntime`，读取配置不会创建状态目录、监听网络或操作服务。
+`loadManagementService(absolutePrivateSettingsPath)` 返回 Fetch 处理器；`loadManagementGateway` 额外提供共享 `authorize` 与 `controller` 给 Server 的 WebSocket 适配层。schemaVersion 1 私有配置包含 `origin`、`credentialPath`、`runtimeSettingsPath`、`deployment`，可选 `subscriptionPolicy`、`controllerPolicy`，合成格式见 examples/management-settings.json。运行设置沿用 runtime 模块；订阅策略沿用受限 HTTPS 许可字段，不接受可执行 resolver。工厂使用真实 `SystemdMihomoRuntime`，读取配置不会创建状态目录、监听网络或操作服务。
 
-后续挂载必须替换上游原控制 router、自动启动插件和 token 注入的 config.js；在同一受信任 origin 下处理会话，保护 Host 和 TLS 终止边界。不能只把本模块放在旧 router 旁边，再宣称旁路已关闭。UI 还须对接登录、版本冲突、明确应用、来源捕获和受限控制器代理；这些关卡当前未完成。
+Server overlay 替换了上游原控制 router、自动启动、刷新调度和 token 注入；桌面 endpoint/sync 插件也已禁用。客户端固定同源 `/api/clash`，不会获取核心密钥或选择任意控制器。部署必须使用专用可信 origin，后端只绑定 loopback；HTTPS 终止代理须覆盖 Host/转发协议头并拒绝不可信转发头。管理与核心的私有状态要求相容的服务身份和权限，systemctl 授权仅针对审阅的核心单元，具体安装另行实施。
+
+## 核心代理
+
+`/api/clash/*` 与上述接口共用 Cookie。仅允许有限 GET：version/configs/proxies/group/rules/providers/connections；按名称选择节点的 PUT，以及关闭连接／清除选择的 DELETE 要求 `If-Match` 等于已观察 generation，且在配置应用共用锁内重新核验目标。PATCH/PUT configs、重启、更新、provider 下载与脚本入口均拒绝。GET 返回 `X-Coproxy-Generation`；候选切换由事务接口完成，不借助热写配置。
+
+目标固定为当前 active、selection 和真实运行证据一致的 loopback controller，密钥仅在服务端 Authorization 头中使用。不接受客户端 Bearer、Cookie 转发、目标地址或 token 查询。延迟探测只能使用 `controllerPolicy.allowedProbeOrigins` 中精确的 HTTPS origin，timeout 不超过 10 秒；未配置时全部拒绝。UI 的探测 URL 必须与部署许可一致。
+
+HTTP 响应最多 2 MiB、5 秒，拒绝重定向，严格解析 UTF-8 JSON；递归脱敏秘密字段及实际 controller secret，限制深度和数量。WS 只允许 traffic/connections/memory/logs 与有界 interval/level 参数，单帧 1 MiB、队列 32 帧／2 MiB，并复核客户端发送缓存。每秒重查会话和代次；注销、过期、事务开始或代次改变会关闭连接。Node Server 另限制最多 128 条流、客户端帧 4096 字节且拒绝任何客户端消息；全局 upgrade hook 同时封住没有 WS 路由的匿名升级入口。流状态不代表代理节点或网关健康。
 
 ```sh
 npm run test:management

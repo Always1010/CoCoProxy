@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "origin": "https://management.example",
+  "credentialPath": "/etc/coproxy/admin.json",
+  "runtimeSettingsPath": "/etc/coproxy/runtime.json",
+  "deployment": {
+    "mixedPort": 17890,
+    "controllerPort": 19090,
+    "controllerSecret": "replace-with-private-random-controller-secret",
+    "dnsPort": 15353,
+    "bootstrapResolvers": ["192.0.2.53"]
+  },
+  "subscriptionPolicy": { "allowedOrigins": ["https://subscription.example"] },
+  "controllerPolicy": { "allowedProbeOrigins": ["https://probe.example"] }
+}

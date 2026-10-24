@@ -8,6 +8,8 @@
 
 默认 decoder 是 `JSON.parse`，也可以显式注入同步 decoder。解码结果必须严格为 `{proxies: JsonObject[]}`。完整订阅里的规则、策略组、provider、脚本、部署及未知顶层字段均返回 `SNAPSHOT_UNSUPPORTED`；节点再通过 `compileConfig` 的离线安全边界，拒绝远程 provider、文件读取、脚本或出口覆盖等字段。校验使用合成部署参数与 `MATCH,REJECT` 策略，不启动网络核心。它不是完整的 Mihomo 协议 schema 校验；真正应用前仍须验证目标核心配置。
 
+管理服务显式注入 `yaml.ts` 的 `decodeNodeSnapshot`：使用锁定的 yaml 2.9.0 接受 JSON 或单份 Clash YAML 1.2，只提取 proxies，其他根字段作为数据解析后丢弃。无节点、provider-only、URI/base64、重复键、多文档、自定义标签和循环引用均拒绝；允许有限的普通锚点并复制为独立 JSON。输入限 1 MiB、深度 48、语法与展开值最多 100,000、别名最多 50、展开字节最多 4 MiB。节点内字段仍交给上述编译器检查；保存快照不等于协议可用。测试命令为 `npm run test:subscription-yaml`。
+
 公开 API：
 
 - `list()`：只读、按 ID 排序的 metadata 清单；缺目录时返回空数组，不暴露 URL。逐项校验已存记录，拒绝不明文件和超限目录，仅跳过原子写入器的已知临时文件；它不是跨来源原子快照，后续修改仍须按各自 revision 检查。

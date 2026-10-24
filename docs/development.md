@@ -1,10 +1,10 @@
 # 首批开发与验证
 
-当前已实现配置、草稿、来源、事务、systemd 运行适配源码、管理认证与事务 Fetch 接口和开发 CLI。固定核心已通过独立回环检查；服务尚未安装，网页集成和 LAN 接管仍未验收，不把测试替身结果作为真实核心或终端验收。
+当前已实现配置、草稿、来源、事务、systemd 运行适配源码、管理认证、受限控制器代理和开发 CLI。适配后的 MetaCubeXD Server/UI 已通过构建、界面类型检查和实际浏览器的登录／草稿／捕获／冲突／注销流程。服务尚未安装，完整节点与 LAN 接管仍未验收；浏览器回环验证也不代表真实 systemd 应用成功。
 
 ## 环境与命令
 
-使用 Node.js 22.18 或更高版本的原生 TypeScript 类型擦除；首批代码没有第三方依赖，无需 npm install。类型擦除只加载代码，不执行静态类型检查。Linux 运行检查在明确的独立项目工作区完成，不能用其他操作系统的结果替代 Linux 文件权限、锁和进程行为验证。
+使用 Node.js 22.18 或更高版本的原生 TypeScript 类型擦除。当前管理代理和 YAML 解码使用根锁文件固定的 ws、yaml；获准后执行 `npm ci --ignore-scripts --no-audit --no-fund`。类型擦除只加载代码，不执行静态类型检查。Linux 运行检查在明确的独立项目工作区完成，不能用其他操作系统的结果替代 Linux 文件权限、锁和进程行为验证。
 
 严格检查工具以 `tooling/package-lock.json` 固定 TypeScript 5.9.3、Node 22 类型和 pnpm 10.34.1。在获准的项目目录执行 `npm ci --prefix tooling --ignore-scripts --no-audit --no-fund`，再运行 `npm run typecheck`。这不替换系统 Node 或包管理器；node_modules、缓存和上游构建产物不参与源码同步及提交。
 
@@ -53,7 +53,7 @@ npm run cli -- source-stage --source-id example-feed --input /absolute/private/b
 
 来源操作返回 revision。成功刷新、304 和持久化的刷新失败都会递增它；后续操作必须使用实际返回/重新读取的 revision。失败保留上次接受的快照；更换 URL 后旧快照暂不可用于新定义。source-stage 捕获指定来源版本，将节点加入基础配置的 sources 后编译并暂存，返回捕获的来源 revision 和快照 revision。基础策略需引用所需节点，重复来源或节点名由编译器拒绝。该命令不应用配置，也不把其他同时发生的草稿保存视为已应用。
 
-当前解码只接受严格的 JSON `{proxies:[...]}`，不支持完整 YAML 订阅、远程策略组、规则或脚本。存储层可注入受审查的 decoder，后续通过上游 YAML 适配接入；此处不把临时输入格式宣称为完整订阅兼容。详见[订阅模块](../packages/subscriptions/README.md)与[HTTP 客户端](../packages/subscriptions/http.md)。
+CLI 的 source-refresh 沿用严格 JSON `{proxies:[...]}` 解码；管理服务显式注入 `decodeNodeSnapshot`，接受 JSON 或单份 Clash YAML 1.2，仅导入 proxies。来源的策略、规则、provider 和脚本不会导入，不支持 URI/base64 订阅转换。两者共享节点安全校验和版本存储。详见[订阅模块](../packages/subscriptions/README.md)与[HTTP 客户端](../packages/subscriptions/http.md)。
 
 ## 针对性检查
 
@@ -67,13 +67,17 @@ npm run test:cli
 npm run test:runtime
 npm run test:management
 npm run test:git-tree
+npm run test:subscription-yaml
+npm run test:overlay
 ```
 
 按修改范围选择命令。配置测试覆盖保护边界和稳定摘要；事务测试覆盖完整性、CAS、回滚、中断、跨进程锁、Linux 死锁核验和权限；草稿与订阅测试覆盖保存/刷新并发、旧回包、失败数据保留和输入完整性，HTTPS 测试用已有 openssl 生成临时证书并执行实际 TLS 握手；核心包装器测试使用明确的可执行测试替身；CLI 测试验证真实命令行进程、私有输出和不伪报运行状态。不能用这些测试宣称协议节点、核心实际语法、网关接管、DNS 或终端出口已验收。
 
 真实核心另由显式命令执行：`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo npm run test:core-live`。未提供路径时该项跳过，不下载程序；提供的二进制必须匹配 review.json 中已审阅的解压后摘要。测试执行真实 `-t`、PID/控制端口核验、回环 HTTP 转发和 UDP/TCP localhost DNS；只用高位 loopback 端口和临时私有目录，不安装服务或修改系统网络，不代表外部节点、WAN DNS 或透明接管验收。
 
-管理模块的 API、认证和剩余挂载关卡见[管理说明](../packages/management/README.md)。普通接口测试使用显式运行替身；真实核心测试与上游构建均单列，不能混为同一种证据。
+管理模块的 API 与认证见[管理说明](../packages/management/README.md)，上游源码、overlay 装配和构建命令见[适配记录](../integrations/metacubexd/README.md)。`test:management` 使用回环 HTTP/WS 与显式运行替身；`test:management-live` 另以 `COPROXY_TEST_SERVER` 指向已构建 Server。提供 `COPROXY_TEST_PLAYWRIGHT`（已安装模块绝对路径）和 `COPROXY_TEST_BROWSER`（浏览器可执行文件绝对路径）时，才运行浏览器子项；缺任一参数会明确跳过，不能计为浏览器验收。可将截图写入显式 `COPROXY_TEST_ARTIFACTS` 私有目录，含当前地址的截图只留本地。
+
+真实 Server 检查创建临时合成凭据和无服务目标，只绑定临时 loopback 端口；验证所有 WebSocket 升级、旧路由拒绝、登录、保存、捕获、CAS 冲突保留与注销。不会安装服务或执行真实核心应用。真实核心测试另验证受限代理的查询和流量流，仍不证明 systemd 部署或终端出口就绪。
 
 ## 后续实施顺序
 

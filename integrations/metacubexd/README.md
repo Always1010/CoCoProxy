@@ -1,6 +1,6 @@
 # MetaCubeXD 适配记录
 
-状态：固定源码与 Git 树已核对，Server/UI 锁文件依赖已安装，尚未完成 Coproxy 网页集成，不是已验证运行组合。固定核心已通过独立回环检查，范围见 review.json。
+状态：固定源码与 Git 树已核对，Server/UI 依赖已锁定并构建；Coproxy overlay 已通过真实 Server 与浏览器回环检查。验证范围为管理登录、草稿、捕获、冲突与注销，尚未验收真实 systemd 服务应用或完整网关组合。固定核心另通过独立回环及受限代理检查，范围见 review.json。
 
 审查入口为 v1.273.1，其 Git 引用核对为 8bbc8f58fef71148a94fb5c0ff808f79b057337d。后续构建应核对提交，不只信任可移动 tag。上游是 pnpm 工作区；Agent 包是 private workspace 包，不能假定可从 npm 独立安装。根配置指定 pnpm 10.34.1。[根配置](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/package.json)、[Agent 包](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/package.json)
 
@@ -28,10 +28,31 @@
 
 实际安装使用 pnpm 10.34.1，限定 `--filter '@metacubexd/server...' --filter '@metacubexd/ui...'`，加 `--frozen-lockfile --ignore-scripts`。安装前后 pnpm-lock.yaml 的 SHA-256 一致。UI 的 nuxt prepare 和其他构建步骤在明确的构建命令中执行；安装成功本身不证明这些步骤、网页或 Agent 生命周期已经适配。
 
-固定源码的 UI `generate` 与 Server `build` 已成功，构建前后锁文件摘要一致。字体提供方元数据获取失败及大分块产生了构建警告；字体显示、浏览器功能和上游类型检查仍需验证，不能把产物生成成功当作 UI 已验收。原始 Server 产物尚未启动，需先关闭原监管和凭据暴露路径并挂载本项目接口。
+固定源码及适配后的 UI `generate` 与 Server `build` 均成功，构建前后上游锁文件摘要一致。overlay 禁用 PWA、mock 和远程字体模块，使用现有 CSS 系统字体回退；保留大分块和未使用导入的构建警告。原始 Server 未启动，只运行适配产物。上游锁定 vue-tsc 3.3.10 默认调用 TypeScript 7 时启动失败；`typecheck-metacubexd-ui.mjs` 使用其 `run(tscPath)` API 显式选择本项目锁定的 TypeScript 5.9.3，完整 UI 类型检查已通过，没有修改上游锁文件或全局工具链。
 
-管理认证与受保护事务接口已在 packages/management 实现为可挂载 Fetch 处理器；尚未挂载上游路由，也未替换旧 UI 的直接控制器访问。不得启动未经适配的原 Server 后声称它已采用 systemd 唯一监管。上游原[启动插件](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/apps/server/plugins/boot-kernel.ts)和[动态配置脚本](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/apps/server/routes/config.js.ts)需要一并处理。
+overlay 已替换启动插件、原控制 router、凭据注入和桌面同步；未实例化原 Agent／scheduler。认证、受限 HTTP/WS 和事务入口统一挂载，界面保留原导航、概览、节点、连接、规则和日志，并增加登录与策略／订阅页。Node WS 全局 upgrade gate 补足 crossws 0.3.5 对无处理器路径仍接受升级的默认行为；不能只依赖 HTTP middleware 或单一路由 hook。
+
+## 复现适配构建
+
+先在获准环境准备本项目根依赖与 tooling，再设置 `UPSTREAM` 为独立上游源码绝对目录。对干净源树运行上面的完整 blob 校验，再按既述 frozen-lockfile/ignore-scripts 安装上游 Server/UI 依赖。下列命令从 Coproxy 仓库根目录执行：
+
+```sh
+node scripts/apply-metacubexd-overlay.mjs --directory "$UPSTREAM"
+CI=true NUXT_TELEMETRY_DISABLED=1 node tooling/node_modules/pnpm/bin/pnpm.cjs --dir "$UPSTREAM" --filter @metacubexd/ui generate
+node scripts/typecheck-metacubexd-ui.mjs --directory "$UPSTREAM"
+CI=true COPROXY_SOURCE_DIR="$PWD" node tooling/node_modules/pnpm/bin/pnpm.cjs --dir "$UPSTREAM" --filter @metacubexd/server build
+```
+
+装配工具只复制受跟踪 overlay，逐个校验固定上游 Git blob 或已应用的相同 overlay；整批预检后逐文件原子替换，拒绝未知漂移、新增文件冲突和目录链接。它不修改依赖或执行上游代码，不将 `.local/` 同步到目标。更新 overlay 后，应从核验过的原始源树重新装配；不能用强制覆盖掩盖手工修改。复用工作区的依赖时仍须核对锁文件，不能把修改后的目录再称作原始源树。
+
+审阅私有配置后可运行临时回环管理服务：
+
+```sh
+COPROXY_MANAGEMENT_CONFIG=/absolute/private/management.json NITRO_HOST=127.0.0.1 NITRO_PORT=18080 node "$UPSTREAM/apps/server/.output/server/index.mjs"
+```
+
+origin 必须与访问地址和可信 HTTPS 终止配置一致；上述 HTTP 仅用于精确 loopback origin。该命令不会安装服务或自动启动核心；核心应用依赖单独部署的审阅 systemd 单元与受限授权。使用 `COPROXY_TEST_SERVER` 指向构建入口运行 `npm run test:management-live`，浏览器参数与跳过规则见开发文档。只在单实例 Node preset 验证，其他部署形态尚未支持。
 
 上游代码使用 MIT 许可证；候选 Mihomo 的 LICENSE 为 GNU GPL v3。实际分发时核对具体资产和组合，保留对应许可与来源要求；本记录不表示已制作包含这些资产的发行包。[MetaCubeXD LICENSE](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/LICENSE)、[Mihomo LICENSE](https://github.com/MetaCubeX/mihomo/blob/3f27ef39f8c96bbfbc8b0b9bb10f5c9ef60149d8/LICENSE)
 
-下一关卡：固定资产校验、真实核心语法与协议输入、受控管理服务、订阅/编辑事务接入和唯一监管。通过前不得报告网关、节点或 LAN 已可用。
+overlay 中复用的上游界面代码沿用本目录 LICENSE 的 MIT 通知。下一关卡是服务安装与受限权限、真实协议输入、完整核心应用恢复，以及独立网络执行与单终端协作；通过前不得报告网关、节点或 LAN 已可用。
