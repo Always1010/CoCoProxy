@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { canonicalJson, compileConfig, ConfigError } from '../../packages/config/index.ts';
 import { validateWithMihomo, MihomoValidationError } from '../../packages/mihomo/validator.ts';
 import { FileTransactionStore, TransactionError } from '../../packages/transaction/index.ts';
+import { DraftStore, DraftError } from '../../packages/drafts/index.ts';
 
 const MAX_INPUT_BYTES = 1_048_576;
 const HELP = [
@@ -15,6 +16,9 @@ const HELP = [
   'validate --input <JSON> --mihomo-bin <绝对路径>  调用现有核心作语法校验',
   'stage    --input <JSON> --state-dir <绝对路径>  暂存不可变候选，不激活',
   'status   --state-dir <绝对路径>  读取持久状态，不代表实时健康',
+  'draft-save --input <JSON> --state-dir <绝对路径> --expected-revision <整数>  保存草稿',
+  'draft-status --state-dir <绝对路径>  读取草稿版本，不输出配置',
+  'draft-stage --state-dir <绝对路径> --expected-revision <整数>  暂存所选草稿版本',
   '',
   '输入/配置可能包含凭据；正常输出仅包含摘要和状态。',
   '不自动下载核心、安装依赖、启动服务或修改系统网络。',
@@ -37,6 +41,9 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     validate: ['--input', '--mihomo-bin'],
     stage: ['--input', '--state-dir'],
     status: ['--state-dir'],
+    'draft-save': ['--input', '--state-dir', '--expected-revision'],
+    'draft-status': ['--state-dir'],
+    'draft-stage': ['--state-dir', '--expected-revision'],
   };
   const command = args[0];
   if (!Object.hasOwn(allowed, command)) throw new CliError('UNKNOWN_COMMAND');
@@ -54,6 +61,11 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     if (flags.has(key) && !isAbsolute(flags.get(key)!)) throw new CliError('ABSOLUTE_PATH_REQUIRED');
   }
   return { command, flags };
+}
+
+function revision(value: string): number {
+  if (!/^(0|[1-9][0-9]*)$/.test(value) || !Number.isSafeInteger(Number(value))) throw new CliError('INVALID_REVISION');
+  return Number(value);
 }
 
 async function readInput(path: string): Promise<unknown> {
@@ -106,6 +118,18 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
     const store = new FileTransactionStore(flags.get('--state-dir')!);
     return { ...await store.status() };
   }
+  if (command.startsWith('draft-')) {
+    const drafts = new DraftStore(flags.get('--state-dir')!);
+    if (command === 'draft-status') return { draft: await drafts.metadata() };
+    const expected = revision(flags.get('--expected-revision')!);
+    if (command === 'draft-save') {
+      return { ...await drafts.save(await readInput(flags.get('--input')!), expected), saved: true, runtime: 'not_started' };
+    }
+    const captured = await drafts.load(expected);
+    const candidate = compileConfig(captured.input);
+    await new FileTransactionStore(flags.get('--state-dir')!).stage(candidate);
+    return { generation: candidate.id, stagedRevision: captured.revision, staged: true, runtime: 'not_started' };
+  }
   const candidate = compileConfig(await readInput(flags.get('--input')!));
   if (command === 'compile') {
     await writePrivateOutput(flags.get('--output')!, canonicalJson(candidate.config) + '\n');
@@ -128,7 +152,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     // No raw exception, paths, core output or JSON fragments in public errors.
     let code = 'IO_ERROR';
     if (error instanceof CliError || error instanceof ConfigError
-        || error instanceof MihomoValidationError || error instanceof TransactionError) {
+        || error instanceof MihomoValidationError || error instanceof TransactionError || error instanceof DraftError) {
       code = error.code;
     } else if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') code = 'OUTPUT_EXISTS';
     process.stderr.write(JSON.stringify({ error: { code } }) + '\n');

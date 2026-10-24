@@ -108,3 +108,26 @@ test('validation cannot silently substitute a mock or download a missing core', 
     assert.equal(result.stdout, '');
   });
 });
+
+test('draft CLI separates revisioned saving, capture and runtime application', async () => {
+  await fixture(async (dir, file) => {
+    const state = join(dir, 'draft-store');
+    assert.deepEqual(JSON.parse((await cli(['draft-status', '--state-dir', state])).stdout), { draft: null });
+    await assert.rejects(stat(state), { code: 'ENOENT' });
+    const saved = await cli(['draft-save', '--input', file, '--state-dir', state, '--expected-revision', '0']);
+    assert.equal(saved.code, 0, saved.stderr);
+    assert.equal(JSON.parse(saved.stdout).revision, 1);
+    assert.ok(!saved.stdout.includes(syntheticSecret));
+    const conflict = await cli(['draft-save', '--input', file, '--state-dir', state, '--expected-revision', '0']);
+    assert.equal(JSON.parse(conflict.stderr).error.code, 'DRAFT_CONFLICT');
+    const staged = await cli(['draft-stage', '--state-dir', state, '--expected-revision', '1']);
+    assert.equal(staged.code, 0, staged.stderr);
+    assert.equal(JSON.parse(staged.stdout).stagedRevision, 1);
+    assert.equal(JSON.parse(staged.stdout).generation, JSON.parse(saved.stdout).generation);
+    assert.equal(JSON.parse((await cli(['status', '--state-dir', state])).stdout).active, null);
+    const metadata = await cli(['draft-status', '--state-dir', state]);
+    assert.ok(!metadata.stdout.includes(syntheticSecret));
+    const invalid = await cli(['draft-stage', '--state-dir', state, '--expected-revision', '1e0']);
+    assert.equal(JSON.parse(invalid.stderr).error.code, 'INVALID_REVISION');
+  });
+});
