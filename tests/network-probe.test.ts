@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { NetworkCommandError } from '../packages/network/command.ts';
 import { observeNetworkReadiness, observeNetworkReadinessFixture } from '../packages/network/probe.ts';
 import type { NetworkProbeFixtureReader, NetworkProbeIdentity, NetworkProbeOptions } from '../packages/network/probe.ts';
 import { renderNetworkPlan } from '../packages/network/plan.ts';
@@ -65,6 +66,7 @@ test('fresh UDP and TCP DNS answers plus exact PID socket/TUN facts produce fixt
     '1: 020200C0:3BF9 0100007F:ABCD 06 00000000:00000000 00:00000000 00000000 0 0 0 2\n');
   const result = await observeNetworkReadinessFixture(plan, identity, options, f.reader);
   assert.equal(result.verified, true); assert.equal(result.scope, 'fixture'); assert.equal(result.terminalPath, 'unverified');
+  assert.equal(result.commandsSettled, true);
   assert.equal(Object.values(result.checks).every(Boolean), true); assert.equal(f.queries.length, 2);
   assert.notDeepEqual(f.queries[0].subarray(12), f.queries[1].subarray(12));
   assert.equal(JSON.stringify(result).includes('probe.invalid'), false); assert.equal(Object.hasOwn(result, 'ready'), false);
@@ -79,6 +81,7 @@ test('ownership, namespace, mount, PID reuse and exact TUN configuration fail cl
     f => { f.data.set('/proc/101/fdinfo/5', 'iff:\tunrelated\n'); },
     f => { f.reader.tunDevice = async () => false; },
     f => { f.reader.address = async () => '[{"ifname":"coproxy-tun","mtu":1400}]'; },
+    f => { f.reader.address = async () => '{'; },
     f => { const original = f.reader.link; f.reader.link = async path => path === '/proc/101/ns/net' ? 'net:[9999]' : original(path); },
     f => { f.data.set('/proc/self/mountinfo', f.data.get('/proc/self/mountinfo')! + '2 1 0:2 / /proc/101/net rw - tmpfs tmpfs rw\n'); },
     f => { const original = f.reader.read; let count = 0; f.reader.read = async path => {
@@ -88,7 +91,20 @@ test('ownership, namespace, mount, PID reuse and exact TUN configuration fail cl
   for (const change of changes) {
     const f = fixture(); change(f); const result = await observeNetworkReadinessFixture(plan, identity, options, f.reader);
     assert.equal(result.verified, false); assert.equal(result.reason, 'NETWORK_PROBE_UNVERIFIED');
+    assert.equal(result.commandsSettled, true);
     assert.equal(Object.values(result.checks).some(Boolean), false); assert.equal(JSON.stringify(result).includes('secret'), false);
+  }
+  for (const error of [new NetworkCommandError('synthetic-private'), new NetworkCommandError('synthetic-private', false),
+    Object.assign(new Error('synthetic-private'), { childSettled: false })]) {
+    const f = fixture(); let commands = 0;
+    f.reader.address = async () => { commands++; throw error; };
+    const result = await observeNetworkReadinessFixture(plan, identity, options, f.reader);
+    assert.equal(result.scope, 'fixture'); assert.equal(result.verified, false);
+    assert.equal(result.commandsSettled, !(error instanceof NetworkCommandError && error.childSettled === false));
+    assert.equal(result.reason, 'NETWORK_PROBE_UNVERIFIED'); assert.equal(result.terminalPath, 'unverified');
+    assert.equal(commands, 1); assert.equal(f.queries.length, 0);
+    assert.equal(Object.values(result.checks).some(Boolean), false);
+    assert.doesNotMatch(JSON.stringify(result), /synthetic-private/);
   }
 });
 
@@ -108,7 +124,8 @@ test('wrong DNS ID/question, RCODE, truncation, unexpected A, unrelated answer a
     assert.equal((await observeNetworkReadinessFixture(plan, identity, options, f.reader)).verified, false);
   }
   const f = fixture(); f.reader.exchange = async () => { throw new Error('sensitive query response'); };
-  assert.equal((await observeNetworkReadinessFixture(plan, identity, options, f.reader)).verified, false);
+  const result = await observeNetworkReadinessFixture(plan, identity, options, f.reader);
+  assert.equal(result.verified, false); assert.equal(result.commandsSettled, true);
 });
 
 test('production cannot use synthetic reader and unsupported hosts stay unverified', async () => {

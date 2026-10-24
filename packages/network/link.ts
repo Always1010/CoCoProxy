@@ -2,7 +2,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { dirname } from 'node:path';
 import { types } from 'node:util';
-import { runNetworkCommand } from './command.ts';
+import { NetworkCommandError, runNetworkCommand } from './command.ts';
 import { renderNetworkPlan, type NetworkPlan } from './plan.ts';
 
 export interface NetworkLinkOptions {
@@ -13,6 +13,8 @@ export interface NetworkLinkOptions {
 export interface NetworkLinkObservation {
   scope: 'production' | 'fixture';
   verified: boolean;
+  /** False forbids recovery mutations while a read command may still be alive. */
+  commandsSettled: boolean;
   checkedAt: number;
   planSha256: string | null;
   generation: string | null;
@@ -230,7 +232,7 @@ function route(raw: string, plan: NetworkPlan, probe: string): void {
 
 async function observe(input: NetworkPlan, optionsInput: NetworkLinkOptions,
   supplied: NetworkLinkFixtureReader | undefined, fixture: boolean): Promise<NetworkLinkObservation> {
-  let verified = false, planSha256: string | null = null, generation: string | null = null;
+  let verified = false, commandsSettled = true, planSha256: string | null = null, generation: string | null = null;
   const now = supplied ? () => supplied.now() : Date.now;
   let checkedAt = Date.now();
   try {
@@ -269,8 +271,11 @@ async function observe(input: NetworkPlan, optionsInput: NetworkLinkOptions,
     const ended = now();
     if (!Number.isSafeInteger(ended) || ended < started || ended - started > 5000 || rounds[0] !== rounds[1]) fail();
     checkedAt = ended; verified = true;
-  } catch { /* Raw kernel output, topology and nested errors never leave this observer. */ }
-  return { scope: fixture ? 'fixture' : 'production', verified, checkedAt, planSha256, generation,
+  } catch (error) {
+    // Raw kernel output, topology and nested errors never leave this observer.
+    commandsSettled = !(error instanceof NetworkCommandError && error.childSettled === false);
+  }
+  return { scope: fixture ? 'fixture' : 'production', verified, commandsSettled, checkedAt, planSha256, generation,
     reason: verified ? null : 'NETWORK_LINK_UNVERIFIED', checks: { interfaceIdentity: verified, carrier: verified,
       gatewayAddress: verified, mtu: verified, routerNeighbour: verified, egressRoute: verified, stable: verified } };
 }

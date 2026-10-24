@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { types } from 'node:util';
-import { runNetworkCommand } from './command.ts';
+import { NetworkCommandError, runNetworkCommand } from './command.ts';
 import { renderNetworkPlan, type NetworkPlan } from './plan.ts';
 
 export interface SocketProcessBinding { pid: number; startTime: string; uid: number; cgroupKernelId: string }
@@ -22,6 +22,8 @@ interface Diagnostics {
 }
 export interface SocketSourceObservation {
   scope: 'production' | 'fixture'; stage: 'identity' | 'ready'; verified: boolean; checkedAt: number;
+  /** False forbids recovery mutations while a read command may still be alive. */
+  commandsSettled: boolean;
   generation: string; planSha256: string; reason: null | 'NETWORK_SOCKET_UNVERIFIED';
   checks: { dnsListenerSources: boolean; coreSocketSources: boolean; egressSocketMarks: boolean;
     managementExcluded: boolean; upstreamObserved: boolean };
@@ -193,7 +195,7 @@ function stable(data: Diagnostics, plan: NetworkPlan) {
 async function observe(planInput: NetworkPlan, input: SocketSourceBinding, options: SocketSourceOptions,
   reader: SocketSourceFixtureReader, scope: SocketSourceObservation['scope']): Promise<SocketSourceObservation> {
   const checks = { dnsListenerSources: false, coreSocketSources: false, egressSocketMarks: false, managementExcluded: false, upstreamObserved: false };
-  const result: SocketSourceObservation = { scope, stage: options?.stage === 'identity' ? 'identity' : 'ready', verified: false,
+  const result: SocketSourceObservation = { scope, stage: options?.stage === 'identity' ? 'identity' : 'ready', verified: false, commandsSettled: true,
     checkedAt: Date.now(), generation: '', planSha256: '', reason: 'NETWORK_SOCKET_UNVERIFIED', checks, counts: null };
   try {
     const started = reader.now(), plan = renderNetworkPlan(planInput.deployment), expected = binding(input, plan);
@@ -208,7 +210,10 @@ async function observe(planInput: NetworkPlan, input: SocketSourceBinding, optio
     result.checkedAt = checkedAt; result.counts = counts;
     result.verified = options.stage === 'identity' || checks.upstreamObserved;
     if (result.verified) result.reason = null;
-  } catch { /* No paths, socket addresses, parser diagnostics or process IDs escape. */ }
+  } catch (error) {
+    // No paths, socket addresses, parser diagnostics or process IDs escape.
+    result.commandsSettled = !(error instanceof NetworkCommandError && error.childSettled === false);
+  }
   return result;
 }
 /** Independent socket facts only; unit/executable/cgroup ownership are separate prerequisites. */

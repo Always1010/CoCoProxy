@@ -25,7 +25,9 @@ route get 必须输出实际目的、from=网关、gateway=路由器、dev=入�
 
 每条输出最多 64 KiB；自包含 JSON parser 限制深度与节点，拒绝重复键（含转义后同名）、危险键、非整数数字、负零、尾随内容与不合约字段。输出对象的受保护事实缺失或类型错误均保持未验证，不暴露 parser/OS 原始错误。支持常见 Linux/iproute2 的驱动队列、offload 上限、linkmode、IPv6 地址生成方式等已知元数据；不会因未输出 carrier 或邻居 dev 就伪造它们。
 
-返回仅含 `scope`、`verified`、`checkedAt`（毫秒）、`planSha256`、`generation`、固定 reason 和 checks。checks 包含 interfaceIdentity/carrier/gatewayAddress/mtu/routerNeighbour/egressRoute/stable，只有完整稳定观察通过时才全部为 true；失败 reason 固定 `NETWORK_LINK_UNVERIFIED`。合法 plan 的绑定即使观察失败仍返回；无效 plan 的绑定为 null。没有实际拓扑、接口名、MAC、probe 目的或 raw 输出。观察只能说明本地瞬时事实，不构成终端/路由器业务验收、资源所有权、socket cgroup 来源或捕获 ready 的充分证据。
+返回仅含 `scope`、`verified`、`commandsSettled`、`checkedAt`（毫秒）、`planSha256`、`generation`、固定 reason 和 checks。checks 包含 interfaceIdentity/carrier/gatewayAddress/mtu/routerNeighbour/egressRoute/stable，只有完整稳定观察通过时才全部为 true；失败 reason 固定 `NETWORK_LINK_UNVERIFIED`。合法 plan 的绑定即使观察失败仍返回；无效 plan 的绑定为 null。没有实际拓扑、接口名、MAC、probe 目的或 raw 输出。观察只能说明本地瞬时事实，不构成终端/路由器业务验收、资源所有权、socket cgroup 来源或捕获 ready 的充分证据。
+
+`commandsSettled` 默认为 `true`；解析、路径或普通检查失败仍为 `true`。只有固定命令传输抛出 `NetworkCommandError` 且 `childSettled: false` 时为 `false`，表示读工具可能仍存活，驱动不得并行执行恢复写入。这个脱敏布尔值不改变固定失败原因或 fixture scope。
 
 fixture reader 为 `{ platform, root, command(args), now() }`，`command` 返回原始 JSON 字符串；默认 reader 执行上述相同固定查询。合成测试不访问设备或网络：
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { NetworkCommandError } from '../packages/network/command.ts';
 import { GATEWAY_CORE_SHA256 } from '../packages/network/config.ts';
 import { renderNetworkPlan } from '../packages/network/plan.ts';
 import { observeSocketSourcesFixture, type SocketSourceBinding, type SocketSourceFixtureReader,
@@ -63,6 +64,7 @@ test('socket sources verify real DNS listener shapes, dedicated process identiti
     const data = model(); data.sockets[3].protocol = protocol;
     const f = fixture(data), result = await observeSocketSourcesFixture(plan, binding(), { stage: 'ready' }, f.reader);
     assert.equal(result.scope, 'fixture'); assert.equal(result.verified, true); assert.equal(result.reason, null);
+    assert.equal(result.commandsSettled, true);
     assert.equal(result.stage, 'ready'); assert.equal(result.checkedAt, 1010);
     assert.equal(result.planSha256, plan.sha256); assert.equal(result.generation, plan.deployment.generation);
     assert.ok(Object.values(result.checks).every(Boolean));
@@ -223,6 +225,16 @@ test('malformed, duplicate, incomplete and oversized helper JSON cannot become e
     ['byte limit', ' '.repeat(1_048_577)], ['socket count limit', JSON.stringify(tooManySockets)],
   ];
   for (const [name, raw] of invalid) await t.test(name, async () => {
-    unverified(await observeSocketSourcesFixture(plan, binding(), { stage: 'ready' }, fixture(raw).reader));
+    const result = await observeSocketSourcesFixture(plan, binding(), { stage: 'ready' }, fixture(raw).reader);
+    unverified(result); assert.equal(result.commandsSettled, true);
   });
+  for (const error of [new NetworkCommandError('synthetic-private'), new NetworkCommandError('synthetic-private', false),
+    Object.assign(new Error('synthetic-private'), { childSettled: false })]) {
+    const f = fixture(); let dumps = 0;
+    f.reader.dump = async () => { dumps++; throw error; };
+    const result = await observeSocketSourcesFixture(plan, binding(), { stage: 'ready' }, f.reader);
+    unverified(result);
+    assert.equal(result.commandsSettled, !(error instanceof NetworkCommandError && error.childSettled === false));
+    assert.equal(dumps, 1); assert.doesNotMatch(JSON.stringify(result), /synthetic-private/);
+  }
 });
