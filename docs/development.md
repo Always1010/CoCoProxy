@@ -78,6 +78,7 @@ npm run test:network-core-observer
 npm run test:network-command
 npm run test:network-fenced-command
 npm run test:network-resource-journal
+npm run test:network-native-preflight
 npm run test:network-rules
 npm run test:network-identity
 npm run test:network-link
@@ -116,6 +117,8 @@ COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo COPROXY_TEST_SING_BOX=/abs
 ```
 
 `test:network-fenced-command` 在 Linux 验证持久 ACK 之前不启动工具、父进程退出与工具后代收敛、私有文件／目录和结果绑定、显式 namespace fixture 来源，以及空 stdin 的快速退出竞态。`test:network-resource-journal` 验证只读不初始化、锁、revision、冻结、重复键与恶意对象拒绝、文件单链接和权限边界。这些是内部组件验证，不替代实际内核路径。
+
+`test:network-native-preflight` 在隔离测试进程中禁止初始化、持久写入和旧 worker 收敛调用，验证正式只读入口的资源、context、revision 与 pending 命令绑定。四角色内核测试另在每次资源进程启动前执行真实 preflight/assertSettled，核对新目录仍不存在、既有及 pending 回执字节不变；只读检查不会自动完成 blocked 恢复。
 
 `test:network-kernel` 核对两个固定官方二进制的摘要，使用已有 Python、ip、nft、unshare 和可用 TUN，在新建 user/network namespace 子树内建立客户端、路由器、网关和源站。网关初始阶段通过正式持久资源会话执行并回读，而非手工应用规则；实际 DNS/TUN 探针核验核心 FD 并发出查询。另通过正式链路观察读取真实 iproute2 输出、通过 INET_DIAG 核对核心 FD 的实际 mark 与 socket cgroup ID；隔离拓扑显式设置合成路由器 PERMANENT 邻居，避免依赖 ARP 状态机计时，不代表生产邻居已核验。测试验证同配置外部路由不被认领、额外 nft 规则污染被拒绝、ip/nft 完成但资源凭据仍 pending 后重启、采纳状态后的第二次强制终止、active 重启和 TUN 消失后恢复 blocked、过期实例拒绝，以及 core-only 本地 DNS 与客户端阻断、active 透明 HTTP／UDP、真实 DNS UDP／TCP、DNS 回答驱动的业务访问、域名 REJECT、保留源地址与经路由器回程；还检查错误 MAC、无 mark 同 UID socket、核心退出、独立删除 TUN 及唯一节点退出后的故障阻断。没有 DIRECT 回退。
 

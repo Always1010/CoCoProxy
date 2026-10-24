@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readFile, readlink, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { privateDirectory } from '../storage/private-files.ts';
-import { runNetworkCommand } from './command.ts';
-import { fencedNetworkCommandDigest, runFencedNetworkCommand, settleFencedNetworkCommand, type FencedCommandScope } from './fenced-command.ts';
-import { ResourceJournal, type NativeResourceContext, type NativeResourceOperation, type NativeResourceReceipt,
+import { NetworkCommandError, runNetworkCommand } from './command.ts';
+import { fencedNetworkCommandDigest, inspectFencedNetworkCommand, runFencedNetworkCommand, settleFencedNetworkCommand,
+  type FencedCommandInspection, type FencedCommandScope } from './fenced-command.ts';
+import { ResourceJournal, ResourceJournalError, type NativeResourceContext, type NativeResourceOperation, type NativeResourceReceipt,
   type NativeResourceState } from './resource-journal.ts';
 import { renderNetworkPlan, type NetworkPlan } from './plan.ts';
 import { nftSnapshotFromEcho, verifyNetworkReadback, type NftEchoUpdate, type NetworkReadbackInput } from './readback.ts';
@@ -17,6 +18,22 @@ export class NativeNetworkError extends Error {
 export interface NativeNetworkTools {
   ipBinary: '/usr/sbin/ip' | '/usr/bin/ip' | '/sbin/ip';
   nftBinary: '/usr/sbin/nft' | '/usr/bin/nft' | '/sbin/nft';
+}
+export interface NativeNetworkFixtureProof {
+  outerUser: string;
+  outerNet: string;
+  cgroups: NonNullable<NetworkRulesOptions['fixtureCgroups']>;
+}
+/** Current observation only; neither an authority handle nor a readiness claim. */
+export interface NativeNetworkPreflight {
+  scope: 'production' | 'fixture';
+  initialized: boolean;
+  recoveryRequired: boolean;
+  pending: boolean;
+  revision: number;
+  generation: string;
+  planSha256: string;
+  terminalPath: 'unverified';
 }
 type Mode = NetworkRulesOptions['mode'];
 const empty = '{"nftables":[]}';
@@ -66,16 +83,113 @@ export class NativeNetworkSession {
       renderNetworkRules(plan.deployment, { mode, ...(fixtureCgroups ? { fixtureCgroups } : {}) })])) as Record<Mode, NetworkRules>;
   }
   static async create(input: unknown, tools: NativeNetworkTools, directory?: string): Promise<NativeNetworkSession> {
-    if (process.platform !== 'linux' || process.geteuid?.() !== 0) fail('NETWORK_NATIVE_UNSUPPORTED');
-    for (const name of ['user', 'net']) if (await readlink(`/proc/self/ns/${name}`) !== await readlink(`/proc/1/ns/${name}`)) fail('NETWORK_NATIVE_UNSUPPORTED');
+    await this.productionPlatform();
     return this.build(input, tools, undefined, directory);
   }
   /** Explicit verified-new-namespace fixture; can never create production scope. */
-  static async fixture(input: unknown, tools: NativeNetworkTools, proof: { outerUser: string; outerNet: string;
-    cgroups: NonNullable<NetworkRulesOptions['fixtureCgroups']> }, directory?: string): Promise<NativeNetworkSession> {
+  static async fixture(input: unknown, tools: NativeNetworkTools, proof: NativeNetworkFixtureProof, directory?: string): Promise<NativeNetworkSession> {
+    await this.fixturePlatform(proof);
+    return this.build(input, tools, proof.cgroups, directory, { scope: 'fixture', outerUser: proof.outerUser, outerNet: proof.outerNet });
+  }
+  private static async productionPlatform(): Promise<void> {
+    if (process.platform !== 'linux' || process.geteuid?.() !== 0) fail('NETWORK_NATIVE_UNSUPPORTED');
+    for (const name of ['user', 'net']) if (await readlink(`/proc/self/ns/${name}`) !== await readlink(`/proc/1/ns/${name}`)) fail('NETWORK_NATIVE_UNSUPPORTED');
+  }
+  private static async fixturePlatform(proof: NativeNetworkFixtureProof): Promise<void> {
     if (process.platform !== 'linux' || !proof.cgroups || !/^user:\[\d+\]$/.test(proof.outerUser) || !/^net:\[\d+\]$/.test(proof.outerNet) ||
       await readlink('/proc/self/ns/user') === proof.outerUser || await readlink('/proc/self/ns/net') === proof.outerNet) fail('NETWORK_NATIVE_UNSUPPORTED');
-    return this.build(input, tools, proof.cgroups, directory, { scope: 'fixture', outerUser: proof.outerUser, outerNet: proof.outerNet });
+  }
+  /** Strictly read-only: no directory, receipt, lock, worker or repair is created. */
+  static async preflight(input: unknown, tools: NativeNetworkTools, directory?: string,
+    purpose: 'apply' | 'recover' = 'apply'): Promise<NativeNetworkPreflight> {
+    return this.readOnly(input, tools, directory, purpose, false);
+  }
+  /** Read-only quiescence proof for the exact pending journal command; never signals. */
+  static async assertSettled(input: unknown, tools: NativeNetworkTools, directory?: string): Promise<void> {
+    await this.readOnly(input, tools, directory, 'recover', true);
+  }
+  static async preflightFixture(input: unknown, tools: NativeNetworkTools, proof: NativeNetworkFixtureProof, directory?: string,
+    purpose: 'apply' | 'recover' = 'apply'): Promise<NativeNetworkPreflight> {
+    return this.readOnly(input, tools, directory, purpose, false, proof, true);
+  }
+  static async assertSettledFixture(input: unknown, tools: NativeNetworkTools, proof: NativeNetworkFixtureProof,
+    directory?: string): Promise<void> {
+    await this.readOnly(input, tools, directory, 'recover', true, proof, true);
+  }
+  private static async readOnly(input: unknown, tools: NativeNetworkTools, directory: string | undefined,
+    purpose: 'apply' | 'recover', settlementOnly: boolean, proof?: NativeNetworkFixtureProof, fixture = false): Promise<NativeNetworkPreflight> {
+    try {
+      if (fixture) await this.fixturePlatform(proof!); else await this.productionPlatform();
+      return await this.observe(input, tools, directory, purpose, settlementOnly, proof);
+    } catch (error) {
+      if (error instanceof NativeNetworkError || error instanceof ResourceJournalError || error instanceof NetworkCommandError) throw error;
+      fail('NETWORK_PREFLIGHT_FAILED');
+    }
+  }
+  private static async observe(input: unknown, tools: NativeNetworkTools, directory: string | undefined,
+    purpose: 'apply' | 'recover', settlementOnly: boolean, proof?: NativeNetworkFixtureProof): Promise<NativeNetworkPreflight> {
+    if (!['apply', 'recover'].includes(purpose)) fail('NETWORK_PHASE_INVALID');
+    const plan = immutable(renderNetworkPlan(input));
+    const ip = await tool(tools.ipBinary, 'ip', !!proof), nft = await tool(tools.nftBinary, 'nft', !!proof);
+    const session = new NativeNetworkSession(plan, ip, nft, proof?.cgroups);
+    session.commandScope = proof ? { scope: 'fixture', outerUser: proof.outerUser, outerNet: proof.outerNet } : 'production';
+    const journal = directory === undefined ? null : new ResourceJournal(directory, session.scope);
+    const context = await session.context(), previous = await journal?.read() ?? null;
+    if (previous && JSON.stringify(previous.context) !== JSON.stringify(context)) fail('NETWORK_RESOURCE_CONTEXT_CHANGED');
+    let pending: FencedCommandInspection | undefined;
+    if (previous?.pending) {
+      session.restore(previous.state);
+      const operation = previous.pending.operation;
+      const binary = operation.kind === 'nft' ? nft : ip;
+      const args = operation.kind === 'nft' ? ['-j', '-n', '-e', session.nftCommand(operation.mode, operation.operation).command] : session.ipStep(operation);
+      if ((operation.kind === 'nft' && operation.reset) ||
+        fencedNetworkCommandDigest(binary, args) !== previous.pending.commandSHA) fail('NETWORK_RESOURCE_PENDING_INVALID');
+      pending = await inspectFencedNetworkCommand(join(journal!.root, 'commands'), previous.pending.token, session.commandScope);
+      if (pending.receipt) {
+        const worker = pending.receipt;
+        if (worker.commandSHA !== previous.pending.commandSHA || worker.bootID !== context.bootID || worker.userNS !== context.userNS ||
+          worker.netNS !== context.netNS || worker.uid !== process.geteuid?.()) fail('NETWORK_RESOURCE_PENDING_INVALID');
+      }
+      if (!['absent', 'settled'].includes(pending.state)) fail('NETWORK_COMMAND_UNSETTLED');
+    }
+    if (!settlementOnly || !previous) {
+      if (!previous) await session.readback('absent', 'absent');
+      else {
+        // Candidate expectations derive only from durable ownership and the exact
+        // pending command. Listing the kernel never establishes ownership.
+        const candidates: NativeResourceState[] = [previous.state];
+        if (previous.pending && pending?.receipt) {
+          const operation = previous.pending.operation;
+          if (operation.kind === 'nft' && pending.result?.ok) {
+            const expectedNft = nftSnapshotFromEcho(previous.state.expectedNft, pending.result.stdout,
+              session.nftCommand(operation.mode, operation.operation).updates);
+            // A successful atomic nft commit cannot still have the old handles.
+            candidates[0] = { ...previous.state, expectedNft, mode: operation.mode };
+          } else if (operation.kind === 'ip') {
+            session.restore(previous.state); session.ipAfter(operation); candidates.push(session.state());
+          }
+        }
+        const raw = await session.snapshot();
+        const accepted = candidates.some(state => {
+          session.restore(state);
+          try {
+            const observed = verifyNetworkReadback(plan.deployment, raw, { nft: state.expectedNft, rules: 'partial', routes: 'partial' });
+            if (purpose === 'recover' && state.capture && !observed.routesPresent.includes('capture')) {
+              session.capture = false; session.routeIds.delete('capture');
+            }
+            session.membership(observed); return true;
+          } catch { return false; }
+        });
+        if (!accepted) fail('NETWORK_RESOURCE_OBSERVATION_INVALID');
+      }
+    }
+    // This detects changes during observation. The caller still owns the global
+    // writer fence; a read-only observation cannot reserve future kernel state.
+    if (JSON.stringify(await journal?.read() ?? null) !== JSON.stringify(previous)) fail('NETWORK_RESOURCE_STALE');
+    if (JSON.stringify(await session.context()) !== JSON.stringify(context)) fail('NETWORK_RESOURCE_CONTEXT_CHANGED');
+    return immutable({ scope: session.scope, initialized: previous !== null, recoveryRequired: previous !== null,
+      pending: previous?.pending !== null && previous?.pending !== undefined, revision: previous?.revision ?? 0,
+      generation: plan.deployment.generation, planSha256: plan.sha256, terminalPath: 'unverified' as const });
   }
   private static async build(input: unknown, tools: NativeNetworkTools, fixtureCgroups?: NetworkRulesOptions['fixtureCgroups'], directory?: string,
     commandScope: FencedCommandScope = 'production') {
