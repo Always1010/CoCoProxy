@@ -1,0 +1,55 @@
+# 管理认证与事务接口
+
+本模块提供可挂载的 Fetch 请求处理器，复用草稿、订阅、不可变候选和应用事务。它不创建监听器、不启动核心；当前尚未挂载到 MetaCubeXD Server，也没有交付网页登录页或控制器 HTTP/WebSocket 代理。不能将单独通过的接口测试当作网页集成完成。
+
+## 身份、会话与请求边界
+
+管理员凭据采用带 16 字节随机盐的 scrypt，固定 `N=16384,r=8,p=5,maxmem=64MiB`，哈希 64 字节。该参数选择 OWASP 列出的低内存档位；成本由代码固定，浏览器和凭据文件不能降低它。[OWASP 密码存储说明](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#scrypt)
+
+用户名为 1–64 位 ASCII 字母、数字及点/下划线/连字符，首位为字母或数字。密码为 12–1024 个 UTF-8 字节，拒绝 NUL 与无效 Unicode。未知用户名仍执行同样的密码派生和固定长度比较。初始化输入是私有 JSON `{ "username": "<admin-name>", "password": "<private-password>" }`；口令不进入命令行参数。
+
+```sh
+node --experimental-strip-types apps/cli/main.ts admin-init --input /absolute/private/login.json --output /absolute/private/admin.json
+```
+
+输入须为当前身份所有的私有普通文件；输出权限为 600，只保存盐和哈希，不覆盖已有文件。创建真实账户属于实际部署步骤；测试只创建临时合成凭据。原始输入仍由操作者按自己的凭据保管规则处理，程序不额外复制或备份它。
+
+会话令牌为 32 字节随机数，仅在 HttpOnly cookie 中返回；内存中只保留 SHA-256 摘要。会话绝对有效期 8 小时、最多 256 个，不因请求续期，注销立即撤销，进程重启后失效。当前管理进程应单实例运行，不能假定多 worker 共享会话。单实例每分钟最多接受 8 次登录，最多并行 2 次含密码派生的登录；多进程或反向代理的额外限制尚未实现。
+
+HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Strict; Path=/`。仅精确 loopback origin 可以使用 HTTP 测试 cookie；其他部署 origin 必须为 HTTPS。写操作要求精确匹配 Origin，跨站 Fetch、URL 查询令牌、Bearer 兼容入口与重复同名会话 cookie 均拒绝。所有 JSON 响应禁止缓存，错误只含固定码。JSON 请求有限量、严格 UTF-8 和读取时限；读取完成后才分派业务操作，不通过超时竞赛打断正在应用的事务。
+
+## 接口
+
+| 方法与路径 | 请求或结果 |
+| --- | --- |
+| POST `/api/session/login` | `{username,password}`；仅 cookie 返回令牌 |
+| GET `/api/session` | 当前已认证用户名与到期时间 |
+| POST `/api/session/logout` | 空对象；撤销 cookie |
+| GET `/api/coproxy/health` | 无需认证，仅报告 management_only 响应，不报告核心健康 |
+| GET `/api/coproxy/status` | 历史状态、草稿摘要和独立 core_only 观察；gateway 明确未实现 |
+| GET `/api/coproxy/draft` | 草稿版本、代次及可编辑 policy，不返回部署参数 |
+| PUT `/api/coproxy/draft` | `{expectedRevision,policy}`；只保存 |
+| POST `/api/coproxy/stage` | `{expectedRevision,sources?:[{id,expectedRevision}]}`；捕获指定草稿和来源快照 |
+| POST `/api/coproxy/apply` | `{generation,expectedActive}`；首次 expectedActive 为 null |
+| POST `/api/coproxy/recover` | 空对象；恢复中断事务 |
+| GET `/api/coproxy/sources` | 来源摘要清单，不包含 URL、ETag 或节点凭据 |
+| GET/PUT `/api/coproxy/sources/:id` | 读取摘要；PUT `{expectedRevision,url}` 保存来源 |
+| POST `/api/coproxy/sources/:id/refresh` | `{expectedRevision}`；按部署许可策略刷新，不自动应用 |
+
+除最小 health 外均要求管理会话；所有路径不接受查询参数。未知路由和原有 `/api/control/**` 在本处理器中返回 404，没有兼容的直接 start、配置热写、脚本、升级、WebDAV 或 geo 下载旁路。
+
+浏览器不能提交 deployment 或 HTTPS 获取策略。`createManagementApplication` 在可信启动参数中捕获部署参数，保存时注入；读取或暂存不匹配的历史草稿会报告冲突。应用已有候选时，用固定部署重新编译并要求完整代次一致，不能只信任内容 hash 或部分监听字段。draft/source revision、generation、expectedActive 分别承担保存、捕获和运行 CAS，互不替代。
+
+policy 可能包含管理员编辑的节点凭据，因此仍是敏感的已认证响应；部署 controller secret 不返回浏览器。stage 回执明确列出捕获的来源 revision、snapshotRevision 和 digest；刷新或保存完成不代表该版本已应用。
+
+## 生产构造与集成关卡
+
+`loadManagementService(absolutePrivateSettingsPath)` 读取 schemaVersion 1 的私有配置，字段为 `origin`、`credentialPath`、`runtimeSettingsPath`、`deployment`，可选 `subscriptionPolicy`。运行设置沿用 runtime 模块；订阅策略沿用受限 HTTPS 许可字段，不接受可执行 resolver。工厂使用真实 `SystemdMihomoRuntime`，读取配置不会创建状态目录、监听网络或操作服务。
+
+后续挂载必须替换上游原控制 router、自动启动插件和 token 注入的 config.js；在同一受信任 origin 下处理会话，保护 Host 和 TLS 终止边界。不能只把本模块放在旧 router 旁边，再宣称旁路已关闭。UI 还须对接登录、版本冲突、明确应用、来源捕获和受限控制器代理；这些关卡当前未完成。
+
+```sh
+npm run test:management
+```
+
+测试使用真实 scrypt、私有文件和 Fetch 请求；运行事务使用显式测试替身。它们验证认证、Origin、限额、服务端部署边界、CAS、失败恢复和脱敏，不证明真实 systemd 部署、网页、协议节点或网关就绪。

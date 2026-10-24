@@ -10,6 +10,7 @@
 
 公开 API：
 
+- `list()`：只读、按 ID 排序的 metadata 清单；缺目录时返回空数组，不暴露 URL。逐项校验已存记录，拒绝不明文件和超限目录，仅跳过原子写入器的已知临时文件；它不是跨来源原子快照，后续修改仍须按各自 revision 检查。
 - `configure({id, url}, expectedRevision)`：输入必须为仅含 `id`、`url` 可枚举数据属性的普通对象，不接受访问器或继承属性；在任何异步操作前复制、校验并冻结内部定义，调用者随后修改原对象不会改变操作目标。新增时 expectedRevision 为 `0`；配置成功 revision 加一。ID 必须匹配 `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`，最多 100 个来源。同一 URL 可继续使用已接受快照和 ETag；URL 字符串变化立即清除 ETag，并将旧快照标记为不属于当前定义。
 - `refresh(id, expectedRevision)`：只在读取和提交时 revision 都匹配时接受下载。成功、304 和已提交的下载／解码／校验失败都会使 revision 加一；失败保存固定 lastError 后抛出 `SubscriptionError`。并发旧回包返回 `SOURCE_CONFLICT`，不会覆盖新定义、快照或失败记录。锁被其他写入占用时继承存储层的 `STORE_LOCKED` 行为。
 - `status(id)`：返回 metadata 或 `null`。metadata 只含 `id`、`revision`、`snapshotDigest`、`snapshotRevision`、`snapshotCurrent`、`lastAttempt` 和 `lastError`，没有 URL、ETag、节点或上游错误文本。
