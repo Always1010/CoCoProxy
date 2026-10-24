@@ -31,6 +31,7 @@ test('installed systemd parser accepts credential units with ordinary and escape
       const unitPath = join(root, 'coproxy-mihomo.service');
       await writeFile(unitPath, plan.unit, { mode: 0o600 });
       await writeFile(join(root, 'coproxy-network.service'), '[Service]\nType=oneshot\nExecStart=/usr/bin/true\nRemainAfterExit=yes\n', { mode: 0o600 });
+      await writeFile(join(root, 'coproxy-management.service'), '[Service]\nType=exec\nExecStart=/usr/bin/true\n', { mode: 0o600 });
       // These are parser inputs only; /usr/bin/true is never executed. No unit
       // is installed, no daemon reload occurs, and no system manager is called.
       const result = await promisify(execFile)('/usr/bin/systemd-analyze', ['verify', '--man=no', unitPath],
@@ -66,10 +67,13 @@ test('gateway runtime plan generates deterministic direct credential launch and 
   assert.notEqual(renderGatewayRuntimePlan(source).settings.unitSha256, plan.settings.unitSha256);
 });
 
-test('gateway core lifecycle and privileges remain bounded by the network helper', () => {
+test('gateway core lifecycle binds to both network helper and management without autonomous restart', () => {
   const { unit } = renderGatewayRuntimePlan(input());
+  for (const dependency of ['Requires', 'After', 'BindsTo']) {
+    assert.deepEqual(unit.split('\n').filter(line => line.startsWith(dependency + '=')),
+      [dependency + '=coproxy-network.service coproxy-management.service']);
+  }
   for (const line of [
-    'Requires=coproxy-network.service', 'After=coproxy-network.service', 'BindsTo=coproxy-network.service',
     'Restart=no', 'KillMode=control-group', 'TimeoutStartSec=10', 'TimeoutStopSec=10', 'UMask=0077',
     'AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW', 'CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW',
     'NoNewPrivileges=true', 'PrivateTmp=true', 'ProtectSystem=strict', 'ProtectHome=true',
