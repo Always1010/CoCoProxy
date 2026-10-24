@@ -53,6 +53,32 @@ test('compile writes private output and never prints credentials or overwrites',
   });
 });
 
+test('deployment plan reads a private input and saves sensitive proposals without installing or printing them', async () => {
+  await fixture(async (dir) => {
+    const definition = JSON.parse(await readFile(join(root, 'examples/deployment-plan.json'), 'utf8'));
+    definition.management.deployment.controllerSecret = syntheticSecret;
+    const file = join(dir, 'deployment.json');
+    await writeFile(file, JSON.stringify(definition), { mode: 0o600 });
+    const output = join(dir, 'plan.json');
+    const result = await cli(['deployment-plan', '--input', file, '--output', output]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { planned: true, fileCount: 5, scope: 'explicit_proxy_deployment', runtime: 'not_started' });
+    assert.ok(!result.stdout.includes(syntheticSecret));
+    const plan = JSON.parse(await readFile(output, 'utf8'));
+    assert.equal(plan.sensitive, true);
+    assert.equal(plan.files.length, 5);
+    assert.ok(plan.files.some((item: { content: string }) => item.content.includes(syntheticSecret)));
+    if (process.platform !== 'win32') assert.equal((await stat(output)).mode & 0o777, 0o600);
+    const duplicate = await cli(['deployment-plan', '--input', file, '--output', output]);
+    assert.equal(JSON.parse(duplicate.stderr).error.code, 'OUTPUT_EXISTS');
+    definition.management.password = syntheticSecret;
+    await writeFile(file, JSON.stringify(definition));
+    const invalid = await cli(['deployment-plan', '--input', file, '--output', join(dir, 'invalid.json')]);
+    assert.equal(JSON.parse(invalid.stderr).error.code, 'DEPLOYMENT_PLAN_INVALID');
+    assert.ok(!invalid.stderr.includes(syntheticSecret));
+  });
+});
+
 test('stage and status do not imply a running service', async () => {
   await fixture(async (dir, file) => {
     const state = join(dir, 'state');
