@@ -31,6 +31,16 @@ async function members(group: number): Promise<number[]> {
   return result;
 }
 
+async function namespaceMembers(namespace: string): Promise<number[]> {
+  const result: number[] = [];
+  for (const pid of await readdir('/proc')) {
+    if (!/^\d+$/.test(pid)) continue;
+    try { if (await readlink(`/proc/${pid}/ns/user`) === namespace) result.push(Number(pid)); }
+    catch (error) { if (!['ENOENT', 'ESRCH', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
+  }
+  return result;
+}
+
 test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a reviewed VLESS node and fails closed',
   { skip, timeout: 150_000 }, async () => {
     const coreReview = JSON.parse(await readFile(new URL('../integrations/metacubexd/review.json', import.meta.url), 'utf8'));
@@ -63,8 +73,10 @@ test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a 
     await chmod(root, 0o700);
     let cleanup = false;
     let child: ReturnType<typeof spawn> | undefined;
+    const hostUser = await readlink('/proc/self/ns/user'), hostNet = await readlink('/proc/self/ns/net');
     try {
-      const input = { config: preview.candidate.config, blocked, coreOnly, active, core, server,
+      const input = { config: preview.candidate.config, networkDeployment: preview.networkPlan.deployment,
+        node: process.execPath, blocked, coreOnly, active, core, server,
         // Typed UDP DNS and default_domain_resolver are supported by the pinned
         // official v1.14.4 option/dns.go and option/route.go schemas.
         serverConfig: { log: { level: 'error' }, dns: { servers: [{ type: 'udp', tag: 'fixture-dns', server: '198.51.100.2', server_port: 53 }] },
@@ -74,7 +86,6 @@ test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a 
           rules: [{ action: 'resolve', server: 'fixture-dns', strategy: 'ipv4_only' },
             { ip_cidr: ['198.51.100.2/32', '198.51.100.77/32', '198.51.100.78/32'], port: [8080, 8081], action: 'route', outbound: 'synthetic-origin' }, { action: 'reject' }] } } };
       await writeFile(join(root, 'input.json'), JSON.stringify(input), { mode: 0o600 });
-      const hostUser = await readlink('/proc/self/ns/user'), hostNet = await readlink('/proc/self/ns/net');
       child = spawn('unshare', ['--user', '--map-current-user', '--keep-caps', '--net', 'python3',
         fileURLToPath(new URL('./fixtures/network-kernel.py', import.meta.url)), root, hostUser, hostNet],
       { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C', HOME: root } });
@@ -93,7 +104,7 @@ test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a 
       assert.equal(code, 0, `isolated kernel fixture failed: ${output.slice(0, 2048) || 'namespace launch or capability unavailable'}`);
       const result = JSON.parse(output);
       assert.equal(result.scope, 'fixture-no-production-cgroup-isolation-proof');
-      for (const key of ['isolatedRoles', 'preCoreRulesInstalled', 'blockedOriginsUntouched', 'coreOnlyStillBlocked', 'coreOnlyLocalDns', 'transparentHttp', 'transparentUdp', 'realDns', 'dnsLinkedHttpUdp', 'dnsLinkedReject',
+      for (const key of ['isolatedRoles', 'nativeReadbackVerified', 'nativeProbeVerified', 'nativeTamperRejected', 'nativeOwnershipCollisionRejected', 'preCoreRulesInstalled', 'blockedOriginsUntouched', 'coreOnlyStillBlocked', 'coreOnlyLocalDns', 'transparentHttp', 'transparentUdp', 'realDns', 'dnsLinkedHttpUdp', 'dnsLinkedReject',
         'routerReturnObserved', 'originalSourceObserved', 'markedCoreEgressObserved', 'wrongMacRejected',
         'unmarkedSameUidRejected', 'coreDeathExistingAndNewBlocked', 'tunLossBlocked', 'nodeDeathNoDirectFallback']) {
         assert.equal(result[key], true, key);
@@ -108,6 +119,28 @@ test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a 
         }
         cleanup = (await members(child.pid)).length === 0;
       } else cleanup = true;
+      // Native tools have their own process groups. Also settle every child in
+      // the fixture's verified private user namespace before removing inputs.
+      let innerUser: string | undefined;
+      try {
+        const proof = JSON.parse(await readFile(join(root, 'isolation.json'), 'utf8'));
+        assert.equal(proof.outerUser, hostUser);
+        assert.match(proof.innerUser, /^user:\[\d+\]$/);
+        assert.notEqual(proof.innerUser, hostUser);
+        innerUser = proof.innerUser;
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { cleanup = false; } }
+      if (innerUser) {
+        for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+          const pending = await namespaceMembers(innerUser);
+          if (!pending.length) break;
+          for (const pid of pending) {
+            try { if (await readlink(`/proc/${pid}/ns/user`) === innerUser) process.kill(pid, signal); }
+            catch (error) { if (!['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
+          }
+          await delay(200);
+        }
+        cleanup = cleanup && (await namespaceMembers(innerUser)).length === 0;
+      }
       // Never remove executable inputs while a namespace child can still use them.
       if (cleanup) await rm(root, { recursive: true, force: true });
       assert.equal(cleanup, true, 'fixture process group survived bounded cleanup; private inputs retained');

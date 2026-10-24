@@ -6,6 +6,8 @@
 
 [内核资源回读校验](readback.md)严格比较固定 nft 表／链／规则的 AST 与 handle，并检查 RPDB 和专用路由的合法存在状态。它只验证输入结构与受信基准一致，不把同名或同配置当作所有权证明；外部 nft／RPDB／自定义表冲突保持拒绝。
 
+[原生资源会话](native.md)已把固定批次、真实提交 echo、逐步 ip 操作和独立内核回读连起来，并接入四角色隔离测试。会话只维护同进程的资源身份与清单，尚无跨进程 receipt adoption、命令启动回执或完整主机预检；不能直接作为持久协调器的生产 driver。
+
 ## 输入契约
 
 这是独立于应用配置的部署输入，`schemaVersion` 必须为 `1`。所有字段均必填，根对象和嵌套对象均拒绝未知字段。下面只有合成地址与身份：
@@ -109,6 +111,6 @@ node --experimental-strip-types --test tests/network-plan.test.ts
 
 测试覆盖确定摘要、输入隔离、三表与失败保护、严格字段及地址／接口／端口边界、精确 DNS、IPv6 声明边界、mark 高位与保留位、恶意属性和 Proxy。它们只验证纯计划契约。
 
-`tests/network-kernel-live.test.ts` 另使用固定官方核心和 VLESS 节点，在全新 user/network namespace 子树中验证 client/router/gateway/origin 四角色：透明 HTTP/UDP、实际 DNS UDP/TCP、原源地址与经路由器回程、错误 MAC、无 mark 的同 UID socket、核心退出后的既有／新会话、独立删除 TUN 和唯一节点退出后的阻断。正向业务实际使用客户端 DNS 回答中的地址，并核对节点侧域名解析；域名 REJECT 先证明同一目的 IP 的原始访问可达，再验证域名关联后的拒绝，避免节点限制造成假通过。隔离 fixture 使用实际现有 cgroup、禁用管理例外，不证明生产两个服务 cgroup 隔离，也不修改主机网络或代替真实设备验收。缺少显式二进制路径或 Linux 前提时跳过；提供路径后能力缺失或路径失败会真实报错。
+`tests/network-kernel-live.test.ts` 另使用固定官方核心和 VLESS 节点，在全新 user/network namespace 子树中验证 client/router/gateway/origin 四角色。初始规则／路由阶段由原生资源会话执行，并调用实际 DNS/TUN 探针；另验证同配置外部路由不被认领、额外 nft 规则污染被拒绝。业务覆盖透明 HTTP/UDP、实际 DNS UDP/TCP、原源地址与经路由器回程、错误 MAC、无 mark 的同 UID socket、核心退出后的既有／新会话、独立删除 TUN 和唯一节点退出后的阻断。正向业务实际使用客户端 DNS 回答中的地址，并核对节点侧域名解析；域名 REJECT 先证明同一目的 IP 的原始访问可达，再验证域名关联后的拒绝，避免节点限制造成假通过。隔离 fixture 使用实际现有 cgroup、禁用管理例外，不证明生产两个服务 cgroup 隔离，也不修改主机网络或代替真实设备验收。缺少显式二进制路径或 Linux 前提时跳过；提供路径后能力缺失或路径失败会真实报错。
 
 后续固定执行者可使用[有界命令传输](command.md)，仍须自行核验授权、资源归属、事务和内核事实。
