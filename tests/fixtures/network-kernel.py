@@ -55,6 +55,12 @@ def limited():
     resource.setrlimit(resource.RLIMIT_FSIZE, (LIMIT, LIMIT))
 
 
+def native_limits():
+    # Durable bounded receipts contain full nft AST/echo, including base64.
+    # Keep IPC's small LIMIT while allowing the transport's 6 MiB disk result.
+    resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024 * 1024, 8 * 1024 * 1024))
+
+
 class Worker:
     def __init__(self, name, root):
         self.name = name
@@ -205,7 +211,7 @@ def role(name, root):
                     try:
                         children['native'] = subprocess.Popen([data['node'], '--experimental-strip-types',
                             str(Path(SELF).with_name('network-native.ts')), str(root), HOST_USER, HOST_NET],
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1, preexec_fn=limited)
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1, preexec_fn=native_limits)
                     finally:
                         os.close(log)
                     check(bool(select.select([children['native'].stdout], [], [], 10)[0]), 'NATIVE_START_TIMEOUT')
@@ -217,6 +223,11 @@ def role(name, root):
                     command['corePid'] = children['core'].pid
                 native.stdin.write(json.dumps(command) + '\n')
                 native.stdin.flush()
+                if request['action'] == 'recover-checkpoint':
+                    check(native.wait(timeout=10) == -signal.SIGKILL, 'NATIVE_CHECKPOINT_NOT_KILLED')
+                    children.pop('native')
+                    print(json.dumps({'value': True}), flush=True)
+                    continue
                 check(bool(select.select([native.stdout], [], [], 10)[0]), 'NATIVE_OPERATION_TIMEOUT')
                 answer = json.loads(native.stdout.readline(LIMIT))
                 check('error' not in answer, 'NATIVE_' + request['action'].upper() + '_' + answer.get('error', 'OPERATION_FAILED'))
@@ -378,8 +389,19 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(gateway.call('native', action='membership-check'), 'NATIVE_FOREIGN_MATCHING_ROUTE_ADOPTED')
         result['nativeOwnershipCollisionRejected'] = True
         check(gateway.call('native', action='install'), 'NATIVE_INSTALL_FAILED')
+        check(gateway.call('native', action='pending-blackhole'), 'NATIVE_IP_PENDING_FAILED')
+        gateway.call('stop', label='native')
+        check(gateway.call('native', action='recover-checkpoint'), 'NATIVE_IP_RECOVERY_CHECKPOINT_FAILED')
+        check(gateway.call('native', action='recover'), 'NATIVE_IP_RECOVERY_FAILED')
+        result['nativePendingIpRecovered'] = True
         check(not any(link['ifname'] == 'coproxy-tun' for link in json.loads(gateway.ip('-j', 'link', 'show'))), 'TUN_EXISTS_BEFORE_CORE')
         check(gateway.call('native', action='prepare'), 'NATIVE_PREPARE_FAILED')
+        check(gateway.call('native', action='pending-nft'), 'NATIVE_NFT_PENDING_FAILED')
+        gateway.call('stop', label='native')
+        check(gateway.call('native', action='recover-checkpoint'), 'NATIVE_NFT_RECOVERY_CHECKPOINT_FAILED')
+        check(gateway.call('native', action='recover'), 'NATIVE_NFT_RECOVERY_FAILED')
+        check(gateway.call('native', action='prepare'), 'NATIVE_PREPARED_RECHECK_FAILED')
+        result['nativePendingNftRecovered'] = True
         result['preCoreRulesInstalled'] = True
         before = origin.call('stats')
         check(not client.call('http') and not client.call('udp') and not client.call('dns'), 'BLOCKED_CLIENT_ESCAPED')
@@ -409,6 +431,15 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         inspected = gateway.call('native', action='inspect')
         check(inspected['scope'] == 'fixture' and inspected['mode'] == 'active' and len(inspected['routesPresent']) == 8, 'NATIVE_ACTIVE_READBACK_FAILED')
         result['nativeReadbackVerified'] = True
+        gateway.call('stop', label='native')
+        check(gateway.call('native', action='recover'), 'NATIVE_ACTIVE_RECOVERY_FAILED')
+        before = origin.call('stats')
+        check(not client.call('http') and not client.call('udp') and not client.call('dns'), 'NATIVE_RECOVERY_DID_NOT_BLOCK')
+        check(before == origin.call('stats'), 'NATIVE_RECOVERY_ORIGIN_TOUCHED')
+        check(gateway.call('native', action='authorize'), 'NATIVE_RECOVERED_AUTHORIZE_FAILED')
+        check(gateway.call('native', action='probe'), 'NATIVE_RECOVERED_PROBE_FAILED')
+        check(gateway.call('native', action='activate'), 'NATIVE_RECOVERED_ACTIVATE_FAILED')
+        result['nativeActiveRestartBlocked'] = True
         time.sleep(.3)
         check(client.call('http', key='existing-http'), 'ACTIVE_HTTP_FAILED')
         result['transparentHttp'] = True
@@ -508,6 +539,10 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(not client.call('http') and not client.call('udp'), 'NODE_DEATH_DIRECT_FALLBACK')
         check(before == origin.call('stats'), 'NODE_DEATH_ORIGIN_TOUCHED')
         result['nodeDeathNoDirectFallback'] = True
+        gateway.call('stop', label='core')
+        gateway.call('stop', label='native')
+        check(gateway.call('native', action='recover'), 'NATIVE_TUN_LOSS_RECOVERY_FAILED')
+        result['nativeTunLossRecovered'] = True
         check(gateway.call('native', action='retain'), 'NATIVE_RETAIN_FAILED')
         retained = gateway.call('native', action='inspect')
         check(retained['mode'] == 'blocked' and len(retained['routesPresent']) == 7, 'NATIVE_RETAIN_READBACK_FAILED')
