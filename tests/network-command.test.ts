@@ -7,6 +7,10 @@ import test from 'node:test';
 import { NetworkCommandError, runNetworkCommand } from '../packages/network/command.ts';
 
 const linux = { skip: process.platform !== 'linux' };
+test('fast tools that never read stdin succeed with absent or empty input', linux, async () => {
+  for (let i = 0; i < 16; i++) assert.equal(await runNetworkCommand('/usr/bin/true', [], i % 2 ? { input: '' } : {}), '');
+});
+
 test('network command carries bounded atomic input without a shell and excludes inherited environment', linux, async () => {
   const source = `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({s,arg:process.argv[1],env:process.env})));`;
   const script = 'add table inet synthetic\n';

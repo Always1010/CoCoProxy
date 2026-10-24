@@ -28,10 +28,11 @@ export async function runNetworkCommand(binary: string, args: readonly string[],
     (options.input !== undefined && (typeof options.input !== 'string' || options.input.includes('\0') ||
       Buffer.byteLength(options.input) > 262_144))) throw new NetworkCommandError('NETWORK_COMMAND_INVALID');
   return new Promise((resolve, reject) => {
+    const hasInput = !!options.input?.length;
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(binary, [...args], { shell: false, detached: true, windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C', LC_ALL: 'C' } });
+        stdio: [hasInput ? 'pipe' : 'ignore', 'pipe', 'pipe'], env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C', LC_ALL: 'C' } });
     } catch { reject(new NetworkCommandError('NETWORK_COMMAND_UNAVAILABLE')); return; }
     let bytes = 0, closed = false, escalated = false, settled = false;
     let code: number | null = null, failure: string | null = null;
@@ -72,12 +73,12 @@ export async function runNetworkCommand(binary: string, args: readonly string[],
     };
     child.stdout!.on('data', chunk => consume(chunk, true));
     child.stderr!.on('data', chunk => consume(chunk, false));
-    child.stdin!.on('error', () => { if (!closed) fail('NETWORK_COMMAND_FAILED'); });
+    child.stdin?.on('error', () => { if (!closed) fail('NETWORK_COMMAND_FAILED'); });
     child.once('error', () => {
       if (!child.pid) { failure = 'NETWORK_COMMAND_UNAVAILABLE'; escalated = true; }
       else fail('NETWORK_COMMAND_FAILED');
     });
     child.once('close', exit => { closed = true; code = exit; finish(); });
-    child.stdin!.end(options.input ?? '');
+    if (hasInput) child.stdin!.end(options.input);
   });
 }
