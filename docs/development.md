@@ -1,6 +1,6 @@
 # 首批开发与验证
 
-当前实现是显式代理配置编译、版本化草稿、订阅节点快照、不可变候选存储、配置事务状态机与开发 CLI。没有真实运行适配器、网页服务或 LAN 接管；不把通过测试替身得到的结果作为真实核心或终端验收。
+当前实现是显式代理配置编译、版本化草稿、订阅节点快照、不可变候选存储、配置事务状态机、systemd 核心运行适配源码与开发 CLI。服务尚未安装，真实核心、网页服务和 LAN 接管仍未验收；不把通过测试替身得到的结果作为真实核心或终端验收。
 
 ## 环境与命令
 
@@ -30,7 +30,13 @@ npm run cli -- validate --input /absolute/private/input.json --mihomo-bin /absol
 
 草稿保存使用严格 revision 检查，与运行代次分开；首次保存使用 expected-revision 0。draft-stage 捕获指定保存版本并暂存对应候选，返回 stagedRevision，不应用配置。捕获后其他人可以继续保存新草稿，暂存回执仍指捕获的版本。公开的 draft-status 只有摘要与版本，私有输入不打印。
 
-CLI 入口提供上述编译、校验、候选和草稿命令。事务模块的 apply/recover 是供后续真实运行适配器调用的内部 API，目前不作为 CLI 命令开放，不提供模拟成功的生产适配器。
+CLI 另提供 runtime-plan 纯生成和显式 runtime-apply/recover/status。后者使用固定单元的生产 systemd 适配器，没有模拟成功路径；须先取得独立安装授权并完成部署预检。详见[运行适配](../packages/runtime/README.md)。可先离线生成审阅计划：
+
+```sh
+npm run cli -- runtime-plan --input examples/runtime-deployment.json --output "$PWD/.local/runtime/service-plan.json"
+```
+
+示例的二进制摘要和 UID 为合成占位值，不能直接安装。该命令只创建私有计划文件；不会创建账户、复制系统单元、daemon-reload、enable 或 start。
 
 ## 订阅节点快照
 
@@ -56,6 +62,7 @@ npm run test:drafts
 npm run test:subscriptions
 npm run test:mihomo
 npm run test:cli
+npm run test:runtime
 ```
 
 按修改范围选择命令。配置测试覆盖保护边界和稳定摘要；事务测试覆盖完整性、CAS、回滚、中断、跨进程锁、Linux 死锁核验和权限；草稿与订阅测试覆盖保存/刷新并发、旧回包、失败数据保留和输入完整性，HTTPS 测试用已有 openssl 生成临时证书并执行实际 TLS 握手；核心包装器测试使用明确的可执行测试替身；CLI 测试验证真实命令行进程、私有输出和不伪报运行状态。不能用这些测试宣称协议节点、核心实际语法、网关接管、DNS 或终端出口已验收。
