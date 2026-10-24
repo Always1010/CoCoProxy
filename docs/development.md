@@ -1,6 +1,6 @@
 # 首批开发与验证
 
-当前已实现配置、草稿、来源、事务、systemd 运行适配源码、管理认证、受限控制器代理和开发 CLI。适配后的 MetaCubeXD Server/UI 已通过构建、界面类型检查和实际浏览器的登录／草稿／捕获／冲突／注销流程。六种协议已通过真实客户端与服务端的回环 HTTP／UDP 及错误凭据检查，其他传输变体、外部节点和 LAN 接管仍未验收。服务尚未安装；浏览器回环验证也不代表真实 systemd 应用成功。
+当前已实现配置、草稿、来源、事务、systemd 运行适配源码、管理认证、受限控制器代理和开发 CLI。适配后的 MetaCubeXD Server/UI 已通过构建、界面类型检查和实际浏览器的登录／草稿／捕获／冲突／注销流程。六种协议已通过真实客户端与服务端的回环 HTTP／UDP 及错误凭据检查；透明网关配置和规则已通过四角色隔离内核测试。生产网络执行者尚未接入，其他传输变体、外部节点和真实 LAN 接管仍未验收。服务尚未安装；浏览器回环验证也不代表真实 systemd 应用成功。
 
 ## 环境与命令
 
@@ -71,6 +71,8 @@ npm run test:deployment
 npm run test:release-stage
 npm run test:network-plan
 npm run test:network-config
+npm run test:network-command
+npm run test:network-rules
 npm run test:management
 npm run test:git-tree
 npm run test:subscription-yaml
@@ -83,7 +85,15 @@ npm run test:overlay
 
 `test:network-plan` 检查[单终端网络资源契约](../packages/network/README.md)，包括 guard／黑洞／证据／激活顺序、强制回程、mark 保留位、共享 UID 下的逐 socket 核心身份和严格部署输入。它只渲染计划，不执行 nft、ip、sysctl 或系统服务；通过不能作为内核、网关或终端出口的就绪证据。
 
-`test:network-config` 验证[网关候选预览](../packages/network/config.md)的核心配置与网络部署代次绑定，以及当前显式运行适配器拒绝这种候选的边界。提供固定 `COPROXY_TEST_MIHOMO` 时另执行真实语法校验；该命令不启动 TUN。独立 namespace 已验证固定核心的 TUN 与精确 DNS 监听能力，尚未完成受限执行者、cgroup 过滤或终端转发验收。
+`test:network-config` 验证[网关候选预览](../packages/network/config.md)的核心配置与网络部署代次绑定，以及当前显式运行适配器拒绝这种候选的边界。提供固定 `COPROXY_TEST_MIHOMO` 时另执行真实语法校验；该命令不启动 TUN。`test:network-command` 检查有界 stdin／输出、固定错误及超时后的进程组收敛；`test:network-rules` 检查三个阶段的受限规则、DNS 握手例外与 mark 保留边界。后两者不能证明真实内核转发成功。
+
+```sh
+COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo COPROXY_TEST_SING_BOX=/absolute/private/reviewed/sing-box npm run test:network-kernel
+```
+
+`test:network-kernel` 核对两个固定官方二进制的摘要，使用已有 Python、ip、nft、unshare 和可用 TUN，在新建 user/network namespace 子树内建立客户端、路由器、网关和源站。它使用正式编译器与规则渲染器，验证 core-only 本地 DNS 与客户端阻断、active 透明 HTTP／UDP、真实 DNS UDP／TCP、DNS 回答驱动的业务访问、域名 REJECT、保留源地址与经路由器回程；还检查错误 MAC、无 mark 同 UID socket、核心退出、独立删除 TUN 及唯一节点退出后的故障阻断。没有 DIRECT 回退。
+
+该 fixture 仅在已核验隔离的 namespace 内准备转发参数、veth 和路由，不配置主机网络，不安装 systemd 服务。它复用现有真实 cgroup 并禁用管理例外，因此不证明生产管理／核心两个服务 cgroup 的隔离、持久执行者或真实设备联调。缺少显式二进制路径或 Linux 前提时跳过，不能计为通过；已提供路径后，隔离能力或实际路径失败会报错。测试不会自行安装缺少的软件。
 
 真实核心另由显式命令执行：`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo npm run test:core-live`。未提供路径时该项跳过，不下载程序；提供的二进制必须匹配 review.json 中已审阅的解压后摘要。测试执行真实 `-t`、PID/控制端口核验、回环 HTTP 转发和 UDP/TCP localhost DNS；只用高位 loopback 端口和临时私有目录，不安装服务或修改系统网络，不代表外部节点、WAN DNS 或透明接管验收。
 

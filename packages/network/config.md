@@ -36,6 +36,6 @@ TUN 固定为 `coproxy-tun`、部署 MTU、`stack: mips`，显式关闭 `auto-ro
 
 `tests/network-config.test.ts` 验证代次绑定、部署一致性、来源／策略隔离、恶意对象拒绝及当前显式运行适配器对 hash 合法网关候选的拒绝。显式提供 `COPROXY_TEST_MIHOMO` 后，另核对固定二进制 SHA-256 并执行真实 `-t`；缺少路径时该项跳过，不构成核心验收。
 
-已在独立 user＋net namespace 中，使用固定核心和合成地址验证 `mips` TUN 能够启动、地址为 `198.18.0.1/30`、MTU 为 1500，TUN FD 与精确 TCP／UDP DNS socket 均属于核心进程。核心未增加自动 nft 或策略路由；主 namespace 可读链路与路由快照保持一致。这是隔离内核可行性证据，尚非完整网关路径测试。原始记录只留本地。
+已在独立 user＋net namespace 中，使用固定核心和合成地址验证 `mips` TUN 能够启动、地址为 `198.18.0.1/30`、MTU 为 1500，TUN FD 与精确 TCP／UDP DNS socket 均属于核心进程。后续[四角色隔离内核测试](README.md)直接使用本编译器与固定规则，已验证透明 HTTP／UDP、实际 DNS UDP／TCP、DNS 地址驱动的业务连接、域名拒绝、路由器回程和核心／TUN／节点故障阻断。测试网络与进程均在隔离子树内；原始记录只留本地。
 
-`ipv6: false` 只约束核心行为；隔离测试观察到内核仍生成 TUN IPv6 链路本地地址。不能把该设置当成内核或路由器的 IPv6 阻断证明。最小 capability、cgroup socket 过滤、实际 DNS 查询、受限执行者、跨进程事务、入口防护、TCP／UDP 转发及真实出口／回程仍需实现和验证。
+`ipv6: false` 只约束核心行为；隔离测试观察到内核仍生成 TUN IPv6 链路本地地址。不能把该设置当成内核或路由器的 IPv6 阻断证明。生产最小 capability、两个服务 cgroup 的隔离与身份核验、受限执行者、持久网络事务、运行适配接入及真实设备联调仍需完成。隔离 fixture 复用现有 cgroup 并禁用管理例外，不能替代上述生产证明。

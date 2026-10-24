@@ -91,7 +91,7 @@ test('fail-closed route domains cannot fall through or directly resolve the clie
   assert.equal(socketBinding.sameUidManagementUpstreamException, false);
   assert.equal(socketBinding.onUnsupportedOrUnprovable, 'remain-blocked');
   assert.deepEqual(plan.binding.coreSocketBinding, socketBinding);
-  const activation = plan.phases[3].operations[2];
+  const activation = plan.phases[4].operations[2];
   assert.deepEqual(activation.classification.egress.socketBinding, socketBinding);
   assert.deepEqual(activation.classification.dnsReplies.socketBinding, socketBinding);
   assert.ok(plan.preflight.requirements.some(requirement => requirement.includes('no-uid-only-fallback')));
@@ -101,19 +101,25 @@ test('fail-closed route domains cannot fall through or directly resolve the clie
 test('durable guard precedes preparation, fresh core evidence precedes capture, failures retain blocking', () => {
   const plan = renderNetworkPlan(input());
   assert.deepEqual(plan.phases.map(phase => phase.id), [
-    'persist-guard', 'prepare-blocked', 'await-core-evidence', 'activate-capture', 'ready',
+    'persist-guard', 'prepare-blocked', 'authorize-core-egress', 'await-core-evidence', 'activate-capture', 'ready',
   ]);
   assert.equal(plan.phases[0].operations[0].kind, 'persist-and-install-guard');
   assert.equal(plan.phases[1].operations[0].kind, 'ensure-blackhole-defaults');
   assert.equal(plan.phases[1].operations[1].kind, 'ensure-policy-rules');
-  assert.equal(plan.phases[3].operations[0].kind, 'recheck-evidence-under-exclusive-lock');
-  assert.equal(plan.phases[3].operations[1].kind, 'install-capture-route');
-  assert.equal(plan.phases[4].operations[0].terminalPath, 'unverified');
+  assert.equal(plan.phases[2].operations[0].kind, 'require-fresh-core-identity');
+  assert.equal(plan.phases[2].operations[1].clientForwarding, 'blocked');
+  assert.equal(plan.phases[2].operations[1].clientDns, 'blocked');
+  assert.equal(plan.phases[2].operations[1].captureRoute, 'absent');
+  assert.equal(plan.phases[2].operations[1].localDnsProbe.sourceIPv4, '127.0.0.1');
+  assert.equal(plan.phases[4].operations[0].kind, 'recheck-evidence-under-exclusive-lock');
+  assert.equal(plan.phases[4].operations[1].kind, 'install-capture-route');
+  assert.equal(plan.phases[5].operations[0].terminalPath, 'unverified');
   assert.equal(plan.guard.dns.exposure, 'blocked-until-current-generation-activation');
   assert.equal(plan.evidence.requireAll, true);
   assert.equal(plan.evidence.onMissingStaleOrMismatch, 'remain-blocked');
   assert.ok(plan.evidence.required.some(requirement => requirement.includes('same-core-pid-owns-exact')));
   assert.ok(plan.evidence.required.some(requirement => requirement.includes('same-core-pid-owns-up-tun')));
+  assert.ok(plan.evidence.required.some(requirement => requirement.includes('actual-loopback-bound-udp-and-tcp-dns-query')));
   assert.equal(plan.faultPolicy.directFallback, false);
   assert.equal(plan.faultPolicy.guard, 'retain-and-reassert-first');
   assert.equal(plan.faultPolicy.blackholeDefaults, 'retain-all-three');
