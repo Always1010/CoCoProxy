@@ -144,7 +144,7 @@ async function writePrivateOutput(path: string, content: string): Promise<void> 
 function httpsPolicy(input: unknown): HttpsClientOptions {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new CliError('INVALID_HTTPS_POLICY');
   const policy = input as Record<string, unknown>;
-  const keys = ['allowedOrigins', 'allowPrivateAddresses', 'timeoutMs', 'maxBytes', 'maxRedirects', 'ca'];
+  const keys = ['allowedOrigins', 'allowedHttpOrigins', 'allowPrivateAddresses', 'timeoutMs', 'maxBytes', 'maxRedirects', 'ca'];
   if (Object.keys(policy).some(key => !keys.includes(key))
       || (policy.allowPrivateAddresses !== undefined && typeof policy.allowPrivateAddresses !== 'boolean')
       || (policy.ca !== undefined && (typeof policy.ca !== 'string' || policy.ca.length > 32_768))) throw new CliError('INVALID_HTTPS_POLICY');

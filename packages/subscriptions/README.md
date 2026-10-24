@@ -4,7 +4,7 @@
 
 默认 HTTPS 下载器、来源许可策略和实际 TLS 验证范围见 [HTTP 客户端](http.md)。
 
-`SnapshotClient.fetch(url, previous?)` 返回 `{status: 'modified', text, etag?}` 或 `{status: 'not-modified'}`；`previous` 仅含可选 ETag。生产客户端必须保证 HTTPS 下载的超时、响应大小和重定向边界。来源 URL 最多 8192 字符，只允许 HTTPS，不允许 userinfo 或 fragment，允许查询参数。保存和发出的 ETag 最多 512 字符且必须是可打印 ASCII；响应中的非法 ETag 被丢弃，合法节点正文仍可接受，下次刷新改为完整下载。URL、ETag、原始响应和节点凭据只属于私有输入，调用方不得记录它们。
+`SnapshotClient.fetch(url, previous?)` 返回 `{status: 'modified', text, etag?}` 或 `{status: 'not-modified'}`；`previous` 仅含可选 ETag。生产客户端必须保证下载的超时、响应大小和重定向边界。来源 URL 最多 8192 字符，接受 HTTPS 或 HTTP 语法，不允许 userinfo 或 fragment，允许查询参数；接受保存不等于取得下载许可。默认只获取部署许可的 HTTPS 来源；HTTP 必须另在私有部署的 `allowedHttpOrigins` 中明确列出精确 origin。保存和发出的 ETag 最多 512 字符且必须是可打印 ASCII；响应中的非法 ETag 被丢弃，合法节点正文仍可接受，下次刷新改为完整下载。URL、ETag、原始响应和节点凭据只属于私有输入，调用方不得记录它们。
 
 默认 decoder 是 `JSON.parse`，也可以显式注入同步 decoder。解码结果必须严格为 `{proxies: JsonObject[]}`。完整订阅里的规则、策略组、provider、脚本、部署及未知顶层字段均返回 `SNAPSHOT_UNSUPPORTED`；节点再通过 `compileConfig` 的离线安全边界，拒绝远程 provider、文件读取、脚本或出口覆盖等字段。校验使用合成部署参数与 `MATCH,REJECT` 策略，不启动网络核心。它不是完整的 Mihomo 协议 schema 校验；真正应用前仍须验证目标核心配置。
 

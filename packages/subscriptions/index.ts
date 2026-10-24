@@ -74,8 +74,8 @@ function checkUrl(value: unknown): asserts value is string {
   if (typeof value !== 'string' || value.length > 8192 || /[\s\u0000-\u001f\u007f\\]/.test(value)) fail('INVALID_SOURCE_URL');
   let url: URL;
   try { url = new URL(value); } catch { fail('INVALID_SOURCE_URL'); }
-  if (url.protocol !== 'https:' || !url.hostname || url.username || url.password || value.includes('#') ||
-      !/^https:\/\//i.test(value) || value.slice(value.indexOf('//') + 2).split(/[/?]/, 1)[0].includes('@')) fail('INVALID_SOURCE_URL');
+  if (!['https:', 'http:'].includes(url.protocol) || !url.hostname || url.username || url.password || value.includes('#') ||
+      !/^https?:\/\//i.test(value) || value.slice(value.indexOf('//') + 2).split(/[/?]/, 1)[0].includes('@')) fail('INVALID_SOURCE_URL');
 }
 
 function sourceDefinition(input: unknown): Readonly<{ id: string; url: string }> {

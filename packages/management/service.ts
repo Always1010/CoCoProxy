@@ -39,7 +39,7 @@ export async function loadManagementGateway(path: string) {
     const runtimeSettings = await loadRuntimeSettings(absolute(settings.runtimeSettingsPath));
     let sourceClient: HttpsSnapshotClient | undefined;
     if (settings.subscriptionPolicy !== undefined) {
-      const policy = exactRecord(settings.subscriptionPolicy, ['allowedOrigins'], ['allowPrivateAddresses', 'timeoutMs', 'maxBytes', 'maxRedirects', 'ca']);
+      const policy = exactRecord(settings.subscriptionPolicy, ['allowedOrigins'], ['allowedHttpOrigins', 'allowPrivateAddresses', 'timeoutMs', 'maxBytes', 'maxRedirects', 'ca']);
       if ((policy.allowPrivateAddresses !== undefined && typeof policy.allowPrivateAddresses !== 'boolean') ||
           (policy.ca !== undefined && (typeof policy.ca !== 'string' || policy.ca.length > 32_768))) throw new Error();
       sourceClient = new HttpsSnapshotClient(policy as unknown as HttpsClientOptions);

@@ -251,7 +251,7 @@ test('invalid IDs and URLs reject traversal and credentials while status reads n
     await assert.rejects(store.configure({ id, url: sourceUrl }, 0), code('INVALID_SOURCE_ID'));
     await assert.rejects(store.status(id), code('INVALID_SOURCE_ID'));
   }
-  for (const url of ['http://subscription.example/x', 'https://user:secret@subscription.example/x',
+  for (const url of ['http://user:secret@subscription.example/x', 'https://user:secret@subscription.example/x',
     'https://@subscription.example/x', 'https://subscription.example/x#secret', 'https://subscription.example/x#', 'file:///secret']) {
     await assert.rejects(store.configure({ id: 'primary', url }, 0), code('INVALID_SOURCE_URL'));
   }
