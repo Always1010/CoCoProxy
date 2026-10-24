@@ -22,6 +22,7 @@
     "test:release-stage": "node --experimental-strip-types --test tests/release-stage.test.ts",
     "test:network-plan": "node --experimental-strip-types --test tests/network-plan.test.ts",
     "test:network-config": "node --experimental-strip-types --test tests/network-config.test.ts",
+    "test:network-candidate": "node --experimental-strip-types --test tests/network-candidate.test.ts",
     "test:network-command": "node --experimental-strip-types --test tests/network-command.test.ts",
     "test:network-fenced-command": "node --experimental-strip-types --test tests/network-fenced-command.test.ts",
     "test:network-resource-journal": "node --experimental-strip-types --test tests/network-resource-journal.test.ts",
