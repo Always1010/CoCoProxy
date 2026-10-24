@@ -24,7 +24,7 @@ function cli(args: string[]): Promise<{ code: number; stdout: string; stderr: st
       cwd: root, timeout: 15_000, maxBuffer: 65_536, windowsHide: true,
     }, (error, stdout, stderr) => {
       if (error && typeof error.code !== 'number') return reject(error);
-      resolve({ code: error?.code ?? 0, stdout, stderr });
+      resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr });
     });
   });
 }

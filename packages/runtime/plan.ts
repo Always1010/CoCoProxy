@@ -8,7 +8,7 @@ const fields = new Set([
   'schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256', 'systemctlPath',
   'nodePath', 'sourceDirectory', 'settingsPath', 'unitPath', 'serviceUid',
 ]);
-const invalid = (): never => { throw new RuntimeError('RUNTIME_PLAN_INVALID'); };
+const invalid: () => never = () => { throw new RuntimeError('RUNTIME_PLAN_INVALID'); };
 
 function absolutePath(value: unknown): string {
   if (typeof value !== 'string' || value.length > 4096 || !posix.isAbsolute(value) || posix.normalize(value) !== value ||

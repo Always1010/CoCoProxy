@@ -55,7 +55,7 @@ const failureCodes = new Set<SnapshotFailure>([
   'SOURCE_FETCH_FAILED', 'SNAPSHOT_DECODE_FAILED', 'SNAPSHOT_UNSUPPORTED',
   'SNAPSHOT_INVALID', 'SNAPSHOT_LIMIT', 'SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT',
 ]);
-const fail = (code: string): never => { throw new TransactionError(code); };
+const fail: (code: string) => never = code => { throw new TransactionError(code); };
 const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 1;
 const hash = (proxies: JsonObject[]): string => createHash('sha256').update(canonicalJson({ proxies }), 'utf8').digest('hex');

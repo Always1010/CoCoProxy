@@ -7,6 +7,7 @@
   "engines": { "node": ">=22.18.0" },
   "scripts": {
     "cli": "node --experimental-strip-types apps/cli/main.ts",
+    "typecheck": "node tooling/node_modules/typescript/bin/tsc -p tsconfig.json",
     "test:config": "node --experimental-strip-types --test tests/config.test.ts",
     "test:transaction": "node --experimental-strip-types --test tests/transaction.test.ts",
     "test:drafts": "node --experimental-strip-types --test tests/drafts.test.ts",

@@ -6,7 +6,7 @@ import { loadRuntimeCandidate, parseRuntimeSettings, verifyBinary } from './sett
 import { RuntimeError } from './types.ts';
 import type { CoreObservation, RuntimeSettings, RuntimeUnitState } from './types.ts';
 
-const fail = (code: string): never => { throw new RuntimeError(code); };
+const fail: (code: string) => never = code => { throw new RuntimeError(code); };
 
 async function boundedRead(path: string, maximum: number): Promise<Buffer> {
   const handle = await open(path, 'r');

@@ -121,7 +121,7 @@ async function fixture(t: test.TestContext) {
 test('systemd apply commits a new active generation only after its observation', { skip: !linux }, async t => {
   const f = await fixture(t);
   assert.equal((await f.manager.status()).active, null);
-  assert.deepEqual(f.events, []);
+  assert.equal(f.events.length, 0);
   const status = await f.manager.apply(f.first.id, null);
   assert.equal(status.active, f.first.id);
   assert.equal(status.desired, f.first.id);

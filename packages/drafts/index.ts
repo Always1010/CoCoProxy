@@ -18,7 +18,7 @@ const MAX_DOCUMENT_BYTES = 4 * 1024 * 1024;
 const DIGEST = /^[a-f0-9]{64}$/;
 const DOCUMENT_KEYS = new Set(['version', 'revision', 'input', 'generation', 'updatedAt']);
 const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
-const fail = (code: string): never => { throw new DraftError(code); };
+const fail: (code: string) => never = code => { throw new DraftError(code); };
 
 function expectedRevision(value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) fail('INVALID_DRAFT_REVISION');
