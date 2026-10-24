@@ -4,10 +4,11 @@ import { FileTransactionStore, TransactionError } from '../transaction/index.ts'
 import { atomicWrite, inspectPrivateDirectory, privateRead } from '../storage/private-files.ts';
 import { NetworkCommandError } from './command.ts';
 import { renderNetworkPlan, type NetworkPlan, type NetworkPlanInput } from './plan.ts';
+import { sameNetworkProtection } from './protection.ts';
 
 export type NetworkScope = 'production' | 'fixture';
 export type NetworkPhase = 'guarding' | 'preparing' | 'starting-core' | 'authorizing-core' |
-  'probing' | 'activating' | 'ready' | 'containing' | 'blocked' | 'fault';
+  'probing' | 'activating' | 'ready' | 'settling' | 'containing' | 'blocked' | 'fault';
 export class NetworkTransactionError extends Error {
   readonly code: string;
   constructor(code: string) { super(code); this.name = 'NetworkTransactionError'; this.code = code; }
@@ -55,8 +56,17 @@ export interface NetworkEvidence {
  */
 export interface NetworkDriver {
   readonly scope: NetworkScope;
-  /** Read-only ownership/collision/bypass/platform preflight. No repairs. */
-  preflight(plan: NetworkPlan, purpose: 'apply' | 'recover'): Promise<void>;
+  /** Read-only ownership/collision/bypass/platform preflight. No repairs.
+   * settle verifies trusted operation receipts and context before convergence;
+   * it may accept bound live pending work, but never unknown ownership. recover
+   * performs the full resource preflight after all pending work has settled. */
+  preflight(plan: NetworkPlan, purpose: 'apply' | 'settle' | 'recover'): Promise<void>;
+  /** Explicit recovery only, under the coordinator lock and durable fence.
+   * Revalidate trusted persisted operation bindings, then boundedly terminate
+   * or await only those earlier worker/manager operations. No caller-selected
+   * PID, new business operation, network authorization or resource repair.
+   * Success is followed by independent read-only settlement proof/preflight. */
+  settlePending(plan: NetworkPlan): Promise<void>;
   /** Read-only proof that every earlier tool/manager mutation has settled. */
   assertSettled(plan: NetworkPlan): Promise<void>;
   /** Verify ownership, atomically install blocked guard, then read it back. */
@@ -104,7 +114,7 @@ export interface NetworkStatus {
   terminalPath: 'unverified';
 }
 const phases = ['guarding', 'preparing', 'starting-core', 'authorizing-core', 'probing',
-  'activating', 'ready', 'containing', 'blocked', 'fault'];
+  'activating', 'ready', 'settling', 'containing', 'blocked', 'fault'];
 const faults = ['NETWORK_APPLY_FAILED', 'NETWORK_RECOVERY_REQUIRED', 'NETWORK_RECOVERY_FAILED',
   'NETWORK_COMMAND_UNSETTLED', 'NETWORK_CONTAINMENT_FAILED'];
 const fail: (code: string) => never = code => { throw new NetworkTransactionError(code); };
@@ -142,12 +152,6 @@ function status(state: Journal | null, scope: NetworkScope): NetworkStatus {
     fault: state?.fault ?? null, unsettled: state?.unsettled ?? false, updatedAt: state?.updatedAt ?? null,
     readiness: state?.phase === 'fault' ? 'fault' : 'unknown', terminalPath: 'unverified' };
 }
-function sameProtection(left: NetworkPlanInput, right: NetworkPlanInput): boolean {
-  const domain = (value: NetworkPlanInput) => ({ ...value, generation: null,
-    core: { ...value.core, binarySha256: null, unitSha256: null } });
-  return JSON.stringify(domain(left)) === JSON.stringify(domain(right));
-}
-
 /** Separate root-owned network journal in production; trusted ancestors required.
  * Reuses the application store's proven cross-process lock and dead-owner checks.
  * Its candidates directory is reserved for subsequent core/network integration. */
@@ -337,7 +341,7 @@ export class NetworkCoordinator {
       if ((previous?.revision ?? 0) !== expectedRevision) fail('NETWORK_REVISION_CONFLICT');
       if (previous && this.recoveredRevision !== previous.revision) fail('NETWORK_RECOVERY_REQUIRED');
       if (previous && !['ready', 'blocked'].includes(previous.phase)) fail('NETWORK_RECOVERY_REQUIRED');
-      if (previous && !sameProtection(previous.deployment, plan.deployment)) fail('NETWORK_PROTECTION_CHANGE_UNSUPPORTED');
+      if (previous && !sameNetworkProtection(previous.deployment, plan.deployment)) fail('NETWORK_PROTECTION_CHANGE_UNSUPPORTED');
       this.recoveredRevision = null;
       try { await this.driverCall(() => this.driver.preflight(plan, 'apply')); }
       catch { fail('NETWORK_PREFLIGHT_FAILED'); }
@@ -386,13 +390,23 @@ export class NetworkCoordinator {
       const state = await this.store.read();
       if (!state) return status(null, this.scope);
       const plan = freeze(renderNetworkPlan(state.deployment));
+      let quiescenceProven = false;
       try {
+        // Check receipt provenance/platform without repairing or requiring the
+        // bound pending worker to have exited before explicit convergence.
+        await this.driverCall(() => this.driver.preflight(plan, 'settle'));
+        state.fault = 'NETWORK_RECOVERY_REQUIRED';
+        state.unsettled = true;
+        await this.write(state, 'settling');
+        await this.driverCall(() => this.driver.settlePending(plan));
         // A crash can happen before recording a failed command or after an
         // uncertain fsync. Never treat a saved false flag as quiescence proof.
         await this.driverCall(() => this.driver.assertSettled(plan));
+        quiescenceProven = true;
+        state.unsettled = false;
         await this.driverCall(() => this.driver.preflight(plan, 'recover'));
       } catch (error) {
-        state.unsettled = state.unsettled || !(error instanceof NetworkDriverError && error.childSettled);
+        state.unsettled = !quiescenceProven || !(error instanceof NetworkDriverError && error.childSettled);
         state.fault = state.unsettled ? 'NETWORK_COMMAND_UNSETTLED' : 'NETWORK_RECOVERY_FAILED';
         await this.write(state, 'fault');
         fail(state.fault);

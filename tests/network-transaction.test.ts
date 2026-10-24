@@ -49,6 +49,11 @@ async function fixture() {
   const driver: NetworkDriver = {
     scope: 'fixture',
     async preflight(_, purpose) { calls.push('preflight:' + purpose); },
+    async settlePending() { await mutation('settle');
+      const state = JSON.parse(await readFile(join(root, 'network-state.json'), 'utf8'));
+      assert.equal(state.phase, 'settling');
+      assert.equal((await lstat(join(root, '.lock'))).isDirectory(), true);
+    },
     async assertSettled() { calls.push('settled'); },
     async installBlockedGuard() { await mutation('guard'); },
     async prepareBlocked() { await mutation('prepare'); },
@@ -89,7 +94,7 @@ test('durable intent and per-mutation fences precede ordered activation; status 
     await assert.rejects(newInstance.apply(next, persisted.revision), reject('NETWORK_RECOVERY_REQUIRED'));
     assert.equal(f.calls.length, before);
     const recovered = await newInstance.recover();
-    assert.deepEqual(f.calls.slice(before), ['settled', 'preflight:recover', 'guard', 'retain']);
+    assert.deepEqual(f.calls.slice(before), ['preflight:settle', 'settle', 'settled', 'preflight:recover', 'guard', 'retain']);
     assert.equal(recovered.lastPhase, 'blocked');
     assert.equal(recovered.desiredEnabled, true);
     assert.equal(recovered.fault, 'NETWORK_RECOVERY_REQUIRED');
@@ -226,14 +231,103 @@ test('unknown or unsettled driver failures fence recovery; no parallel blocking 
       const before = f.calls.length;
       f.driver.assertSettled = async () => { f.calls.push('settled'); throw new NetworkDriverError(false); };
       await assert.rejects(manager.recover(), reject('NETWORK_COMMAND_UNSETTLED'));
-      assert.deepEqual(f.calls.slice(before), ['settled']);
+      assert.deepEqual(f.calls.slice(before), ['preflight:settle', 'settle', 'settled']);
       f.driver.assertSettled = async () => { f.calls.push('settled'); };
       const recovered = await manager.recover();
-      assert.deepEqual(f.calls.slice(-4), ['settled', 'preflight:recover', 'guard', 'retain']);
+      assert.deepEqual(f.calls.slice(-6), ['preflight:settle', 'settle', 'settled', 'preflight:recover', 'guard', 'retain']);
       assert.equal(recovered.lastPhase, 'blocked');
       assert.equal(recovered.unsettled, false);
     } finally { await f.close(); }
   }
+});
+
+test('explicit recovery converges bound pending work under a durable fence even after saved ready', async () => {
+  const f = await fixture();
+  try {
+    await f.coordinator().apply(input(), 0);
+    const saved = JSON.parse(await readFile(join(f.root, 'network-state.json'), 'utf8'));
+    assert.equal(saved.unsettled, false);
+    let pending = true;
+    const settle = f.driver.settlePending, preflight = f.driver.preflight;
+    f.driver.preflight = async (plan, purpose) => {
+      await preflight(plan, purpose);
+      if (purpose === 'recover') assert.equal(pending, false);
+    };
+    f.driver.settlePending = async plan => {
+      assert.equal(plan.sha256, renderNetworkPlan(input()).sha256);
+      await settle(plan);
+      await assert.rejects(f.coordinator().recover(), reject('NETWORK_BUSY'));
+      pending = false;
+    };
+    f.driver.assertSettled = async () => {
+      f.calls.push('settled');
+      assert.equal(pending, false);
+      const state = JSON.parse(await readFile(join(f.root, 'network-state.json'), 'utf8'));
+      assert.equal(state.phase, 'settling');
+      assert.equal(state.unsettled, true, 'settle success alone never clears the durable fence');
+    };
+    const before = f.calls.length, result = await f.coordinator().recover();
+    assert.deepEqual(f.calls.slice(before), ['preflight:settle', 'settle', 'settled', 'preflight:recover', 'guard', 'retain']);
+    assert.equal(result.lastPhase, 'blocked');
+    assert.equal(result.unsettled, false);
+    assert.equal(result.fault, 'NETWORK_RECOVERY_REQUIRED');
+  } finally { await f.close(); }
+});
+
+test('recovery never proceeds to another mutation after failed provenance, convergence or settlement proof', async () => {
+  for (const failure of ['provenance', 'settle-known', 'settle-unknown', 'proof', 'preflight-known', 'preflight-unknown'] as const) {
+    const f = await fixture();
+    try {
+      await f.coordinator().apply(input(), 0);
+      const before = f.calls.length;
+      const preflight = f.driver.preflight;
+      f.driver.preflight = async (plan, purpose) => {
+        await preflight(plan, purpose);
+        if (failure === 'provenance' && purpose === 'settle') throw new NetworkDriverError(true);
+        if (failure.startsWith('preflight-') && purpose === 'recover') {
+          if (failure === 'preflight-unknown') throw new Error('private preflight failure');
+          throw new NetworkDriverError(true);
+        }
+      };
+      if (failure.startsWith('settle-')) {
+        const settle = f.driver.settlePending;
+        f.driver.settlePending = async plan => {
+          await settle(plan);
+          if (failure === 'settle-unknown') throw new Error('private convergence failure');
+          throw new NetworkDriverError(true);
+        };
+      }
+      if (failure === 'proof') f.driver.assertSettled = async () => {
+        f.calls.push('settled'); throw new NetworkDriverError(true);
+      };
+      const manager = f.coordinator();
+      const stillUnsettled = failure !== 'preflight-known';
+      await assert.rejects(manager.recover(), reject(stillUnsettled ? 'NETWORK_COMMAND_UNSETTLED' : 'NETWORK_RECOVERY_FAILED'), failure);
+      const expected = ['preflight:settle'];
+      if (failure !== 'provenance') expected.push('settle');
+      if (failure === 'proof' || failure.startsWith('preflight-')) expected.push('settled');
+      if (failure.startsWith('preflight-')) expected.push('preflight:recover');
+      assert.deepEqual(f.calls.slice(before), expected, failure);
+      const result = await manager.status();
+      assert.equal(result.lastPhase, 'fault', failure);
+      assert.equal(result.unsettled, stillUnsettled, failure);
+      await assert.rejects(manager.apply(input(), result.revision), reject('NETWORK_RECOVERY_REQUIRED'));
+    } finally { await f.close(); }
+  }
+});
+
+test('a journal interrupted during settling is accepted only for a fresh explicit recovery', async () => {
+  const f = await fixture();
+  try {
+    await f.coordinator().apply(input(), 0);
+    const path = join(f.root, 'network-state.json'), saved = JSON.parse(await readFile(path, 'utf8'));
+    saved.phase = 'settling'; saved.unsettled = true; saved.fault = 'NETWORK_RECOVERY_REQUIRED';
+    await writeFile(path, JSON.stringify(saved));
+    const manager = f.coordinator(), before = f.calls.length;
+    await assert.rejects(manager.apply(input(), saved.revision), reject('NETWORK_RECOVERY_REQUIRED'));
+    assert.equal((await manager.recover()).lastPhase, 'blocked');
+    assert.deepEqual(f.calls.slice(before), ['preflight:settle', 'settle', 'settled', 'preflight:recover', 'guard', 'retain']);
+  } finally { await f.close(); }
 });
 
 test('scope, corrupted journal and external revision cannot be adopted as recovered authority', async () => {
@@ -297,7 +391,7 @@ test('process death during a mutation leaves a durable fence and dead-owner reco
     try {
       const module = new URL('../packages/network/transaction.ts', import.meta.url).href;
       const script = `import { NetworkCoordinator } from ${JSON.stringify(module)};
-        const driver = { scope:'fixture', async preflight(){}, async installBlockedGuard(){}, async prepareBlocked(){},
+        const driver = { scope:'fixture', async preflight(){}, async settlePending(){}, async installBlockedGuard(){}, async prepareBlocked(){},
           async ensureCore(){ process.stdout.write('IN_FLIGHT\\n'); await new Promise(() => setInterval(() => {}, 1000)); } };
         await new NetworkCoordinator(${JSON.stringify(f.root)}, driver).apply(${JSON.stringify(input())}, 0);`;
       child = spawn(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -313,6 +407,6 @@ test('process death during a mutation leaves a durable fence and dead-owner reco
       child.kill('SIGKILL'); await closed;
       const result = await f.coordinator().recover();
       assert.equal(result.lastPhase, 'blocked');
-      assert.deepEqual(f.calls, ['settled', 'preflight:recover', 'guard', 'retain']);
+      assert.deepEqual(f.calls, ['preflight:settle', 'settle', 'settled', 'preflight:recover', 'guard', 'retain']);
     } finally { child?.kill('SIGKILL'); await f.close(); }
   });
