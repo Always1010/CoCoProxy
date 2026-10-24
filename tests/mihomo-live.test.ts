@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
+import { createControllerProxy } from '../packages/management/controller.ts';
 import { compileConfig } from '../packages/config/index.ts';
 import { validateWithMihomo } from '../packages/mihomo/validator.ts';
 import { observeCore } from '../packages/runtime/observer.ts';
@@ -137,6 +138,29 @@ test('reviewed real Mihomo validates and serves loopback HTTP proxy plus UDP/TCP
     }
     assert.equal(logLimit, false, 'core exceeded the bounded diagnostic budget');
     assert.ok(ready, 'reviewed core did not become ready');
+    const controller = createControllerProxy({
+      target: async () => ({ generation: candidate.id, port: controllerPort, secret: candidate.config.secret as string }),
+      isCurrent: async generation => generation === candidate.id && !exited,
+      mutate: async operation => operation(),
+    });
+    for (const route of ['/version', '/configs', '/proxies', '/rules', '/connections']) {
+      const response = await controller.fetch(new Request('https://management.example' + route));
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-coproxy-generation'), candidate.id);
+      assert.ok(!(await response.text()).includes(candidate.config.secret as string));
+    }
+    let firstFrame!: (text: string) => void;
+    const received = new Promise<string>(resolve => { firstFrame = resolve; });
+    const cleanup = await controller.relay(new Request('https://management.example/traffic?interval=0.1'), {
+      send: text => firstFrame(text), close: () => {},
+    }, () => true);
+    let frameTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const traffic = JSON.parse(await Promise.race([received, new Promise<never>((_, reject) => {
+        frameTimer = setTimeout(() => reject(new Error('CORE_STREAM_TIMEOUT')), 3000);
+      })]));
+      assert.equal(typeof traffic.up, 'number'); assert.equal(typeof traffic.down, 'number');
+    } finally { clearTimeout(frameTimer); cleanup(); }
     const fixture = httpServer((_req, res) => { res.writeHead(200); res.end(nonce); });
     await new Promise<void>(resolve => fixture.listen(0, '127.0.0.1', resolve));
     t.after(() => new Promise<void>((resolve, reject) => fixture.close(error => error ? reject(error) : resolve())));
