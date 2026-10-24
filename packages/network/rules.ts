@@ -53,10 +53,25 @@ function options(value: unknown) {
 }
 
 interface Chain { name: string; definition: string; rules: string[] }
+/** Expand only the fixed renderer's literal forms. nft 1.0.x JSON echo can
+ * confuse anonymous-set IDs while replacing chains; scalar rules avoid that
+ * cache path and keep the committed echo suitable for independent readback. */
+function scalarRules(source: string): string[] {
+  // A negative membership test is conjunction, never alternative rules.
+  const rule = source.replace(/ip daddr != \{ ([\d.]+), ([\d.]+) \}/g, 'ip daddr != $1 ip daddr != $2');
+  const protocols = 'meta l4proto { tcp, udp }';
+  if (rule.includes(protocols)) return ['tcp', 'udp'].flatMap(protocol =>
+    scalarRules(rule.replace(protocols, `meta l4proto ${protocol}`)));
+  const addresses = /ip (saddr|daddr) \{ ([\d./]+), ([\d./]+) \}/.exec(rule);
+  if (addresses) return [addresses[2], addresses[3]].flatMap(address =>
+    scalarRules(rule.replace(addresses[0], `ip ${addresses[1]} ${address}`)));
+  if (/[{}]/.test(rule)) fail();
+  return [rule];
+}
 function table(name: string, chains: Chain[]) {
   // Replacements flush only the expected, previously verified owned chains.
   // Do not delete/recreate a table or silently accept additional foreign objects.
-  const rules = chains.flatMap(chain => chain.rules.map(rule => `add rule inet ${name} ${chain.name} ${rule}`));
+  const rules = chains.flatMap(chain => chain.rules.flatMap(scalarRules).map(rule => `add rule inet ${name} ${chain.name} ${rule}`));
   return {
     create: [`add table inet ${name}`, ...chains.map(chain =>
       `add chain inet ${name} ${chain.name} { ${chain.definition}; policy accept; }`), ...rules, ''].join('\n'),

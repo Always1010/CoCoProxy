@@ -2,6 +2,8 @@
 
 `renderNetworkRules(input, { mode })` 每次重新调用 `renderNetworkPlan`，仅接受完整部署输入，不信任调用方传回的 plan。输出包含 `generation`、规范 plan 的 `planSha256`、`scope`、两个固定 nft 表的批次和独立 `ip` argv。渲染不读取本机状态，不执行命令，不证明已具备权限或内核能力。
 
+发出的规则使用标量匹配。固定的 TCP/UDP 与正向地址集合展开为连续规则；负向目的集合变为同一条规则中两个 `!=` 的 AND，不能展开成任一地址不等即可通过的替代规则。此处理避开已实测的 nft 1.0.9 匿名 set 在 replace JSON echo 中出现重复／错误类型成员的问题，使提交回显可与独立内核 list 精确比较；不会从 list 反向修补期望规则。展开只处理本 renderer 内部的固定形式，不接受用户规则文本作为命令。
+
 `nft.guard` 与 `nft.data` 分别含 `create`、`replace`。首次创建使用 `create`；执行器确认既有表、链、hook、priority 和所有权完全相符后使用 `replace`，后者仅清空三个固定链。执行器应将本次需要的批次拼接为一次 `nft -f -` 事务，先通过 `nft -c -f -` 验证。不能在失败后盲试另一批次，不能销毁未知表，也不能把表名相同当成所有权证明。
 
 支持 `blocked`、`core-only` 和 `active` 三个阶段。`blocked` 不提供客户端转发、TUN 转发、LAN DNS 或共享核心 UID 非 loopback 输出例外。三个阶段均允许从 loopback 接口、127.0.0.1 源地址访问精确网关 IPv4 DNS TCP/UDP 端口，供 root helper 显式绑定 127.0.0.1 做真实本地 DNS 探针；该规则不开放 LAN DNS。`core-only` 仅在执行器已经核验核心 PID、binary、unit 和 cgroup 后使用，开放与 active 相同的精确核心输出及独立管理 cgroup 无保留 mark 例外，客户端转发、LAN DNS 和 capture/return 分类仍保持阻断。执行器取得真实 DNS/出口证据后才能进入 active。
