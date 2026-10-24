@@ -107,6 +107,7 @@ test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a 
       for (const key of ['isolatedRoles', 'nativeReadbackVerified', 'nativeProbeVerified', 'nativeTamperRejected', 'nativeOwnershipCollisionRejected', 'preCoreRulesInstalled', 'blockedOriginsUntouched', 'coreOnlyStillBlocked', 'coreOnlyLocalDns', 'transparentHttp', 'transparentUdp', 'realDns', 'dnsLinkedHttpUdp', 'dnsLinkedReject',
         'nativePendingIpRecovered', 'nativePendingNftRecovered', 'nativeActiveRestartBlocked', 'nativeTunLossRecovered',
         'actualLinkNeighbourVerified', 'actualCoreSocketMarksVerified', 'nativeReadOnlyPreflightVerified',
+        'nativeGenerationRebound', 'nativeExplicitSettlementVerified',
         'routerReturnObserved', 'originalSourceObserved', 'markedCoreEgressObserved', 'wrongMacRejected',
         'unmarkedSameUidRejected', 'coreDeathExistingAndNewBlocked', 'tunLossBlocked', 'nodeDeathNoDirectFallback']) {
         assert.equal(result[key], true, key);

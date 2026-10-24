@@ -24,6 +24,8 @@ const optional = async <T>(operation: () => Promise<T>): Promise<T | null> => {
 };
 const receiptBefore = await optional(() => readFile(join(directory, 'native-resource-receipt.json')));
 const directoryBefore = await optional(() => lstat(directory));
+await NativeNetworkSession.preflightFixture(plan.deployment, tools, proof, directory, 'settle');
+await NativeNetworkSession.settlePendingFixture(plan.deployment, tools, proof, directory);
 const preflight = await NativeNetworkSession.preflightFixture(plan.deployment, tools, proof, directory, 'recover');
 await NativeNetworkSession.assertSettledFixture(plan.deployment, tools, proof, directory);
 const receiptAfter = await optional(() => readFile(join(directory, 'native-resource-receipt.json')));
@@ -32,8 +34,8 @@ if (preflight.scope !== 'fixture' || preflight.initialized !== (receiptBefore !=
   (directoryBefore === null && await optional(() => lstat(directory)) !== null)) throw new Error('NATIVE_READONLY_PREFLIGHT_FAILED');
 const create = () => NativeNetworkSession.fixture(plan.deployment, { ipBinary: '/usr/sbin/ip', nftBinary: '/usr/sbin/nft' },
   { outerUser, outerNet, cgroups: { core: input.blocked.cgroups.core.path, management: null } }, directory);
-const session = await create();
-console.log(JSON.stringify({ ready: true, readonlyPreflight: true }));
+let session = await create();
+console.log(JSON.stringify({ ready: true, readonlyPreflight: true, explicitSettlement: true }));
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
   try {
     if (line.length > 1024) throw new Error();
@@ -87,6 +89,35 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       try { await stale.recoverBlocked(); }
       catch (error) { refused = (error as { code?: string }).code === 'NETWORK_RESOURCE_STALE'; }
       value = refused && (await session.inspect()).mode === 'blocked';
+    }
+    else if (request.op === 'rebind-roundtrip') {
+      // Resource-only migration: synthetic artifact hashes do not claim a new
+      // running core. Complete the round trip before starting the real core.
+      const target = { ...plan.deployment, generation: 'd'.repeat(64),
+        core: { ...plan.deployment.core, binarySha256: 'e'.repeat(64), unitSha256: 'f'.repeat(64) } };
+      const receipt = await readFile(join(directory, 'native-resource-receipt.json'));
+      const preview = await NativeNetworkSession.preflightFixture(target, tools, proof, directory);
+      if (preview.binding !== 'previous-generation' || !receipt.equals(await readFile(join(directory, 'native-resource-receipt.json')))) throw new Error();
+      const update = await NativeNetworkSession.openForUpdateFixture(target, tools, proof, directory);
+      await update.recoverBlocked();
+      const stale = await NativeNetworkSession.openForUpdateFixture(target, tools, proof, directory);
+      const raw = () => Promise.all([
+        runNetworkCommand(tools.nftBinary, ['-j', '-n', '-a', 'list', 'ruleset']),
+        runNetworkCommand(tools.ipBinary, ['-j', '-4', 'rule', 'show']),
+        runNetworkCommand(tools.ipBinary, ['-j', '-4', 'route', 'show', 'table', 'all']),
+      ]);
+      const before = await raw();
+      await update.rebind(target);
+      if (JSON.stringify(before) !== JSON.stringify(await raw()) || (await update.inspect()).generation !== target.generation) throw new Error();
+      let refused = false;
+      try { await stale.rebind(target); }
+      catch (error) { refused = (error as { code?: string }).code === 'NETWORK_RESOURCE_STALE'; }
+      if (!refused) throw new Error();
+      const reopened = await NativeNetworkSession.fixture(target, tools, proof, directory);
+      await reopened.recoverBlocked();
+      await reopened.rebind(plan.deployment);
+      session = reopened;
+      value = (await session.inspect()).mode === 'blocked' && session.plan.sha256 === plan.sha256;
     }
     else if (request.op === 'install') await session.installBlocked();
     else if (request.op === 'prepare') await session.prepare();

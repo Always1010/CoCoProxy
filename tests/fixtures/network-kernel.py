@@ -216,7 +216,7 @@ def role(name, root):
                         os.close(log)
                     check(bool(select.select([children['native'].stdout], [], [], 10)[0]), 'NATIVE_START_TIMEOUT')
                     ready = json.loads(children['native'].stdout.readline(LIMIT))
-                    check(ready.get('ready') and ready.get('readonlyPreflight'), 'NATIVE_START_FAILED')
+                    check(ready.get('ready') and ready.get('readonlyPreflight') and ready.get('explicitSettlement'), 'NATIVE_START_FAILED')
                 native = children['native']
                 command = {'op': request['action']}
                 if request['action'] in ('probe', 'socket-probe'):
@@ -408,6 +408,9 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(gateway.call('native', action='recover'), 'NATIVE_NFT_RECOVERY_FAILED')
         check(gateway.call('native', action='prepare'), 'NATIVE_PREPARED_RECHECK_FAILED')
         result['nativePendingNftRecovered'] = True
+        check(gateway.call('native', action='rebind-roundtrip'), 'NATIVE_GENERATION_REBIND_FAILED')
+        result['nativeGenerationRebound'] = True
+        result['nativeExplicitSettlementVerified'] = True
         result['preCoreRulesInstalled'] = True
         before = origin.call('stats')
         check(not client.call('http') and not client.call('udp') and not client.call('dns'), 'BLOCKED_CLIENT_ESCAPED')
