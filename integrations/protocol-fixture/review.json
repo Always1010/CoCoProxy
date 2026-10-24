@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "status": "six-protocol-loopback-verified",
+  "reviewedOn": "2026-10-25",
+  "server": {
+    "repository": "https://github.com/SagerNet/sing-box",
+    "tag": "v1.14.4",
+    "commit": "c005f35300ce76427dc285481ec5695f5b179cd2",
+    "asset": "sing-box-1.14.4-linux-arm64.tar.gz",
+    "downloadUrl": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-arm64.tar.gz",
+    "metadataUrl": "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v1.14.4",
+    "releaseReportedSha256": "436441f76ee2f7fe21b5b2d426d3cb261a480455a704865789ad533e4273ec26",
+    "binarySha256": "d953af885f11d6b547c21a3c0ffe70796963afc802fab959d548311002b4908a",
+    "downloadedAssetVerified": true,
+    "extractedMember": "sing-box",
+    "additionalArchiveLibrariesLoaded": false,
+    "runtimeVerified": true
+  },
+  "clientReview": "../metacubexd/review.json",
+  "scope": "official-core-to-core-ipv4-loopback-only",
+  "tlsVerification": "synthetic-self-signed-test-certificate-with-explicit-skip-cert-verify",
+  "protocols": {
+    "vmess": { "variant": "aead-tcp", "httpNonceVerified": true, "udpEchoVerified": true, "wrongCredentialHttpRejected": true, "wrongCredentialUdpRejected": true, "wrongCredentialOriginsUntouched": true },
+    "vless": { "variant": "plain-tcp", "httpNonceVerified": true, "udpEchoVerified": true, "wrongCredentialHttpRejected": true, "wrongCredentialUdpRejected": true, "wrongCredentialOriginsUntouched": true },
+    "trojan": { "variant": "tls", "httpNonceVerified": true, "udpEchoVerified": true, "wrongCredentialHttpRejected": true, "wrongCredentialUdpRejected": true, "wrongCredentialOriginsUntouched": true },
+    "shadowsocks": { "variant": "aes-128-gcm", "httpNonceVerified": true, "udpEchoVerified": true, "wrongCredentialHttpRejected": true, "wrongCredentialUdpRejected": true, "wrongCredentialOriginsUntouched": true },
+    "hysteria2": { "variant": "quic-no-obfuscation", "httpNonceVerified": true, "udpEchoVerified": true, "wrongCredentialHttpRejected": true, "wrongCredentialUdpRejected": true, "wrongCredentialOriginsUntouched": true },
+    "tuic": { "variant": "v5-quic-native-udp", "httpNonceVerified": true, "udpEchoVerified": true, "wrongCredentialHttpRejected": true, "wrongCredentialUdpRejected": true, "wrongCredentialOriginsUntouched": true }
+  },
+  "configuredListenersProcVerified": true,
+  "allConfiguredTargetsLoopbackOnly": true,
+  "clientEphemeralUdpWildcardBindingsPermitted": true,
+  "directFallbackConfigured": false,
+  "syntheticOriginEgressAllowlist": true,
+  "strictTypecheckVerified": true,
+  "testResult": { "passed": 7, "failed": 0, "skipped": 0 },
+  "wanLanVerified": false,
+  "productionSubscriptionVerified": false,
+  "gatewayDeploymentVerified": false
+}

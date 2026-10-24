@@ -1,6 +1,6 @@
 # 首批开发与验证
 
-当前已实现配置、草稿、来源、事务、systemd 运行适配源码、管理认证、受限控制器代理和开发 CLI。适配后的 MetaCubeXD Server/UI 已通过构建、界面类型检查和实际浏览器的登录／草稿／捕获／冲突／注销流程。服务尚未安装，完整节点与 LAN 接管仍未验收；浏览器回环验证也不代表真实 systemd 应用成功。
+当前已实现配置、草稿、来源、事务、systemd 运行适配源码、管理认证、受限控制器代理和开发 CLI。适配后的 MetaCubeXD Server/UI 已通过构建、界面类型检查和实际浏览器的登录／草稿／捕获／冲突／注销流程。六种协议已通过真实客户端与服务端的回环 HTTP／UDP 及错误凭据检查，其他传输变体、外部节点和 LAN 接管仍未验收。服务尚未安装；浏览器回环验证也不代表真实 systemd 应用成功。
 
 ## 环境与命令
 
@@ -74,6 +74,8 @@ npm run test:overlay
 按修改范围选择命令。配置测试覆盖保护边界和稳定摘要；事务测试覆盖完整性、CAS、回滚、中断、跨进程锁、Linux 死锁核验和权限；草稿与订阅测试覆盖保存/刷新并发、旧回包、失败数据保留和输入完整性，HTTPS 测试用已有 openssl 生成临时证书并执行实际 TLS 握手；核心包装器测试使用明确的可执行测试替身；CLI 测试验证真实命令行进程、私有输出和不伪报运行状态。不能用这些测试宣称协议节点、核心实际语法、网关接管、DNS 或终端出口已验收。
 
 真实核心另由显式命令执行：`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo npm run test:core-live`。未提供路径时该项跳过，不下载程序；提供的二进制必须匹配 review.json 中已审阅的解压后摘要。测试执行真实 `-t`、PID/控制端口核验、回环 HTTP 转发和 UDP/TCP localhost DNS；只用高位 loopback 端口和临时私有目录，不安装服务或修改系统网络，不代表外部节点、WAN DNS 或透明接管验收。
+
+`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo COPROXY_TEST_SING_BOX=/absolute/private/reviewed/sing-box npm run test:protocol-live` 另执行 VMess AEAD/TCP、VLESS/TCP、Trojan/TLS、Shadowsocks aes-128-gcm、Hysteria2 和 TUIC v5 的真实协议测试。每种协议都验证正确凭据下 HTTP nonce 与 UDP echo 可达，以及错误凭据下两者均不能到达源站；没有 DIRECT 回退。两个可执行文件都必须匹配固定审阅摘要。测试只使用本机临时端口、合成节点和临时证书，不涉及外部订阅、生产信任链、系统服务或网络配置。范围和已执行结果见[协议联调记录](../integrations/protocol-fixture/README.md)。
 
 管理模块的 API 与认证见[管理说明](../packages/management/README.md)，上游源码、overlay 装配和构建命令见[适配记录](../integrations/metacubexd/README.md)。`test:management` 使用回环 HTTP/WS 与显式运行替身；`test:management-live` 另以 `COPROXY_TEST_SERVER` 指向已构建 Server。提供 `COPROXY_TEST_PLAYWRIGHT`（已安装模块绝对路径）和 `COPROXY_TEST_BROWSER`（浏览器可执行文件绝对路径）时，才运行浏览器子项；缺任一参数会明确跳过，不能计为浏览器验收。可将截图写入显式 `COPROXY_TEST_ARTIFACTS` 私有目录，含当前地址的截图只留本地。
 
