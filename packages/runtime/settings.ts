@@ -11,7 +11,7 @@ import type { RuntimeSettings } from './types.ts';
 
 const digest = /^[a-f0-9]{64}$/;
 const settingKeys = ['schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256', 'systemctlPath', 'unitPath', 'unitSha256', 'serviceUid'];
-const fail = (code: string): never => { throw new RuntimeError(code); };
+const fail: (code: string) => never = code => { throw new RuntimeError(code); };
 
 function plainRecord(input: unknown, keys: string[]): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input) ||

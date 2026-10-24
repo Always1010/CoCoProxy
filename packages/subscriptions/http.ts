@@ -22,7 +22,7 @@ export interface HttpsClientOptions {
   resolve?: (hostname: string) => Promise<Address[]>;
 }
 
-const fail = (code: string): never => { throw new SnapshotHttpError(code); };
+const fail: (code: string) => never = code => { throw new SnapshotHttpError(code); };
 const v4Restricted = new BlockList();
 for (const [network, prefix] of [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],

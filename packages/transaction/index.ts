@@ -48,7 +48,7 @@ const emptyState = (): State => ({ version: 1, desired: null, active: null, pend
 const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 const validId = (value: unknown): value is string => typeof value === 'string' && digestPattern.test(value);
 const optionalId = (value: unknown): value is string | null => value === null || validId(value);
-const fail = (code: string): never => { throw new TransactionError(code); };
+const fail: (code: string) => never = code => { throw new TransactionError(code); };
 
 function publicStatus(state: State): PublicStatus {
   return {

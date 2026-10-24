@@ -107,9 +107,10 @@ test('candidate recompile preserves proxies and policy while rejecting forged de
   assert.equal(loaded.candidate.id, good.id);
   assert.deepEqual(loaded.candidate.config.proxies, good.config.proxies);
   assert.deepEqual(loaded.controller, { port: 19090, secret });
-  for (const modification of [{ tun: { enable: true } }, { listeners: [] }, { 'allow-lan': true },
+  const modifications: Candidate['config'][] = [{ tun: { enable: true } }, { listeners: [] }, { 'allow-lan': true },
     { 'external-controller': '0.0.0.0:19090' }, { dns: { ...(good.config.dns as object), nameserver: ['198.51.100.53'] } },
-    { 'rule-providers': {} }]) {
+    { 'rule-providers': {} }];
+  for (const modification of modifications) {
     const forged = changed(good, modification);
     await store.stage(forged);
     await assert.rejects(loadRuntimeCandidate(settings, forged.id), code('CANDIDATE_UNTRUSTED'));

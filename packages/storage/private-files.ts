@@ -9,7 +9,7 @@ export class PrivateFileError extends Error {
   constructor(code: string) { super(code); this.name = 'PrivateFileError'; this.code = code; }
 }
 
-const fail = (code: string): never => { throw new PrivateFileError(code); };
+const fail: (code: string) => never = code => { throw new PrivateFileError(code); };
 const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 
 export async function inspectPrivateDirectory(path: string): Promise<void> {
