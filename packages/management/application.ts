@@ -4,7 +4,7 @@ import { DraftStore, DraftError } from '../drafts/index.ts';
 import { FileTransactionStore, TransactionManager, TransactionError } from '../transaction/index.ts';
 import type { RuntimeAdapter } from '../transaction/index.ts';
 import { SubscriptionStore, SubscriptionError } from '../subscriptions/index.ts';
-import type { SnapshotClient } from '../subscriptions/index.ts';
+import type { SnapshotClient, SnapshotDecoder } from '../subscriptions/index.ts';
 import type { CoreObservation } from '../runtime/types.ts';
 import { privateRead } from '../storage/private-files.ts';
 import { exactRecord, ManagementError, readJsonBody } from './http.ts';
@@ -16,13 +16,13 @@ const digest = (value: unknown): value is string => typeof value === 'string' &&
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
 /** Routes only Coproxy operations; the stock upstream write router is not used. */
-export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient }): ManagementAction {
+export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient; sourceDecoder?: SnapshotDecoder }): ManagementAction {
   // Compile before cloning so getters and non-JSON values cannot run here.
   compileConfig({ schemaVersion: 1, deployment: options.deployment, policy: { rules: ['MATCH,REJECT'] } });
   const deployment = structuredClone(options.deployment);
   const store = new FileTransactionStore(options.stateDirectory);
   const drafts = new DraftStore(options.stateDirectory);
-  const subscriptions = new SubscriptionStore(options.stateDirectory, options.sourceClient);
+  const subscriptions = new SubscriptionStore(options.stateDirectory, options.sourceClient, options.sourceDecoder);
   const manager = new TransactionManager(store, options.runtime);
   async function managedDraft(expected: unknown) {
     if (!revision(expected)) throw new ManagementError('INVALID_REVISION');

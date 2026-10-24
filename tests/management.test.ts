@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createAdminCredential, SessionStore } from '../packages/management/auth.ts';
-import { createManagementHandler, managementOrigin, readJsonBody } from '../packages/management/http.ts';
+import { createManagementHandler, createManagementGateway, managementOrigin, readJsonBody } from '../packages/management/http.ts';
 import { createManagementApplication } from '../packages/management/application.ts';
-import { loadManagementService } from '../packages/management/service.ts';
+import { loadManagementService, stripControllerMount } from '../packages/management/service.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
 import { canonicalJson, compileConfig } from '../packages/config/index.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
@@ -20,6 +20,28 @@ const deployment = { mixedPort: 17890, controllerPort: 19090, dnsPort: 15353,
   controllerSecret: secret, bootstrapResolvers: ['192.0.2.53'] };
 const credential = await createAdminCredential({ username, password });
 const policy = { proxies: [], 'proxy-groups': [], rules: ['MATCH,DIRECT'], 'log-level': 'warning' };
+
+test('controller HTTP responses and WebSocket checks share the same revocable cookie session', async () => {
+  const gateway = createManagementGateway({ origin, credential }, async input => {
+    const stripped = stripControllerMount(input);
+    assert.equal(new URL(stripped.url).pathname, '/proxies/%E8%8A%82%E7%82%B9');
+    assert.equal(stripped.method, 'DELETE');
+    return new Response(null, { status: 204, headers: { 'x-coproxy-generation': 'a'.repeat(64) } });
+  });
+  const cookie = await login(gateway.fetch);
+  const input = request('/api/clash/proxies/%E8%8A%82%E7%82%B9', 'DELETE', undefined, cookie);
+  const response = await gateway.fetch(input);
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get('x-coproxy-generation'), 'a'.repeat(64));
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const ws = request('/api/clash/logs?level=info', 'GET', undefined, cookie, { origin });
+  assert.equal(gateway.authorize(ws, true).username, username);
+  assert.throws(() => gateway.authorize(request('/api/clash/traffic', 'GET', undefined, cookie), true), { code: 'ORIGIN_DENIED' });
+  assert.throws(() => gateway.authorize(request('/api/clash/traffic', 'GET', undefined, cookie, { origin: 'https://other.example' }), true), { code: 'ORIGIN_DENIED' });
+  await gateway.fetch(request('/api/session/logout', 'POST', {}, cookie));
+  assert.throws(() => gateway.authorize(ws, true), { code: 'UNAUTHORIZED' });
+  assert.equal((await gateway.fetch(input)).status, 401);
+});
 
 function request(path: string, method = 'GET', body?: unknown, cookie?: string, headers: Record<string, string> = {}): Request {
   return new Request(origin + path, { method, headers: { ...(method === 'GET' ? {} : { origin, 'content-type': 'application/json' }),
