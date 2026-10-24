@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { lstat, open, opendir, readlink, statfs } from 'node:fs/promises';
 import { release } from 'node:os';
+import { types } from 'node:util';
 
 export const CORE_CONTROL_GROUP = '/system.slice/coproxy-mihomo.service';
 export const MANAGEMENT_CONTROL_GROUP = '/system.slice/coproxy-management.service';
@@ -14,6 +15,8 @@ export interface CoreCgroupRequest {
   corePid: number;
   managementPid: number;
   serviceUid: number;
+  /** Defaults to serviceUid for compatibility; production socket isolation may require a distinct UID. */
+  managementUid?: number;
   bootId: string;
   corePidStartTime: string;
 }
@@ -77,13 +80,26 @@ const liveReader: CgroupFixtureReader = {
   async link(path) { return readlink(path); },
 };
 
-function validate(input: CoreCgroupRequest): CoreCgroupRequest {
+type ValidatedRequest = CoreCgroupRequest & { managementUid: number };
+function validate(input: CoreCgroupRequest): ValidatedRequest {
   // This is an internal typed API, never a JSON configuration or alternate filesystem root.
-  const result = { corePid: input.corePid, managementPid: input.managementPid, serviceUid: input.serviceUid,
-    bootId: input.bootId, corePidStartTime: input.corePidStartTime };
+  if (!input || typeof input !== 'object' || types.isProxy(input) || Array.isArray(input) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(input))) fail();
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const values: Record<string, unknown> = {};
+  for (const key of ['corePid', 'managementPid', 'serviceUid', 'bootId', 'corePidStartTime', 'managementUid']) {
+    const descriptor = descriptors[key];
+    if (key === 'managementUid' && !descriptor) continue;
+    if (!descriptor?.enumerable || !('value' in descriptor)) fail();
+    values[key] = descriptor.value;
+  }
+  const result = { corePid: values.corePid as number, managementPid: values.managementPid as number,
+    serviceUid: values.serviceUid as number, managementUid: (values.managementUid === undefined ? values.serviceUid : values.managementUid) as number,
+    bootId: values.bootId as string, corePidStartTime: values.corePidStartTime as string };
   if (![result.corePid, result.managementPid].every(pid => Number.isSafeInteger(pid) && pid > 1 && pid <= 0x7fffffff) ||
     result.corePid === result.managementPid || !Number.isSafeInteger(result.serviceUid) || result.serviceUid < 1 ||
-    result.serviceUid > 0xfffffffe || typeof result.bootId !== 'string' || !uuid.test(result.bootId) ||
+    result.serviceUid > 0xfffffffe || !Number.isSafeInteger(result.managementUid) || result.managementUid < 1 ||
+    result.managementUid > 0xfffffffe || typeof result.bootId !== 'string' || !uuid.test(result.bootId) ||
     typeof result.corePidStartTime !== 'string' || !positive.test(result.corePidStartTime)) fail();
   return result;
 }
@@ -108,7 +124,7 @@ async function processIdentity(reader: CgroupFixtureReader, pid: number, uid: nu
   return fields[19];
 }
 
-async function snapshot(reader: CgroupFixtureReader, request: CoreCgroupRequest) {
+async function snapshot(reader: CgroupFixtureReader, request: ValidatedRequest) {
   if (reader.platform !== 'linux' || !['x64', 'arm64'].includes(reader.arch) ||
     !/^6\.([1-9][0-9]*)\./.test(reader.kernelRelease)) fail();
   if (await reader.fsType('/proc') !== 0x9fa0n || await reader.fsType(ROOT) !== 0x63677270n) fail();
@@ -171,7 +187,7 @@ async function snapshot(reader: CgroupFixtureReader, request: CoreCgroupRequest)
   }
   if (kernelIds[0] === kernelIds[1]) fail();
   const corePidStartTime = await processIdentity(reader, request.corePid, request.serviceUid, CORE_CONTROL_GROUP);
-  const managementPidStartTime = await processIdentity(reader, request.managementPid, request.serviceUid, MANAGEMENT_CONTROL_GROUP);
+  const managementPidStartTime = await processIdentity(reader, request.managementPid, request.managementUid, MANAGEMENT_CONTROL_GROUP);
   if (corePidStartTime !== request.corePidStartTime) fail();
   const identity: CoreCgroupIdentity = { bootId, corePid: request.corePid, corePidStartTime,
     coreUnitControlGroup: CORE_CONTROL_GROUP, coreCgroupKernelId: kernelIds[0], managementPid: request.managementPid,
