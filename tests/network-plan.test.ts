@@ -53,6 +53,31 @@ test('network proposal is deterministic, detached, generation-bound and still un
   assert.ok(plan.binding.bindEvidenceTo.includes('coreCgroupKernelId'));
 });
 
+test('optional dedicated management UID is normalized, detached and bound to the complete plan digest', () => {
+  const legacy = renderNetworkPlan(input());
+  assert.equal(Object.hasOwn(legacy.deployment, 'management'), false);
+  assert.equal(Object.hasOwn(legacy.binding, 'management'), false);
+  const source = { ...input(), management: { serviceUid: 12346 } };
+  const plan = renderNetworkPlan(source);
+  assert.deepEqual(plan.deployment.management, { serviceUid: 12346 });
+  assert.deepEqual(plan.binding.management, { serviceUid: 12346 });
+  assert.deepEqual(plan.evidence.binding.management, plan.binding.management);
+  assert.deepEqual(plan.coreIdentityEvidence.binding.management, plan.binding.management);
+  assert.deepEqual(renderNetworkPlan({ management: { serviceUid: 12346 }, ...input() }), plan);
+  assert.notEqual(plan.sha256, legacy.sha256);
+  assert.notEqual(renderNetworkPlan({ ...source, management: { serviceUid: 12347 } }).sha256, plan.sha256);
+  source.management.serviceUid++;
+  assert.equal(plan.deployment.management?.serviceUid, 12346);
+  assert.equal(plan.binding.management?.serviceUid, 12346);
+  for (const serviceUid of [1, 4_294_967_294]) {
+    assert.doesNotThrow(() => renderNetworkPlan({ ...input(), management: { serviceUid } }));
+  }
+  for (const management of [undefined, null, {}, { serviceUid: 12346, extra: true },
+    ...[0, -0, -1, 1.5, 4_294_967_295, NaN, Infinity, '12346', input().core.serviceUid].map(serviceUid => ({ serviceUid }))]) {
+    invalid({ ...input(), management });
+  }
+});
+
 test('fail-closed route domains cannot fall through or directly resolve the client neighbour', () => {
   const plan = renderNetworkPlan(input());
   assert.equal(new Set(plan.rules.map(rule => rule.table)).size, 3);
@@ -214,6 +239,7 @@ test('untrusted data cannot execute traps, getters or serialization hooks and er
   Object.defineProperty(getter, 'generation', { enumerable: true, get() { executed = true; throw new Error('SECRET'); } });
   const proxy = new Proxy(input(), { getPrototypeOf() { executed = true; throw new Error('SECRET'); }, ownKeys() { executed = true; return []; } });
   const nestedProxy = new Proxy(input().core, { getPrototypeOf() { executed = true; throw new Error('SECRET'); } });
+  const managementGetter = { get serviceUid() { executed = true; throw new Error('SECRET'); } };
   const cyclic: Record<string, unknown> = { ...input() };
   cyclic.core = cyclic;
   const hidden = input();
@@ -225,7 +251,8 @@ test('untrusted data cannot execute traps, getters or serialization hooks and er
   const deep: Record<string, unknown> = {}; let cursor = deep;
   for (let index = 0; index < 12; index++) { cursor.next = {}; cursor = cursor.next as Record<string, unknown>; }
   const bad: unknown[] = [null, [], true, 1, 'SECRET', {}, getter, proxy, revoked.proxy,
-    { ...input(), core: nestedProxy }, cyclic, hidden, symbol, custom, serialization,
+    { ...input(), core: nestedProxy }, { ...input(), management: nestedProxy },
+    { ...input(), management: managementGetter }, cyclic, hidden, symbol, custom, serialization,
     { ...input(), extra: 'SECRET' }, { ...input(), generation: 'SECRET'.repeat(4000) },
     { ...input(), core: deep }, { ...input(), core: { ...input().core, extra: 1 } },
     { ...input(), schemaVersion: 2 }, { ...input(), dnsPort: NaN }, { ...input(), dnsPort: Infinity },

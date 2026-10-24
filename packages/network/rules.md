@@ -6,11 +6,15 @@
 
 `nft.guard` 与 `nft.data` 分别含 `create`、`replace`。首次创建使用 `create`；执行器确认既有表、链、hook、priority 和所有权完全相符后使用 `replace`，后者仅清空三个固定链。执行器应将本次需要的批次拼接为一次 `nft -f -` 事务，先通过 `nft -c -f -` 验证。不能在失败后盲试另一批次，不能销毁未知表，也不能把表名相同当成所有权证明。
 
-支持 `blocked`、`core-only` 和 `active` 三个阶段。`blocked` 不提供客户端转发、TUN 转发、LAN DNS 或共享核心 UID 非 loopback 输出例外。三个阶段均允许从 loopback 接口、127.0.0.1 源地址访问精确网关 IPv4 DNS TCP/UDP 端口，供 root helper 显式绑定 127.0.0.1 做真实本地 DNS 探针；该规则不开放 LAN DNS。`core-only` 仅在执行器已经核验核心 PID、binary、unit 和 cgroup 后使用，开放与 active 相同的精确核心输出及独立管理 cgroup 无保留 mark 例外，客户端转发、LAN DNS 和 capture/return 分类仍保持阻断。执行器取得真实 DNS/出口证据后才能进入 active。
+支持 `blocked`、`core-only` 和 `active` 三个阶段。`blocked` 不提供客户端转发、TUN 转发、LAN DNS 或核心／管理 UID 非 loopback 输出例外。三个阶段均允许从 loopback 接口、127.0.0.1 源地址访问精确网关 IPv4 DNS TCP/UDP 端口，供 root helper 显式绑定 127.0.0.1 做真实本地 DNS 探针；该规则不开放 LAN DNS。`core-only` 仅在执行器已经核验核心 PID、binary、unit 和 cgroup 后使用，开放与 active 相同的精确核心输出及独立管理 cgroup 无保留 mark 例外，客户端转发、LAN DNS 和 capture/return 分类仍保持阻断。执行器取得真实 DNS/出口证据后才能进入 active。
 
 `active` 对客户端只允许入口接口、路由器源 MAC、原始客户端 /32、TCP/UDP、capture 保留位和 TUN 出口同时匹配；TUN 回程只允许客户端 /32、return 保留位和指定物理出口。其余客户端源或 TUN 转发丢弃。到达本网关的路由器来源 IPv6 转发丢弃；客户端通过其他路径直出的 IPv6 仍须由路由器阻断。
 
-每包仅对入口接口上的客户端源 /32，以及 TUN 上的客户端目的 /32 清除保留位后重新分类，不从 conntrack 恢复标记，保留其他 mark 位；同接口的其他业务不修改 mark。output 分类链为空，本地输出保留 socket 原始 mark。核心输出要求 socket 原始 cgroup、UID、既有 egress mark、IPv4 网关源地址、TCP/UDP 和指定物理出口全部匹配；缺失 SO_MARK 的核心 socket 不会由渲染规则补标。共享 UID 的管理服务仅能通过另一个固定 cgroup 的无保留 mark 例外访问正常网络；其他共享 UID 非 loopback 输出丢弃。`blocked` 故障期会同时暂时阻断该 UID 管理服务外连。
+每包仅对入口接口上的客户端源 /32，以及 TUN 上的客户端目的 /32 清除保留位后重新分类，不从 conntrack 恢复标记，保留其他 mark 位；同接口的其他业务不修改 mark。output 分类链为空，本地输出保留 socket 原始 mark。核心输出要求 socket 原始 cgroup、核心 UID、既有 egress mark、IPv4 网关源地址、TCP/UDP 和指定物理出口全部匹配；缺失 SO_MARK 的核心 socket 不会由渲染规则补标。
+
+可选根输入 `management: { serviceUid }` 声明不同于核心的非 root UID，该值进入规范计划及摘要。管理输出在 core-only/active 中必须同时匹配管理 UID、固定管理 cgroup、保留 mark 位为零（其他 mark 位可保留）、TCP/UDP 和非专用 DNS 源端口。该例外通过正常本机路由访问网络，沿用既有管理范围，未额外限制地址族、源地址、目的地址或出口；它不能借用核心 egress mark 或 DNS SYNACK 例外。两个 UID 在放行规则后各有无条件非 loopback drop，因此错误保留 mark、未知／核心 cgroup、专用 DNS 源端口或其他协议的管理输出均不能落入链的默认 accept。所有模式最前面的 `oifname "lo" return` 继续将 loopback 留在上游保护范围之外。`blocked` 同时阻断两种 UID 的非 loopback 输出。
+
+省略 `management` 时沿用旧共享核心 UID 的管理 cgroup 匹配及单条 UID drop，不新增计划属性或改变旧规则文本，供旧计划与隔离 fixture 兼容。规则渲染成功并不代表满足生产部署前提；生产 driver 必须强制显式独立管理 UID 并核验真实进程及 cgroup 身份。`fixtureCgroups.management: null` 只移除管理例外，显式管理 UID 的 drop 仍然保留。
 
 生产 cgroup 固定为 `/system.slice/coproxy-mihomo.service` 和 `/system.slice/coproxy-management.service`，`socket cgroupv2 level 2` 匹配对应层级。执行器必须真实核验 cgroup v2、内核身份、进程归属、不可委派及禁止共享 UID 迁移；祖先匹配本身不能证明没有额外进程或子 cgroup。不得退化为仅 UID 放行。规则语法参考 [nftables 官方手册的 socket 表达式及 route output hook](https://www.netfilter.org/projects/nftables/manpage.html)。内核不支持该表达式或无法证明归属时保持 blocked。
 

@@ -32,6 +32,8 @@
 
 驱动身份须绑定 generation、完整 plan SHA-256、boot ID、PID、PID start time、固定核心 ControlGroup、当前完整 cgroup kernel ID、服务 UID 和核心 binary/unit 摘要，且明确完成进程/unit 与逐 socket cgroup 隔离核验。[cgroup observer](identity.md)只提供其中的 cgroup 补充证明，不能单独填满全部条件。
 
+生产 `apply` 强制 deployment 显式提供与核心不同的 `management.serviceUid`，在任何存储初始化或驱动调用前拒绝缺省的历史计划。绑定独立管理身份的计划还强制 `NetworkIdentity.management` 包含管理 PID/start time、计划 UID、固定管理 ControlGroup 和与核心不同的完整 cgroup ID。管理进程身份在探针前后及激活边界同样不得改变；管理 UID 属于不可静默修改的保护范围。历史共享 UID 计划只保留解析、fixture 及阻断恢复兼容，不能用来执行新的生产启用。
+
 `NetworkEvidence` 还须逐项证明 DNS socket 所有权、真实 UDP/TCP DNS 查询、TUN 所有权、链路／邻居、socket 出口 mark 及拥有资源读回。协调器拒绝未知或缺失字段、accessor、Proxy、假值、错误身份、不同 scope、未来时间和超过 30 秒的证据。证据不会保存成下一次的许可；系统时钟后退也拒绝推进。
 
 协调器校验证据之后还需要同步 mutation fence。因此 native `authorizeCore`、`activate` 和实际探针必须在使用时自行重核当前身份、鲜度与事实，不能省略为“上层刚刚查过”。内核资源状态本身由驱动证明，不能把这些接口中的 true 字段暴露为浏览器可提交的授权。

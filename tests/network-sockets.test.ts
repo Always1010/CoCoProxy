@@ -106,6 +106,15 @@ test('missing marks, wrong cgroup/UID and shared file descriptors never acquire 
     unverified(await observeSocketSourcesFixture(plan, target, { stage: 'identity' }, f.reader));
     assert.equal(f.calls.length, 0);
   });
+  await t.test('explicit management UID binds the plan before dumping', async () => {
+    const managedPlan = renderNetworkPlan({ ...plan.deployment, management: { serviceUid: 12346 } });
+    const matching = await observeSocketSourcesFixture(managedPlan, binding(), { stage: 'identity' }, fixture().reader);
+    assert.equal(matching.verified, true); assert.equal(matching.planSha256, managedPlan.sha256);
+    const wrong = binding(); wrong.management.uid = 12347;
+    const f = fixture();
+    unverified(await observeSocketSourcesFixture(managedPlan, wrong, { stage: 'identity' }, f.reader));
+    assert.equal(f.calls.length, 0);
+  });
 });
 
 test('DNS source proof requires exactly one gateway TCP LISTEN and UDP CLOSE listener on the same planned port', async t => {

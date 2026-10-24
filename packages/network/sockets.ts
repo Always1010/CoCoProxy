@@ -137,7 +137,8 @@ function binding(input: SocketSourceBinding, plan: NetworkPlan): SocketSourceBin
     result[role] = item as unknown as SocketProcessBinding;
   }
   if (result.core.uid !== plan.deployment.core.serviceUid || result.core.pid === result.management.pid ||
-    result.core.uid === result.management.uid || result.core.cgroupKernelId === result.management.cgroupKernelId) fail();
+    result.core.uid === result.management.uid || result.core.cgroupKernelId === result.management.cgroupKernelId ||
+    (plan.deployment.management && result.management.uid !== plan.deployment.management.serviceUid)) fail();
   return result;
 }
 function verify(data: Diagnostics, plan: NetworkPlan, expected: SocketSourceBinding) {
