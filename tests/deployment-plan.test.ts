@@ -168,9 +168,11 @@ test('deployment validates exact origins, unprivileged distinct ports and bounde
   for (const value of bad) assert.throws(() => renderDeploymentPlan(value), DeploymentPlanError);
   const approved = input();
   Object.assign(approved.management, { subscriptionPolicy: { allowedOrigins: ['https://feeds.example'],
+    allowedHttpOrigins: ['http://legacy-feed.example:8080'],
     timeoutMs: 1000, allowPrivateAddresses: false }, controllerPolicy: { allowedProbeOrigins: ['https://probe.example'] } });
   const settings = JSON.parse(renderDeploymentPlan(approved).files.find(file => file.path === approved.management.settingsPath)!.content);
   assert.deepEqual(settings.subscriptionPolicy.allowedOrigins, ['https://feeds.example']);
+  assert.deepEqual(settings.subscriptionPolicy.allowedHttpOrigins, ['http://legacy-feed.example:8080']);
   assert.deepEqual(settings.controllerPolicy.allowedProbeOrigins, ['https://probe.example']);
 });
 

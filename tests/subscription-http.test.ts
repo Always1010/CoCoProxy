@@ -3,11 +3,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
+import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { HttpsSnapshotClient, SnapshotHttpError } from '../packages/subscriptions/http.ts';
 import type { HttpsClientOptions } from '../packages/subscriptions/http.ts';
+import { SubscriptionStore } from '../packages/subscriptions/index.ts';
 import { runCli } from '../apps/cli/main.ts';
 
 const execute = promisify(execFile);
@@ -97,6 +99,43 @@ test('default origin/address policy rejects local targets before connecting', as
   await assert.rejects(client.fetch('http://subscription.example/'), code('SOURCE_URL_DENIED'));
   await assert.rejects(client.fetch('https://user:secret@subscription.example/'), code('SOURCE_URL_DENIED'));
   assert.throws(() => new HttpsSnapshotClient({ allowedOrigins: [] }), code('SOURCE_ORIGIN_POLICY_REQUIRED'));
+});
+
+test('HTTP subscriptions require an exact explicit origin and retain address, redirect and size restrictions', async t => {
+  let hits = 0;
+  const server = createHttpServer((req, res) => {
+    hits++;
+    if (req.url === '/redirect') res.writeHead(302, { location: '/nodes' }).end();
+    else if (req.url === '/cross') res.writeHead(302, { location: 'http://unapproved.example/nodes' }).end();
+    else if (req.url === '/large') res.end('x'.repeat(512));
+    else if (req.headers['if-none-match'] === '"v1"') res.writeHead(304).end();
+    else res.writeHead(200, { etag: '"v1"' }).end('{"proxies":[]}');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const origin = `http://127.0.0.1:${address.port}`;
+  const denied = new HttpsSnapshotClient({ allowedOrigins: ['https://subscription.example'] });
+  await assert.rejects(denied.fetch(origin + '/nodes'), code('SOURCE_URL_DENIED'));
+  const localDenied = new HttpsSnapshotClient({ allowedOrigins: [], allowedHttpOrigins: [origin] });
+  await assert.rejects(localDenied.fetch(origin + '/nodes'), code('SOURCE_ADDRESS_DENIED'));
+  assert.equal(hits, 0);
+  const options = { allowedOrigins: [], allowedHttpOrigins: [origin], allowPrivateAddresses: true, maxBytes: 128 };
+  const client = new HttpsSnapshotClient(options);
+  const result = await client.fetch(origin + '/redirect');
+  assert.equal(result.status, 'modified');
+  assert.deepEqual(await client.fetch(origin + '/nodes', { etag: '"v1"' }), { status: 'not-modified' });
+  await assert.rejects(client.fetch(origin + '/cross'), code('SOURCE_REDIRECT_DENIED'));
+  await assert.rejects(client.fetch(origin + '/large'), code('SOURCE_BODY_LIMIT'));
+  assert.equal(hits, 5);
+  assert.throws(() => new HttpsSnapshotClient({ allowedOrigins: [origin] }), code('SOURCE_URL_DENIED'));
+  const root = await mkdtemp(join(tmpdir(), 'coproxy-http-source-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SubscriptionStore(root, client);
+  await store.configure({ id: 'legacy', url: origin + '/nodes?token=' + sensitive }, 0);
+  assert.equal((await store.refresh('legacy', 1)).snapshotCurrent, true);
+  assert.ok(!JSON.stringify(await store.list()).includes(sensitive));
 });
 
 test('same-origin redirects are bounded and cannot redirect tokens across origins', async () => {

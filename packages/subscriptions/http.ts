@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
+import { request as requestHttp } from 'node:http';
 import { BlockList, isIP } from 'node:net';
 import { checkServerIdentity } from 'node:tls';
 import type { IncomingHttpHeaders } from 'node:http';
@@ -14,6 +15,8 @@ type Address = { address: string; family: number };
 export interface HttpsClientOptions {
   /** Deployment-approved exact HTTPS origins, no wildcard or URL credentials. */
   allowedOrigins: readonly string[];
+  /** Optional exact HTTP origins explicitly approved in private deployment settings. */
+  allowedHttpOrigins?: readonly string[];
   allowPrivateAddresses?: boolean;
   timeoutMs?: number;
   maxBytes?: number;
@@ -43,11 +46,12 @@ alwaysDenied.addSubnet('240.0.0.0', 4, 'ipv4');
 alwaysDenied.addAddress('::', 'ipv6');
 alwaysDenied.addSubnet('ff00::', 8, 'ipv6');
 
-function checkedUrl(text: string): URL {
+function checkedUrl(text: string, allowHttp = false): URL {
   if (typeof text !== 'string' || text.length > 8192 || /[\u0000-\u0020\u007f]/.test(text)) fail('SOURCE_URL_DENIED');
   let url: URL;
   try { url = new URL(text); } catch { fail('SOURCE_URL_DENIED'); }
-  if (url.protocol !== 'https:' || url.username || url.password || url.hash) fail('SOURCE_URL_DENIED');
+  if (!(url.protocol === 'https:' || (allowHttp && url.protocol === 'http:')) ||
+      url.username || url.password || url.hash || text.includes('#') || text.includes('\\')) fail('SOURCE_URL_DENIED');
   return url;
 }
 
@@ -78,9 +82,10 @@ function bounded<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 
 type Reply = { status: number; headers: IncomingHttpHeaders; text?: string };
 
-/** HTTPS transport only. Parsing, snapshot CAS and activation are separate. */
+/** Restricted transport; HTTP requires its own exact deployment allowlist. */
 export class HttpsSnapshotClient implements SnapshotClient {
   private readonly origins: Set<string>;
+  private readonly httpOrigins: Set<string>;
   private readonly privateAllowed: boolean;
   private readonly timeout: number;
   private readonly maxBytes: number;
@@ -89,10 +94,18 @@ export class HttpsSnapshotClient implements SnapshotClient {
   private readonly resolveAddress: (hostname: string) => Promise<Address[]>;
 
   constructor(options: HttpsClientOptions) {
-    if (!options || !Array.isArray(options.allowedOrigins) || options.allowedOrigins.length < 1 || options.allowedOrigins.length > 100) fail('SOURCE_ORIGIN_POLICY_REQUIRED');
+    if (!options || !Array.isArray(options.allowedOrigins) ||
+        (options.allowedHttpOrigins !== undefined && !Array.isArray(options.allowedHttpOrigins)) ||
+        options.allowedOrigins.length + (options.allowedHttpOrigins?.length ?? 0) < 1 ||
+        options.allowedOrigins.length + (options.allowedHttpOrigins?.length ?? 0) > 100) fail('SOURCE_ORIGIN_POLICY_REQUIRED');
     this.origins = new Set(options.allowedOrigins.map(value => {
       const url = checkedUrl(value);
       if (url.pathname !== '/' || url.search) fail('SOURCE_URL_DENIED');
+      return url.origin;
+    }));
+    this.httpOrigins = new Set((options.allowedHttpOrigins ?? []).map(value => {
+      const url = checkedUrl(value, true);
+      if (url.protocol !== 'http:' || url.pathname !== '/' || url.search) fail('SOURCE_URL_DENIED');
       return url.origin;
     }));
     this.privateAllowed = options.allowPrivateAddresses === true;
@@ -107,9 +120,10 @@ export class HttpsSnapshotClient implements SnapshotClient {
   }
 
   async fetch(text: string, previous?: { etag?: string }): ReturnType<SnapshotClient['fetch']> {
-    let url = checkedUrl(text);
+    let url = checkedUrl(text, true);
     const initialOrigin = url.origin;
-    if (!this.origins.has(initialOrigin)) fail('SOURCE_ORIGIN_DENIED');
+    if (url.protocol === 'http:' && !this.httpOrigins.has(initialOrigin)) fail('SOURCE_URL_DENIED');
+    if (!this.origins.has(initialOrigin) && !this.httpOrigins.has(initialOrigin)) fail('SOURCE_ORIGIN_DENIED');
     let etag = previous?.etag;
     if (etag !== undefined && (typeof etag !== 'string' || etag.length > 512 || /[^\x20-\x7e]/.test(etag))) fail('SOURCE_INVALID_ETAG');
     const controller = new AbortController();
@@ -136,8 +150,8 @@ export class HttpsSnapshotClient implements SnapshotClient {
         if (!reply) throw last ?? new SnapshotHttpError('SOURCE_FETCH_FAILED');
         if ([301, 302, 303, 307, 308].includes(reply.status)) {
           if (count === this.redirects || typeof reply.headers.location !== 'string') fail('SOURCE_REDIRECT_DENIED');
-          const next = checkedUrl(new URL(reply.headers.location, url).href);
-          if (next.origin !== initialOrigin || !this.origins.has(next.origin)) fail('SOURCE_REDIRECT_DENIED');
+          const next = checkedUrl(new URL(reply.headers.location, url).href, true);
+          if (next.origin !== initialOrigin) fail('SOURCE_REDIRECT_DENIED');
           url = next;
           etag = undefined;
           continue;
@@ -167,13 +181,14 @@ export class HttpsSnapshotClient implements SnapshotClient {
         if (error) reject(error); else resolve(reply!);
       };
       const hostname = url.hostname.replace(/^\[|\]$/g, '');
-      const req = request({
-        protocol: 'https:', hostname: address.address, family: address.family,
-        port: url.port || 443, path: url.pathname + url.search, method: 'GET',
-        servername: isIP(hostname) ? '' : hostname,
-        checkServerIdentity: (_name, cert) => checkServerIdentity(hostname, cert),
-        ...(this.ca === undefined ? {} : { ca: this.ca }),
-        rejectUnauthorized: true, agent: false, signal,
+      const plaintext = url.protocol === 'http:';
+      const req = (plaintext ? requestHttp : request)({
+        protocol: url.protocol, hostname: address.address, family: address.family,
+        port: url.port || (plaintext ? 80 : 443), path: url.pathname + url.search, method: 'GET',
+        ...(plaintext ? {} : { servername: isIP(hostname) ? '' : hostname,
+          checkServerIdentity: (_name: string, cert: Parameters<typeof checkServerIdentity>[1]) => checkServerIdentity(hostname, cert),
+          ...(this.ca === undefined ? {} : { ca: this.ca }), rejectUnauthorized: true }),
+        agent: false, signal,
         headers: { Host: url.host, 'Accept-Encoding': 'identity', 'User-Agent': 'Coproxy/0.1', ...(etag ? { 'If-None-Match': etag } : {}) },
       }, res => {
         const status = res.statusCode ?? 0;

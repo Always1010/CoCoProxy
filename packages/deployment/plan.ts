@@ -173,7 +173,7 @@ function render(input: unknown): DeploymentPlan {
 
   if (management.subscriptionPolicy !== undefined) {
     const policy = record(management.subscriptionPolicy, ['allowedOrigins'],
-      ['allowPrivateAddresses', 'timeoutMs', 'maxBytes', 'maxRedirects', 'ca']);
+      ['allowedHttpOrigins', 'allowPrivateAddresses', 'timeoutMs', 'maxBytes', 'maxRedirects', 'ca']);
     origins(policy.allowedOrigins, 100);
     if (policy.allowPrivateAddresses !== undefined && typeof policy.allowPrivateAddresses !== 'boolean') fail();
     if (policy.ca !== undefined && (typeof policy.ca !== 'string' || policy.ca.length > 32_768)) fail();

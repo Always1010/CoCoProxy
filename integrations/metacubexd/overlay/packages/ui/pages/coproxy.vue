@@ -223,7 +223,7 @@ onMounted(() => run('load', async () => {
       </div>
       <form class="mt-4 grid items-end gap-3 border-t border-base-content/10 pt-4 sm:grid-cols-[1fr_2fr_auto]" @submit.prevent="run('source-save', configureSource)">
         <label class="flex flex-col gap-2 text-xs" for="coproxy-source-id">来源标识 · 预期版本 {{ sourceRevision }}<input id="coproxy-source-id" v-model="sourceId" class="input input-bordered input-sm w-full" maxlength="64" required autocomplete="off" :disabled="!!busy || !sourcesLoaded" @change="sourceIdChanged" /></label>
-        <label class="flex flex-col gap-2 text-xs" for="coproxy-source-url">HTTPS 订阅地址<input id="coproxy-source-url" v-model="sourceUrl" class="input input-bordered input-sm w-full" type="url" placeholder="https://…" required autocomplete="off" :disabled="!!busy || !sourcesLoaded" /></label>
+        <label class="flex flex-col gap-2 text-xs" for="coproxy-source-url">订阅地址<input id="coproxy-source-url" v-model="sourceUrl" class="input input-bordered input-sm w-full" type="url" placeholder="https://… 或已获准的 http://…" required autocomplete="off" :disabled="!!busy || !sourcesLoaded" /></label>
         <button class="btn btn-outline btn-sm" type="submit" :disabled="!!busy || !sourcesLoaded"><IconDeviceFloppy :size="17" aria-hidden="true" />保存地址</button>
       </form>
       <p class="mt-2 text-xs text-base-content/55">编辑已有来源请点铅笔；URL 不回显。发生版本冲突后，先重新读取来源，再点铅笔选择新版本。地址受部署获取许可约束。</p>
