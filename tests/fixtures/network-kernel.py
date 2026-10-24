@@ -219,7 +219,7 @@ def role(name, root):
                     check(ready.get('ready'), 'NATIVE_START_FAILED')
                 native = children['native']
                 command = {'op': request['action']}
-                if request['action'] == 'probe':
+                if request['action'] in ('probe', 'socket-probe'):
                     command['corePid'] = children['core'].pid
                 native.stdin.write(json.dumps(command) + '\n')
                 native.stdin.flush()
@@ -349,6 +349,12 @@ def driver(root):
             role_.ip('link', 'set', 'lan-test', 'address', '02:00:00:00:00:' + mac)
             role_.ip('addr', 'add', address + '/24', 'dev', 'lan-test')
             role_.ip('link', 'set', 'lan-test', 'up')
+        # The isolated topology has a fixed router MAC. Make that test input
+        # explicit rather than racing the kernel's DELAY -> REACHABLE timer.
+        # Production observations still require a current REACHABLE/PERMANENT
+        # neighbour and never refresh or modify the host neighbour cache.
+        gateway.ip('neigh', 'replace', '192.0.2.1', 'lladdr', '02:00:00:00:00:01',
+                   'nud', 'permanent', 'dev', 'lan-test')
         execute(['ip', 'link', 'add', 'wan-router', 'type', 'veth', 'peer', 'name', 'wan-origin'])
         execute(['ip', 'link', 'set', 'wan-router', 'netns', str(router.process.pid)])
         execute(['ip', 'link', 'set', 'wan-origin', 'netns', str(origin.process.pid)])
@@ -420,6 +426,10 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(gateway.call('native', action='authorize'), 'NATIVE_AUTHORIZE_FAILED')
         check(gateway.call('native', action='probe'), 'NATIVE_READINESS_PROBE_FAILED')
         result['nativeProbeVerified'] = True
+        check(gateway.call('native', action='link-probe'), 'NATIVE_LINK_PROBE_FAILED')
+        check(gateway.call('native', action='socket-probe'), 'NATIVE_SOCKET_FACTS_FAILED')
+        result['actualLinkNeighbourVerified'] = True
+        result['actualCoreSocketMarksVerified'] = True
         check(gateway.call('dns', loopback=True), 'CORE_ONLY_LOCAL_DNS_UDP_FAILED')
         check(gateway.call('dns_tcp', loopback=True), 'CORE_ONLY_LOCAL_DNS_TCP_FAILED')
         result['coreOnlyLocalDns'] = True
