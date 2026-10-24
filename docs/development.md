@@ -80,6 +80,7 @@ npm run test:network-fenced-command
 npm run test:network-resource-journal
 npm run test:network-rules
 npm run test:network-identity
+npm run test:network-link
 npm run test:network-transaction
 npm run test:network-probe
 npm run test:network-readback
@@ -104,6 +105,8 @@ npm run test:overlay
 `test:network-identity` 用合成 reader 验证固定 cgroup 的完整 64 位身份、namespace、权限、唯一成员、覆挂与读取竞态，支持独立管理 UID；fixture 始终保持 fixture 来源。Linux 固定 unit 下的正向生产观察仍需独立部署后验收，不能把跳过项计为通过。`test:network-transaction` 使用明确 fixture driver 验证持久意图、逐操作 fence、30 秒证据、CAS、启动恢复和未知操作收敛；Linux 非 root 子项实际模拟目录写入失败，并强制终止变更中的独立进程，确认只恢复阻断。它们不执行 nft、ip 或 systemd，也不替代 native driver 验收。
 
 `test:network-probe` 检查严格 DNS 报文、精确 socket/TUN 所有权、PID/namespace 变化与固定错误；单元层使用合成 reader。`test:network-readback` 检查 nft AST/handle、完整提交 echo、RPDB、专用路由、pre-core detached 注记及外部资源拒绝。其纯解析结果不能替代真实命令输出或受保护的所有权回执。
+
+`test:network-link` 检查[入口链路与邻居观察](../packages/network/link.md)的真实字段形状、接口/地址一致性、carrier、MTU、精确邻居 MAC、REACHABLE/PERMANENT 状态和 mark/source/UID 路由选择；合成 reader 不修改或刷新邻居。真实 iproute2 输出另在四角色隔离测试中核对，不能推导生产物理入口或真实终端已验收。
 
 ```sh
 COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo COPROXY_TEST_SING_BOX=/absolute/private/reviewed/sing-box npm run test:network-kernel
