@@ -71,6 +71,9 @@ npm run test:deployment
 npm run test:release-stage
 npm run test:network-plan
 npm run test:network-config
+npm run test:network-candidate
+npm run test:network-runtime-plan
+npm run test:network-runtime
 npm run test:network-command
 npm run test:network-fenced-command
 npm run test:network-resource-journal
@@ -92,6 +95,8 @@ npm run test:overlay
 `test:network-plan` 检查[单终端网络资源契约](../packages/network/README.md)，包括 guard／黑洞／证据／激活顺序、强制回程、mark 保留位、共享 UID 下的逐 socket 核心身份和严格部署输入。它只渲染计划，不执行 nft、ip、sysctl 或系统服务；通过不能作为内核、网关或终端出口的就绪证据。
 
 `test:network-config` 验证[网关候选预览](../packages/network/config.md)的核心配置与网络部署代次绑定，以及当前显式运行适配器拒绝这种候选的边界。提供固定 `COPROXY_TEST_MIHOMO` 时另执行真实语法校验；该命令不启动 TUN。`test:network-command` 检查有界 stdin／输出、固定错误及超时后的进程组收敛；`test:network-rules` 检查三个阶段的受限规则、DNS 握手例外与 mark 保留边界。后两者不能证明真实内核转发成功。
+
+`test:network-candidate` 验证私有网关候选的完整重编译、可信 plan／核心绑定、hash-valid 篡改拒绝和私有读取，并确认显式 loader 仍拒绝网关 profile。`test:network-runtime-plan` 核验 root state 与独立 coreHome、credential 路径、有限权限、禁用自动重启及 systemd 转义；Linux 已有 systemd-analyze 时还实际只读解析两个路径变体，没有工具时明确跳过。`test:network-runtime` 使用真实私有文件与锁、明确的 systemd/worker fixture 模型验证 stop/选择/start 的持久协议、manager 收敛、blocked 门槛、恢复只 stop、输入大小与错误边界。它们不安装单元，不代表生产 systemd lifecycle、credential 实际快照或完整 driver 已验收。
 
 `test:network-identity` 用合成 reader 验证固定 cgroup 的完整 64 位身份、namespace、权限、唯一成员、覆挂与读取竞态；fixture 始终保持 fixture 来源。Linux 固定 unit 下的正向生产观察仍需独立部署后验收，不能把跳过项计为通过。`test:network-transaction` 使用明确 fixture driver 验证持久意图、逐操作 fence、30 秒证据、CAS、启动恢复和未知操作收敛；Linux 非 root 子项实际模拟目录写入失败，并强制终止变更中的独立进程，确认只恢复阻断。它们不执行 nft、ip 或 systemd，也不替代 native driver 验收。
 

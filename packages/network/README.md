@@ -6,7 +6,9 @@
 
 [内核资源回读校验](readback.md)严格比较固定 nft 表／链／规则的 AST 与 handle，并检查 RPDB 和专用路由的合法存在状态。它只验证输入结构与受信基准一致，不把同名或同配置当作所有权证明；外部 nft／RPDB／自定义表冲突保持拒绝。
 
-[原生资源会话](native.md)已把固定批次、真实提交 echo、逐步 ip 操作和独立内核回读连起来，并接入四角色隔离测试。会话只维护同进程的资源身份与清单，尚无跨进程 receipt adoption、命令启动回执或完整主机预检；不能直接作为持久协调器的生产 driver。
+[原生资源会话](native.md)已把固定批次、真实提交 echo、逐步 ip 操作和独立内核回读连起来，并接入四角色隔离测试。持久模式通过私有资源凭据、命令启动屏障、跨进程锁与 revision CAS，在核验归属后恢复 blocked；完整主机预检、迁移和生产 driver 仍待完成。
+
+[私有网关候选](candidate.md)在不可变内容摘要之外重编译完整配置及网络计划，并独立核对可信部署；显式代理 loader 保持拒绝网关 profile。[网关核心 unit 计划](runtime-plan.md)和[持久核心监管入口](runtime.md)补充 root 选择状态、systemd credential、固定单元操作及未知 job 的明确停止恢复。它们还未接入完整协调器或安装服务，不能由选中代次和 unit running 推导网络 ready。
 
 ## 输入契约
 
