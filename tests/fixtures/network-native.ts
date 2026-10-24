@@ -90,6 +90,23 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       catch (error) { refused = (error as { code?: string }).code === 'NETWORK_RESOURCE_STALE'; }
       value = refused && (await session.inspect()).mode === 'blocked';
     }
+    else if (request.op === 'poisoned-reopen-blocked') {
+      const previous = session;
+      let lost = false;
+      try { await previous.inspect(); }
+      catch (error) { lost = ['NETWORK_READBACK_INVALID', 'NETWORK_RESOURCE_MEMBERSHIP_CHANGED'].includes((error as { code: string }).code); }
+      if (!lost) throw new Error('NATIVE_TUN_READBACK_DID_NOT_FAIL');
+      await NativeNetworkSession.assertSettledFixture(plan.deployment, tools, proof, directory);
+      const observed = await NativeNetworkSession.preflightFixture(plan.deployment, tools, proof, directory, 'recover');
+      if (!observed.initialized) throw new Error();
+      session = await NativeNetworkSession.openForUpdateFixture(plan.deployment, tools, proof, directory);
+      await session.recoverBlocked();
+      let refused = false;
+      try { await previous.inspect(); }
+      catch (error) { refused = (error as { code?: string }).code === 'NETWORK_SESSION_UNAVAILABLE'; }
+      const recovered = await session.inspect();
+      value = refused && recovered.mode === 'blocked' && !recovered.routesPresent.includes('capture');
+    }
     else if (request.op === 'rebind-roundtrip') {
       // Resource-only migration: synthetic artifact hashes do not claim a new
       // running core. Complete the round trip before starting the real core.

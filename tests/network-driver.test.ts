@@ -134,7 +134,7 @@ test('generation changes retain blocking and remove capture before explicit rebi
   f.model.mode = 'active'; f.model.capture = true; f.calls.length = 0;
   await f.driver.installBlockedGuard(p);
   assert.equal(f.model.bound.sha256, p.sha256);
-  assert.ok(f.calls.indexOf('blocked') < f.calls.indexOf('retain') && f.calls.indexOf('retain') < f.calls.indexOf('rebind'));
+  assert.ok(f.calls.indexOf('recover-blocked') < f.calls.indexOf('retain') && f.calls.indexOf('retain') < f.calls.indexOf('rebind'));
   const changed = renderNetworkPlan({ ...p.deployment, clientIPv4: '192.0.2.4' });
   const before = [...f.calls]; await assert.rejects(f.driver.installBlockedGuard(changed), failed(true));
   assert.deepEqual(f.calls, before);

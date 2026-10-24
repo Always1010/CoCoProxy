@@ -554,6 +554,8 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(before == origin.call('stats'), 'NODE_DEATH_ORIGIN_TOUCHED')
         result['nodeDeathNoDirectFallback'] = True
         gateway.call('stop', label='core')
+        check(gateway.call('native', action='poisoned-reopen-blocked'), 'NATIVE_POISONED_SESSION_RECOVERY_FAILED')
+        result['nativePoisonedSessionRecovered'] = True
         gateway.call('stop', label='native')
         check(gateway.call('native', action='recover'), 'NATIVE_TUN_LOSS_RECOVERY_FAILED')
         result['nativeTunLossRecovered'] = True

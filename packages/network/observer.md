@@ -17,7 +17,7 @@
 
 各观察都必须在本次调用开始后完成；scope、代次、plan、具体检查项、两种服务身份和时间必须一致。整个组合窗口最多 30 秒，输出时间采用最早的必要证据时间，避免最后一次成功读取掩盖前面事实已过期。任何来源缺失、失败、混代、管理进程更换或时间异常都拒绝，不能用其他观察的成功补齐。
 
-核心、链路、socket 和 DNS/TUN 观察的 `commandsSettled` 必须明确为 true。明确未收敛或缺失该字段时抛出脱敏 `NetworkDriverError(false)`，驱动不得并发发出恢复变更；普通检查失败且读取已收敛时抛出 `NetworkDriverError(true)`。未分类依赖异常同样保留未收敛 fence，没有异常原文或嵌套 cause。资源读取的 `NetworkCommandError` 保留其收敛分类。
+核心、链路、socket 和 DNS/TUN 观察的 `commandsSettled` 必须明确为 true。明确未收敛或缺失该字段时抛出脱敏 `NetworkDriverError(false)`，驱动不得并发发出恢复变更；普通检查失败且读取已收敛时抛出 `NetworkDriverError(true)`。未分类依赖异常同样保留未收敛 fence，没有异常原文或嵌套 cause。资源读取的 `NetworkCommandError` 保留其收敛分类；固定只读资源读回中的 `NetworkReadbackError` 和 `NETWORK_RESOURCE_MEMBERSHIP_CHANGED` 仅在查询已经返回后产生，因此作为已收敛的证据失败，允许驱动走显式阻断恢复。会话失效、其他原生错误和未知异常不采用此例外。
 
 这个组件连接了观察来源，尚不等于完整生产 `NetworkDriver`。全局主机预检、核心/网络唯一监管、跨配置代次资源迁移、未知操作的显式收敛阶段、故障监测与阻断、关闭接管及管理入口仍须集成。两轮观察也不是原子快照，驱动在真正 authorize/activate 前必须于独占 fence 内重新使用这些检查，并核验即将修改的资源；公开状态继续不能推导真实终端路径已经验收。
 
