@@ -16,6 +16,7 @@ import { SystemdMihomoRuntime } from '../../packages/runtime/systemd.ts';
 import { RuntimeError } from '../../packages/runtime/types.ts';
 import { createAdminCredential, AuthError } from '../../packages/management/auth.ts';
 import { privateRead } from '../../packages/storage/private-files.ts';
+import { renderDeploymentPlan, DeploymentPlanError } from '../../packages/deployment/plan.ts';
 
 const MAX_INPUT_BYTES = 1_048_576;
 const HELP = [
@@ -33,6 +34,7 @@ const HELP = [
   'source-refresh --source-id <ID> --state-dir <绝对路径> --expected-revision <整数> --policy <HTTPS策略JSON>',
   'source-stage --source-id <ID> --input <基础配置JSON> --state-dir <绝对路径> --expected-revision <整数>',
   'runtime-plan --input <部署JSON> --output <绝对路径>  仅生成待审阅服务计划',
+  'deployment-plan --input <私有部署JSON> --output <绝对路径>  生成管理/核心/授权文件清单，不安装',
   'runtime-apply --state-dir <绝对路径> --runtime-settings <私有JSON> --generation <SHA256> --expected-active <SHA256|none>',
   'runtime-recover --state-dir <绝对路径> --runtime-settings <私有JSON>  恢复中断事务',
   'runtime-status --state-dir <绝对路径> --runtime-settings <私有JSON>  核验当前核心进程',
@@ -67,6 +69,7 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     'source-refresh': ['--source-id', '--state-dir', '--expected-revision', '--policy'],
     'source-stage': ['--source-id', '--input', '--state-dir', '--expected-revision'],
     'runtime-plan': ['--input', '--output'],
+    'deployment-plan': ['--input', '--output'],
     'runtime-apply': ['--state-dir', '--runtime-settings', '--generation', '--expected-active'],
     'runtime-recover': ['--state-dir', '--runtime-settings'],
     'runtime-status': ['--state-dir', '--runtime-settings'],
@@ -163,6 +166,14 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
     const store = new FileTransactionStore(flags.get('--state-dir')!);
     return { ...await store.status() };
   }
+  if (command === 'deployment-plan') {
+    let input: unknown;
+    try { input = JSON.parse(await privateRead(resolve(flags.get('--input')!), 128 * 1024)); }
+    catch { throw new CliError('INVALID_DEPLOYMENT_INPUT'); }
+    const plan = renderDeploymentPlan(input);
+    await writePrivateOutput(flags.get('--output')!, JSON.stringify(plan, null, 2) + '\n');
+    return { planned: true, fileCount: plan.files.length, scope: 'explicit_proxy_deployment', runtime: 'not_started' };
+  }
   if (command === 'runtime-plan') {
     const plan = renderRuntimePlan(await readInput(flags.get('--input')!));
     await writePrivateOutput(flags.get('--output')!, JSON.stringify(plan, null, 2) + '\n');
@@ -241,7 +252,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     let code = 'IO_ERROR';
     if (error instanceof CliError || error instanceof ConfigError
         || error instanceof MihomoValidationError || error instanceof TransactionError || error instanceof DraftError
-        || error instanceof SubscriptionError || error instanceof SnapshotHttpError || error instanceof RuntimeError || error instanceof AuthError) {
+        || error instanceof SubscriptionError || error instanceof SnapshotHttpError || error instanceof RuntimeError || error instanceof AuthError || error instanceof DeploymentPlanError) {
       code = error.code;
     } else if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') code = 'OUTPUT_EXISTS';
     process.stderr.write(JSON.stringify({ error: { code } }) + '\n');

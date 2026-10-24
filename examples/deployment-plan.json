@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "schemaVersion": 1,
+    "stateDirectory": "/var/lib/coproxy",
+    "binaryPath": "/opt/coproxy/bin/mihomo",
+    "binarySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "systemctlPath": "/usr/bin/systemctl",
+    "nodePath": "/usr/bin/node",
+    "sourceDirectory": "/opt/coproxy/source",
+    "settingsPath": "/etc/coproxy/runtime.json",
+    "unitPath": "/etc/systemd/system/coproxy-mihomo.service",
+    "serviceUid": 12345
+  },
+  "management": {
+    "origin": "https://management.example",
+    "listenPort": 13000,
+    "serviceUser": "coproxy",
+    "serverEntry": "/opt/coproxy/server/.output/server/index.mjs",
+    "settingsPath": "/etc/coproxy/management.json",
+    "credentialPath": "/etc/coproxy/admin.json",
+    "unitPath": "/etc/systemd/system/coproxy-management.service",
+    "policyPath": "/etc/polkit-1/rules.d/50-coproxy-management.rules",
+    "deployment": {
+      "mixedPort": 17890,
+      "controllerPort": 19090,
+      "controllerSecret": "replace-with-private-random-controller-secret",
+      "dnsPort": 15353,
+      "bootstrapResolvers": ["192.0.2.53"]
+    },
+    "subscriptionPolicy": { "allowedOrigins": ["https://subscription.example"] },
+    "controllerPolicy": { "allowedProbeOrigins": ["https://probe.example"] }
+  }
+}

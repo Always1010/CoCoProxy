@@ -40,6 +40,8 @@ npm run cli -- runtime-plan --input examples/runtime-deployment.json --output "$
 
 示例的二进制摘要和 UID 为合成占位值，不能直接安装。该命令只创建私有计划文件；不会创建账户、复制系统单元、daemon-reload、enable 或 start。
 
+`npm run cli -- deployment-plan --input /absolute/private/deployment.json --output /absolute/private/installation-plan.json` 组合核心与管理服务计划，输出两份 unit、两份私有设置、受限 polkit 规则及目录权限清单。输入须为私有文件，格式参考 `examples/deployment-plan.json`，其中路径、UID、核心摘要和 secret 均为合成占位值。整个计划包含 controller secret，不能提交或公开打印。它不创建管理员凭据，不安装或启动服务；接口和真实解析器检查方法见[部署计划说明](../packages/deployment/README.md)。
+
 ## 订阅节点快照
 
 来源定义和 HTTPS 许可策略都从私有 JSON 文件读取，避免将查询令牌暴露在命令行。以下占位路径需换成自己的私有文件，格式参考 examples/subscription-source.json 和 examples/subscription-policy.json；示例域名不是实际来源。
@@ -65,6 +67,7 @@ npm run test:subscriptions
 npm run test:mihomo
 npm run test:cli
 npm run test:runtime
+npm run test:deployment
 npm run test:management
 npm run test:git-tree
 npm run test:subscription-yaml
