@@ -105,6 +105,7 @@ test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a 
       const result = JSON.parse(output);
       assert.equal(result.scope, 'fixture-no-production-cgroup-isolation-proof');
       for (const key of ['isolatedRoles', 'nativeReadbackVerified', 'nativeProbeVerified', 'nativeTamperRejected', 'nativeOwnershipCollisionRejected', 'preCoreRulesInstalled', 'blockedOriginsUntouched', 'coreOnlyStillBlocked', 'coreOnlyLocalDns', 'transparentHttp', 'transparentUdp', 'realDns', 'dnsLinkedHttpUdp', 'dnsLinkedReject',
+        'nativePendingIpRecovered', 'nativePendingNftRecovered', 'nativeActiveRestartBlocked', 'nativeTunLossRecovered',
         'routerReturnObserved', 'originalSourceObserved', 'markedCoreEgressObserved', 'wrongMacRejected',
         'unmarkedSameUidRejected', 'coreDeathExistingAndNewBlocked', 'tunLossBlocked', 'nodeDeathNoDirectFallback']) {
         assert.equal(result[key], true, key);
