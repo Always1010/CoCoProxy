@@ -2,7 +2,7 @@
 
 `renderNetworkPlan(input: unknown): NetworkPlan` 生成确定的、可审阅的结构化资源与阶段计划。它只处理内存数据，不读取主机状态，不执行命令，不生成 nftables 规则文本或 CLI，不安装软件，不改动本机网络，也不授予浏览器调用特权网络操作的能力。所有失败均抛出固定的 `NetworkPlanError`，其 `code` 与 `message` 都是 `NETWORK_PLAN_INVALID`，不附带输入值、路径或底层异常。
 
-已有[受保护的网关候选预览](config.md)把完整网络部署绑定到核心内容代次，[固定规则渲染器](rules.md)生成受限 nft 批次和 ip 参数，真实四角色隔离路径已验证。[cgroup 只读身份观察](identity.md)补充固定核心与管理服务的独立来源核验，[持久事务协调器](transaction.md)实现启用意图、操作 fence、证据门槛与启动恢复阻断。协调器仍需真实 native driver，尚未接入 systemd 运行适配或管理入口，也没有已安装的特权 executor。现有显式代理候选不能直接满足本计划的 TUN、专用 DNS 与出口 mark 要求。本模块不构成网关实现完成或设备验收通过。
+已有[受保护的网关候选预览](config.md)把完整网络部署绑定到核心内容代次，[固定规则渲染器](rules.md)生成受限 nft 批次和 ip 参数，真实四角色隔离路径已验证。[cgroup 只读身份观察](identity.md)补充固定核心与管理服务的独立来源核验，[DNS/TUN 实际探针](probe.md)检查核心 FD、精确监听和两种传输的真实 DNS 查询，[持久事务协调器](transaction.md)实现启用意图、操作 fence、证据门槛与启动恢复阻断。协调器仍需真实 native driver，尚未接入 systemd 运行适配或管理入口，也没有已安装的特权 executor。现有显式代理候选不能直接满足本计划的 TUN、专用 DNS 与出口 mark 要求。本模块不构成网关实现完成或设备验收通过。
 
 ## 输入契约
 
