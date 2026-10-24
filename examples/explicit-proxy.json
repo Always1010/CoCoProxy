@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "deployment": {
+    "mixedPort": 17890,
+    "controllerPort": 19090,
+    "controllerSecret": "EXAMPLE_ONLY_REPLACE_BEFORE_USE",
+    "dnsPort": 15353,
+    "bootstrapResolvers": ["192.0.2.53"]
+  },
+  "policy": {
+    "log-level": "info",
+    "proxy-groups": [
+      { "name": "Example Select", "type": "select", "proxies": ["Example Proxy", "REJECT"] }
+    ],
+    "rules": ["DOMAIN-SUFFIX,example.com,Example Select", "MATCH,REJECT"]
+  },
+  "sources": [
+    {
+      "id": "example-snapshot",
+      "proxies": [
+        { "name": "Example Proxy", "type": "socks5", "server": "192.0.2.10", "port": 1080 }
+      ]
+    }
+  ]
+}

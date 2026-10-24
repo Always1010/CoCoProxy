@@ -1,0 +1,11 @@
+{
+  "name": "coproxy",
+  "version": "0.1.0-dev",
+  "private": true,
+  "type": "module",
+  "description": "Linux 代理网关的配置与可靠性集成",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "test:config": "node --experimental-strip-types --test tests/config.test.ts"
+  }
+}
