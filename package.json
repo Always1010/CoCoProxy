@@ -12,6 +12,7 @@
     "test:drafts": "node --experimental-strip-types --test tests/drafts.test.ts",
     "test:subscriptions": "node --experimental-strip-types --test tests/subscriptions.test.ts tests/subscription-http.test.ts",
     "test:mihomo": "node --experimental-strip-types --test tests/mihomo.test.ts",
-    "test:cli": "node --experimental-strip-types --test tests/cli.test.ts"
+    "test:cli": "node --experimental-strip-types --test tests/cli.test.ts",
+    "test:runtime": "node --experimental-strip-types --test tests/runtime-evidence.test.ts tests/runtime-plan.test.ts tests/runtime-systemd.test.ts"
   }
 }

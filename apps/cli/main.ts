@@ -5,11 +5,15 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, compileConfig, ConfigError } from '../../packages/config/index.ts';
 import { validateWithMihomo, MihomoValidationError } from '../../packages/mihomo/validator.ts';
-import { FileTransactionStore, TransactionError } from '../../packages/transaction/index.ts';
+import { FileTransactionStore, TransactionError, TransactionManager } from '../../packages/transaction/index.ts';
 import { DraftStore, DraftError } from '../../packages/drafts/index.ts';
 import { SubscriptionStore, SubscriptionError } from '../../packages/subscriptions/index.ts';
 import { HttpsSnapshotClient, SnapshotHttpError } from '../../packages/subscriptions/http.ts';
 import type { HttpsClientOptions } from '../../packages/subscriptions/http.ts';
+import { renderRuntimePlan } from '../../packages/runtime/plan.ts';
+import { loadRuntimeSettings } from '../../packages/runtime/settings.ts';
+import { SystemdMihomoRuntime } from '../../packages/runtime/systemd.ts';
+import { RuntimeError } from '../../packages/runtime/types.ts';
 
 const MAX_INPUT_BYTES = 1_048_576;
 const HELP = [
@@ -26,9 +30,13 @@ const HELP = [
   'source-status --source-id <ID> --state-dir <绝对路径>  读取来源状态',
   'source-refresh --source-id <ID> --state-dir <绝对路径> --expected-revision <整数> --policy <HTTPS策略JSON>',
   'source-stage --source-id <ID> --input <基础配置JSON> --state-dir <绝对路径> --expected-revision <整数>',
+  'runtime-plan --input <部署JSON> --output <绝对路径>  仅生成待审阅服务计划',
+  'runtime-apply --state-dir <绝对路径> --runtime-settings <私有JSON> --generation <SHA256> --expected-active <SHA256|none>',
+  'runtime-recover --state-dir <绝对路径> --runtime-settings <私有JSON>  恢复中断事务',
+  'runtime-status --state-dir <绝对路径> --runtime-settings <私有JSON>  核验当前核心进程',
   '',
   '输入/配置可能包含凭据；正常输出仅包含摘要和状态。',
-  '不自动下载核心、安装依赖、启动服务或修改系统网络。',
+  '不自动下载核心、安装依赖或修改系统网络；runtime-apply/recover 明确控制已审阅的服务。',
 ].join('\n');
 
 class CliError extends Error {
@@ -55,6 +63,10 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     'source-status': ['--source-id', '--state-dir'],
     'source-refresh': ['--source-id', '--state-dir', '--expected-revision', '--policy'],
     'source-stage': ['--source-id', '--input', '--state-dir', '--expected-revision'],
+    'runtime-plan': ['--input', '--output'],
+    'runtime-apply': ['--state-dir', '--runtime-settings', '--generation', '--expected-active'],
+    'runtime-recover': ['--state-dir', '--runtime-settings'],
+    'runtime-status': ['--state-dir', '--runtime-settings'],
   };
   const command = args[0];
   if (!Object.hasOwn(allowed, command)) throw new CliError('UNKNOWN_COMMAND');
@@ -68,7 +80,7 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     flags.set(key, value);
   }
   if (allowed[command].some((key) => !flags.has(key))) throw new CliError('MISSING_ARGUMENT');
-  for (const key of ['--output', '--state-dir', '--mihomo-bin']) {
+  for (const key of ['--output', '--state-dir', '--mihomo-bin', '--runtime-settings']) {
     if (flags.has(key) && !isAbsolute(flags.get(key)!)) throw new CliError('ABSOLUTE_PATH_REQUIRED');
   }
   return { command, flags };
@@ -139,6 +151,28 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
     const store = new FileTransactionStore(flags.get('--state-dir')!);
     return { ...await store.status() };
   }
+  if (command === 'runtime-plan') {
+    const plan = renderRuntimePlan(await readInput(flags.get('--input')!));
+    await writePrivateOutput(flags.get('--output')!, JSON.stringify(plan, null, 2) + '\n');
+    return { planned: true, unitSha256: plan.settings.unitSha256, runtime: 'not_started' };
+  }
+  if (command.startsWith('runtime-')) {
+    const settings = await loadRuntimeSettings(flags.get('--runtime-settings')!);
+    if (flags.get('--state-dir') !== settings.stateDirectory) throw new CliError('RUNTIME_STATE_MISMATCH');
+    const runtime = new SystemdMihomoRuntime(settings);
+    const store = new FileTransactionStore(settings.stateDirectory);
+    const manager = new TransactionManager(store, runtime);
+    if (command === 'runtime-status') {
+      const status = await store.status();
+      const core = status.active === null ? null : await runtime.observe(status.active);
+      return { ...status, core, scope: 'core_only' };
+    }
+    if (command === 'runtime-recover') return { ...await manager.recover() };
+    const generation = flags.get('--generation')!;
+    const expected = flags.get('--expected-active')!;
+    if (!/^[a-f0-9]{64}$/.test(generation) || !(expected === 'none' || /^[a-f0-9]{64}$/.test(expected))) throw new CliError('INVALID_GENERATION');
+    return { ...await manager.apply(generation, expected === 'none' ? null : expected) };
+  }
   if (command.startsWith('draft-')) {
     const drafts = new DraftStore(flags.get('--state-dir')!);
     if (command === 'draft-status') return { draft: await drafts.metadata() };
@@ -195,7 +229,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     let code = 'IO_ERROR';
     if (error instanceof CliError || error instanceof ConfigError
         || error instanceof MihomoValidationError || error instanceof TransactionError || error instanceof DraftError
-        || error instanceof SubscriptionError || error instanceof SnapshotHttpError) {
+        || error instanceof SubscriptionError || error instanceof SnapshotHttpError || error instanceof RuntimeError) {
       code = error.code;
     } else if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') code = 'OUTPUT_EXISTS';
     process.stderr.write(JSON.stringify({ error: { code } }) + '\n');

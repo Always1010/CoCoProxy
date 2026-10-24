@@ -155,3 +155,37 @@ test('source CLI keeps URL credentials out of arguments and public metadata', as
     assert.equal(JSON.parse((await cli(['source-status', '--source-id', 'primary', '--state-dir', state])).stdout).source.revision, 1);
   });
 });
+
+test('runtime CLI produces a private review plan and refuses mismatched state before service control', async () => {
+  await fixture(async (dir) => {
+    const file = join(dir, 'deployment.json');
+    const output = join(dir, 'plan.json');
+    await writeFile(file, JSON.stringify({ schemaVersion: 1, stateDirectory: '/var/lib/coproxy',
+      binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: 'a'.repeat(64), systemctlPath: '/usr/bin/systemctl',
+      nodePath: '/usr/bin/node', sourceDirectory: '/opt/coproxy/source', settingsPath: '/etc/coproxy/runtime.json',
+      unitPath: '/etc/systemd/system/coproxy-mihomo.service', serviceUid: 12345 }), { mode: 0o600 });
+    const result = await cli(['runtime-plan', '--input', file, '--output', output]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).runtime, 'not_started');
+    const plan = JSON.parse(await readFile(output, 'utf8'));
+    assert.match(plan.unit, /^KillMode=control-group$/m);
+    assert.equal((await stat(output)).mode & 0o777, 0o600);
+    const settings = join(dir, 'settings.json');
+    await writeFile(settings, JSON.stringify(plan.settings), { mode: 0o600 });
+    const mismatched = await cli(['runtime-apply', '--state-dir', join(dir, 'unused-state'), '--runtime-settings', settings,
+      '--generation', 'b'.repeat(64), '--expected-active', 'none']);
+    assert.equal(JSON.parse(mismatched.stderr).error.code, 'RUNTIME_STATE_MISMATCH');
+    await assert.rejects(stat(join(dir, 'unused-state')), { code: 'ENOENT' });
+    plan.settings.stateDirectory = join(dir, 'absent-state');
+    await writeFile(settings, JSON.stringify(plan.settings));
+    const status = await cli(['runtime-status', '--state-dir', plan.settings.stateDirectory, '--runtime-settings', settings]);
+    assert.equal(status.code, 0, status.stderr);
+    assert.equal(JSON.parse(status.stdout).core, null);
+    assert.equal(JSON.parse(status.stdout).scope, 'core_only');
+    await assert.rejects(stat(plan.settings.stateDirectory), { code: 'ENOENT' });
+    const invalid = await cli(['runtime-apply', '--state-dir', plan.settings.stateDirectory, '--runtime-settings', settings,
+      '--generation', 'invalid', '--expected-active', 'none']);
+    assert.equal(JSON.parse(invalid.stderr).error.code, 'INVALID_GENERATION');
+    await assert.rejects(stat(plan.settings.stateDirectory), { code: 'ENOENT' });
+  });
+});
