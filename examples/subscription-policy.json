@@ -1,0 +1,7 @@
+{
+  "allowedOrigins": ["https://subscription.example"],
+  "allowPrivateAddresses": false,
+  "timeoutMs": 15000,
+  "maxBytes": 1048576,
+  "maxRedirects": 3
+}

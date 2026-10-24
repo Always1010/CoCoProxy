@@ -2,7 +2,7 @@
 
 Coproxy 面向 Linux 网关，提供可通过浏览器管理的局域网代理、DNS 与分流能力。终端通过接入路由器统一使用服务，无需逐台安装代理客户端；软件不绑定个人设备或当前调试网络。
 
-当前已实现首批开发基础：受保护的离线配置编译、不可变候选存储、持久化应用事务和开发 CLI。CLI 可编译、调用指定核心作语法校验、暂存候选及读取状态；尚无真实运行适配器、网页服务、发行包或已通过的设备联调。首选评估 Mihomo 与 MetaCubeXD Server／Agent 的组合；最终组件和版本在验证后冻结，不将候选写成已交付功能。
+当前已实现配置开发基础：受保护的离线编译、版本化草稿、订阅节点快照、不可变候选存储、持久化应用事务和 CLI。订阅可按显式 HTTPS 策略更新，失败保留旧快照，并捕获指定来源版本生成候选；目前仅支持严格 JSON 节点快照，完整 YAML 订阅待上游适配。尚无真实运行适配器、网页服务、发行包或已通过的设备联调。首选评估 Mihomo 与 MetaCubeXD Server／Agent 的组合；最终组件和版本在验证后冻结，不将候选写成已交付功能。
 
 开发基线为 Node.js 22.18 或更高版本，使用原生 TypeScript 类型擦除；首批源码没有第三方运行依赖，无需执行依赖安装。运行 `npm run cli -- help` 查看入口，具体用法和针对性检查见[首批开发与验证](docs/development.md)。类型擦除不执行 TypeScript 静态类型检查。
 
@@ -12,6 +12,7 @@ Coproxy 面向 Linux 网关，提供可通过浏览器管理的局域网代理�
 - [软件架构](docs/architecture.md)：模块归属、配置事务和网关协作边界。
 - [首批开发与验证](docs/development.md)：已实现范围、CLI、针对性检查和后续关卡。
 - [配置模块](packages/config/README.md)与[事务模块](packages/transaction/README.md)：内部 API、保护边界和恢复约束。
+- [草稿模块](packages/drafts/README.md)与[订阅模块](packages/subscriptions/README.md)：修订号、私有快照、刷新和候选捕获。
 - [MetaCubeXD 适配记录](integrations/metacubexd/README.md)：固定源码引用、待接入入口和候选版本差异。
 - [与接入路由器的协作](docs/router-cooperation.md)：通用职责、流量和解析边界，以及本机联调资料的范围说明。
 - [协作规则](AGENTS.md)：源码归属、本地资料和提交约定。
