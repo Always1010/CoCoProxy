@@ -1,6 +1,6 @@
 # Coproxy 软件架构
 
-本文记录模块边界与开发方向；验证方法和范围见 development.md。当前已完成回环显式代理、管理网页与受控事务的集成源码，固定核心及六种协议已通过真实回环检查。透明网关配置、规则、持久资源会话和实际 DNS/TUN 探针已通过四角色隔离内核验证，固定生产驱动组合已连接持久协调器、核心监管与运行观察并通过 fixture 测试；特权 helper／管理入口、持续故障与关闭生命周期、systemd 安装和真实设备联调仍待完成。
+本文记录模块边界与开发方向；验证方法和范围见 development.md。当前已完成回环显式代理、管理网页与受控事务的集成源码，固定核心及六种协议已通过真实回环检查。透明网关配置、规则、持久资源会话和实际 DNS/TUN 探针已通过四角色隔离内核验证，固定生产驱动组合已连接持久协调器、核心监管与运行观察并通过 fixture 测试；持续运行检查与停止恢复组件已实现，特权 helper／管理入口、服务失效绑定、关闭生命周期、systemd 安装和真实设备联调仍待完成。
 
 ## 模块与唯一归属
 
@@ -38,7 +38,7 @@
 
 [网关核心监管入口](../packages/network/runtime.md)另使用完整重编译的私有网关候选、root-owned 选择与操作 journal、固定 systemctl 的启动屏障，以及独立 manager job/PID/cgroup 收敛核验。其独立 unit 通过 systemd credential 向非 root 核心传递配置快照，关闭自动重启，要求每次 stop/start 前证明 blocked。旧 worker 收敛入口不发新 stop/start，供协调器在持久 settling 后调用。[详细运行观察](../packages/network/core-observer.md)补充实际 executable、精确 argv、核心 mount view 中的 credential 代次与认证 controller 监听归属。监管组件已通过 fixture 持久协议测试和实际 unit 语法解析，观察组件已通过合成 reader 验证；尚未安装服务，不能据此授权生产转发。
 
-[socket 来源观察](../packages/network/sockets.md)通过 INET_DIAG 将核心/管理 FD 与实际 socket mark、UID、cgroup ID 交叉核对，并要求两个专用 UID 无额外进程；缺失属性、未知 FD 和未连接 UDP 都不能补造成就绪事实。[链路观察](../packages/network/link.md)另核对接口、网关地址、carrier、当前邻居及带 mark 的出口路由。[运行证据组合器](../packages/network/observer.md)已将核心、cgroup、socket、DNS/TUN、链路与资源回读连接起来，并在前后重新核验核心及管理身份；计划、规则和协调器共同绑定独立管理 UID，生产启用拒绝历史缺省身份。四角色隔离测试已读取真实核心 socket mark/cgroup 与真实 iproute2 输出；该环境复用既有 UID/cgroup，只证明局部内核事实。[主机预检](../packages/network/host.md)另只读验证可信初始主机视图、转发参数及旁路机制；完整正向目前来自合成 reader。资源会话已支持 blocked 下同保护参数的代次重绑定，协调器恢复先持久记录 settling 再显式收敛旧操作。固定生产驱动已连接这些组件与唯一核心监管者；管理入口、持续故障处理及关闭生命周期仍待完成。
+[socket 来源观察](../packages/network/sockets.md)通过 INET_DIAG 将核心/管理 FD 与实际 socket mark、UID、cgroup ID 交叉核对，并要求两个专用 UID 无额外进程；缺失属性、未知 FD 和未连接 UDP 都不能补造成就绪事实。[链路观察](../packages/network/link.md)另核对接口、网关地址、carrier、当前邻居及带 mark 的出口路由。[运行证据组合器](../packages/network/observer.md)已将核心、cgroup、socket、DNS/TUN、链路与资源回读连接起来，并在前后重新核验核心及管理身份；计划、规则和协调器共同绑定独立管理 UID，生产启用拒绝历史缺省身份。四角色隔离测试已读取真实核心 socket mark/cgroup 与真实 iproute2 输出；该环境复用既有 UID/cgroup，只证明局部内核事实。[主机预检](../packages/network/host.md)另只读验证可信初始主机视图、转发参数及旁路机制；完整正向目前来自合成 reader。资源会话已支持 blocked 下同保护参数的代次重绑定，协调器恢复先持久记录 settling 再显式收敛旧操作。固定生产驱动已连接这些组件与唯一核心监管者；[运行监测](../packages/network/watchdog.md)已提供串行周期检查和停止恢复，管理入口、实际服务失效绑定及关闭生命周期仍待完成。
 
 AlwayRoute 负责受管来源、外部代理开关、基础网络和独立关闭恢复。Coproxy 只负责收到流量后的接管、DNS、分流与自身状态，不写路由器配置。首轮通过本地诊断对齐必要语义，再按实际缺口增加带认证的最小只读接口。
 
