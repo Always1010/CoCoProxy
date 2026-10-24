@@ -122,6 +122,161 @@ test('read-only preflight failures preserve state and enabled protection scope c
   } finally { await f.close(); }
 });
 
+test('active checks use fresh observations bound to the original activation without changing journal bytes or revision', async () => {
+  const f = await fixture();
+  try {
+    const manager = f.coordinator();
+    assert.deepEqual(await manager.checkActive(), { status: await manager.status(), observation: null });
+    await assert.rejects(lstat(f.root), { code: 'ENOENT' });
+    const applied = await manager.apply(input(), 0), path = join(f.root, 'network-state.json');
+    const saved = await readFile(path), before = f.calls.length;
+    let original: NetworkEvidence | undefined;
+    f.driver.verifyActive = async (_, proof) => {
+      f.calls.push('verify');
+      if (original) assert.equal(proof, original, 'monitoring retains the exact activation proof');
+      original = proof;
+      assert.equal(proof.checkedAt, applied.observation.checkedAt);
+      assert.equal((await lstat(join(f.root, '.lock'))).isDirectory(), true);
+      return evidence(proof.identity, f.clock.now);
+    };
+    for (let i = 0; i < 2; i++) {
+      f.clock.now += 60_000;
+      const checked = await manager.checkActive();
+      assert.equal(checked.observation?.localReady, true);
+      assert.equal(checked.observation?.checkedAt, f.clock.now);
+      assert.equal(checked.observation?.terminalPath, 'unverified');
+      assert.equal(checked.status.readiness, 'unknown');
+      assert.equal(checked.status.revision, applied.status.revision);
+      assert.deepEqual(await readFile(path), saved);
+    }
+    assert.deepEqual(f.calls.slice(before), ['settled', 'identity', 'verify', 'settled', 'identity', 'verify']);
+    await assert.rejects(manager.apply(input(), 0), reject('NETWORK_REVISION_CONFLICT'));
+    await assert.rejects(manager.apply({}, applied.status.revision), reject('NETWORK_INPUT_INVALID'));
+    const preflight = f.driver.preflight;
+    f.driver.preflight = async () => { throw new NetworkDriverError(true); };
+    await assert.rejects(manager.apply(input(), applied.status.revision), reject('NETWORK_PREFLIGHT_FAILED'));
+    f.driver.preflight = preflight;
+    assert.equal((await manager.checkActive()).observation?.localReady, true, 'read-only rejected updates retain the old activation');
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const verify = f.driver.verifyActive;
+    f.driver.verifyActive = async (...args) => { entered(); await held; return verify(...args); };
+    const checking = manager.checkActive(); await started;
+    try { await assert.rejects(manager.checkActive(), reject('NETWORK_BUSY')); }
+    finally { release(); await checking; f.driver.verifyActive = verify; }
+    assert.equal((await manager.checkActive()).observation?.localReady, true, 'a busy contender cannot revoke the active check');
+    const count = f.calls.length;
+    await assert.rejects(f.coordinator().checkActive(), reject('NETWORK_RECOVERY_REQUIRED'));
+    assert.equal(f.calls.length, count);
+    assert.deepEqual(await readFile(path), saved);
+    const recovered = await manager.recover(), blockedCalls = f.calls.length;
+    assert.equal((await manager.checkActive()).observation, null);
+    assert.equal((await f.coordinator().checkActive()).observation, null);
+    assert.equal(f.calls.length, blockedCalls);
+    assert.equal(recovered.lastPhase, 'blocked');
+  } finally { await f.close(); }
+});
+
+test('active identity replacement, stale or malformed evidence and settled failures contain instead of adopting a new activation', async () => {
+  for (const failure of ['identity', 'management', 'verify-identity', 'stale', 'shape', 'known'] as const) {
+    const f = await fixture();
+    try {
+      const manager = f.coordinator();
+      await manager.apply({ ...input(), management: { serviceUid: 12346 } }, 0);
+      if (failure === 'identity' || failure === 'management') f.driver.observeIdentity = async plan => {
+        f.calls.push('identity'); const bound = identity(plan, f.clock.now);
+        if (failure === 'identity') bound.corePid++;
+        else bound.management!.pidStartTime = '34567';
+        return bound;
+      };
+      else f.driver.verifyActive = async (_, proof) => {
+        f.calls.push('verify');
+        if (failure === 'known') throw new NetworkCommandError('NETWORK_COMMAND_FAILED', true);
+        const fresh = evidence(proof.identity, f.clock.now);
+        if (failure === 'verify-identity') fresh.identity.coreCgroupKernelId = '999';
+        if (failure === 'stale') fresh.checkedAt -= 30_001;
+        if (failure === 'shape') delete (fresh.checks as Partial<NetworkEvidence['checks']>).tunOwned;
+        return fresh;
+      };
+      const before = f.calls.length;
+      await assert.rejects(manager.checkActive(), reject('NETWORK_HEALTH_FAILED'), failure);
+      assert.deepEqual(f.calls.slice(-2), ['guard', 'retain'], failure);
+      assert.equal(f.calls.slice(before).includes('activate'), false);
+      const state = await manager.status();
+      assert.equal(state.lastPhase, 'blocked'); assert.equal(state.fault, 'NETWORK_HEALTH_FAILED');
+      assert.equal(state.unsettled, false);
+      const count = f.calls.length;
+      assert.equal((await manager.checkActive()).observation, null);
+      assert.equal(f.calls.length, count);
+      await assert.rejects(manager.apply(input(), state.revision), reject('NETWORK_RECOVERY_REQUIRED'));
+    } finally { await f.close(); }
+  }
+});
+
+test('active checks fence failed settlement proof and unknown observations without concurrent containment or automatic recovery', async () => {
+  for (const failure of ['settlement-known', 'settlement-unsettled', 'identity-unknown', 'verify-unsettled'] as const) {
+    const f = await fixture();
+    try {
+      const manager = f.coordinator();
+      await manager.apply(input(), 0);
+      if (failure.startsWith('settlement-')) f.driver.assertSettled = async () => {
+        f.calls.push('settled'); throw new NetworkDriverError(failure === 'settlement-known');
+      };
+      if (failure === 'identity-unknown') f.driver.observeIdentity = async () => {
+        f.calls.push('identity'); throw new Error('private observation failure');
+      };
+      if (failure === 'verify-unsettled') f.driver.verifyActive = async () => {
+        f.calls.push('verify'); throw new NetworkCommandError('NETWORK_COMMAND_UNSETTLED', false);
+      };
+      const before = f.calls.length;
+      await assert.rejects(manager.checkActive(), reject('NETWORK_COMMAND_UNSETTLED'), failure);
+      assert.deepEqual(f.calls.slice(before), failure.startsWith('settlement-') ? ['settled'] :
+        failure === 'identity-unknown' ? ['settled', 'identity'] : ['settled', 'identity', 'verify']);
+      const state = await manager.status();
+      assert.equal(state.lastPhase, 'fault'); assert.equal(state.unsettled, true);
+      const count = f.calls.length;
+      assert.equal((await manager.checkActive()).observation, null);
+      assert.equal((await f.coordinator().checkActive()).observation, null);
+      await assert.rejects(manager.apply(input(), state.revision), reject('NETWORK_RECOVERY_REQUIRED'));
+      assert.equal(f.calls.length, count);
+    } finally { await f.close(); }
+  }
+});
+
+test('failed active checks clear retained activation authority', async () => {
+  for (const failure of ['journal', 'revision'] as const) {
+    const f = await fixture();
+    try {
+      const manager = f.coordinator(), applied = await manager.apply(input(), 0);
+      const path = join(f.root, 'network-state.json'), saved = await readFile(path, 'utf8'), before = f.calls.length;
+      await writeFile(path, failure === 'journal' ? '{' : JSON.stringify({ ...JSON.parse(saved), revision: applied.status.revision + 1 }));
+      await assert.rejects(manager.checkActive(), reject(failure === 'journal' ? 'NETWORK_STORE_CORRUPT' : 'NETWORK_RECOVERY_REQUIRED'));
+      await writeFile(path, saved);
+      await assert.rejects(manager.checkActive(), reject('NETWORK_RECOVERY_REQUIRED'));
+      assert.equal(f.calls.length, before, 'failed read/gate check never invokes the driver');
+    } finally { await f.close(); }
+  }
+});
+
+test('lock release failure after an active check clears both live proof and the application gate', async () => {
+  const f = await fixture();
+  try {
+    const manager = f.coordinator(), applied = await manager.apply(input(), 0);
+    const saved = await readFile(join(f.root, 'network-state.json'));
+    f.driver.verifyActive = async (_, proof) => {
+      f.calls.push('verify'); await unlink(join(f.root, '.lock', 'owner.json')); return evidence(proof.identity, f.clock.now);
+    };
+    await assert.rejects(manager.checkActive(), reject('NETWORK_STORE_IO'));
+    assert.deepEqual(await readFile(join(f.root, 'network-state.json')), saved);
+    await rmdir(join(f.root, '.lock'));
+    const before = f.calls.length;
+    await assert.rejects(manager.checkActive(), reject('NETWORK_RECOVERY_REQUIRED'));
+    await assert.rejects(manager.apply(input(), applied.status.revision), reject('NETWORK_RECOVERY_REQUIRED'));
+    assert.equal(f.calls.length, before);
+  } finally { await f.close(); }
+});
+
 test('independent management identity is required, remains bound through activation and cannot change protection domain', async () => {
   const f = await fixture();
   try {

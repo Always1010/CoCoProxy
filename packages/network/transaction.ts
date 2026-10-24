@@ -113,10 +113,22 @@ export interface NetworkStatus {
   readiness: 'unknown' | 'fault';
   terminalPath: 'unverified';
 }
+export interface NetworkObservation {
+  scope: NetworkScope;
+  localReady: true;
+  checkedAt: number;
+  generation: string;
+  planSha256: string;
+  terminalPath: 'unverified';
+}
+export interface NetworkActiveCheckResult {
+  status: NetworkStatus;
+  observation: NetworkObservation | null;
+}
 const phases = ['guarding', 'preparing', 'starting-core', 'authorizing-core', 'probing',
   'activating', 'ready', 'settling', 'containing', 'blocked', 'fault'];
 const faults = ['NETWORK_APPLY_FAILED', 'NETWORK_RECOVERY_REQUIRED', 'NETWORK_RECOVERY_FAILED',
-  'NETWORK_COMMAND_UNSETTLED', 'NETWORK_CONTAINMENT_FAILED'];
+  'NETWORK_COMMAND_UNSETTLED', 'NETWORK_CONTAINMENT_FAILED', 'NETWORK_HEALTH_FAILED'];
 const fail: (code: string) => never = code => { throw new NetworkTransactionError(code); };
 const errno = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
 
@@ -210,6 +222,7 @@ export class NetworkCoordinator {
   private readonly clock: () => number;
   private lastTime = 0;
   private recoveredRevision: number | null = null;
+  private activeProof: { revision: number; evidence: NetworkEvidence } | null = null;
   constructor(root: string, driver: NetworkDriver, clock = Date.now) {
     if (!driver || !['production', 'fixture'].includes(driver.scope)) fail('NETWORK_DRIVER_INVALID');
     this.driver = driver;
@@ -277,7 +290,7 @@ export class NetworkCoordinator {
     } catch (error) {
       // The callback can commit successfully and still fail while releasing or
       // syncing the lock. Such a failed request must not retain an apply gate.
-      if (completed) this.recoveredRevision = null;
+      if (completed) { this.recoveredRevision = null; this.activeProof = null; }
       throw error;
     }
   }
@@ -302,6 +315,8 @@ export class NetworkCoordinator {
     return storageFailed;
   }
   private async contain(state: Journal, plan: NetworkPlan, reason: string, settled: boolean): Promise<void> {
+    this.activeProof = null;
+    this.recoveredRevision = null;
     state.fault = settled ? reason : 'NETWORK_COMMAND_UNSETTLED';
     state.unsettled = !settled;
     if (!settled) {
@@ -327,9 +342,54 @@ export class NetworkCoordinator {
   /** Read-only; never converts a saved ready phase into live readiness. */
   async status(): Promise<NetworkStatus> { return status(await this.store.read(), this.scope); }
 
-  async apply(input: unknown, expectedRevision: number): Promise<{ status: NetworkStatus; observation: {
-    scope: NetworkScope; localReady: true; checkedAt: number; generation: string; planSha256: string; terminalPath: 'unverified';
-  } }> {
+  /** Fresh observation of this instance's successful activation. Saved ready is
+   * never authorization, and monitoring never recovers or reactivates a path. */
+  async checkActive(): Promise<NetworkActiveCheckResult> {
+    try {
+      // Acquiring the file lock creates its directory. Keep a never-enabled
+      // installation untouched, as status/recover do for the same case.
+      if (await this.store.read() === null) {
+        this.activeProof = null;
+        return { status: status(null, this.scope), observation: null };
+      }
+      return await this.locked(async () => {
+        const state = await this.store.read();
+        if (!state || ['blocked', 'fault'].includes(state.phase)) {
+          this.activeProof = null;
+          return { status: status(state, this.scope), observation: null };
+        }
+        const proof = this.activeProof;
+        if (state.phase !== 'ready' || state.unsettled || this.recoveredRevision !== state.revision ||
+          !proof || proof.revision !== state.revision) fail('NETWORK_RECOVERY_REQUIRED');
+        const plan = freeze(renderNetworkPlan(state.deployment));
+        let quiescenceProven = false;
+        try {
+          // A settled rejection only describes that call. Until successful
+          // independent proof, earlier work must remain fenced as unsettled.
+          await this.driverCall(() => this.driver.assertSettled(plan));
+          quiescenceProven = true;
+          this.sameIdentity(proof.evidence.identity,
+            this.identity(await this.driverCall(() => this.driver.observeIdentity(plan)), plan));
+          const verified = this.evidence(await this.driverCall(() => this.driver.verifyActive(plan, proof.evidence)),
+            plan, proof.evidence.identity);
+          return { status: status(state, this.scope), observation: { scope: this.scope, localReady: true as const,
+            checkedAt: verified.checkedAt, generation: plan.deployment.generation, planSha256: plan.sha256,
+            terminalPath: 'unverified' as const } };
+        } catch (error) {
+          const settled = quiescenceProven && (!(error instanceof NetworkDriverError) || error.childSettled);
+          await this.contain(state, plan, 'NETWORK_HEALTH_FAILED', settled);
+          fail('NETWORK_HEALTH_FAILED');
+        }
+      });
+    } catch (error) {
+      // A contender did not own the lock and cannot revoke the successful
+      // check/apply currently holding it in this same coordinator instance.
+      if (!(error instanceof NetworkTransactionError && error.code === 'NETWORK_BUSY')) this.activeProof = null;
+      throw error;
+    }
+  }
+
+  async apply(input: unknown, expectedRevision: number): Promise<{ status: NetworkStatus; observation: NetworkObservation }> {
     let plan: NetworkPlan;
     try {
       plan = freeze(renderNetworkPlan(input));
@@ -342,9 +402,15 @@ export class NetworkCoordinator {
       if (previous && this.recoveredRevision !== previous.revision) fail('NETWORK_RECOVERY_REQUIRED');
       if (previous && !['ready', 'blocked'].includes(previous.phase)) fail('NETWORK_RECOVERY_REQUIRED');
       if (previous && !sameNetworkProtection(previous.deployment, plan.deployment)) fail('NETWORK_PROTECTION_CHANGE_UNSUPPORTED');
-      this.recoveredRevision = null;
       try { await this.driverCall(() => this.driver.preflight(plan, 'apply')); }
-      catch { fail('NETWORK_PREFLIGHT_FAILED'); }
+      catch (error) {
+        if (!(error instanceof NetworkDriverError && error.childSettled)) {
+          this.recoveredRevision = null; this.activeProof = null;
+        }
+        fail('NETWORK_PREFLIGHT_FAILED');
+      }
+      this.recoveredRevision = null;
+      this.activeProof = null;
       const state: Journal = { schemaVersion: 1, scope: this.scope, revision: previous?.revision ?? 0,
         deployment: plan.deployment, planSha256: plan.sha256, phase: 'guarding', fault: null, unsettled: false, updatedAt: this.now() };
       // This durable enable intent precedes every network or core mutation.
@@ -369,6 +435,7 @@ export class NetworkCoordinator {
         this.evidence(verified, plan, identity);
         await this.write(state, 'ready');
         this.recoveredRevision = state.revision;
+        this.activeProof = { revision: state.revision, evidence: verified };
         return { status: status(state, this.scope), observation: { scope: this.scope, localReady: true as const,
           checkedAt: verified.checkedAt, generation: plan.deployment.generation, planSha256: plan.sha256,
           terminalPath: 'unverified' as const } };
@@ -385,6 +452,7 @@ export class NetworkCoordinator {
    * are required. A fresh journal remains untouched. */
   async recover(): Promise<NetworkStatus> {
     this.recoveredRevision = null;
+    this.activeProof = null;
     if (await this.store.read() === null) return status(null, this.scope);
     return this.locked(async () => {
       const state = await this.store.read();
