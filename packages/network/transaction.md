@@ -46,7 +46,14 @@
 
 驱动仅能用 `NetworkDriverError(true)` 或已收敛的 `NetworkCommandError` 声明失败操作已终止。未知驱动异常、`childSettled: false` 都进入 unsettled fault，不并发发出恢复变更。驱动的只读观察调用同样参与异常分类，防止遗漏仍运行的工具。驱动不得吞掉底层未收敛异常再伪装成正常失败。
 
-`recover()` 对所有已有启用意图执行恢复，包括历史 ready、blocked 和中断阶段。无论保存的 unsettled 标志为何，都先要求驱动只读证明先前工具／systemd job／netlink 操作已收敛，再做只读归属预检，之后重申阻断。保存的 false 不能排除进程在记录异常前死亡。无法证明时保留故障；不猜测已结束，也不并行回滚。驱动须保存或取得足够的操作收敛事实，接口本身没有提供这份生产证明。
+`recover()` 对所有已有启用意图执行恢复，包括历史 ready、blocked 和中断阶段，在同一跨进程唯一锁内依次执行：
+
+1. `preflight(plan, 'settle')` 只读核验平台、可信操作回执及其归属、上下文和固定命令绑定。允许此前已绑定的 pending worker／manager 操作仍运行；不能为通过检查而 kill、修复回执或修改资源。此时实际资源可能仍在变化，因此不能把旧资源快照当作已收敛后的完整预检。
+2. 先持久保存 `phase: settling` 与 `unsettled: true`，再显式调用必须实现的 `settlePending(plan)`。该方法必须自行重验可信来源，只能有界地终止或等待此前回执已经绑定的 worker／manager 操作，不能接收任意待 kill PID、启动新的业务操作、放行网络或修复网络资源。没有可信绑定时安全拒绝，不能猜测进程归属。
+3. `assertSettled(plan)` 独立只读证明先前工具／systemd job／netlink 操作全部收敛，再执行 `preflight(plan, 'recover')` 完整只读资源预检。`settlePending` 成功返回本身不会清除持久 fence；缺少后续证明仍保持未收敛故障。
+4. 完成上述证明后，重申并读回 blocked guard，再保留黑洞、撤回 capture／分类并读回阻断；每次实际变更继续先持久保存自己的 fence。
+
+无论保存的 unsettled 标志为何，都必须经过这套显式恢复顺序。保存的 false 不能排除进程在记录异常前死亡，历史 `settling` 也只代表需要重新恢复。未知异常或 `childSettled: false` 立即保留未收敛故障，不在其后并发执行 contain；只有用户再次显式 `recover()` 才能尝试收敛已绑定的 pending。在 `assertSettled` 独立证明成功之前，任何调用失败即使带 `childSettled: true`，也仅证明该失败调用自身已结束，不能替代对更早操作的完整收敛证明，不能沿用保存的 false。驱动须保存或取得足够的可信事实，接口本身没有提供这份生产证明。
 
 恢复仅返回阻断，绝不自动续做激活；重新启用需要显式 apply、新 revision 和新鲜证据。没有 journal 的新目录，status/recover 都不创建文件。损坏或跨 scope 的 journal 拒绝使用，不据此猜测网络资源。手动关闭与解除接管是独立的授权生命周期，本模块尚未提供卸载或恢复直连入口。
 
