@@ -5,6 +5,9 @@ import { observeGatewayEvidenceFixture, observeGatewayIdentityFixture, type Gate
 import { renderNetworkPlan } from '../packages/network/plan.ts';
 import { renderGatewayRuntimePlan } from '../packages/network/runtime-plan.ts';
 import { NetworkDriverError } from '../packages/network/transaction.ts';
+import { NativeNetworkError } from '../packages/network/native.ts';
+import { NetworkReadbackError } from '../packages/network/readback.ts';
+import { NetworkCommandError } from '../packages/network/command.ts';
 
 const runtime = renderGatewayRuntimePlan({ schemaVersion: 1, stateDirectory: '/var/lib/coproxy-observer-fixture',
   coreHome: '/var/lib/coproxy-observer-home', binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
@@ -120,4 +123,13 @@ test('unsettled observers and unknown reader failures retain the driver fence', 
     const result = await core(...args); delete (result as Partial<typeof result>).commandsSettled; return result;
   };
   await assert.rejects(missing.identity(), rejected(false));
+  for (const [error, settled] of [[new NetworkReadbackError(), true],
+    [new NativeNetworkError('NETWORK_RESOURCE_MEMBERSHIP_CHANGED'), true],
+    [new NativeNetworkError('NETWORK_SESSION_UNAVAILABLE'), false],
+    [new NetworkCommandError('NETWORK_COMMAND_FAILED', false), false],
+    [new Error('private-resource-error'), false]] as const) {
+    const f = fixture(), expected = await f.identity();
+    f.reader.resources = async () => { throw error; };
+    await assert.rejects(observeGatewayEvidenceFixture(plan, settings, expected, options, f.reader), rejected(settled));
+  }
 });

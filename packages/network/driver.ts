@@ -200,16 +200,16 @@ export class GatewayNetworkDriver implements NetworkDriver {
   async installBlockedGuard(input: NetworkPlan): Promise<void> {
     return this.call(async () => {
       const plan = this.plan(input);
-      if (!this.session) {
-        const old = await this.deps.preflight(plan, 'recover');
-        if (old.scope !== this.scope || old.planSha256 !== plan.sha256) fail();
-        this.session = await this.deps.open(plan);
-        if (this.session.scope !== this.scope || !sameNetworkProtection(this.session.plan.deployment, plan.deployment)) fail();
-        if (old.initialized) await this.session.recoverBlocked(); else await this.session.installBlocked();
-      } else {
-        if (!sameNetworkProtection(this.session.plan.deployment, plan.deployment)) fail();
-        await this.session.installBlocked();
-      }
+      if (this.session && !sameNetworkProtection(this.session.plan.deployment, plan.deployment)) fail();
+      // Reopen against the durable receipt even in the same process. Active
+      // readback may have poisoned the cached session after TUN destruction;
+      // only explicit recovery accepts that exact owned capture disappearance.
+      this.session = null;
+      const old = await this.deps.preflight(plan, 'recover');
+      if (old.scope !== this.scope || old.planSha256 !== plan.sha256) fail();
+      this.session = await this.deps.open(plan);
+      if (this.session.scope !== this.scope || !sameNetworkProtection(this.session.plan.deployment, plan.deployment)) fail();
+      if (old.initialized) await this.session.recoverBlocked(); else await this.session.installBlocked();
       if (this.session.plan.sha256 !== plan.sha256) {
         await this.session.retainBlocked(); await this.session.rebind(plan.deployment);
       }

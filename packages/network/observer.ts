@@ -3,7 +3,8 @@ import { NetworkCommandError } from './command.ts';
 import { observeGatewayCore, type GatewayCoreObservation } from './core-observer.ts';
 import { observeCoreCgroup, type CoreCgroupObservation, type CoreCgroupRequest } from './identity.ts';
 import { observeNetworkLink, type NetworkLinkObservation, type NetworkLinkOptions } from './link.ts';
-import { NativeNetworkSession } from './native.ts';
+import { NativeNetworkError, NativeNetworkSession } from './native.ts';
+import { NetworkReadbackError } from './readback.ts';
 import { renderNetworkPlan, type NetworkPlan } from './plan.ts';
 import { observeNetworkReadiness, type NetworkProbeObservation, type NetworkProbeOptions } from './probe.ts';
 import type { GatewayCoreSettings } from './runtime.ts';
@@ -160,7 +161,15 @@ async function evidence(plan: NetworkPlan, settings: GatewayObserverSettings, ex
   observed(sockets, scope, started, reader, sockets.commandsSettled);
   if (sockets.stage !== 'ready' || sockets.planSha256 !== plan.sha256 || sockets.generation !== plan.deployment.generation ||
     !['dnsListenerSources', 'coreSocketSources', 'egressSocketMarks', 'managementExcluded', 'upstreamObserved'].every(key => sockets.checks[key as keyof typeof sockets.checks] === true)) fail();
-  const resources = await reader.resources(plan);
+  let resources: ResourceFacts;
+  try { resources = await reader.resources(plan); }
+  catch (error) {
+    // These failures arise only after the fixed read commands returned. A
+    // missing TUN/capture route is failed evidence, not a live mutation.
+    if (error instanceof NetworkReadbackError || error instanceof NativeNetworkError &&
+      error.code === 'NETWORK_RESOURCE_MEMBERSHIP_CHANGED') fail(true);
+    throw error;
+  }
   if (resources.scope !== scope || resources.generation !== plan.deployment.generation || resources.planSha256 !== plan.sha256 || resources.mode !== options.mode) fail();
   const after = await identity(plan, settings, reader, scope, started);
   same(before, after);
