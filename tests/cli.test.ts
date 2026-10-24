@@ -189,3 +189,21 @@ test('runtime CLI produces a private review plan and refuses mismatched state be
     await assert.rejects(stat(plan.settings.stateDirectory), { code: 'ENOENT' });
   });
 });
+
+test('admin initialization reads private input, writes only a salted credential and never overwrites it', async () => {
+  await fixture(async (dir) => {
+    const file = join(dir, 'login.json');
+    const output = join(dir, 'admin.json');
+    await writeFile(file, JSON.stringify({ username: 'synthetic-admin', password: syntheticSecret }), { mode: 0o600 });
+    const result = await cli(['admin-init', '--input', file, '--output', output]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.ok(!result.stdout.includes(syntheticSecret));
+    const credential = await readFile(output, 'utf8');
+    assert.ok(!credential.includes(syntheticSecret));
+    assert.equal(JSON.parse(credential).algorithm, 'scrypt-v1');
+    assert.equal((await stat(output)).mode & 0o777, 0o600);
+    const duplicate = await cli(['admin-init', '--input', file, '--output', output]);
+    assert.equal(JSON.parse(duplicate.stderr).error.code, 'OUTPUT_EXISTS');
+    assert.equal(await readFile(output, 'utf8'), credential);
+  });
+});

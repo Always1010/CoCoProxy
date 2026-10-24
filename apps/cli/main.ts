@@ -14,6 +14,8 @@ import { renderRuntimePlan } from '../../packages/runtime/plan.ts';
 import { loadRuntimeSettings } from '../../packages/runtime/settings.ts';
 import { SystemdMihomoRuntime } from '../../packages/runtime/systemd.ts';
 import { RuntimeError } from '../../packages/runtime/types.ts';
+import { createAdminCredential, AuthError } from '../../packages/management/auth.ts';
+import { privateRead } from '../../packages/storage/private-files.ts';
 
 const MAX_INPUT_BYTES = 1_048_576;
 const HELP = [
@@ -34,6 +36,7 @@ const HELP = [
   'runtime-apply --state-dir <绝对路径> --runtime-settings <私有JSON> --generation <SHA256> --expected-active <SHA256|none>',
   'runtime-recover --state-dir <绝对路径> --runtime-settings <私有JSON>  恢复中断事务',
   'runtime-status --state-dir <绝对路径> --runtime-settings <私有JSON>  核验当前核心进程',
+  'admin-init --input <私有登录JSON> --output <绝对路径>  创建私有管理员凭据，不覆盖',
   '',
   '输入/配置可能包含凭据；正常输出仅包含摘要和状态。',
   '不自动下载核心、安装依赖或修改系统网络；runtime-apply/recover 明确控制已审阅的服务。',
@@ -67,6 +70,7 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     'runtime-apply': ['--state-dir', '--runtime-settings', '--generation', '--expected-active'],
     'runtime-recover': ['--state-dir', '--runtime-settings'],
     'runtime-status': ['--state-dir', '--runtime-settings'],
+    'admin-init': ['--input', '--output'],
   };
   const command = args[0];
   if (!Object.hasOwn(allowed, command)) throw new CliError('UNKNOWN_COMMAND');
@@ -147,6 +151,14 @@ function httpsPolicy(input: unknown): HttpsClientOptions {
 export async function runCli(args: string[]): Promise<Record<string, unknown> | string> {
   const { command, flags } = parse(args);
   if (command === 'help') return HELP;
+  if (command === 'admin-init') {
+    let input: unknown;
+    try { input = JSON.parse(await privateRead(resolve(flags.get('--input')!), 8192)); }
+    catch { throw new CliError('INVALID_ADMIN_INPUT'); }
+    const credential = await createAdminCredential(input);
+    await writePrivateOutput(flags.get('--output')!, JSON.stringify(credential) + '\n');
+    return { created: true, scope: 'admin_credential', runtime: 'not_started' };
+  }
   if (command === 'status') {
     const store = new FileTransactionStore(flags.get('--state-dir')!);
     return { ...await store.status() };
@@ -229,7 +241,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     let code = 'IO_ERROR';
     if (error instanceof CliError || error instanceof ConfigError
         || error instanceof MihomoValidationError || error instanceof TransactionError || error instanceof DraftError
-        || error instanceof SubscriptionError || error instanceof SnapshotHttpError || error instanceof RuntimeError) {
+        || error instanceof SubscriptionError || error instanceof SnapshotHttpError || error instanceof RuntimeError || error instanceof AuthError) {
       code = error.code;
     } else if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') code = 'OUTPUT_EXISTS';
     process.stderr.write(JSON.stringify({ error: { code } }) + '\n');
