@@ -8,6 +8,11 @@ export class ManagementError extends Error {
 }
 export type Principal = { username: string; expiresAt: number };
 export type ManagementAction = (request: Request, principal: Principal) => Promise<unknown>;
+export type ManagementGateway = {
+  fetch: (request: Request) => Promise<Response>;
+  /** Rechecked for every WebSocket heartbeat, including after logout. */
+  authorize: (request: Request, websocket?: boolean) => Principal;
+};
 
 export function exactRecord(input: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
   if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw new ManagementError('INVALID_REQUEST');
@@ -77,6 +82,10 @@ function json(body: unknown, status = 200, cookie?: string): Response {
 
 /** Cookie authentication for the Coproxy mount, independent of core credentials. */
 export function createManagementHandler(options: { origin: string; credential: AdminCredential; sessions?: SessionStore; now?: () => number }, action: ManagementAction): (request: Request) => Promise<Response> {
+  return createManagementGateway(options, action).fetch;
+}
+
+export function createManagementGateway(options: { origin: string; credential: AdminCredential; sessions?: SessionStore; now?: () => number }, action: ManagementAction): ManagementGateway {
   const origin = managementOrigin(options.origin);
   const credential = Object.freeze(parseAdminCredential(options.credential));
   const sessions = options.sessions ?? new SessionStore();
@@ -94,17 +103,30 @@ export function createManagementHandler(options: { origin: string; credential: A
     if (values.length > 1) throw new ManagementError('UNAUTHORIZED', 401);
     return values[0]?.slice(name.length + 1);
   }
-  return async request => {
-    try {
+  function validate(request: Request, websocket = false): URL {
       const url = new URL(request.url);
       if (url.origin !== origin || url.username || url.password || url.hash) throw new ManagementError('ORIGIN_DENIED', 421);
-      // No token-in-URL or ambiguous routing compatibility with the upstream router.
-      if (url.search || url.pathname.includes('%') || request.headers.has('authorization')) throw new ManagementError('INVALID_REQUEST');
-      if (!['GET', 'POST', 'PUT'].includes(request.method)) throw new ManagementError('METHOD_NOT_ALLOWED', 405);
+      // Only the controller allowlist interprets its encoded names and queries.
+      const controller = url.pathname.startsWith('/api/clash/');
+      if ((!controller && (url.search || url.pathname.includes('%'))) || request.headers.has('authorization')) throw new ManagementError('INVALID_REQUEST');
+      if (!(controller ? ['GET', 'PUT', 'DELETE'] : ['GET', 'POST', 'PUT']).includes(request.method)) throw new ManagementError('METHOD_NOT_ALLOWED', 405);
       if (request.headers.get('sec-fetch-site') === 'cross-site') throw new ManagementError('ORIGIN_DENIED', 403);
       const suppliedOrigin = request.headers.get('origin');
       if ((suppliedOrigin !== null && suppliedOrigin !== origin) ||
-          (request.method !== 'GET' && suppliedOrigin !== origin)) throw new ManagementError('ORIGIN_DENIED', 403);
+          ((request.method !== 'GET' || websocket) && suppliedOrigin !== origin)) throw new ManagementError('ORIGIN_DENIED', 403);
+      if (websocket && (!controller || request.method !== 'GET')) throw new ManagementError('INVALID_REQUEST');
+      return url;
+  }
+  function authorize(request: Request, websocket = false): Principal {
+    validate(request, websocket);
+    const presented = token(request);
+    const principal = presented ? sessions.check(presented) : null;
+    if (principal === null) throw new ManagementError('UNAUTHORIZED', 401);
+    return principal;
+  }
+  return { authorize, fetch: async request => {
+    try {
+      const url = validate(request);
       if (request.method === 'GET' && url.pathname === '/api/coproxy/health') return json({ responding: true, scope: 'management_only' });
       if (request.method === 'POST' && url.pathname === '/api/session/login') {
         const stamp = now();
@@ -121,20 +143,29 @@ export function createManagementHandler(options: { origin: string; credential: A
             `${name}=${session.token}; ${attributes}; Max-Age=${Math.max(0, Math.floor((session.expiresAt - now()) / 1000))}`);
         } finally { loggingIn--; }
       }
-      const presented = token(request);
-      const principal = presented ? sessions.check(presented) : null;
-      if (principal === null) throw new ManagementError('UNAUTHORIZED', 401);
+      const principal = authorize(request);
       if (url.pathname === '/api/session' && request.method === 'GET') return json({ authenticated: true, ...principal });
       if (url.pathname === '/api/session/logout' && request.method === 'POST') {
         exactRecord(await readJsonBody(request, 128), []);
-        sessions.revoke(presented!);
+        sessions.revoke(token(request)!);
         return json({ authenticated: false }, 200, `${name}=; ${attributes}; Max-Age=0`);
       }
-      return json(await action(request, principal));
+      const result = await action(request, principal);
+      if (result instanceof Response) {
+        // The action is trusted server code; upstream cookies and headers never
+        // enter this response (the controller adapter reconstructs both).
+        const headers = new Headers(result.headers);
+        headers.set('cache-control', 'no-store');
+        headers.set('x-content-type-options', 'nosniff');
+        headers.set('referrer-policy', 'no-referrer');
+        headers.set('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+        return new Response(result.body, { status: result.status, headers });
+      }
+      return json(result);
     } catch (error) {
       if (error instanceof ManagementError) return json({ error: { code: error.code } }, error.status);
       if (error instanceof AuthError) return json({ error: { code: error.code === 'AUTH_SESSION_LIMIT' ? 'SESSION_LIMIT' : 'AUTH_UNAVAILABLE' } }, 503);
       return json({ error: { code: 'MANAGEMENT_UNAVAILABLE' } }, 503);
     }
-  };
+  } };
 }
