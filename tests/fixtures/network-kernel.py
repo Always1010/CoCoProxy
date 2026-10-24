@@ -198,6 +198,29 @@ def role(name, root):
                     child.wait(timeout=2)
             elif op == 'alive':
                 value = children[request['label']].poll() is None
+            elif op == 'native':
+                if 'native' not in children:
+                    data = json.loads((root / 'input.json').read_text())
+                    log = os.open(root / 'native.log', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    try:
+                        children['native'] = subprocess.Popen([data['node'], '--experimental-strip-types',
+                            str(Path(SELF).with_name('network-native.ts')), str(root), HOST_USER, HOST_NET],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1, preexec_fn=limited)
+                    finally:
+                        os.close(log)
+                    check(bool(select.select([children['native'].stdout], [], [], 10)[0]), 'NATIVE_START_TIMEOUT')
+                    ready = json.loads(children['native'].stdout.readline(LIMIT))
+                    check(ready.get('ready'), 'NATIVE_START_FAILED')
+                native = children['native']
+                command = {'op': request['action']}
+                if request['action'] == 'probe':
+                    command['corePid'] = children['core'].pid
+                native.stdin.write(json.dumps(command) + '\n')
+                native.stdin.flush()
+                check(bool(select.select([native.stdout], [], [], 10)[0]), 'NATIVE_OPERATION_TIMEOUT')
+                answer = json.loads(native.stdout.readline(LIMIT))
+                check('error' not in answer, 'NATIVE_' + request['action'].upper() + '_' + answer.get('error', 'OPERATION_FAILED'))
+                value = answer['value']
             elif op in ('http', 'udp', 'dns', 'dns_tcp'):
                 key = request.get('key', '')
                 sock = sockets.get(key) if key else None
@@ -292,6 +315,7 @@ def role(name, root):
 
 def driver(root):
     isolated()
+    private_json(root / 'isolation.json', {'outerUser': HOST_USER, 'innerUser': namespace('user')})
     data = json.loads((root / 'input.json').read_text())
     check(data['blocked']['scope'] == data['active']['scope'] == 'fixture', 'FIXTURE_SCOPE_REQUIRED')
     roles = {}
@@ -351,11 +375,11 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         origin.call('origin')
         origin.call('start', label='server', binary=data['server'], args=['run', '-c', '@CONFIG'], config=data['serverConfig'])
         blocked, active = data['blocked'], data['active']
-        gateway.nft(blocked['nft']['guard']['create'] + blocked['nft']['data']['create'])
+        check(gateway.call('native', action='membership-check'), 'NATIVE_FOREIGN_MATCHING_ROUTE_ADOPTED')
+        result['nativeOwnershipCollisionRejected'] = True
+        check(gateway.call('native', action='install'), 'NATIVE_INSTALL_FAILED')
         check(not any(link['ifname'] == 'coproxy-tun' for link in json.loads(gateway.ip('-j', 'link', 'show'))), 'TUN_EXISTS_BEFORE_CORE')
-        for phase in ['blackholes', 'rules', 'prepareRoutes']:
-            for step in blocked['ip'][phase]:
-                gateway.call('exec', args=['ip', *step['args']])
+        check(gateway.call('native', action='prepare'), 'NATIVE_PREPARE_FAILED')
         result['preCoreRulesInstalled'] = True
         before = origin.call('stats')
         check(not client.call('http') and not client.call('udp') and not client.call('dns'), 'BLOCKED_CLIENT_ESCAPED')
@@ -371,7 +395,9 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         else:
             raise RuntimeError('TUN_DID_NOT_APPEAR')
         core_only = data['coreOnly']
-        gateway.nft(core_only['nft']['guard']['replace'] + core_only['nft']['data']['replace'])
+        check(gateway.call('native', action='authorize'), 'NATIVE_AUTHORIZE_FAILED')
+        check(gateway.call('native', action='probe'), 'NATIVE_READINESS_PROBE_FAILED')
+        result['nativeProbeVerified'] = True
         check(gateway.call('dns', loopback=True), 'CORE_ONLY_LOCAL_DNS_UDP_FAILED')
         check(gateway.call('dns_tcp', loopback=True), 'CORE_ONLY_LOCAL_DNS_TCP_FAILED')
         result['coreOnlyLocalDns'] = True
@@ -379,10 +405,10 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(not client.call('http') and not client.call('udp') and not client.call('dns') and not client.call('dns_tcp'), 'CORE_ONLY_CLIENT_ESCAPED')
         check(before == origin.call('stats'), 'CORE_ONLY_CLIENT_ORIGIN_TOUCHED')
         result['coreOnlyStillBlocked'] = True
-        for phase in ['activateCapture']:
-            for step in active['ip'][phase]:
-                gateway.call('exec', args=['ip', *step['args']])
-        gateway.nft(active['nft']['guard']['replace'] + active['nft']['data']['replace'])
+        check(gateway.call('native', action='activate'), 'NATIVE_ACTIVATE_FAILED')
+        inspected = gateway.call('native', action='inspect')
+        check(inspected['scope'] == 'fixture' and inspected['mode'] == 'active' and len(inspected['routesPresent']) == 8, 'NATIVE_ACTIVE_READBACK_FAILED')
+        result['nativeReadbackVerified'] = True
         time.sleep(.3)
         check(client.call('http', key='existing-http'), 'ACTIVE_HTTP_FAILED')
         result['transparentHttp'] = True
@@ -482,6 +508,12 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(not client.call('http') and not client.call('udp'), 'NODE_DEATH_DIRECT_FALLBACK')
         check(before == origin.call('stats'), 'NODE_DEATH_ORIGIN_TOUCHED')
         result['nodeDeathNoDirectFallback'] = True
+        check(gateway.call('native', action='retain'), 'NATIVE_RETAIN_FAILED')
+        retained = gateway.call('native', action='inspect')
+        check(retained['mode'] == 'blocked' and len(retained['routesPresent']) == 7, 'NATIVE_RETAIN_READBACK_FAILED')
+        gateway.nft('add rule inet coproxy_guard forward_guard accept\n')
+        check(gateway.call('native', action='tamper-check'), 'NATIVE_TAMPER_NOT_REJECTED')
+        result['nativeTamperRejected'] = True
         return result
     finally:
         failures = 0
