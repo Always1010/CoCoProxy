@@ -9,7 +9,7 @@
     "forceConsistentCasingInFileNames": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "typeRoots": ["./tooling/node_modules/@types"],
+    "typeRoots": ["./tooling/node_modules/@types", "./node_modules/@types"],
     "types": ["node"]
   },
   "include": ["apps/**/*.ts", "packages/**/*.ts", "tests/**/*.ts"]
