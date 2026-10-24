@@ -1,5 +1,5 @@
 /** Real operations only in the kernel test's verified new user/network tree. */
-import { readFile, stat } from 'node:fs/promises';
+import { lstat, readFile, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -16,10 +16,24 @@ const [root, outerUser, outerNet] = process.argv.slice(2);
 const input = JSON.parse(await readFile(join(root, 'input.json'), 'utf8'));
 const plan = renderNetworkPlan(input.networkDeployment);
 const directory = join(root, 'native-resources');
+const tools = { ipBinary: '/usr/sbin/ip', nftBinary: '/usr/sbin/nft' } as const;
+const proof = { outerUser, outerNet, cgroups: { core: input.blocked.cgroups.core.path, management: null } };
+const optional = async <T>(operation: () => Promise<T>): Promise<T | null> => {
+  try { return await operation(); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+};
+const receiptBefore = await optional(() => readFile(join(directory, 'native-resource-receipt.json')));
+const directoryBefore = await optional(() => lstat(directory));
+const preflight = await NativeNetworkSession.preflightFixture(plan.deployment, tools, proof, directory, 'recover');
+await NativeNetworkSession.assertSettledFixture(plan.deployment, tools, proof, directory);
+const receiptAfter = await optional(() => readFile(join(directory, 'native-resource-receipt.json')));
+if (preflight.scope !== 'fixture' || preflight.initialized !== (receiptBefore !== null) ||
+  (receiptBefore === null ? receiptAfter !== null : receiptAfter === null || !receiptBefore.equals(receiptAfter)) ||
+  (directoryBefore === null && await optional(() => lstat(directory)) !== null)) throw new Error('NATIVE_READONLY_PREFLIGHT_FAILED');
 const create = () => NativeNetworkSession.fixture(plan.deployment, { ipBinary: '/usr/sbin/ip', nftBinary: '/usr/sbin/nft' },
   { outerUser, outerNet, cgroups: { core: input.blocked.cgroups.core.path, management: null } }, directory);
 const session = await create();
-console.log(JSON.stringify({ ready: true }));
+console.log(JSON.stringify({ ready: true, readonlyPreflight: true }));
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
   try {
     if (line.length > 1024) throw new Error();

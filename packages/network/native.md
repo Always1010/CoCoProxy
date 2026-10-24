@@ -10,6 +10,18 @@
 
 首次会话只接受本模块 nft 表、三个 RPDB 规则及专用路由都不存在的初始状态，不接受外部 JSON receipt，不按同名或同配置认领已有资源。后续持久会话只读取同一私有 authority directory 的受保护凭据，并先要求显式恢复。v1 [回读校验](readback.md)要求无其他 nft 对象、无额外 RPDB 或自定义路由表；不满足时拒绝，不能清理发行版防火墙、容器网络或其他服务来通过预检。
 
+## 严格只读入口
+
+`preflight(deployment, tools, directory?, purpose = 'apply')` 与 `assertSettled(deployment, tools, directory?)` 可供持久协调器在任何初始化或修改之前调用。两者沿用生产 root、PID 1 user/net namespace、受信工具及资源凭据上下文校验，只读取既有凭据，不调用 `create()`、不获取会创建目录的资源锁，不创建 authority、commands 或 receipt，不推进 revision，不终止旧 pending worker，也不调用恢复。只读 nft/ip 查询沿用有界传输；查询超时只收敛本次查询自己的子进程组。
+
+`preflight()` 对无 receipt 的 authority 要求实际 nft、RPDB 及专用路由全部 absent；目录不存在仍保持不存在。已有 receipt 必须绑定当前 boot、namespace、工具二进制、renderer 及计划，且用独立内核列表核验具体归属，不能把历史 state 当成实际资源。pending 的命令必须由固定 renderer 重建且摘要相同；只观察其启动回执、结果与进程组，running 或 uncertain 均拒绝。已收敛的 pending 只允许匹配旧归属或准确的单步后归属；成功 nft echo 只允许匹配提交后的 AST 与 handle。没有可信 echo 而实际 nft 已变化时拒绝。所有候选仅用于当前核验，绝不采纳或保存。
+
+`purpose: 'recover'` 仅额外容许先前已拥有的 capture 路由精确消失，以便之后显式进入 blocked 恢复；其余归属仍须完整匹配。该观察本身不会撤回 capture、安装 blocked 或生成运行授权。`assertSettled()` 独立核验当前 receipt 的 pending 固定命令摘要、worker boot、UID、user/net namespace 与整个进程组均已消失，不依赖历史的完成布尔值，也不要求此时内核仍匹配旧 state；无 receipt 时仍确认资源 absent。命令启动屏障确认 pending 无启动回执且无孤立结果时，也能只读证明该命令尚未获得执行许可。
+
+`preflightFixture(deployment, tools, proof, directory?, purpose?)` 与 `assertSettledFixture(deployment, tools, proof, directory?)` 使用与 `fixture()` 相同的外层 user/net namespace 和受限 cgroup 证据，始终只产生 fixture scope；缺失或无效 proof 不能退回 production。预检只返回冻结的 scope、initialized、recoveryRequired、pending、revision、generation、planSha256 与 `terminalPath: unverified`，不返回工具输出、原始 AST 或私有路径。`initialized` 表示已经存在资源 receipt，`recoveryRequired` 表示以该 receipt 新建持久会话后必须显式恢复，不代表长期运行中的驱动会话需要重建。
+
+读取末尾再次核对完整 receipt 与上下文，可发现观察过程中发生的版本或域变化；它不预留未来的内核状态。外层生产驱动仍须持有统一的写入 fence，并在实际修改前重新校验，保证没有另一写入者在预检返回后启动命令。pending 已完成不代表完成 blocked 恢复，`assertSettled()` 也不证明 systemd 管理操作已收敛；后者由组合驱动的独立管理回执证明。
+
 命令通过[有界传输](command.md)直接执行，无 shell。所有 nft 批次和 ip 参数均重新来自固定 renderer，不能提交任意命令。`plan` 在构造时深度冻结；模式、规则基准和资源清单由会话维护，不接受调用方覆盖。
 
 ## 实际提交与回读

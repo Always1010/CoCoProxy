@@ -216,7 +216,7 @@ def role(name, root):
                         os.close(log)
                     check(bool(select.select([children['native'].stdout], [], [], 10)[0]), 'NATIVE_START_TIMEOUT')
                     ready = json.loads(children['native'].stdout.readline(LIMIT))
-                    check(ready.get('ready'), 'NATIVE_START_FAILED')
+                    check(ready.get('ready') and ready.get('readonlyPreflight'), 'NATIVE_START_FAILED')
                 native = children['native']
                 command = {'op': request['action']}
                 if request['action'] in ('probe', 'socket-probe'):
@@ -426,6 +426,7 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(gateway.call('native', action='authorize'), 'NATIVE_AUTHORIZE_FAILED')
         check(gateway.call('native', action='probe'), 'NATIVE_READINESS_PROBE_FAILED')
         result['nativeProbeVerified'] = True
+        result['nativeReadOnlyPreflightVerified'] = True
         check(gateway.call('native', action='link-probe'), 'NATIVE_LINK_PROBE_FAILED')
         check(gateway.call('native', action='socket-probe'), 'NATIVE_SOCKET_FACTS_FAILED')
         result['actualLinkNeighbourVerified'] = True
