@@ -97,7 +97,8 @@ test('does not mutate or retain references to the input', () => {
 });
 
 test('rejects protected deployment keys even when supplied with disabled values', () => {
-  for (const key of ['tun', 'dns', 'allow-lan', 'port', 'mixed-port', 'socks-port', 'redir-port', 'tproxy-port', 'listeners', 'external-controller', 'external-controller-unix', 'secret', 'authentication', 'external-ui', 'external-ui-url', 'profile', 'hosts', 'sniffer', 'ipv6']) {
+  for (const key of ['tun', 'dns', 'allow-lan', 'port', 'mixed-port', 'socks-port', 'redir-port', 'tproxy-port', 'listeners', 'external-controller', 'external-controller-unix', 'secret', 'authentication', 'external-ui', 'external-ui-url', 'profile', 'hosts', 'sniffer', 'ipv6',
+    'iptables', 'tuic-server', 'ss-config', 'vmess-config', 'ntp', 'external-doh-server', 'external-controller-routing-mark', 'clash-for-android']) {
     const value = input();
     (value.policy as JsonObject)[key] = false;
     fails(value, 'PROTECTED_FIELD');
@@ -110,7 +111,7 @@ test('rejects protected deployment keys even when supplied with disabled values'
 });
 
 test('rejects recursive providers, scripts, file reads and egress overrides', () => {
-  for (const key of ['proxy-providers', 'rule-providers', 'script', 'interface-name', 'routing-mark', 'dialer-proxy', 'certificate', 'private-key', 'ca-file', 'plugin', 'executable']) {
+  for (const key of ['proxy-providers', 'rule-providers', 'script', 'interface-name', 'routing-mark', 'dialer-proxy', 'certificate', 'private-key', 'ca-file', 'plugin', 'executable', 'file-descriptor', 'dialer-ip4p-convert']) {
     const value = input();
     value.sources = [{ id: 'snapshot', proxies: [{ name: 'untrusted', type: 'socks5', options: { [key]: 'SENSITIVE_NODE_CONTENT' } }] }];
     fails(value, 'PROTECTED_FIELD');
