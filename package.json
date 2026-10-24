@@ -21,6 +21,7 @@
     "test:deployment": "node --experimental-strip-types --test tests/deployment-plan.test.ts",
     "test:release-stage": "node --experimental-strip-types --test tests/release-stage.test.ts",
     "test:network-plan": "node --experimental-strip-types --test tests/network-plan.test.ts",
+    "test:network-config": "node --experimental-strip-types --test tests/network-config.test.ts",
     "test:protocol-live": "node --experimental-strip-types --test tests/protocol-live.test.ts",
     "test:protocol-reality-live": "node --experimental-strip-types --test tests/protocol-reality-live.test.ts",
     "test:subscription-yaml": "node --experimental-strip-types --test tests/subscription-yaml.test.ts",

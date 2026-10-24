@@ -70,6 +70,7 @@ npm run test:runtime
 npm run test:deployment
 npm run test:release-stage
 npm run test:network-plan
+npm run test:network-config
 npm run test:management
 npm run test:git-tree
 npm run test:subscription-yaml
@@ -81,6 +82,8 @@ npm run test:overlay
 `test:release-stage` 使用合成 Git 仓库、普通运行依赖副本和假核心，检查装配的来源、排除规则、摘要、不覆盖与失败清理。真实载荷装配使用干净 HEAD、固定核心和已构建的 Server/UI，方法见[发行装配说明](release-staging.md)。载荷不含部署设置、管理员凭据或本地资料；装配通过仍不表示服务已经安装。
 
 `test:network-plan` 检查[单终端网络资源契约](../packages/network/README.md)，包括 guard／黑洞／证据／激活顺序、强制回程、mark 保留位、共享 UID 下的逐 socket 核心身份和严格部署输入。它只渲染计划，不执行 nft、ip、sysctl 或系统服务；通过不能作为内核、网关或终端出口的就绪证据。
+
+`test:network-config` 验证[网关候选预览](../packages/network/config.md)的核心配置与网络部署代次绑定，以及当前显式运行适配器拒绝这种候选的边界。提供固定 `COPROXY_TEST_MIHOMO` 时另执行真实语法校验；该命令不启动 TUN。独立 namespace 已验证固定核心的 TUN 与精确 DNS 监听能力，尚未完成受限执行者、cgroup 过滤或终端转发验收。
 
 真实核心另由显式命令执行：`COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo npm run test:core-live`。未提供路径时该项跳过，不下载程序；提供的二进制必须匹配 review.json 中已审阅的解压后摘要。测试执行真实 `-t`、PID/控制端口核验、回环 HTTP 转发和 UDP/TCP localhost DNS；只用高位 loopback 端口和临时私有目录，不安装服务或修改系统网络，不代表外部节点、WAN DNS 或透明接管验收。
 
