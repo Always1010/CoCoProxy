@@ -28,6 +28,7 @@
     "test:network-identity": "node --experimental-strip-types --test tests/network-identity.test.ts",
     "test:network-transaction": "node --experimental-strip-types --test tests/network-transaction.test.ts",
     "test:network-probe": "node --experimental-strip-types --test tests/network-probe.test.ts",
+    "test:network-readback": "node --experimental-strip-types --test tests/network-readback.test.ts",
     "test:protocol-live": "node --experimental-strip-types --test tests/protocol-live.test.ts",
     "test:protocol-reality-live": "node --experimental-strip-types --test tests/protocol-reality-live.test.ts",
     "test:subscription-yaml": "node --experimental-strip-types --test tests/subscription-yaml.test.ts",
