@@ -1,2 +1,10 @@
 # 当前工作区的环境配置、调试记录和环境专用脚本。
 /.local/
+
+# 构建输入、依赖、缓存和产物不属于项目源码。
+node_modules/
+.cache/
+.output/
+dist/
+coverage/
+*.tsbuildinfo

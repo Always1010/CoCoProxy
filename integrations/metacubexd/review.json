@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "status": "source-reviewed-not-integrated",
+  "reviewedOn": "2026-10-25",
+  "management": {
+    "repository": "https://github.com/MetaCubeX/metacubexd",
+    "tag": "v1.273.1",
+    "commit": "8bbc8f58fef71148a94fb5c0ff808f79b057337d",
+    "packageManager": "pnpm@10.34.1",
+    "agentPackage": "private-workspace-package",
+    "defaultMihomoVersion": "v1.19.27",
+    "runtimeVerified": false
+  },
+  "coreCandidate": {
+    "repository": "https://github.com/MetaCubeX/mihomo",
+    "tag": "v1.19.33",
+    "commit": "3f27ef39f8c96bbfbc8b0b9bb10f5c9ef60149d8",
+    "asset": "mihomo-linux-arm64-v1.19.33.gz",
+    "downloadUrl": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-arm64-v1.19.33.gz",
+    "releaseReportedSha256": "ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187",
+    "metadataUrl": "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/v1.19.33",
+    "downloadedAssetVerified": false,
+    "runtimeVerified": false
+  },
+  "compatibilityVerified": false
+}

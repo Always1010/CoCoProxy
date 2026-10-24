@@ -9,8 +9,10 @@ Coproxy 面向 Linux 网关，提供可通过浏览器管理的局域网代理�
 ## 项目文档
 
 - [项目目标与技术方案](docs/project-plan.md)：范围、开源选型、架构、实施阶段与验收要求。
+- [软件架构](docs/architecture.md)：模块归属、配置事务和网关协作边界。
 - [首批开发与验证](docs/development.md)：已实现范围、CLI、针对性检查和后续关卡。
 - [配置模块](packages/config/README.md)与[事务模块](packages/transaction/README.md)：内部 API、保护边界和恢复约束。
+- [MetaCubeXD 适配记录](integrations/metacubexd/README.md)：固定源码引用、待接入入口和候选版本差异。
 - [与接入路由器的协作](docs/router-cooperation.md)：通用职责、流量和解析边界，以及本机联调资料的范围说明。
 - [协作规则](AGENTS.md)：源码归属、本地资料和提交约定。
 
