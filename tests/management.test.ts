@@ -10,6 +10,7 @@ import { createManagementApplication } from '../packages/management/application.
 import { loadManagementService, stripControllerMount } from '../packages/management/service.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
 import { canonicalJson, compileConfig } from '../packages/config/index.ts';
+import type { JsonObject } from '../packages/config/index.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
 
 const origin = 'https://management.example';
@@ -187,7 +188,8 @@ test('authenticated saves pin server deployment, stage captures a revision and o
   const mismatch = await call('/api/coproxy/apply', 'POST', { generation: foreign.id, expectedActive: staged.generation });
   assert.equal(mismatch.status, 409);
   assert.equal((await mismatch.json()).error.code, 'DEPLOYMENT_MISMATCH');
-  for (const bypass of [{ listeners: [] }, { iptables: { enable: true } }]) {
+  const bypasses: JsonObject[] = [{ listeners: [] }, { iptables: { enable: true } }];
+  for (const bypass of bypasses) {
     const invalidConfig = { ...compileConfig({ schemaVersion: 1, deployment, policy }).config, ...bypass };
     const invalidDigest = createHash('sha256').update(canonicalJson(invalidConfig)).digest('hex');
     await new FileTransactionStore(f.state).stage({ id: invalidDigest, sha256: invalidDigest, config: invalidConfig });
