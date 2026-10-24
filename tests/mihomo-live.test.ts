@@ -105,7 +105,8 @@ test('reviewed real Mihomo validates and serves loopback HTTP proxy plus UDP/TCP
     const domain = 'localhost';
     const candidate = compileConfig({ schemaVersion: 1, deployment: { mixedPort, controllerPort, dnsPort,
       controllerSecret: randomBytes(32).toString('hex'), bootstrapResolvers: ['127.0.0.1'] },
-    policy: { rules: ['MATCH,DIRECT'], 'log-level': 'error' } });
+    policy: { rules: ['MATCH,DIRECT'], 'log-level': 'error',
+      'proxy-groups': [{ name: 'synthetic-select', type: 'select', proxies: ['DIRECT', 'REJECT'] }] } });
     const stateDirectory = join(root, 'state');
     const staged = await new FileTransactionStore(stateDirectory).stage(candidate);
     const home = join(stateDirectory, 'core-home');
@@ -149,6 +150,12 @@ test('reviewed real Mihomo validates and serves loopback HTTP proxy plus UDP/TCP
       assert.equal(response.headers.get('x-coproxy-generation'), candidate.id);
       assert.ok(!(await response.text()).includes(candidate.config.secret as string));
     }
+    const selected = await controller.fetch(new Request('https://management.example/proxies/synthetic-select', {
+      method: 'PUT', headers: { 'content-type': 'application/json', 'if-match': candidate.id }, body: JSON.stringify({ name: 'REJECT' }),
+    }));
+    assert.equal(selected.status, 204);
+    const selection = await controller.fetch(new Request('https://management.example/proxies/synthetic-select'));
+    assert.equal((await selection.json()).now, 'REJECT');
     let firstFrame!: (text: string) => void;
     const received = new Promise<string>(resolve => { firstFrame = resolve; });
     const cleanup = await controller.relay(new Request('https://management.example/traffic?interval=0.1'), {
