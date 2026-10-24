@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "stateDirectory": "/var/lib/coproxy",
+  "binaryPath": "/opt/coproxy/bin/mihomo",
+  "binarySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "systemctlPath": "/usr/bin/systemctl",
+  "nodePath": "/usr/bin/node",
+  "sourceDirectory": "/opt/coproxy/source",
+  "settingsPath": "/etc/coproxy/runtime.json",
+  "unitPath": "/etc/systemd/system/coproxy-mihomo.service",
+  "serviceUid": 12345
+}
