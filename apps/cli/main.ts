@@ -7,6 +7,9 @@ import { canonicalJson, compileConfig, ConfigError } from '../../packages/config
 import { validateWithMihomo, MihomoValidationError } from '../../packages/mihomo/validator.ts';
 import { FileTransactionStore, TransactionError } from '../../packages/transaction/index.ts';
 import { DraftStore, DraftError } from '../../packages/drafts/index.ts';
+import { SubscriptionStore, SubscriptionError } from '../../packages/subscriptions/index.ts';
+import { HttpsSnapshotClient, SnapshotHttpError } from '../../packages/subscriptions/http.ts';
+import type { HttpsClientOptions } from '../../packages/subscriptions/http.ts';
 
 const MAX_INPUT_BYTES = 1_048_576;
 const HELP = [
@@ -19,6 +22,10 @@ const HELP = [
   'draft-save --input <JSON> --state-dir <绝对路径> --expected-revision <整数>  保存草稿',
   'draft-status --state-dir <绝对路径>  读取草稿版本，不输出配置',
   'draft-stage --state-dir <绝对路径> --expected-revision <整数>  暂存所选草稿版本',
+  'source-configure --input <来源JSON> --state-dir <绝对路径> --expected-revision <整数>',
+  'source-status --source-id <ID> --state-dir <绝对路径>  读取来源状态',
+  'source-refresh --source-id <ID> --state-dir <绝对路径> --expected-revision <整数> --policy <HTTPS策略JSON>',
+  'source-stage --source-id <ID> --input <基础配置JSON> --state-dir <绝对路径> --expected-revision <整数>',
   '',
   '输入/配置可能包含凭据；正常输出仅包含摘要和状态。',
   '不自动下载核心、安装依赖、启动服务或修改系统网络。',
@@ -44,6 +51,10 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     'draft-save': ['--input', '--state-dir', '--expected-revision'],
     'draft-status': ['--state-dir'],
     'draft-stage': ['--state-dir', '--expected-revision'],
+    'source-configure': ['--input', '--state-dir', '--expected-revision'],
+    'source-status': ['--source-id', '--state-dir'],
+    'source-refresh': ['--source-id', '--state-dir', '--expected-revision', '--policy'],
+    'source-stage': ['--source-id', '--input', '--state-dir', '--expected-revision'],
   };
   const command = args[0];
   if (!Object.hasOwn(allowed, command)) throw new CliError('UNKNOWN_COMMAND');
@@ -111,6 +122,16 @@ async function writePrivateOutput(path: string, content: string): Promise<void> 
   }
 }
 
+function httpsPolicy(input: unknown): HttpsClientOptions {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new CliError('INVALID_HTTPS_POLICY');
+  const policy = input as Record<string, unknown>;
+  const keys = ['allowedOrigins', 'allowPrivateAddresses', 'timeoutMs', 'maxBytes', 'maxRedirects', 'ca'];
+  if (Object.keys(policy).some(key => !keys.includes(key))
+      || (policy.allowPrivateAddresses !== undefined && typeof policy.allowPrivateAddresses !== 'boolean')
+      || (policy.ca !== undefined && (typeof policy.ca !== 'string' || policy.ca.length > 32_768))) throw new CliError('INVALID_HTTPS_POLICY');
+  return policy as unknown as HttpsClientOptions;
+}
+
 export async function runCli(args: string[]): Promise<Record<string, unknown> | string> {
   const { command, flags } = parse(args);
   if (command === 'help') return HELP;
@@ -129,6 +150,27 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
     const candidate = compileConfig(captured.input);
     await new FileTransactionStore(flags.get('--state-dir')!).stage(candidate);
     return { generation: candidate.id, stagedRevision: captured.revision, staged: true, runtime: 'not_started' };
+  }
+  if (command.startsWith('source-')) {
+    const state = flags.get('--state-dir')!;
+    const sourceId = flags.get('--source-id')!;
+    if (command === 'source-status') return { source: await new SubscriptionStore(state).status(sourceId) };
+    const expected = revision(flags.get('--expected-revision')!);
+    if (command === 'source-configure') {
+      return { ...await new SubscriptionStore(state).configure(await readInput(flags.get('--input')!) as { id: string; url: string }, expected) };
+    }
+    if (command === 'source-refresh') {
+      const client = new HttpsSnapshotClient(httpsPolicy(await readInput(flags.get('--policy')!)));
+      return { ...await new SubscriptionStore(state, client).refresh(sourceId, expected) };
+    }
+    const base = await readInput(flags.get('--input')!);
+    if (!base || typeof base !== 'object' || Array.isArray(base)) throw new CliError('INVALID_INPUT');
+    const envelope = base as Record<string, unknown>;
+    if (envelope.sources !== undefined && !Array.isArray(envelope.sources)) throw new CliError('INVALID_INPUT');
+    const captured = await new SubscriptionStore(state).snapshot(sourceId, expected);
+    const candidate = compileConfig({ ...envelope, sources: [...(envelope.sources as unknown[] ?? []), { id: captured.id, proxies: captured.proxies }] });
+    await new FileTransactionStore(state).stage(candidate);
+    return { generation: candidate.id, sourceId, capturedSourceRevision: expected, snapshotRevision: captured.sourceRevision, staged: true, runtime: 'not_started' };
   }
   const candidate = compileConfig(await readInput(flags.get('--input')!));
   if (command === 'compile') {
@@ -152,7 +194,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     // No raw exception, paths, core output or JSON fragments in public errors.
     let code = 'IO_ERROR';
     if (error instanceof CliError || error instanceof ConfigError
-        || error instanceof MihomoValidationError || error instanceof TransactionError || error instanceof DraftError) {
+        || error instanceof MihomoValidationError || error instanceof TransactionError || error instanceof DraftError
+        || error instanceof SubscriptionError || error instanceof SnapshotHttpError) {
       code = error.code;
     } else if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') code = 'OUTPUT_EXISTS';
     process.stderr.write(JSON.stringify({ error: { code } }) + '\n');

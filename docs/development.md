@@ -1,6 +1,6 @@
 # 首批开发与验证
 
-当前实现是显式代理配置编译、版本化草稿、不可变候选存储、配置事务状态机与开发 CLI。没有真实运行适配器、网页服务或 LAN 接管；不把通过测试替身得到的结果作为真实核心或终端验收。
+当前实现是显式代理配置编译、版本化草稿、订阅节点快照、不可变候选存储、配置事务状态机与开发 CLI。没有真实运行适配器、网页服务或 LAN 接管；不把通过测试替身得到的结果作为真实核心或终端验收。
 
 ## 环境与命令
 
@@ -32,17 +32,33 @@ npm run cli -- validate --input /absolute/private/input.json --mihomo-bin /absol
 
 CLI 入口提供上述编译、校验、候选和草稿命令。事务模块的 apply/recover 是供后续真实运行适配器调用的内部 API，目前不作为 CLI 命令开放，不提供模拟成功的生产适配器。
 
+## 订阅节点快照
+
+来源定义和 HTTPS 许可策略都从私有 JSON 文件读取，避免将查询令牌暴露在命令行。以下占位路径需换成自己的私有文件，格式参考 examples/subscription-source.json 和 examples/subscription-policy.json；示例域名不是实际来源。
+
+```sh
+npm run cli -- source-configure --input /absolute/private/source.json --state-dir "$PWD/.local/runtime/store" --expected-revision 0
+npm run cli -- source-status --source-id example-feed --state-dir "$PWD/.local/runtime/store"
+npm run cli -- source-refresh --source-id example-feed --state-dir "$PWD/.local/runtime/store" --expected-revision 1 --policy /absolute/private/https-policy.json
+npm run cli -- source-stage --source-id example-feed --input /absolute/private/base.json --state-dir "$PWD/.local/runtime/store" --expected-revision 2
+```
+
+来源操作返回 revision。成功刷新、304 和持久化的刷新失败都会递增它；后续操作必须使用实际返回/重新读取的 revision。失败保留上次接受的快照；更换 URL 后旧快照暂不可用于新定义。source-stage 捕获指定来源版本，将节点加入基础配置的 sources 后编译并暂存，返回捕获的来源 revision 和快照 revision。基础策略需引用所需节点，重复来源或节点名由编译器拒绝。该命令不应用配置，也不把其他同时发生的草稿保存视为已应用。
+
+当前解码只接受严格的 JSON `{proxies:[...]}`，不支持完整 YAML 订阅、远程策略组、规则或脚本。存储层可注入受审查的 decoder，后续通过上游 YAML 适配接入；此处不把临时输入格式宣称为完整订阅兼容。详见[订阅模块](../packages/subscriptions/README.md)与[HTTP 客户端](../packages/subscriptions/http.md)。
+
 ## 针对性检查
 
 ```sh
 npm run test:config
 npm run test:transaction
 npm run test:drafts
+npm run test:subscriptions
 npm run test:mihomo
 npm run test:cli
 ```
 
-按修改范围选择命令。配置测试覆盖保护边界和稳定摘要；事务测试覆盖完整性、CAS、回滚、中断、跨进程锁、Linux 死锁核验和权限；核心包装器测试使用明确的可执行测试替身，验证进程参数、输出上限、超时和脱敏；CLI 测试验证真实命令行进程、私有输出和不伪报运行状态。不能用这些测试宣称协议节点、核心实际语法、网关接管、DNS 或终端出口已验收。
+按修改范围选择命令。配置测试覆盖保护边界和稳定摘要；事务测试覆盖完整性、CAS、回滚、中断、跨进程锁、Linux 死锁核验和权限；草稿与订阅测试覆盖保存/刷新并发、旧回包、失败数据保留和输入完整性，HTTPS 测试用已有 openssl 生成临时证书并执行实际 TLS 握手；核心包装器测试使用明确的可执行测试替身；CLI 测试验证真实命令行进程、私有输出和不伪报运行状态。不能用这些测试宣称协议节点、核心实际语法、网关接管、DNS 或终端出口已验收。
 
 ## 后续实施顺序
 

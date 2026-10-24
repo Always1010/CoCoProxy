@@ -1,0 +1,4 @@
+{
+  "id": "example-feed",
+  "url": "https://subscription.example/nodes.json?token=EXAMPLE_ONLY_REPLACE_BEFORE_USE"
+}

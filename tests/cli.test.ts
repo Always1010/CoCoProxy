@@ -131,3 +131,27 @@ test('draft CLI separates revisioned saving, capture and runtime application', a
     assert.equal(JSON.parse(invalid.stderr).error.code, 'INVALID_REVISION');
   });
 });
+
+test('source CLI keeps URL credentials out of arguments and public metadata', async () => {
+  await fixture(async (dir) => {
+    const state = join(dir, 'source-store');
+    const file = join(dir, 'source.json');
+    await writeFile(file, JSON.stringify({ id: 'primary', url: 'https://subscription.example/nodes?token=' + syntheticSecret }), { mode: 0o600 });
+    const result = await cli(['source-configure', '--input', file, '--state-dir', state, '--expected-revision', '0']);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).revision, 1);
+    assert.ok(!result.stdout.includes(syntheticSecret));
+    const status = await cli(['source-status', '--source-id', 'primary', '--state-dir', state]);
+    assert.equal(status.code, 0, status.stderr);
+    assert.ok(!status.stdout.includes(syntheticSecret));
+    const conflict = await cli(['source-configure', '--input', file, '--state-dir', state, '--expected-revision', '0']);
+    assert.equal(JSON.parse(conflict.stderr).error.code, 'SOURCE_CONFLICT');
+    const pending = await cli(['source-stage', '--source-id', 'primary', '--input', file, '--state-dir', state, '--expected-revision', '1']);
+    assert.equal(JSON.parse(pending.stderr).error.code, 'SOURCE_PENDING');
+    const policy = join(dir, 'policy.json');
+    await writeFile(policy, JSON.stringify({ allowedOrigins: [], rejectUnauthorized: false }));
+    const denied = await cli(['source-refresh', '--source-id', 'primary', '--state-dir', state, '--expected-revision', '1', '--policy', policy]);
+    assert.equal(JSON.parse(denied.stderr).error.code, 'INVALID_HTTPS_POLICY');
+    assert.equal(JSON.parse((await cli(['source-status', '--source-id', 'primary', '--state-dir', state])).stdout).source.revision, 1);
+  });
+});

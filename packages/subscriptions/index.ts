@@ -1,0 +1,303 @@
+import { createHash } from 'node:crypto';
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { canonicalJson, compileConfig } from '../config/index.ts';
+import type { JsonObject } from '../config/index.ts';
+import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
+import { PrivateFileError, privateDirectory, inspectPrivateDirectory, privateRead, atomicWrite } from '../storage/private-files.ts';
+
+export type SnapshotResponse =
+  | { status: 'modified'; text: string; etag?: string }
+  | { status: 'not-modified' };
+export interface SnapshotClient {
+  fetch(url: string, previous?: { etag?: string }): Promise<SnapshotResponse>;
+}
+export type SnapshotDecoder = (text: string) => unknown;
+export type SnapshotFailure = 'SOURCE_FETCH_FAILED' | 'SNAPSHOT_DECODE_FAILED' |
+  'SNAPSHOT_UNSUPPORTED' | 'SNAPSHOT_INVALID' | 'SNAPSHOT_LIMIT' | 'SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT';
+export type SourceMetadata = {
+  id: string;
+  revision: number;
+  snapshotDigest: string | null;
+  snapshotRevision: number | null;
+  snapshotCurrent: boolean;
+  lastAttempt: string | null;
+  lastError: SnapshotFailure | null;
+};
+export type SourceSnapshot = { id: string; proxies: JsonObject[]; sha256: string; sourceRevision: number };
+
+/** Public errors deliberately omit URLs, upstream diagnostics and node fields. */
+export class SubscriptionError extends Error {
+  readonly code: string;
+  constructor(code: string) { super(code); this.name = 'SubscriptionError'; this.code = code; }
+}
+
+type StoredSnapshot = { proxies: JsonObject[]; sha256: string; sourceRevision: number; definitionRevision: number };
+type SourceRecord = {
+  version: 1;
+  id: string;
+  url: string;
+  revision: number;
+  definitionRevision: number;
+  snapshot: StoredSnapshot | null;
+  etag: string | null;
+  lastAttempt: string | null;
+  lastError: SnapshotFailure | null;
+};
+type RefreshResult = { status: 'modified'; proxies: JsonObject[]; sha256: string; etag: string | null } |
+  { status: 'not-modified' } | { status: 'failed'; code: SnapshotFailure };
+const MAX_BYTES = 4 * 1024 * 1024;
+const MAX_SOURCES = 100;
+const digestPattern = /^[a-f0-9]{64}$/;
+const sourcePattern = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+const validEtag = (value: unknown): value is string => typeof value === 'string' && value.length <= 512 && !/[^\x20-\x7e]/.test(value);
+const failureCodes = new Set<SnapshotFailure>([
+  'SOURCE_FETCH_FAILED', 'SNAPSHOT_DECODE_FAILED', 'SNAPSHOT_UNSUPPORTED',
+  'SNAPSHOT_INVALID', 'SNAPSHOT_LIMIT', 'SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT',
+]);
+const fail = (code: string): never => { throw new TransactionError(code); };
+const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
+const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 1;
+const hash = (proxies: JsonObject[]): string => createHash('sha256').update(canonicalJson({ proxies }), 'utf8').digest('hex');
+const timestamp = (value: unknown): value is string | null => value === null ||
+  (typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)));
+
+function checkId(id: unknown): asserts id is string {
+  if (typeof id !== 'string' || !sourcePattern.test(id)) fail('INVALID_SOURCE_ID');
+}
+
+function checkRevision(value: unknown): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) >= Number.MAX_SAFE_INTEGER) fail('INVALID_SOURCE_REVISION');
+}
+
+function checkUrl(value: unknown): asserts value is string {
+  if (typeof value !== 'string' || value.length > 8192 || /[\s\u0000-\u001f\u007f\\]/.test(value)) fail('INVALID_SOURCE_URL');
+  let url: URL;
+  try { url = new URL(value); } catch { fail('INVALID_SOURCE_URL'); }
+  if (url.protocol !== 'https:' || !url.hostname || url.username || url.password || value.includes('#') ||
+      !/^https:\/\//i.test(value) || value.slice(value.indexOf('//') + 2).split(/[/?]/, 1)[0].includes('@')) fail('INVALID_SOURCE_URL');
+}
+
+function sourceDefinition(input: unknown): Readonly<{ id: string; url: string }> {
+  if (!input || typeof input !== 'object' || Array.isArray(input) ||
+      (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)) fail('INVALID_SOURCE_INPUT');
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  if (Reflect.ownKeys(descriptors).length !== 2 || Reflect.ownKeys(descriptors).some(key => key !== 'id' && key !== 'url')) fail('INVALID_SOURCE_INPUT');
+  const id = descriptors.id;
+  const url = descriptors.url;
+  if (!id?.enumerable || !('value' in id) || !url?.enumerable || !('value' in url)) fail('INVALID_SOURCE_INPUT');
+  checkId(id.value); checkUrl(url.value);
+  return Object.freeze({ id: id.value, url: url.value });
+}
+
+function metadata(record: SourceRecord): SourceMetadata {
+  return {
+    id: record.id, revision: record.revision,
+    snapshotDigest: record.snapshot?.sha256 ?? null,
+    snapshotRevision: record.snapshot?.sourceRevision ?? null,
+    snapshotCurrent: record.snapshot !== null && record.snapshot.definitionRevision === record.definitionRevision,
+    lastAttempt: record.lastAttempt, lastError: record.lastError,
+  };
+}
+
+/** Strict node snapshots only; full subscriptions and providers are unsupported. */
+function validateSnapshot(value: unknown): JsonObject[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) fail('SNAPSHOT_INVALID');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).some(key => key !== 'proxies')) fail('SNAPSHOT_UNSUPPORTED');
+  const entry = descriptors.proxies;
+  if (!entry || !entry.enumerable || !('value' in entry) || !Array.isArray(entry.value)) fail('SNAPSHOT_INVALID');
+  try {
+    // Only the copied proxies are retained. This candidate is neither staged nor applied.
+    const candidate = compileConfig({
+      schemaVersion: 1,
+      deployment: { mixedPort: 18080, controllerPort: 18081, dnsPort: 18053,
+        controllerSecret: 'offline-subscription-validation', bootstrapResolvers: ['192.0.2.53'] },
+      policy: { rules: ['MATCH,REJECT'] },
+      sources: [{ id: 'subscription', proxies: entry.value }],
+    });
+    return candidate.config.proxies as JsonObject[];
+  } catch { fail('SNAPSHOT_INVALID'); }
+}
+
+function exactKeys(value: object, keys: string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every(key => keys.includes(key));
+}
+
+/** One private atomic record per source; mutations share the runtime store lock. */
+export class SubscriptionStore {
+  readonly root: string;
+  private readonly files: FileTransactionStore;
+  private readonly client: SnapshotClient | undefined;
+  private readonly decoder: SnapshotDecoder;
+
+  constructor(root: string, client?: SnapshotClient, decoder: SnapshotDecoder = JSON.parse) {
+    try { this.files = new FileTransactionStore(root); }
+    catch { throw new SubscriptionError('INVALID_STORE_PATH'); }
+    this.root = this.files.root;
+    this.client = client;
+    this.decoder = decoder;
+  }
+
+  private async protect<T>(operation: () => Promise<T>): Promise<T> {
+    try { return await operation(); }
+    catch (error) {
+      if (error instanceof TransactionError || error instanceof PrivateFileError) throw new SubscriptionError(error.code);
+      throw new SubscriptionError('STORE_IO');
+    }
+  }
+
+  private async read(id: string): Promise<SourceRecord | null> {
+    checkId(id);
+    try {
+      await inspectPrivateDirectory(this.root);
+      await inspectPrivateDirectory(join(this.root, 'subscriptions'));
+    } catch (error) { if (errno(error) === 'ENOENT') return null; throw error; }
+    let record: SourceRecord;
+    try { record = JSON.parse(await privateRead(join(this.root, 'subscriptions', `${id}.json`), MAX_BYTES)); }
+    catch (error) {
+      if (errno(error) === 'ENOENT') return null;
+      if (error instanceof PrivateFileError) throw error;
+      fail('SOURCE_CORRUPT');
+    }
+    try {
+      if (!record || !exactKeys(record, ['version', 'id', 'url', 'revision', 'definitionRevision', 'snapshot', 'etag', 'lastAttempt', 'lastError']) ||
+          record.version !== 1 || record.id !== id || !revision(record.revision) || !revision(record.definitionRevision) ||
+          record.definitionRevision > record.revision || !timestamp(record.lastAttempt) ||
+          !(record.lastError === null || failureCodes.has(record.lastError)) ||
+          !(record.etag === null || validEtag(record.etag))) fail('SOURCE_CORRUPT');
+      checkUrl(record.url);
+      if (record.snapshot !== null) {
+        const snapshot = record.snapshot;
+        if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision']) ||
+            !Array.isArray(snapshot.proxies) || !digestPattern.test(snapshot.sha256) ||
+            !revision(snapshot.sourceRevision) || snapshot.sourceRevision > record.revision ||
+            !revision(snapshot.definitionRevision) || snapshot.definitionRevision > snapshot.sourceRevision ||
+            snapshot.definitionRevision > record.definitionRevision || hash(snapshot.proxies) !== snapshot.sha256) fail('SOURCE_CORRUPT');
+        validateSnapshot({ proxies: snapshot.proxies });
+      }
+      if (record.etag !== null && !metadata(record).snapshotCurrent) fail('SOURCE_CORRUPT');
+      return record;
+    } catch { fail('SOURCE_CORRUPT'); }
+  }
+
+  private async write(record: SourceRecord): Promise<void> {
+    const contents = JSON.stringify(record);
+    if (Buffer.byteLength(contents, 'utf8') > MAX_BYTES) fail('SNAPSHOT_LIMIT');
+    await privateDirectory(join(this.root, 'subscriptions'));
+    await atomicWrite(join(this.root, 'subscriptions'), `${record.id}.json`, contents);
+  }
+
+  async configure(input: { id: string; url: string }, expectedRevision: number): Promise<SourceMetadata> {
+    return this.protect(async () => {
+      // Capture validated primitives before the first asynchronous boundary.
+      const definition = sourceDefinition(input);
+      checkRevision(expectedRevision);
+      return this.files.exclusive(async () => {
+        const previous = await this.read(definition.id);
+        if ((previous?.revision ?? 0) !== expectedRevision) fail('SOURCE_CONFLICT');
+        if (!previous) {
+          await privateDirectory(join(this.root, 'subscriptions'));
+          const entries = await readdir(join(this.root, 'subscriptions'));
+          if (entries.length >= MAX_SOURCES) fail('SOURCE_LIMIT');
+        }
+        const changed = previous?.url !== definition.url;
+        const record: SourceRecord = {
+          version: 1, id: definition.id, url: definition.url, revision: expectedRevision + 1,
+          definitionRevision: changed ? expectedRevision + 1 : previous!.definitionRevision,
+          snapshot: previous?.snapshot ?? null, etag: changed ? null : previous!.etag,
+          lastAttempt: changed ? null : previous!.lastAttempt, lastError: changed ? null : previous!.lastError,
+        };
+        if (Buffer.byteLength(JSON.stringify(record), 'utf8') > MAX_BYTES - 256) fail('SNAPSHOT_LIMIT');
+        await this.write(record);
+        return metadata(record);
+      });
+    });
+  }
+
+  async status(id: string): Promise<SourceMetadata | null> {
+    return this.protect(async () => {
+      const record = await this.read(id);
+      return record ? metadata(record) : null;
+    });
+  }
+
+  /** Private compiler input; callers must protect these credentials from logs. */
+  async snapshot(id: string, expectedRevision?: number): Promise<SourceSnapshot> {
+    return this.protect(async () => {
+      if (expectedRevision !== undefined) checkRevision(expectedRevision);
+      const record = await this.read(id);
+      if (!record) fail('SOURCE_NOT_FOUND');
+      if (expectedRevision !== undefined && record.revision !== expectedRevision) fail('SOURCE_CONFLICT');
+      if (!record.snapshot || !metadata(record).snapshotCurrent) fail('SOURCE_PENDING');
+      return { id, proxies: record.snapshot.proxies, sha256: record.snapshot.sha256, sourceRevision: record.snapshot.sourceRevision };
+    });
+  }
+
+  private async download(record: SourceRecord): Promise<RefreshResult> {
+    let response: SnapshotResponse;
+    try { response = await this.client!.fetch(record.url, record.etag === null ? undefined : { etag: record.etag }); }
+    catch { return { status: 'failed', code: 'SOURCE_FETCH_FAILED' }; }
+    if (!response || typeof response !== 'object') return { status: 'failed', code: 'SOURCE_FETCH_FAILED' };
+    if (response.status === 'not-modified') {
+      if (!record.snapshot || !metadata(record).snapshotCurrent || record.etag === null) {
+        return { status: 'failed', code: 'SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT' };
+      }
+      return { status: 'not-modified' };
+    }
+    if (response.status !== 'modified' || typeof response.text !== 'string') {
+      return { status: 'failed', code: 'SOURCE_FETCH_FAILED' };
+    }
+    if (Buffer.byteLength(response.text, 'utf8') > MAX_BYTES) return { status: 'failed', code: 'SNAPSHOT_LIMIT' };
+    let decoded: unknown;
+    try { decoded = this.decoder(response.text); }
+    catch { return { status: 'failed', code: 'SNAPSHOT_DECODE_FAILED' }; }
+    try {
+      const proxies = validateSnapshot(decoded);
+      // An unusable cache validator must not discard an otherwise valid body.
+      return { status: 'modified', proxies, sha256: hash(proxies), etag: validEtag(response.etag) ? response.etag : null };
+    } catch (error) {
+      return { status: 'failed', code: error instanceof TransactionError && error.code === 'SNAPSHOT_UNSUPPORTED' ? 'SNAPSHOT_UNSUPPORTED' : 'SNAPSHOT_INVALID' };
+    }
+  }
+
+  async refresh(id: string, expectedRevision: number): Promise<SourceMetadata> {
+    return this.protect(async () => {
+      checkId(id); checkRevision(expectedRevision);
+      if (!this.client) fail('SOURCE_CLIENT_REQUIRED');
+      const captured = await this.read(id);
+      if (!captured) fail('SOURCE_NOT_FOUND');
+      if (captured.revision !== expectedRevision) fail('SOURCE_CONFLICT');
+      // Download and decoding never occupy the shared transaction lock.
+      const result = await this.download(captured);
+      const committed = await this.files.exclusive(async () => {
+        const current = await this.read(id);
+        if (!current || current.revision !== captured.revision) fail('SOURCE_CONFLICT');
+        current.revision++;
+        current.lastAttempt = new Date().toISOString();
+        current.lastError = result.status === 'failed' ? result.code : null;
+        if (result.status === 'modified') {
+          const updated: SourceRecord = {
+            ...current,
+            snapshot: { proxies: result.proxies, sha256: result.sha256, sourceRevision: current.revision,
+              definitionRevision: current.definitionRevision },
+            etag: result.etag,
+          };
+          // Reserve room for a later fixed failure code without dropping the
+          // accepted snapshot merely to record that an upstream refresh failed.
+          if (Buffer.byteLength(JSON.stringify(updated), 'utf8') <= MAX_BYTES - 256) {
+            await this.write(updated);
+            return { metadata: metadata(updated), failure: null };
+          }
+          current.lastError = 'SNAPSHOT_LIMIT';
+        }
+        await this.write(current);
+        return { metadata: metadata(current), failure: current.lastError };
+      });
+      if (committed.failure) fail(committed.failure);
+      return committed.metadata;
+    });
+  }
+}
