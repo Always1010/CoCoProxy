@@ -34,11 +34,25 @@
 
 生产 `apply` 强制 deployment 显式提供与核心不同的 `management.serviceUid`，在任何存储初始化或驱动调用前拒绝缺省的历史计划。绑定独立管理身份的计划还强制 `NetworkIdentity.management` 包含管理 PID/start time、计划 UID、固定管理 ControlGroup 和与核心不同的完整 cgroup ID。管理进程身份在探针前后及激活边界同样不得改变；管理 UID 属于不可静默修改的保护范围。历史共享 UID 计划只保留解析、fixture 及阻断恢复兼容，不能用来执行新的生产启用。
 
-`NetworkEvidence` 还须逐项证明 DNS socket 所有权、真实 UDP/TCP DNS 查询、TUN 所有权、链路／邻居、socket 出口 mark 及拥有资源读回。协调器拒绝未知或缺失字段、accessor、Proxy、假值、错误身份、不同 scope、未来时间和超过 30 秒的证据。证据不会保存成下一次的许可；系统时钟后退也拒绝推进。
+`NetworkEvidence` 还须逐项证明 DNS socket 所有权、真实 UDP/TCP DNS 查询、TUN 所有权、链路／邻居、socket 出口 mark 及拥有资源读回。协调器拒绝未知或缺失字段、accessor、Proxy、假值、错误身份、不同 scope、未来时间和超过 30 秒的新观察证据。证据不持久保存成下一次启动的许可；系统时钟后退也拒绝推进。
 
 协调器校验证据之后还需要同步 mutation fence。因此 native `authorizeCore`、`activate` 和实际探针必须在使用时自行重核当前身份、鲜度与事实，不能省略为“上层刚刚查过”。内核资源状态本身由驱动证明，不能把这些接口中的 true 字段暴露为浏览器可提交的授权。
 
-`scope` 在构造时固定，fixture 驱动及 journal 始终保留 fixture 来源，不能转成 production 使用。该标签是受信代码间的来源约束，不是对恶意进程内 JavaScript 的防护。`status()` 的 readiness 永远为 unknown 或 fault；只有本次完整应用返回短期 localReady 观察，且 `terminalPath` 仍为 unverified，不推导真实终端验收。
+`scope` 在构造时固定，fixture 驱动及 journal 始终保留 fixture 来源，不能转成 production 使用。该标签是受信代码间的来源约束，不是对恶意进程内 JavaScript 的防护。`status()` 的 readiness 永远为 unknown 或 fault；完整应用及成功的运行检查各自返回本次短期 localReady 观察，且 `terminalPath` 仍为 unverified，不推导真实终端验收。
+
+## 运行检查
+
+`checkActive(): Promise<NetworkActiveCheckResult>` 返回 `{ status, observation }`。`observation` 为 `null` 或 `{ scope, localReady: true, checkedAt, generation, planSha256, terminalPath: 'unverified' }`；`status` 继续只表达历史状态。成功检查不写 journal、不增加 revision，也不更新历史 `updatedAt`。
+
+成功 `apply` 仅在该协调器实例的内存中保留最终核验的精确 `NetworkEvidence` 和 ready revision。运行检查要求同一实例的恢复／应用门闩、ready 阶段、journal revision 与保留证明全部一致，持唯一写入锁依次执行：
+
+1. `assertSettled(plan)` 独立证明先前操作全部收敛；不能将保存的 `unsettled: false` 当作证明。
+2. `observeIdentity(plan)` 取得新鲜身份，与最初激活的 boot ID、核心及管理 PID/start time、cgroup 等身份逐项比较。
+3. `verifyActive(plan, originalEvidence)` 重新探测全部 active 资源与链路，核验返回的新鲜证据仍绑定最初激活身份。
+
+保留证明的时间戳只标识原始激活时刻；检查不把旧证明当作当前观察，也不以其逐渐过期为由拒绝长期运行，当前身份与返回证据必须各自满足 30 秒鲜度。核心或管理身份替换、过期／不完整的新证据及已知收敛的驱动失败都会先重申 guard，再保留黑洞、撤回 capture／分类并读回阻断，保存 `NETWORK_HEALTH_FAILED` 并拒绝本次检查。未知或未收敛的驱动异常，以及任何失败的 `assertSettled`，进入 `NETWORK_COMMAND_UNSETTLED` fault，不并发执行阻断变更。
+
+检查失败、contain、recover、通过预检后开始的新 apply 和锁释放失败都会清除内存激活证明。未取得锁的 busy 检查不撤销正在成功检查的证明；参数、CAS、保护范围拒绝及已收敛的只读预检失败也保留原运行证明。未知预检异常则撤销证明与门闩。新实例遇到历史 ready，即使 journal 完好，也拒绝检查并要求显式 recover／apply；恢复本身只返回 blocked，不能生成激活证明。blocked 或 fault 的检查返回 `observation: null`，不调用驱动、不尝试重新激活。没有 journal 时同样只读返回 null，不初始化目录；读取失败不调用驱动。检查本身不负责定时调度，调用者不得用检查失败自动重新 apply。
 
 ## 失败与启动恢复
 
@@ -59,4 +73,4 @@
 
 ## 针对性验证
 
-`npm run test:network-transaction` 使用明确 fixture driver 检查顺序、持久 fence、CAS、启动门闩、保护范围、证据失效、身份更换、异常收敛与 scope。Linux 非 root 子项实际通过目录权限模拟 ready 写入失败，另在独立进程的变更中途强制终止，验证文件锁与恢复记录；这些是真实文件/进程语义，不涉及真实网络或 systemd。固定内核资源驱动及服务集成仍需后续验证。
+`npm run test:network-transaction` 使用明确 fixture driver 检查顺序、持久 fence、CAS、启动门闩、保护范围、证据失效、身份更换、异常收敛与 scope，并验证长期运行的新鲜检查、journal 字节和 revision 不变、历史 ready 拒绝、检查故障阻断／未收敛分类及门闩失效。Linux 非 root 子项实际通过目录权限模拟 ready 写入失败，另在独立进程的变更中途强制终止，验证文件锁与恢复记录；这些是真实文件/进程语义，不涉及真实网络或 systemd。固定内核资源驱动及服务集成仍需后续验证。
