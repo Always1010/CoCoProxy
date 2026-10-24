@@ -33,6 +33,7 @@
     "test:network-kernel": "node --experimental-strip-types --test tests/network-kernel-live.test.ts",
     "test:network-identity": "node --experimental-strip-types --test tests/network-identity.test.ts",
     "test:network-link": "node --experimental-strip-types --test tests/network-link.test.ts",
+    "test:network-sockets": "node --experimental-strip-types --test tests/network-sockets.test.ts",
     "test:network-transaction": "node --experimental-strip-types --test tests/network-transaction.test.ts",
     "test:network-probe": "node --experimental-strip-types --test tests/network-probe.test.ts",
     "test:network-readback": "node --experimental-strip-types --test tests/network-readback.test.ts",

@@ -38,6 +38,8 @@
 
 [网关核心监管入口](../packages/network/runtime.md)另使用完整重编译的私有网关候选、root-owned 选择与操作 journal、固定 systemctl 的启动屏障，以及独立 manager job/PID/cgroup 收敛核验。其独立 unit 通过 systemd credential 向非 root 核心传递配置快照，关闭自动重启，要求每次 stop/start 前证明 blocked。[详细运行观察](../packages/network/core-observer.md)补充实际 executable、精确 argv、核心 mount view 中的 credential 代次与认证 controller 监听归属。监管组件已通过明确 fixture 模型的持久协议测试和实际 unit 语法解析，观察组件已通过合成 reader 验证；尚未安装服务或与完整网络驱动连接，不能据此授权生产转发。
 
+[socket 来源观察](../packages/network/sockets.md)通过 INET_DIAG 将核心/管理 FD 与实际 socket mark、UID、cgroup ID 交叉核对，并要求两个专用 UID 无额外进程；缺失属性、未知 FD 和未连接 UDP 都不能补造成就绪事实。[链路观察](../packages/network/link.md)另核对接口、网关地址、carrier、当前邻居及带 mark 的出口路由。四角色隔离测试已读取真实核心 socket mark/cgroup 与真实 iproute2 输出；该环境复用既有 UID/cgroup，只证明局部内核事实。生产驱动仍需统一专用管理身份与规则保护范围，再组合全部证据、持久资源和唯一核心监管者。
+
 AlwayRoute 负责受管来源、外部代理开关、基础网络和独立关闭恢复。Coproxy 只负责收到流量后的接管、DNS、分流与自身状态，不写路由器配置。首轮通过本地诊断对齐必要语义，再按实际缺口增加带认证的最小只读接口。
 
 本地域名由路由器处理，受管公网解析交给受限 Coproxy DNS；bootstrap 不经过同一转发循环。单终端阶段不能替换所有终端共用的解析路径。加密 DNS、来源丢失后的设备策略和未支持地址族单独声明能力。

@@ -81,6 +81,7 @@ npm run test:network-resource-journal
 npm run test:network-rules
 npm run test:network-identity
 npm run test:network-link
+npm run test:network-sockets
 npm run test:network-transaction
 npm run test:network-probe
 npm run test:network-readback
@@ -108,13 +109,15 @@ npm run test:overlay
 
 `test:network-link` 检查[入口链路与邻居观察](../packages/network/link.md)的真实字段形状、接口/地址一致性、carrier、MTU、精确邻居 MAC、REACHABLE/PERMANENT 状态和 mark/source/UID 路由选择；合成 reader 不修改或刷新邻居。真实 iproute2 输出另在四角色隔离测试中核对，不能推导生产物理入口或真实终端已验收。
 
+`test:network-sockets` 检查[逐 socket 来源观察](../packages/network/sockets.md)的实际 mark/cgroup 字段、FD 完整分类、专用 UID 占用、DNS listener、临时连接替换和缺失证据拒绝。生产读取通过 root 控制的 Python 3 标准库辅助程序完成，Python 是该网关组件的显式运行依赖，不自动安装；未连接 UDP 或 TCP SYN pending 不计作上游连接，连接存在也不等于业务探针通过。
+
 ```sh
 COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo COPROXY_TEST_SING_BOX=/absolute/private/reviewed/sing-box npm run test:network-kernel
 ```
 
 `test:network-fenced-command` 在 Linux 验证持久 ACK 之前不启动工具、父进程退出与工具后代收敛、私有文件／目录和结果绑定、显式 namespace fixture 来源，以及空 stdin 的快速退出竞态。`test:network-resource-journal` 验证只读不初始化、锁、revision、冻结、重复键与恶意对象拒绝、文件单链接和权限边界。这些是内部组件验证，不替代实际内核路径。
 
-`test:network-kernel` 核对两个固定官方二进制的摘要，使用已有 Python、ip、nft、unshare 和可用 TUN，在新建 user/network namespace 子树内建立客户端、路由器、网关和源站。网关初始阶段通过正式持久资源会话执行并回读，而非手工应用规则；实际 DNS/TUN 探针核验核心 FD 并发出查询。测试验证同配置外部路由不被认领、额外 nft 规则污染被拒绝、ip/nft 完成但资源凭据仍 pending 后重启、采纳状态后的第二次强制终止、active 重启和 TUN 消失后恢复 blocked、过期实例拒绝，以及 core-only 本地 DNS 与客户端阻断、active 透明 HTTP／UDP、真实 DNS UDP／TCP、DNS 回答驱动的业务访问、域名 REJECT、保留源地址与经路由器回程；还检查错误 MAC、无 mark 同 UID socket、核心退出、独立删除 TUN 及唯一节点退出后的故障阻断。没有 DIRECT 回退。
+`test:network-kernel` 核对两个固定官方二进制的摘要，使用已有 Python、ip、nft、unshare 和可用 TUN，在新建 user/network namespace 子树内建立客户端、路由器、网关和源站。网关初始阶段通过正式持久资源会话执行并回读，而非手工应用规则；实际 DNS/TUN 探针核验核心 FD 并发出查询。另通过正式链路观察读取真实 iproute2 输出、通过 INET_DIAG 核对核心 FD 的实际 mark 与 socket cgroup ID；隔离拓扑显式设置合成路由器 PERMANENT 邻居，避免依赖 ARP 状态机计时，不代表生产邻居已核验。测试验证同配置外部路由不被认领、额外 nft 规则污染被拒绝、ip/nft 完成但资源凭据仍 pending 后重启、采纳状态后的第二次强制终止、active 重启和 TUN 消失后恢复 blocked、过期实例拒绝，以及 core-only 本地 DNS 与客户端阻断、active 透明 HTTP／UDP、真实 DNS UDP／TCP、DNS 回答驱动的业务访问、域名 REJECT、保留源地址与经路由器回程；还检查错误 MAC、无 mark 同 UID socket、核心退出、独立删除 TUN 及唯一节点退出后的故障阻断。没有 DIRECT 回退。
 
 该 fixture 仅在已核验隔离的 namespace 内准备转发参数、veth 和路由，不配置主机网络，不安装 systemd 服务。它复用现有真实 cgroup 并禁用管理例外，资源会话尚未连接持久协调器，因此不证明生产管理／核心两个服务 cgroup 的隔离、完整服务恢复或真实设备联调。pending 与第二次崩溃使用可信 fixture 明确设置持久边界，不声称覆盖任意时刻的掉电。清理既核对原进程组，也核对专用 user namespace 中的工具子进程。缺少显式二进制路径或 Linux 前提时跳过，不能计为通过；已提供路径后，隔离能力或实际路径失败会报错。测试不会自行安装缺少的软件。
 

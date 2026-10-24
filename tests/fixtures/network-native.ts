@@ -1,5 +1,5 @@
 /** Real operations only in the kernel test's verified new user/network tree. */
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -9,6 +9,8 @@ import { fencedNetworkCommandDigest, runFencedNetworkCommand } from '../../packa
 import { ResourceJournal } from '../../packages/network/resource-journal.ts';
 import { renderNetworkPlan } from '../../packages/network/plan.ts';
 import { observeNetworkReadinessFixture } from '../../packages/network/probe.ts';
+import { observeNetworkLinkFixture } from '../../packages/network/link.ts';
+import { readSocketDiagnosticsFixture } from '../../packages/network/sockets.ts';
 
 const [root, outerUser, outerNet] = process.argv.slice(2);
 const input = JSON.parse(await readFile(join(root, 'input.json'), 'utf8'));
@@ -86,6 +88,20 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         try { await session.installBlocked(); value = false; }
         catch (error) { value = (error as { code?: string }).code === 'NETWORK_SESSION_UNAVAILABLE'; }
       }
+    }
+    else if (request.op === 'link-probe') {
+      const observed = await observeNetworkLinkFixture(plan, { ipBinary: '/usr/sbin/ip', probeIPv4: '198.51.100.2' });
+      value = observed.verified && observed.scope === 'fixture' && Object.values(observed.checks).every(Boolean);
+    }
+    else if (request.op === 'socket-probe') {
+      const observed = await readSocketDiagnosticsFixture([request.corePid], { outerUser, outerNet });
+      const cgroupID = String((await stat('/sys/fs/cgroup' + input.blocked.cgroups.core.path, { bigint: true })).ino);
+      const sockets = observed.sockets;
+      value = observed.unknown.length === 0 && sockets.length >= 2 && sockets.every(socket =>
+        socket.uid === plan.deployment.core.serviceUid && socket.cgroupID === cgroupID && socket.mark !== null &&
+        (socket.localAddress === '127.0.0.1' ? true : ((socket.mark & plan.deployment.marks.mask) >>> 0) === plan.deployment.marks.egress)) &&
+        ['tcp', 'udp'].every(protocol => sockets.some(socket => socket.protocol === protocol &&
+          socket.localAddress === plan.deployment.gatewayIPv4 && socket.localPort === plan.deployment.dnsPort && socket.remotePort === 0));
     }
     else if (request.op === 'probe') {
       const stat = await readFile(`/proc/${request.corePid}/stat`, 'utf8');
