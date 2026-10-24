@@ -13,6 +13,8 @@ export interface NetworkPlanInput {
   schemaVersion: 1;
   generation: string;
   core: { serviceUid: number; binarySha256: string; unitSha256: string };
+  /** Omission retains the legacy shared-UID proposal for isolated fixtures. */
+  management?: { serviceUid: number };
   ingressInterface: string;
   gatewayIPv4: string;
   prefixLength: number;
@@ -69,8 +71,8 @@ function snapshot(input: unknown): Data {
   return copy(input, 0);
 }
 
-function record(value: Data | undefined, keys: readonly string[]): DataObject {
-  if (!value || typeof value !== 'object' || Object.keys(value).length !== keys.length ||
+function record(value: Data | undefined, keys: readonly string[], optional: readonly string[] = []): DataObject {
+  if (!value || typeof value !== 'object' || Object.keys(value).some(key => !keys.includes(key) && !optional.includes(key)) ||
     keys.some(key => !Object.hasOwn(value, key))) fail();
   return value;
 }
@@ -97,9 +99,13 @@ function ipv4(value: Data | undefined): { text: string; number: number } {
 
 function validate(input: unknown): NetworkPlanInput {
   const root = record(snapshot(input), ['schemaVersion', 'generation', 'core', 'ingressInterface',
-    'gatewayIPv4', 'prefixLength', 'routerIPv4', 'routerMAC', 'clientIPv4', 'dnsPort', 'tun', 'marks', 'tables', 'priorities']);
+    'gatewayIPv4', 'prefixLength', 'routerIPv4', 'routerMAC', 'clientIPv4', 'dnsPort', 'tun', 'marks', 'tables', 'priorities'], ['management']);
   if (root.schemaVersion !== 1) fail();
   const core = record(root.core, ['serviceUid', 'binarySha256', 'unitSha256']);
+  const serviceUid = integer(core.serviceUid, 1, 4_294_967_294);
+  const management = Object.hasOwn(root, 'management')
+    ? { serviceUid: integer(record(root.management, ['serviceUid']).serviceUid, 1, 4_294_967_294) } : undefined;
+  if (management?.serviceUid === serviceUid) fail();
   const tun = record(root.tun, ['interface', 'mtu']);
   const marks = record(root.marks, ['mask', ...roles]);
   const tables = record(root.tables, roles);
@@ -128,8 +134,9 @@ function validate(input: unknown): NetworkPlanInput {
     !(priorityValues[2] < priorityValues[1] && priorityValues[1] < priorityValues[0])) fail();
   return {
     schemaVersion: 1, generation: digest(root.generation),
-    core: { serviceUid: integer(core.serviceUid, 1, 4_294_967_294),
+    core: { serviceUid,
       binarySha256: digest(core.binarySha256), unitSha256: digest(core.unitSha256) },
+    ...(management ? { management } : {}),
     ingressInterface, gatewayIPv4: gateway.text, prefixLength, routerIPv4: router.text,
     routerMAC: root.routerMAC, clientIPv4: client.text, dnsPort: integer(root.dnsPort, 1024, 65535),
     tun: { interface: 'coproxy-tun', mtu: integer(tun.mtu, 1280, 9000) },
@@ -174,7 +181,8 @@ function buildPlan(input: unknown) {
     equivalentMechanismRequires: 'prove-every-exempt-socket-originates-from-this-exact-bound-cgroup',
     onUnsupportedOrUnprovable: 'remain-blocked',
   } as const;
-  const binding = { generation, core, coreSocketBinding, planDigestRequired: true, exclusiveWriterRequired: true,
+  const binding = { generation, core, ...(deployment.management ? { management: deployment.management } : {}),
+    coreSocketBinding, planDigestRequired: true, exclusiveWriterRequired: true,
     evidenceMaxAgeMs: 30_000, bindEvidenceTo: ['generation', 'planSha256', 'bootId', 'corePid', 'corePidStartTime',
       'coreUnitControlGroup', 'coreCgroupKernelId'] } as const;
   const dns = {

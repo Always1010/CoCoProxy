@@ -21,7 +21,10 @@ function identity(plan: NetworkPlan, now: number): NetworkIdentity {
   return { scope: 'fixture', generation: plan.deployment.generation, planSha256: plan.sha256, checkedAt: now,
     bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', corePid: 101, corePidStartTime: '12345',
     coreUnitControlGroup: '/system.slice/coproxy-mihomo.service', coreCgroupKernelId: '9007199254740999',
-    ...plan.deployment.core, processAndUnitVerified: true, socketCgroupIsolationVerified: true };
+    ...plan.deployment.core, processAndUnitVerified: true, socketCgroupIsolationVerified: true,
+    ...(plan.deployment.management ? { management: { pid: 202, pidStartTime: '23456',
+      serviceUid: plan.deployment.management.serviceUid, unitControlGroup: '/system.slice/coproxy-management.service' as const,
+      cgroupKernelId: '9007199254741000' } } : {}) };
 }
 function evidence(bound: NetworkIdentity, now: number): NetworkEvidence {
   return { identity: { ...bound, checkedAt: now }, checkedAt: now, checks: { dnsSocketsOwned: true,
@@ -111,6 +114,49 @@ test('read-only preflight failures preserve state and enabled protection scope c
     }
     assert.equal(f.calls.length, before);
     assert.equal((await manager.status()).revision, applied.status.revision);
+  } finally { await f.close(); }
+});
+
+test('independent management identity is required, remains bound through activation and cannot change protection domain', async () => {
+  const f = await fixture();
+  try {
+    const plan = { ...input(), management: { serviceUid: 12346 } }, manager = f.coordinator();
+    const applied = await manager.apply(plan, 0);
+    assert.equal(applied.observation.localReady, true);
+    const before = f.calls.length;
+    await assert.rejects(manager.apply({ ...plan, management: { serviceUid: 12347 } }, applied.status.revision), reject('NETWORK_PROTECTION_CHANGE_UNSUPPORTED'));
+    await assert.rejects(manager.apply(input(), applied.status.revision), reject('NETWORK_PROTECTION_CHANGE_UNSUPPORTED'));
+    assert.equal(f.calls.length, before);
+  } finally { await f.close(); }
+  for (const kind of ['missing', 'uid', 'pid', 'start', 'cgroup', 'unit', 'restarted'] as const) {
+    const f = await fixture();
+    try {
+      f.driver.probe = async (_, bound) => {
+        const proof = evidence(bound, f.clock.now), management = { ...bound.management! };
+        if (kind === 'uid') management.serviceUid++;
+        if (kind === 'pid') management.pid = bound.corePid;
+        if (kind === 'start') management.pidStartTime = '0';
+        if (kind === 'cgroup') management.cgroupKernelId = bound.coreCgroupKernelId;
+        if (kind === 'unit') management.unitControlGroup = '/system.slice/other.service' as typeof management.unitControlGroup;
+        if (kind === 'restarted') { management.pid++; management.pidStartTime = '34567'; }
+        if (kind === 'missing') delete proof.identity.management;
+        else proof.identity.management = management;
+        return proof;
+      };
+      await assert.rejects(f.coordinator().apply({ ...input(), management: { serviceUid: 12346 } }, 0), reject('NETWORK_APPLY_FAILED'), kind);
+      assert.equal(f.calls.includes('activate'), false, kind);
+      assert.deepEqual(f.calls.slice(-2), ['guard', 'retain'], kind);
+    } finally { await f.close(); }
+  }
+});
+
+test('production apply cannot use a legacy plan without an independent management identity', async () => {
+  const f = await fixture();
+  try {
+    const manager = new NetworkCoordinator(f.root, { ...f.driver, scope: 'production' });
+    await assert.rejects(manager.apply(input(), 0), reject('NETWORK_INPUT_INVALID'));
+    assert.deepEqual(f.calls, []);
+    await assert.rejects(lstat(f.root), { code: 'ENOENT' });
   } finally { await f.close(); }
 });
 

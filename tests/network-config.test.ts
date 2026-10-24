@@ -41,6 +41,10 @@ test('gateway preview binds complete network deployment to the canonical core ge
   assert.notEqual(changedMac, preview.candidate.id);
   source.network.tables.capture++;
   assert.notEqual(compileGatewayPreview(source).candidate.id, changedMac);
+  const separate = compileGatewayPreview({ ...input(), network: { ...input().network, management: { serviceUid: 12346 } } });
+  assert.notEqual(separate.candidate.id, preview.candidate.id);
+  assert.deepEqual(separate.networkPlan.deployment.management, { serviceUid: 12346 });
+  assert.deepEqual((separate.candidate.config['x-coproxy-network'] as Record<string, unknown>).management, { serviceUid: 12346 });
   const explicit = compileConfig(input().base);
   assert.equal(explicit.config['x-coproxy-network'], undefined);
   assert.deepEqual(explicit.config.tun, { enable: false });
@@ -86,5 +90,6 @@ test('reviewed core parses the protected gateway preview without starting TUN or
     const review = JSON.parse(await readFile(new URL('../integrations/metacubexd/review.json', import.meta.url), 'utf8'));
     assert.equal(GATEWAY_CORE_SHA256, review.coreCandidate.binarySha256);
     assert.equal(createHash('sha256').update(await readFile(binaryPath)).digest('hex'), GATEWAY_CORE_SHA256);
-    await validateWithMihomo(compileGatewayPreview(input()).candidate, { binaryPath });
+    await validateWithMihomo(compileGatewayPreview({ ...input(), network: { ...input().network,
+      management: { serviceUid: 12346 } } }).candidate, { binaryPath });
   });

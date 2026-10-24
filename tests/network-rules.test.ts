@@ -116,6 +116,40 @@ test('socket cgroup origin is mandatory, shared uid management has a separate un
   } }).scope, 'fixture');
 });
 
+test('dedicated management UID is cgroup-bound and falls closed outside its unmarked management exception', () => {
+  const source = { ...input(), management: { serviceUid: 12346 } };
+  for (const mode of ['blocked', 'core-only', 'active'] as const) {
+    for (const fixtureCgroups of [undefined, { core: '/fixture/core', management: '/fixture/management' },
+      { core: '/fixture/core', management: null }]) {
+      const options = { mode, ...(fixtureCgroups ? { fixtureCgroups } : {}) };
+      const rendered = renderNetworkRules(source, options);
+      const legacy = renderNetworkRules(input(), options);
+      assert.equal(rendered.planSha256, renderNetworkPlan(source).sha256);
+      assert.notEqual(rendered.planSha256, legacy.planSha256);
+      assert.deepEqual(rendered.ip, legacy.ip, 'management must not change core routing');
+      assert.deepEqual(rendered.nft.data, legacy.nft.data, 'management must not change classification or manufacture marks');
+      const output = rendered.nft.guard.replace.split('\n').filter(line => line.startsWith('add rule inet coproxy_guard output_guard '));
+      const managementRules = output.filter(line => line.includes('meta skuid 12346'));
+      const allowed = managementRules.filter(line => line.endsWith('accept'));
+      const managementPath = fixtureCgroups?.management === null ? null : fixtureCgroups?.management ?? '/system.slice/coproxy-management.service';
+      assert.equal(allowed.length, mode !== 'blocked' && managementPath ? 2 : 0);
+      for (const protocol of ['tcp', 'udp']) {
+        if (allowed.length) assert.ok(allowed.some(line => line.endsWith(
+          `meta skuid 12346 socket cgroupv2 level 2 "${managementPath!.slice(1)}" meta mark & 0x0000ff00 == 0 meta l4proto ${protocol} th sport != 15353 accept`)));
+      }
+      assert.equal(managementRules.at(-1), 'add rule inet coproxy_guard output_guard meta skuid 12346 drop',
+        'wrong/unknown cgroups, reserved marks, DNS source port and other protocols cannot fall through policy accept');
+      assert.equal(managementRules.length, allowed.length + 1, 'no other management UID exception');
+      assert.equal(output.at(-1), managementRules.at(-1));
+      assert.equal(output[0], 'add rule inet coproxy_guard output_guard oifname "lo" return');
+      assert.deepEqual(output.filter(line => !line.includes('meta skuid 12346')),
+        legacy.nft.guard.replace.split('\n').filter(line => line.startsWith('add rule inet coproxy_guard output_guard ') &&
+          !line.includes('socket cgroupv2 level 2 "' + managementPath?.slice(1) + '"')),
+        'all core exceptions and the core UID drop remain identical');
+    }
+  }
+});
+
 test('DNS allows only exact IPv4 listener delivered by router for the two permitted sources', () => {
   const script = renderNetworkRules(input(), { mode: 'active' }).nft.guard.replace;
   const lines = script.split('\n').filter(line => line.includes('input_guard') && line.endsWith('accept'));

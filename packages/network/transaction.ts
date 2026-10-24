@@ -35,6 +35,9 @@ export interface NetworkIdentity {
   unitSha256: string;
   processAndUnitVerified: true;
   socketCgroupIsolationVerified: true;
+  /** Required whenever the plan binds an independent management identity. */
+  management?: { pid: number; pidStartTime: string; serviceUid: number;
+    unitControlGroup: '/system.slice/coproxy-management.service'; cgroupKernelId: string };
 }
 const checks = ['dnsSocketsOwned', 'dnsUdpQuery', 'dnsTcpQuery', 'tunOwned', 'linkAndNeighbour',
   'socketEgressMark', 'ownedResources'] as const;
@@ -223,6 +226,7 @@ export class NetworkCoordinator {
     const keys = ['scope', 'generation', 'planSha256', 'checkedAt', 'bootId', 'corePid', 'corePidStartTime',
       'coreUnitControlGroup', 'coreCgroupKernelId', 'serviceUid', 'binarySha256', 'unitSha256',
       'processAndUnitVerified', 'socketCgroupIsolationVerified'];
+    if (plan.deployment.management) keys.push('management');
     const value = fields(input, keys), now = this.now();
     this.fresh(value.checkedAt, now);
     if (value.scope !== this.scope || value.generation !== plan.deployment.generation || value.planSha256 !== plan.sha256 ||
@@ -234,6 +238,14 @@ export class NetworkCoordinator {
       value.serviceUid !== plan.deployment.core.serviceUid || value.binarySha256 !== plan.deployment.core.binarySha256 ||
       value.unitSha256 !== plan.deployment.core.unitSha256 || value.processAndUnitVerified !== true ||
       value.socketCgroupIsolationVerified !== true) fail('NETWORK_IDENTITY_MISMATCH');
+    if (plan.deployment.management) {
+      const management = fields(value.management, ['pid', 'pidStartTime', 'serviceUid', 'unitControlGroup', 'cgroupKernelId']);
+      if (!Number.isSafeInteger(management.pid) || (management.pid as number) <= 1 || (management.pid as number) > 0x7fff_ffff ||
+        management.pid === value.corePid || typeof management.pidStartTime !== 'string' || !/^[1-9]\d{0,19}$/.test(management.pidStartTime) ||
+        management.serviceUid !== plan.deployment.management.serviceUid || management.serviceUid === value.serviceUid ||
+        management.unitControlGroup !== '/system.slice/coproxy-management.service' || typeof management.cgroupKernelId !== 'string' ||
+        !/^[1-9]\d{0,19}$/.test(management.cgroupKernelId) || management.cgroupKernelId === value.coreCgroupKernelId) fail('NETWORK_IDENTITY_MISMATCH');
+    } else if (this.scope === 'production') fail('NETWORK_IDENTITY_MISMATCH');
     return freeze({ ...value } as unknown as NetworkIdentity);
   }
   private sameIdentity(left: NetworkIdentity, right: NetworkIdentity): void {
@@ -315,7 +327,10 @@ export class NetworkCoordinator {
     scope: NetworkScope; localReady: true; checkedAt: number; generation: string; planSha256: string; terminalPath: 'unverified';
   } }> {
     let plan: NetworkPlan;
-    try { plan = freeze(renderNetworkPlan(input)); } catch { fail('NETWORK_INPUT_INVALID'); }
+    try {
+      plan = freeze(renderNetworkPlan(input));
+      if (this.scope === 'production' && !plan.deployment.management) fail('NETWORK_INPUT_INVALID');
+    } catch { fail('NETWORK_INPUT_INVALID'); }
     if (!revision(expectedRevision)) fail('NETWORK_REVISION_INVALID');
     return this.locked(async () => {
       const previous = await this.store.read();

@@ -85,6 +85,7 @@ function build(input: unknown, rawOptions: unknown) {
   const plan = renderNetworkPlan(input);
   const opt = options(rawOptions);
   const d = plan.deployment;
+  const managementUid = d.management?.serviceUid ?? d.core.serviceUid;
   const active = opt.mode === 'active';
   const coreAllowed = opt.mode !== 'blocked';
   const quote = (text: string) => JSON.stringify(text);
@@ -97,7 +98,8 @@ function build(input: unknown, rawOptions: unknown) {
   const socket = (role: 'core' | 'management') => {
     const cg = opt.cgroups[role];
     if (!cg) return fail();
-    return `meta skuid ${d.core.serviceUid} socket cgroupv2 level ${cg.level} ${quote(cg.path.slice(1))}`;
+    const uid = role === 'management' ? managementUid : d.core.serviceUid;
+    return `meta skuid ${uid} socket cgroupv2 level ${cg.level} ${quote(cg.path.slice(1))}`;
   };
   const allowedIngress = `iifname ${ingress} ether saddr ${d.routerMAC} ip saddr ${client}`;
   const exclusions = `ip daddr != { ${d.gatewayIPv4}, ${d.routerIPv4} }`;
@@ -139,6 +141,10 @@ function build(input: unknown, rawOptions: unknown) {
         ...(opt.cgroups.management ? [`${socket('management')} meta mark & ${mask} == 0 meta l4proto { tcp, udp } th sport != ${d.dnsPort} accept`] : []),
       ] : []),
       `meta skuid ${d.core.serviceUid} drop`,
+      // An independent management UID must not fall through the accept policy
+      // when its socket origin, reserved mark, or protocol is untrusted. Retain
+      // this guard even when an isolated fixture omits the management cgroup.
+      ...(d.management ? [`meta skuid ${managementUid} drop`] : []),
     ] },
   ]);
   const data = table('coproxy_data', [
