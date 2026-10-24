@@ -1,6 +1,6 @@
 # MetaCubeXD 适配记录
 
-状态：固定源码已审查，尚未安装、构建或集成，不是已验证运行组合。机器可读的候选引用见 review.json。
+状态：固定源码与 Git 树已核对，Server/UI 锁文件依赖已安装，尚未完成 Coproxy 网页集成，不是已验证运行组合。固定核心已通过独立回环检查，范围见 review.json。
 
 审查入口为 v1.273.1，其 Git 引用核对为 8bbc8f58fef71148a94fb5c0ff808f79b057337d。后续构建应核对提交，不只信任可移动 tag。上游是 pnpm 工作区；Agent 包是 private workspace 包，不能假定可从 npm 独立安装。根配置指定 pnpm 10.34.1。[根配置](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/package.json)、[Agent 包](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/package.json)
 
@@ -13,6 +13,8 @@
 | packages/agent/src/refresh-apply.ts | 活跃订阅刷新可写入活跃配置并重启 | 手动与自动刷新都必须进入统一暂存、校验与应用事务 |
 | packages/agent/src/http.ts | 路由包括生命周期、配置及能力入口 | 审查所有修改入口；外层独立认证和访问限制；不能直接公开核心凭据 |
 | packages/agent/src/profile-editor.ts | 编辑器有独立的应用逻辑 | 将编辑结果送入受保护编译器，不绕过部署边界 |
+| apps/server/plugins/boot-kernel.ts | 启动时自动创建 Agent、拉起核心并启动刷新调度 | 替换自动启动路径；事务恢复与核心监管仍归本项目/systemd |
+| apps/server/routes/config.js.ts | 动态脚本向浏览器注入 CONTROL_TOKEN 和可选 GITHUB_TOKEN | 替换为无凭据公共配置；管理会话与核心控制凭据分开 |
 
 上述源码见固定提交的 [Agent 入口](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/src/index.ts)、[类型](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/src/types.ts)、[订阅应用](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/src/refresh-apply.ts)、[控制路由](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/src/http.ts)、[编辑器](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/src/profile-editor.ts)。
 
@@ -21,6 +23,14 @@
 ## 构建与验收边界
 
 获准准备依赖后，在项目专用构建目录获取固定提交并使用上游锁文件冻结依赖；先审查安装生命周期脚本，不自动运行任意准备脚本。优先只构建 Server/UI 相关依赖，不安装桌面应用或浏览器资产。上游完整源码、node_modules、缓存和构建输出不进入本仓库源文件或发布源码附件。
+
+已记录固定提交的完整 blob 清单 source-tree.json，共 476 个文件。依赖安装前执行 `node scripts/verify-git-tree.mjs --directory /absolute/build/upstream --manifest integrations/metacubexd/source-tree.json`，按 Git blob 格式核对内容和可执行位，拒绝额外文件及危险路径；验证不会执行上游源码。已有 node_modules 或构建输出的目录不再是干净源树，不能直接用它替代安装前检查。
+
+实际安装使用 pnpm 10.34.1，限定 `--filter '@metacubexd/server...' --filter '@metacubexd/ui...'`，加 `--frozen-lockfile --ignore-scripts`。安装前后 pnpm-lock.yaml 的 SHA-256 一致。UI 的 nuxt prepare 和其他构建步骤在明确的构建命令中执行；安装成功本身不证明这些步骤、网页或 Agent 生命周期已经适配。
+
+固定源码的 UI `generate` 与 Server `build` 已成功，构建前后锁文件摘要一致。字体提供方元数据获取失败及大分块产生了构建警告；字体显示、浏览器功能和上游类型检查仍需验证，不能把产物生成成功当作 UI 已验收。原始 Server 产物尚未启动，需先关闭原监管和凭据暴露路径并挂载本项目接口。
+
+管理认证与受保护事务接口已在 packages/management 实现为可挂载 Fetch 处理器；尚未挂载上游路由，也未替换旧 UI 的直接控制器访问。不得启动未经适配的原 Server 后声称它已采用 systemd 唯一监管。上游原[启动插件](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/apps/server/plugins/boot-kernel.ts)和[动态配置脚本](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/apps/server/routes/config.js.ts)需要一并处理。
 
 上游代码使用 MIT 许可证；候选 Mihomo 的 LICENSE 为 GNU GPL v3。实际分发时核对具体资产和组合，保留对应许可与来源要求；本记录不表示已制作包含这些资产的发行包。[MetaCubeXD LICENSE](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/LICENSE)、[Mihomo LICENSE](https://github.com/MetaCubeX/mihomo/blob/3f27ef39f8c96bbfbc8b0b9bb10f5c9ef60149d8/LICENSE)
 

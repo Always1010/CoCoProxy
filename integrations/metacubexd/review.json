@@ -9,6 +9,17 @@
     "packageManager": "pnpm@10.34.1",
     "agentPackage": "private-workspace-package",
     "defaultMihomoVersion": "v1.19.27",
+    "sourceArchiveSha256": "d4d0d5b98a1b152c319777c196da8d9e11338ce6a729fd8c32a25f7b1eae94e5",
+    "sourceTreeVerified": true,
+    "sourceFileCount": 476,
+    "lockfileSha256": "1282dba8b03fa39b1532be5ba03ce306ca29049c5e89e4135b48a58d3e7a46f2",
+    "dependenciesInstalled": true,
+    "dependencyScope": ["@metacubexd/server...", "@metacubexd/ui..."],
+    "installLifecycleScriptsExecuted": false,
+    "uiBuildVerified": true,
+    "serverBuildVerified": true,
+    "upstreamTypecheckVerified": false,
+    "buildWarnings": ["font-provider-metadata-unavailable", "large-ui-chunks"],
     "runtimeVerified": false
   },
   "coreCandidate": {
@@ -19,8 +30,13 @@
     "downloadUrl": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-arm64-v1.19.33.gz",
     "releaseReportedSha256": "ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187",
     "metadataUrl": "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/v1.19.33",
-    "downloadedAssetVerified": false,
-    "runtimeVerified": false
+    "binarySha256": "8c73570d9a5f388bc2f58eee0b347ccfab84fb3cf1a0f8f2cf5eac7005fbcdc0",
+    "downloadedAssetVerified": true,
+    "runtimeVerified": true,
+    "runtimeScope": "loopback-http-proxy-and-localhost-dns-only",
+    "syntaxVerified": true,
+    "explicitProxySmokeVerified": true,
+    "loopbackDnsSmokeVerified": true
   },
   "compatibilityVerified": false
 }

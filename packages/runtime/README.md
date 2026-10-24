@@ -36,6 +36,6 @@ node --experimental-strip-types apps/cli/main.ts runtime-recover --state-dir /va
 
 `tests/runtime-evidence.test.ts` 使用真实 Linux `/proc` 和 Node HTTP child 验证进程/端口归属、错代次、私有文件、超时和脱敏。`tests/runtime-plan.test.ts` 验证生成计划、exec 保持 PID、输入拒绝和 fault 恢复启动边界。`tests/runtime-systemd.test.ts` 用真实事务存储和显式假的 systemctl 验证提交、超时后残留 job、停止未收敛与拒绝不可信单元，命令包装器另用真实 Node 子进程验证限额。
 
-这些测试不安装或控制真实系统服务，不构成 Mihomo、节点协议、DNS 或网关验收。实际 systemd 沙箱、服务授权、Mihomo `/version` 兼容与重启恢复仍需在获准环境完成。Node `process.execve` 在所用 22.x 文档中仍为实验 API；不支持时启动器明确拒绝，不能退回第二个子进程监管器。
+这些夹具测试不安装或控制真实系统服务，不构成节点协议、WAN DNS 或网关验收。另有显式的 mihomo-live 测试，已验证固定核心的 `/version`、回环 HTTP 代理和 localhost DNS；实际 systemd 沙箱、服务授权与服务重启恢复仍待验证。Node `process.execve` 在所用 22.x 文档中仍为实验 API；不支持时启动器明确拒绝，不能退回第二个子进程监管器。
 
 依据：[systemd service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)、[systemctl job 语义](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html#--job-mode=)、[Node 22 process.execve](https://nodejs.org/docs/latest-v22.x/api/process.html#processexecvefile-args-env)。
