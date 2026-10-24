@@ -47,6 +47,43 @@ test('synthetic identity accepts unrelated binfmt_misc mounts, preserves 64-bit 
   assert.ok(Number.isSafeInteger(result.checkedAt));
 });
 
+test('cgroup identity accepts a separately bound management UID without changing the identity output shape', async () => {
+  const shared = fixture(), separate = fixture();
+  separate.data.set('/proc/202/status', separate.data.get('/proc/202/status')!.replace('12345\t12345\t12345\t12345', '12346\t12346\t12346\t12346'));
+  const before = await observeCoreCgroupFixture(request, shared.reader);
+  const after = await observeCoreCgroupFixture({ ...request, managementUid: 12346 }, separate.reader);
+  assert.equal(after.verified, true); assert.equal(after.scope, 'fixture');
+  assert.deepEqual(after.identity, before.identity);
+  assert.equal(Object.hasOwn(after.identity!, 'managementUid'), false);
+  assert.equal((await observeCoreCgroupFixture({ ...request, managementUid: undefined }, shared.reader)).verified, true);
+});
+
+test('cgroup identity requires every management UID field to match its separately bound identity', async () => {
+  for (let index = 0; index < 4; index++) {
+    const f = fixture(), uids = Array(4).fill('12346'); uids[index] = index === 0 ? '0' : '12345';
+    f.data.set('/proc/202/status', f.data.get('/proc/202/status')!.replace('12345\t12345\t12345\t12345', uids.join('\t')));
+    const result = await observeCoreCgroupFixture({ ...request, managementUid: 12346 }, f.reader);
+    assert.equal(result.verified, false); assert.equal(result.identity, null); assert.equal(result.reason, 'NETWORK_CGROUP_UNVERIFIED');
+  }
+  const f = fixture();
+  assert.equal((await observeCoreCgroupFixture({ ...request, managementUid: 12346 }, f.reader)).verified, false);
+});
+
+test('invalid management UID values and executable input descriptors fail before reading kernel state', async () => {
+  const f = fixture(); let read = false, invoked = false;
+  f.reader.read = async () => { read = true; throw new Error('synthetic private error'); };
+  for (const managementUid of [0, -1, 1.5, NaN, Infinity, 4294967295, Number.MAX_SAFE_INTEGER, '12346', null, {}, 1n]) {
+    const result = await observeCoreCgroupFixture({ ...request, managementUid } as unknown as CoreCgroupRequest, f.reader);
+    assert.equal(result.verified, false); assert.equal(result.identity, null); assert.equal(result.scope, 'fixture');
+  }
+  const accessor = Object.defineProperty({ ...request }, 'managementUid', {
+    enumerable: true, get() { invoked = true; throw new Error('synthetic private error'); },
+  });
+  const proxy = new Proxy({ ...request, managementUid: 12346 }, { ownKeys() { invoked = true; throw new Error('synthetic private error'); } });
+  for (const input of [accessor, proxy]) assert.equal((await observeCoreCgroupFixture(input, f.reader)).verified, false);
+  assert.equal(invoked, false); assert.equal(read, false);
+});
+
 test('wrong mount, namespace, permissions, foreign member and child groups fail closed', async () => {
   const changes: ((f: ReturnType<typeof fixture>) => void)[] = [
     f => { f.reader.fsType = async () => 1n; },
