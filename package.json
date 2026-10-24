@@ -5,6 +5,8 @@
   "type": "module",
   "description": "Linux 代理网关的配置与可靠性集成",
   "engines": { "node": ">=22.18.0" },
+  "dependencies": { "ws": "8.22.0", "yaml": "2.9.0" },
+  "devDependencies": { "@types/node": "22.18.13", "@types/ws": "8.18.2" },
   "scripts": {
     "cli": "node --experimental-strip-types apps/cli/main.ts",
     "typecheck": "node tooling/node_modules/typescript/bin/tsc -p tsconfig.json",
@@ -15,7 +17,8 @@
     "test:mihomo": "node --experimental-strip-types --test tests/mihomo.test.ts",
     "test:cli": "node --experimental-strip-types --test tests/cli.test.ts",
     "test:runtime": "node --experimental-strip-types --test tests/runtime-evidence.test.ts tests/runtime-plan.test.ts tests/runtime-systemd.test.ts",
-    "test:management": "node --experimental-strip-types --test tests/management-auth.test.ts tests/management.test.ts",
+    "test:management": "node --experimental-strip-types --test tests/management-auth.test.ts tests/management.test.ts tests/controller.test.ts",
+    "test:subscription-yaml": "node --experimental-strip-types --test tests/subscription-yaml.test.ts",
     "test:core-live": "node --experimental-strip-types --test tests/mihomo-live.test.ts",
     "test:git-tree": "node --experimental-strip-types --test tests/git-tree.test.ts"
   }
