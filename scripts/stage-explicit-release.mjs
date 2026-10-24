@@ -5,7 +5,7 @@ import { constants } from 'node:fs';
 import { chmod, lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 
 const execute = promisify(execFile);
 const FILE_LIMIT = 256 * 1024 * 1024;
@@ -209,22 +209,29 @@ export async function stageExplicitRelease(options) {
       const paths = await walk(directory);
       if (!paths.some(path => /^(LICENSE|LICENCE|COPYING)(?:\.|$)/iu.test(path))) fail('DEPENDENCY_LICENSE_MISSING');
       const serverCopy = await noLinks(join(serverModules, ...name.split('/')));
-      if (JSON.stringify(await walk(serverCopy)) !== JSON.stringify(paths)) fail('SERVER_DEPENDENCY_MISMATCH');
+      const tracedPaths = new Set(await walk(serverCopy));
+      const rootPaths = new Set(paths);
+      if (!tracedPaths.has('package.json') || [...tracedPaths].some(path => !rootPaths.has(path))) fail('SERVER_DEPENDENCY_MISMATCH');
       for (const path of paths) {
         const bytes = await regular(join(directory, ...safePath(path)));
-        const copied = await regular(join(serverCopy, ...safePath(path)));
-        if (sha256(bytes) !== sha256(copied)) fail('SERVER_DEPENDENCY_MISMATCH');
+        if (tracedPaths.has(path)) {
+          const copied = await regular(join(serverCopy, ...safePath(path)));
+          // Nitro trace prunes unused files and reformats package.json, but must
+          // not alter any package metadata or the bytes of retained code.
+          if (path === 'package.json' ? !isDeepStrictEqual(json(bytes), json(copied)) : sha256(bytes) !== sha256(copied)) fail('SERVER_DEPENDENCY_MISMATCH');
+        }
         if (path.endsWith('.map')) continue;
         await write(`source/node_modules/${name}/${path}`, bytes);
+        await write(`server/.output/server/node_modules/${name}/${path}`, bytes);
       }
       dependencyVersions[name] = { version: entry.version, integrity: entry.integrity };
     }
     for (const area of ['server', 'public']) {
       for (const path of await walk(join(serverDir, area))) {
+        if (area === 'server' && path.startsWith('node_modules/')) continue;
         if (path.endsWith('.map')) continue;
         if (area === 'server' && !/\.(?:mjs|cjs|js|json|wasm)$/iu.test(path)
-          && !/(?:^|\/)(?:LICENSE|LICENCE|COPYING|NOTICE|README)(?:\.|$)/iu.test(path)
-          && !path.startsWith('node_modules/')) fail('SERVER_FILE_UNEXPECTED');
+          && !/(?:^|\/)(?:LICENSE|LICENCE|COPYING|NOTICE|README)(?:\.|$)/iu.test(path)) fail('SERVER_FILE_UNEXPECTED');
         await write(`server/.output/${area}/${path}`, await regular(join(serverDir, area, ...safePath(path))));
       }
     }

@@ -84,6 +84,28 @@ test('rejects source drift and nonignored untracked input while leaving ignored 
   await rejects(stageExplicitRelease(options), 'SOURCE_DIRTY');
 });
 
+test('accepts pruned Nitro traces with semantically unchanged package metadata and restores full locked packages', async t => {
+  const options = await fixture(t);
+  for (const name of ['ws', 'yaml']) {
+    const directory = join(options.serverDir, 'server/node_modules', name);
+    await rm(join(directory, 'LICENSE'));
+    await rm(join(directory, 'dist'), { recursive: true });
+    await writeFile(join(directory, 'package.json'), `${JSON.stringify({ version: '1.0.0', name }, null, 2)}\n`);
+  }
+  await stageExplicitRelease(options);
+  const manifest = JSON.parse(await readFile(join(options.output, 'manifest.json'), 'utf8')) as { files: Array<{path: string; sha256: string}> };
+  for (const name of ['ws', 'yaml']) {
+    for (const path of ['LICENSE', 'dist/index.js', 'package.json']) {
+      const original = await readFile(join(options.runtimeDependencies, name, path));
+      for (const base of ['source/node_modules', 'server/.output/server/node_modules']) {
+        const target = `${base}/${name}/${path}`;
+        assert.deepEqual(await readFile(join(options.output, target)), original);
+        assert.equal(manifest.files.find(file => file.path === target)?.sha256, digest(original));
+      }
+    }
+  }
+});
+
 test('rejects wrong reviewed binary and cleans only its temporary staging directory', async t => {
   const options = await fixture(t);
   await writeFile(options.core, 'unapproved core');
@@ -93,14 +115,16 @@ test('rejects wrong reviewed binary and cleans only its temporary staging direct
   assert.equal(await readFile(options.core, 'utf8'), 'unapproved core');
 });
 
-test('rejects lock drift, unknown runtime modules and incomplete or changed Nitro dependency copies', async t => {
-  for (const variant of ['lock', 'unknown', 'server-extra', 'server-drift'] as const) {
+test('rejects lock drift, unknown runtime modules and changed or unknown Nitro trace files', async t => {
+  for (const variant of ['lock', 'unknown', 'server-extra', 'server-drift', 'server-unknown-file', 'server-metadata'] as const) {
     await t.test(variant, async t => {
       const options = await fixture(t);
       if (variant === 'lock') await writeFile(join(options.runtimeDependencies, '.package-lock.json'), '{"packages":{}}');
       if (variant === 'unknown') await mkdir(join(options.runtimeDependencies, 'unknown'));
       if (variant === 'server-extra') await mkdir(join(options.serverDir, 'server/node_modules/unknown'));
       if (variant === 'server-drift') await writeFile(join(options.serverDir, 'server/node_modules/ws/dist/index.js'), 'drift');
+      if (variant === 'server-unknown-file') await writeFile(join(options.serverDir, 'server/node_modules/ws/unknown.js'), 'unknown');
+      if (variant === 'server-metadata') await writeFile(join(options.serverDir, 'server/node_modules/ws/package.json'), JSON.stringify({ name: 'ws', version: '1.0.1' }));
       await rejects(stageExplicitRelease(options), variant === 'lock' ? 'DEPENDENCY_LOCK_MISMATCH' : variant === 'unknown' ? 'DEPENDENCY_UNKNOWN' : 'SERVER_DEPENDENCY_MISMATCH');
       await assert.rejects(lstat(options.output), { code: 'ENOENT' });
     });
