@@ -19,6 +19,6 @@
 
 核心、链路、socket 和 DNS/TUN 观察的 `commandsSettled` 必须明确为 true。明确未收敛或缺失该字段时抛出脱敏 `NetworkDriverError(false)`，驱动不得并发发出恢复变更；普通检查失败且读取已收敛时抛出 `NetworkDriverError(true)`。未分类依赖异常同样保留未收敛 fence，没有异常原文或嵌套 cause。资源读取的 `NetworkCommandError` 保留其收敛分类；固定只读资源读回中的 `NetworkReadbackError` 和 `NETWORK_RESOURCE_MEMBERSHIP_CHANGED` 仅在查询已经返回后产生，因此作为已收敛的证据失败，允许驱动走显式阻断恢复。会话失效、其他原生错误和未知异常不采用此例外。
 
-这个组件连接了观察来源，尚不等于完整生产 `NetworkDriver`。全局主机预检、核心/网络唯一监管、跨配置代次资源迁移、未知操作的显式收敛阶段、故障监测与阻断、关闭接管及管理入口仍须集成。两轮观察也不是原子快照，驱动在真正 authorize/activate 前必须于独占 fence 内重新使用这些检查，并核验即将修改的资源；公开状态继续不能推导真实终端路径已经验收。
+这个组件已由[固定驱动组合](driver.md)连接主机预检、核心/网络唯一监管、配置代次资源迁移及未知操作显式收敛；[运行监测](watchdog.md)通过协调器持续复核最初激活身份。实际 helper／管理入口、服务失效绑定和关闭接管仍待接入验收。两轮观察不是原子快照，驱动在真正 authorize/activate 前必须于独占 fence 内重新使用这些检查，并核验即将修改的资源；公开状态继续不能推导真实终端路径已经验收。
 
 针对性命令：`node --experimental-strip-types --test tests/network-observer.test.ts`。测试覆盖完整来源组合、固定 fixture scope、核心/管理重启、证据混代、缺失检查、资源阶段不符、过期窗口和未收敛错误传播。没有默认或自动选择的模拟成功 backend。
