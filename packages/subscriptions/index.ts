@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { opendir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonicalJson, compileConfig } from '../config/index.ts';
 import type { JsonObject } from '../config/index.ts';
@@ -221,6 +221,30 @@ export class SubscriptionStore {
     return this.protect(async () => {
       const record = await this.read(id);
       return record ? metadata(record) : null;
+    });
+  }
+
+  /** Read-only inventory; public metadata never includes subscription URLs. */
+  async list(): Promise<SourceMetadata[]> {
+    return this.protect(async () => {
+      try {
+        await inspectPrivateDirectory(this.root);
+        await inspectPrivateDirectory(join(this.root, 'subscriptions'));
+      } catch (error) { if (errno(error) === 'ENOENT') return []; throw error; }
+      const result: SourceMetadata[] = [];
+      let inspected = 0;
+      for await (const entry of await opendir(join(this.root, 'subscriptions'))) {
+        if (++inspected > MAX_SOURCES + 16) fail('SOURCE_LIMIT');
+        const name = entry.name;
+        // Atomic writers may have a private temporary file while a refresh
+        // commits. Ignore only their known temporary naming convention.
+        if (/^\.write-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(name)) continue;
+        if (!entry.isFile() || !name.endsWith('.json') || !sourcePattern.test(name.slice(0, -5))) fail('SOURCE_CORRUPT');
+        const record = await this.read(name.slice(0, -5));
+        if (record !== null) result.push(metadata(record));
+        if (result.length > MAX_SOURCES) fail('SOURCE_LIMIT');
+      }
+      return result.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     });
   }
 
