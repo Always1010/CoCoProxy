@@ -33,6 +33,8 @@ npm run cli -- runtime-apply --state-dir /var/lib/coproxy --runtime-settings /et
 npm run cli -- runtime-recover --state-dir /var/lib/coproxy --runtime-settings /etc/coproxy/runtime.json
 ```
 
+经显式配置迁移后，旧候选可能已不匹配当前部署。普通恢复仍优先恢复前一代；若它进入 `RESTORE_FAILED`，操作者应保持路由器交付关闭并核查故障事务及目标，再显式运行 `runtime-recover-target --state-dir <状态目录> --runtime-settings <当前运行设置> --generation <故障事务目标摘要> --expected-transaction <故障事务ID>`。该入口只允许匹配当前故障的原目标，重新校验不可变候选、实际激活并确认核心后才提交；校验、启动、确认失败或操作中断都保留故障记录，不根据 selection 文件推断成功。
+
 上述路径为合成角色示例，实际服务控制须按已审阅部署执行。none 仅匹配首次 null；后续使用实际 active。历史 status.readiness 为 unknown，runtime-status.core 为实时 `core_only` 观察；无 active 返回 null，不初始化状态目录。
 
 ## 核心身份与受限观察

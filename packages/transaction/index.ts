@@ -304,4 +304,36 @@ export class TransactionManager {
       return publicStatus(state);
     });
   }
+
+  /** Explicit operator recovery when the predecessor no longer matches a
+   * reviewed deployment. Never infer success from selection or persisted intent. */
+  async recoverTarget(expectedTransaction: string, generation: string): Promise<PublicStatus> {
+    return this.store.exclusive(async () => {
+      const state = await this.store.readState();
+      if (!state.pending || state.pending.id !== expectedTransaction || state.pending.target !== generation ||
+          state.desired !== generation) fail('ACTIVE_CONFLICT');
+      if (state.pending.phase !== 'fault' || state.fault !== 'RESTORE_FAILED' || state.active !== null) fail('RECOVERY_REQUIRED');
+      const path = await this.store.readCandidate(generation);
+      const stopUnconfirmed = async () => {
+        try { await this.runtime.restore(null, null); } catch { /* The durable fault remains authoritative. */ }
+      };
+      // Retain the durable fault throughout the attempt. An interruption or
+      // failure must remain recoverable and must never commit an unready core.
+      try { await this.runtime.validate(path); } catch { await stopUnconfirmed(); fail('VALIDATION_FAILED'); }
+      await this.store.readCandidate(generation);
+      try { await this.runtime.activate(path, generation); } catch { await stopUnconfirmed(); fail('ACTIVATION_FAILED'); }
+      let confirmed = false;
+      try { confirmed = await this.runtime.confirm(generation) === true; } catch { /* Preserve the fault. */ }
+      if (!confirmed) { await stopUnconfirmed(); fail('CONFIRM_FAILED'); }
+      await this.store.readCandidate(generation);
+      state.active = generation;
+      state.fault = null;
+      state.checkedAt = new Date().toISOString();
+      state.pending.phase = 'committed';
+      await this.store.writeState(state);
+      state.pending = null;
+      await this.store.writeState(state);
+      return publicStatus(state);
+    });
+  }
 }
