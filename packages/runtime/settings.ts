@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { access, lstat, open, realpath } from 'node:fs/promises';
 import { posix } from 'node:path';
 import { compileConfig, deploymentDnsOptions } from '../config/index.ts';
+import { expandCompilerRuleSets } from '../config/compact-rules.ts';
 import type { Candidate, JsonObject } from '../config/index.ts';
 import { inspectPrivateDirectory, privateRead } from '../storage/private-files.ts';
 import { FileTransactionStore } from '../transaction/index.ts';
@@ -121,7 +122,7 @@ export async function loadRuntimeCandidate(input: RuntimeSettings, generation: s
         !dns || typeof dns !== 'object' || Array.isArray(dns) ||
         typeof dns.listen !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(dns.listen) ||
         typeof config.secret !== 'string') fail('CANDIDATE_UNTRUSTED');
-    const policy = { ...config };
+    const policy = expandCompilerRuleSets(config);
     for (const key of ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer']) delete policy[key];
     const compiled = compileConfig({ schemaVersion: 1, deployment: {
       mixedPort: config['mixed-port'], controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,
