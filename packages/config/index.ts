@@ -94,7 +94,7 @@ function limit(): never {
 }
 
 /** Copy only plain JSON data; do not invoke accessors, toJSON or prototypes. */
-function cloneJson(input: unknown): JsonValue {
+export function cloneConfigJson(input: unknown): JsonValue {
   let values = 0;
   let bytes = 0;
   const ancestors = new Set<object>();
@@ -323,7 +323,7 @@ export function canonicalJson(value: JsonValue): string {
  * The caller must run `mihomo -t` before applying the candidate.
  */
 export function compileConfig(input: unknown): Candidate {
-  const envelope = object(cloneJson(input));
+  const envelope = object(cloneConfigJson(input));
   exactKeys(envelope, new Set(['schemaVersion', 'deployment', 'policy', 'sources']));
   if (envelope.schemaVersion !== 1) invalid();
   const deployment = object(envelope.deployment);

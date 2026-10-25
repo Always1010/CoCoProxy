@@ -38,6 +38,13 @@ test('compiled policy reuse is immutable and invalidates on content even at the 
   assert.throws(() => compile({ dns: {} }));
   assert.equal(compile(policy).id, compile(policy).id);
   assert.equal(compilations, 3); // Failed compilations never replace the last verified entry.
+  compile({ rules: ['MATCH,DIRECT'], extension: null });
+  for (const extension of [Infinity, NaN]) assert.throws(() => compile({ rules: ['MATCH,DIRECT'], extension }), { code: 'INVALID_INPUT' });
+  let invoked = false;
+  const accessor: JsonObject = { rules: ['MATCH,DIRECT'] };
+  Object.defineProperty(accessor, 'extension', { enumerable: true, get: () => { invoked = true; return null; } });
+  assert.throws(() => compile(accessor), { code: 'INVALID_INPUT' });
+  assert.equal(invoked, false);
 });
 
 function settings(changes: Partial<WorkspaceSettings> = {}): WorkspaceSettings {

@@ -1,4 +1,4 @@
-import { canonicalJson, type Candidate, type JsonObject, type JsonValue } from '../config/index.ts';
+import { cloneConfigJson, type Candidate, type JsonObject, type JsonValue } from '../config/index.ts';
 
 /** Share only unfinished work. No observation or failure survives completion. */
 export function singleFlight<T>(operation: () => Promise<T>): () => Promise<T> {
@@ -19,7 +19,9 @@ export function memoizePolicyCompiler(compile: (policy: JsonObject) => Candidate
     }
   };
   return policy => {
-    const key = canonicalJson(policy);
+    // Validate before any cache hit: NaN/Infinity serialize like null, and
+    // normal JSON serialization would otherwise invoke getters or toJSON.
+    const key = JSON.stringify(cloneConfigJson(policy));
     if (previous?.key === key) return previous.value;
     const value = compile(policy);
     freeze(value.config);
