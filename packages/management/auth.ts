@@ -55,7 +55,7 @@ function validPassword(value: unknown): value is string {
     } else if (code >= 0xdc00 && code <= 0xdfff) return false;
   }
   const bytes = Buffer.byteLength(value, 'utf8');
-  return bytes >= 12 && bytes <= 1024;
+  return bytes >= 10 && bytes <= 1024;
 }
 
 function loginInput(input: unknown): { username: string; password: string } {
