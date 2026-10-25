@@ -2,7 +2,7 @@
 import { IconCheck, IconRefresh, IconSettings } from '@tabler/icons-vue'
 import { CoproxyError } from '~/composables/useCoproxy'
 const props = defineProps<{ dirty?: boolean; beforeApply?: () => Promise<void> }>()
-const { view, workspace, busy, error, run, load, save, apply } = useWorkspace()
+const { view, workspace, busy, error, run, load, save, editOverrides, apply } = useWorkspace()
 const profiles = computed(() => view.value?.sources.filter(source => source.kind === 'profile') ?? [])
 const visibleError = computed(() => error.value || (view.value?.error ? new CoproxyError(view.value.error).message : ''))
 
@@ -22,6 +22,13 @@ async function applyCurrent() {
   })
 }
 
+async function resetInvalidSelections() {
+  const names = view.value?.invalidSelections ?? []
+  await run(() => save(settings => {
+    const selections = editOverrides(settings).selections
+    for (const name of names) delete selections[name]
+  }))
+}
 </script>
 
 <template>
@@ -48,6 +55,6 @@ async function applyCurrent() {
         <button class="btn btn-primary btn-sm" :disabled="busy || (!view?.pending && !dirty)" @click="applyCurrent"><IconCheck :size="16" />应用</button>
       </div>
     </div>
-    <div v-if="visibleError" role="alert" class="alert alert-error py-2 text-sm">{{ visibleError }}</div>
+    <div v-if="visibleError" role="alert" class="alert alert-error flex flex-wrap gap-2 py-2 text-sm"><span class="flex-1">{{ visibleError }}</span><button v-if="view?.invalidSelections?.length" class="btn btn-warning btn-sm" :disabled="busy" @click="resetInvalidSelections">重置失效选择</button></div>
   </div>
 </template>
