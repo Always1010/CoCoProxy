@@ -46,6 +46,32 @@ test('routed HTTPS DNS survives native candidate recompilation and preserves leg
     }
   }
 });
+
+test('node resolver policies survive gateway reconstruction and reject intercepted DNS endpoints', () => {
+  const source = base(), deployment = source.deployment as JsonObject;
+  const endpoint = 'https://resolver.example:5443/synthetic-private-token/dns-query';
+  deployment.nodeNameserverPolicy = { 'node.example.test': [endpoint] };
+  const candidate = compileAutomaticGatewayConfig(source, settings()), dns = candidate.config.dns as JsonObject;
+  assert.deepEqual(dns['proxy-server-nameserver-policy'], deployment.nodeNameserverPolicy);
+  assert.deepEqual(dns['proxy-server-nameserver'], ['192.0.2.53']);
+  assert.deepEqual(recompileAutomaticGatewayConfig(candidate.config, settings()), candidate);
+  assert.equal(dns['respect-rules'], undefined);
+  for (const resolver of ['192.0.2.2', 'https://192.0.2.3/dns-query',
+    'HTTPS://192.0.2.3:5443/synthetic-private-token/dns-query', '127.0.0.1', 'https://127.0.0.1/dns-query', '::1']) {
+    deployment.nodeNameserverPolicy = { 'node.example.test': [resolver] };
+    assert.throws(() => compileAutomaticGatewayConfig(source, settings()), (error: unknown) => {
+      assert.ok(error instanceof AutomaticGatewayConfigError);
+      assert.equal(error.message, error.code);
+      assert.ok(!JSON.stringify(error).includes('synthetic-private-token'));
+      return true;
+    });
+  }
+  // CIDR mode intercepts every ordinary LAN client, not just one designated host.
+  const subnet = { ...settings(), clientCIDR: '192.0.2.0/24' } as Record<string, unknown>;
+  delete subnet.clientIPv4;
+  deployment.nodeNameserverPolicy = { 'node.example.test': ['https://192.0.2.99/dns-query'] };
+  assert.throws(() => compileAutomaticGatewayConfig(source, subnet), AutomaticGatewayConfigError);
+});
 const invalid = (run: () => unknown) => assert.throws(run, (error: unknown) =>
   error instanceof AutomaticGatewayConfigError && error.code === 'AUTOMATIC_GATEWAY_CONFIG_INVALID' && error.message === error.code);
 
@@ -218,7 +244,8 @@ test('pinned reviewed core parses native profile without starting listeners or T
     assert.equal(createHash('sha256').update(await readFile(binaryPath)).digest('hex'), AUTOMATIC_GATEWAY_CORE_SHA256);
     await validateWithMihomo(compileAutomaticGatewayConfig(base(), settings()), { binaryPath });
     const source = base();
-    Object.assign(source.deployment as JsonObject, { nameservers: ['https://192.0.2.54/dns-query'], sniffing: true });
+    Object.assign(source.deployment as JsonObject, { nameservers: ['https://192.0.2.54/dns-query'], sniffing: true,
+      nodeNameserverPolicy: { 'node.example.test': ['https://resolver.example:5443/synthetic-private-token/dns-query'] } });
     await validateWithMihomo(compileAutomaticGatewayConfig(source, settings()), { binaryPath });
   });
 

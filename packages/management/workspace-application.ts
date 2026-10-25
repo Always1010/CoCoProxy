@@ -7,7 +7,7 @@ import { ManagementError, exactRecord, readJsonBody } from './http.ts';
 import { describeTcpNode, probeTcpEndpoint, tcpEndpoint } from './tcp-delay.ts';
 import { memoizePolicyCompiler } from './shared-work.ts';
 
-type Plan = { workspace: Workspace; policy: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string };
+type Plan = { workspace: Workspace; policy: JsonObject; nodeDnsPolicy?: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string };
 const asGroups = (policy: JsonObject): JsonObject[] => Array.isArray(policy['proxy-groups']) ? policy['proxy-groups'].filter((value): value is JsonObject => !!value && typeof value === 'object' && !Array.isArray(value)) : [];
 const asNodes = (policy: JsonObject): JsonObject[] => Array.isArray(policy.proxies) ? policy.proxies as JsonObject[] : [];
 function invalid(code = 'WORKSPACE_INVALID'): never { throw new WorkspaceError(code); }
@@ -69,13 +69,14 @@ export function createWorkspaceApplication(options: {
   subscriptions: SubscriptionStore;
   store: FileTransactionStore;
   manager: TransactionManager;
-  compile: (policy: JsonObject) => Candidate;
+  compile: (policy: JsonObject, nodeDnsPolicy?: JsonObject) => Candidate;
   legacyPolicy: () => Promise<JsonObject | null>;
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
   const { subscriptions, store, manager } = options;
-  const compile = memoizePolicyCompiler(options.compile);
+  const cachedCompile = memoizePolicyCompiler(input => options.compile(input.policy as JsonObject, input.nodeDnsPolicy as JsonObject | undefined));
+  const compile = (plan: Plan) => cachedCompile({ policy: plan.policy, ...(plan.nodeDnsPolicy ? { nodeDnsPolicy: plan.nodeDnsPolicy } : {}) });
   const building = new Map<string, Promise<Plan>>();
   let tcpProbes = 0;
 
@@ -120,11 +121,16 @@ export function createWorkspaceApplication(options: {
 
   async function buildPlan(workspace: Workspace, repair: boolean): Promise<Plan> {
     const captures: Plan['captures'] = [];
+    const nodeDnsPolicy: JsonObject = {};
     async function snapshot(id: string) {
       const metadata = await subscriptions.status(id);
       if (!metadata) throw new SubscriptionError('SOURCE_NOT_FOUND');
       const result = await subscriptions.snapshot(id, metadata.revision);
       captures.push({ id, revision: metadata.revision, digest: result.sha256 });
+      for (const [host, resolvers] of Object.entries(result.nodeDnsPolicy ?? {})) {
+        if (nodeDnsPolicy[host] !== undefined && canonicalJson(nodeDnsPolicy[host]) !== canonicalJson(resolvers)) invalid('NODE_DNS_POLICY_CONFLICT');
+        nodeDnsPolicy[host] = resolvers;
+      }
       return result;
     }
     let policy: JsonObject, legacy: string | undefined;
@@ -159,13 +165,13 @@ export function createWorkspaceApplication(options: {
         policy = overridePolicy({ ...base, proxies }, workspace.subscriptionOverrides.legacy ?? emptyOverrides(), workspace.runMode, workspace.revision > 0, repair);
       }
     }
-    return { workspace, policy, captures, ...(legacy ? { legacy } : {}) };
+    return { workspace, policy, captures, ...(Object.keys(nodeDnsPolicy).length ? { nodeDnsPolicy } : {}), ...(legacy ? { legacy } : {}) };
   }
 
   async function apply(workspace: Workspace, expectedActive: unknown) {
     if (!(expectedActive === null || (typeof expectedActive === 'string' && /^[a-f0-9]{64}$/.test(expectedActive)))) invalid();
     const plan = await build(workspace);
-    const candidate = compile(plan.policy);
+    const candidate = compile(plan);
     // Bind the UI's exact settings and snapshots before staging; never recapture
     // an unrelated editor's latest settings as though the caller approved them.
     await store.stage(candidate);
@@ -189,7 +195,7 @@ export function createWorkspaceApplication(options: {
     const status = await store.status();
     const sources = await subscriptions.list();
     let plan: Plan | undefined, candidate: Candidate | undefined, error: string | undefined;
-    try { plan = await build(workspace); candidate = compile(plan.policy); }
+    try { plan = await build(workspace); candidate = compile(plan); }
     catch (cause) {
       error = cause instanceof WorkspaceError || cause instanceof SubscriptionError || cause instanceof ConfigError ? cause.code : 'WORKSPACE_UNAVAILABLE';
       // Invalid selections/rules remain blocked for application, but retain
@@ -238,7 +244,7 @@ export function createWorkspaceApplication(options: {
         if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
         if (!body.expectedActive || (await store.status()).active !== body.expectedActive) invalid('ACTIVE_CONFLICT');
         const plan = await build(current);
-        if (compile(plan.policy).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
+        if (compile(plan).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
         const node = asNodes(plan.policy).find(node => node.name === body.name);
         if (!node || describeTcpNode(node).fingerprint !== body.fingerprint) invalid('TCP_NODE_CONFLICT');
         const endpoint = tcpEndpoint(node);
@@ -269,7 +275,7 @@ export function createWorkspaceApplication(options: {
       if (typeof body.group !== 'string' || typeof body.name !== 'string') invalid();
       if ((await store.status()).active !== body.expectedActive) invalid('ACTIVE_CONFLICT');
       const plan = await build(current);
-      if (compile(plan.policy).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
+      if (compile(plan).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
       const group = asGroups(plan.policy).find(group => group.name === body.group);
       if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(body.name)) invalid('GROUP_SELECTION_CONFLICT');
       if (group.type !== 'select') invalid('GROUP_SELECTION_UNSUPPORTED');
@@ -278,7 +284,7 @@ export function createWorkspaceApplication(options: {
       edits.selections[body.group] = body.name;
       if (current.mode !== 'local') settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] = edits;
       const next = { ...settings, revision: current.revision + 1 };
-      compile((await build(next)).policy);
+      compile(await build(next));
       const saved = await preferences.save(settings, current.revision);
       return apply(saved, body.expectedActive);
     }

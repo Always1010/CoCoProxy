@@ -62,7 +62,7 @@ async function directory(t: TestContext) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
   // Keep the pure settings/store test runnable without the optional YAML runtime.
   const [{ createManagementApplication }, { decodeSubscriptionProfile }] = await Promise.all([
     import('../packages/management/application.ts'), import('../packages/subscriptions/yaml.ts'),
@@ -79,7 +79,7 @@ async function fixture(t: TestContext) {
     restore: async () => { events.push('restore'); },
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }),
   };
-  const action = createManagementApplication({ stateDirectory: state, deployment, runtime,
+  const action = createManagementApplication({ stateDirectory: state, deployment: { ...deployment, ...deploymentOverrides }, runtime,
     observeSelections: async () => {
       const generation = (await new FileTransactionStore(state).status()).active;
       if (!generation || !observedChoices) throw new Error('Synthetic core unavailable');
@@ -108,6 +108,40 @@ async function fixture(t: TestContext) {
   return { state, events, call, view, save, apply, source, candidate, payloads, fail: () => { failActivation = true; },
     observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
+
+test('workspace binds private node DNS to captured sources in local and subscription modes', async t => {
+  const f = await fixture(t);
+  const resolver = 'https://resolver.example/private/EXAMPLE_ONLY_TOKEN';
+  const input = { ...profile, proxies: [{ ...node, server: 'entry.example' }],
+    dns: { 'nameserver-policy': { 'entry.example': resolver } } };
+  await f.source('provider', input);
+  const saved = await f.save(settings({ sourceIds: ['provider'] }), 0);
+  const active = await f.apply(saved, null);
+  assert.deepEqual(((await f.candidate(active.active)).dns as JsonObject)['proxy-server-nameserver-policy'], { 'entry.example': [resolver] });
+  assert.equal(JSON.stringify(await f.view()).includes('EXAMPLE_ONLY_TOKEN'), false);
+  assert.equal((await f.view()).pending, false);
+  const full = await f.save(settings({ mode: 'subscription', subscriptionId: 'provider' }), saved.revision);
+  const next = await f.apply(full, active.active);
+  assert.deepEqual(((await f.candidate(next.active)).dns as JsonObject)['proxy-server-nameserver-policy'], { 'entry.example': [resolver] });
+  const admin = await fixture(t, { nodeNameserverPolicy: { 'entry.example': ['https://admin.example/dns-query'] } });
+  await admin.source('provider', input);
+  const configured = await admin.save(settings({ sourceIds: ['provider'] }), 0);
+  const overridden = await admin.apply(configured, null);
+  assert.deepEqual(((await admin.candidate(overridden.active)).dns as JsonObject)['proxy-server-nameserver-policy'], { 'entry.example': ['https://admin.example/dns-query'] });
+});
+
+test('conflicting node DNS from multiple sources blocks application without leaking resolver paths', async t => {
+  const f = await fixture(t);
+  for (const [id, resolver] of [['first', 'https://one.example/EXAMPLE_ONLY_PRIVATE'], ['second', 'https://two.example/EXAMPLE_ONLY_PRIVATE']]) {
+    const metadata = await f.source(id, { proxies: [{ ...node, name: id, server: 'entry.example' }], rules: ['MATCH,DIRECT'], dns: { 'nameserver-policy': { 'entry.example': resolver } } });
+    assert.equal((metadata as unknown as { snapshotCurrent: boolean }).snapshotCurrent, true);
+  }
+  // Older persisted workspaces may contain multiple sources; the current UI
+  // permits one source, but compilation must still reject ambiguous DNS.
+  const saved = await new WorkspaceStore(f.state).save(settings({ sourceIds: ['first', 'second'] }), 0);
+  await assert.rejects(f.apply(saved, null), { code: 'NODE_DNS_POLICY_CONFLICT' });
+  assert.equal(f.events.length, 0);
+});
 
 test('workspace TCP tests bind to the active node and revision without applying configuration', async t => {
   const server = createServer(socket => socket.resume());

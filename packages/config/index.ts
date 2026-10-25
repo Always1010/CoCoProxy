@@ -35,7 +35,7 @@ const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const DEPLOYMENT_FIELDS = new Set([
   'mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers', 'nameservers', 'sniffing',
-  'nameserverPolicy', 'nodeResolvers', 'directResolvers',
+  'nameserverPolicy', 'nodeNameserverPolicy', 'nodeResolvers', 'directResolvers',
   'performance',
 ]);
 
@@ -230,8 +230,9 @@ function dnsResolvers(value: JsonValue, allowIP: boolean): JsonValue[] {
     let endpoint: URL;
     try { endpoint = new URL(server); } catch { invalid(); }
     // No credentials, proxy/interface fragments, queries or arbitrary core syntax.
-    if (endpoint.protocol !== 'https:' || !endpoint.hostname || endpoint.username || endpoint.password ||
-      server.includes('#') || server.includes('?') || endpoint.pathname === '/') invalid();
+    if (!/^https:\/\//i.test(server) || endpoint.protocol !== 'https:' || !endpoint.hostname || endpoint.username || endpoint.password ||
+      server.slice(server.indexOf('//') + 2).split('/', 1)[0].includes('@') ||
+      server.includes('#') || server.includes('?') || endpoint.pathname === '/' || endpoint.port === '0') invalid();
   }
   return servers;
 }
@@ -342,6 +343,7 @@ export function compileConfig(input: unknown): Candidate {
   }
   const nameservers = deployment.nameservers === undefined ? undefined : dnsResolvers(deployment.nameservers, false);
   const nameserverPolicy = deployment.nameserverPolicy === undefined ? undefined : dnsPolicy(deployment.nameserverPolicy);
+  const nodeNameserverPolicy = deployment.nodeNameserverPolicy === undefined ? undefined : dnsPolicy(deployment.nodeNameserverPolicy);
   const nodeResolvers = deployment.nodeResolvers === undefined ? undefined : dnsResolvers(deployment.nodeResolvers, true);
   const directResolvers = deployment.directResolvers === undefined ? undefined : dnsResolvers(deployment.directResolvers, true);
   const sniffer = snifferOptions(deployment.sniffing), performance = performanceOptions(deployment.performance);
@@ -424,10 +426,11 @@ export function compileConfig(input: unknown): Candidate {
       ...(nameservers || nameserverPolicy ? { 'respect-rules': true,
         'proxy-server-nameserver': [...(nodeResolvers ?? resolvers)],
         'direct-nameserver': [...(directResolvers ?? resolvers)] } : {
-        ...(nodeResolvers ? { 'proxy-server-nameserver': [...nodeResolvers] } : {}),
+        ...(nodeResolvers || nodeNameserverPolicy ? { 'proxy-server-nameserver': [...(nodeResolvers ?? resolvers)] } : {}),
         ...(directResolvers ? { 'direct-nameserver': [...directResolvers] } : {}),
       }),
       ...(nameserverPolicy ? { 'nameserver-policy': nameserverPolicy } : {}),
+      ...(nodeNameserverPolicy ? { 'proxy-server-nameserver-policy': nodeNameserverPolicy } : {}),
     },
   };
   const compiled = compactCompilerRuleSets(config);
@@ -446,6 +449,7 @@ export function deploymentDnsOptions(config: JsonObject): JsonObject {
   const nameserverPolicy = externalNameserverPolicy(config);
   return { ...(routed ? { nameservers: dns.nameserver } : {}),
     ...(nameserverPolicy === undefined ? {} : { nameserverPolicy }),
+    ...(dns['proxy-server-nameserver-policy'] === undefined ? {} : { nodeNameserverPolicy: dns['proxy-server-nameserver-policy'] }),
     ...(dns['proxy-server-nameserver'] === undefined ? {} : { nodeResolvers: dns['proxy-server-nameserver'] }),
     ...(dns['direct-nameserver'] === undefined ? {} : { directResolvers: dns['direct-nameserver'] }),
     ...(Object.keys(performance).length ? { performance } : {}),
