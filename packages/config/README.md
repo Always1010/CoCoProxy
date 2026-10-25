@@ -10,7 +10,7 @@
 
 候选的 `config` 是可作为 YAML 输入的 JSON。编译器固定 loopback 显式代理和控制器监听，禁用 LAN、TUN 与 IPv6，使用 `redir-host` 真实地址 DNS；DNS 上游仅来自部署参数。输入和输出没有共享可变对象。`id` 与 `sha256` 相同，均为 `canonicalJson(config)` UTF-8 字节的 SHA-256；对象键排序，数组顺序保留，配置内容相同则标识稳定。候选本身可包含凭据，调用方必须保护其存储与日志；错误只返回固定消息和 `code`，不回显输入内容。
 
-保护字段一律拒绝，即使输入值为 `false`。部署监听、认证、DNS、TUN、外部 UI、profile 持久化、provider、脚本、文件证书和出口接口／路由标记等配置不开放。递归检查会拒绝嵌套 provider、插件执行、文件字段和出口覆盖；因此部分原本合法的 Mihomo 高级协议选项也暂不受支持。`RULE-SET`、`GEOIP`、`SRC-GEOIP`、`GEOSITE`、`IP-ASN`、`SRC-IP-ASN` 与 `SCRIPT` 规则暂不支持，复合规则与子规则同样拒绝，以免隐式依赖外部文件或下载。策略模式仅允许 `rule`。
+保护字段一律拒绝，即使输入值为 `false`。部署监听、认证、DNS、TUN、外部 UI、provider、脚本、文件证书和出口接口／路由标记等配置不开放；profile 仅允许前述禁用选择缓存的例外。递归检查拒绝嵌套 provider、插件执行、文件字段和出口覆盖；部分合法的 Mihomo 高级协议选项因此不受支持。`RULE-SET`、`GEOIP`、`SRC-GEOIP`、`GEOSITE`、`IP-ASN`、`SRC-IP-ASN` 与 `SCRIPT` 规则拒绝，复合规则和 `sub-rules` 内也递归检查这些操作；其余完整语法由核心校验。策略模式仅允许 `rule`。
 
 固定 v1.19.33 的其他部署入口也受保护：`iptables`、`tuic-server`、`ss-config`、`vmess-config`、`ntp`、`external-doh-server`、`external-controller-routing-mark` 和 `clash-for-android` 不得由策略启用或覆盖；递归拒绝 `file-descriptor` 与 `dialer-ip4p-convert`。这些字段来自固定版本的 [RawConfig／RawTun](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/config/config.go)，避免来源或编辑策略启动额外监听、接管规则、时间同步或继承未知描述符。未触及这些边界的既有候选摘要保持不变；携带被禁字段的旧候选会在重编译校验时拒绝，不能凭正确 hash 绕过。
 

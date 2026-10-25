@@ -20,6 +20,6 @@ Linux v6.1 的 [`inet_diag_msg_attrs_fill`](https://github.com/torvalds/linux/bl
 
 `observeSocketSourcesFixture` 仅接受明确可信的合成 reader，结果永远为 fixture。`readSocketDiagnosticsFixture` 只用于已独立核验的新 user/network namespace，要求提供不同于当前 namespace 的外层证明。四角色内核测试使用真实 Mihomo FD，核对实际 mark 和 socket cgroup ID；该 fixture 复用现有 UID/cgroup，因此只能证明低层内核读取，不能证明生产两个专用服务身份隔离。生产正向验收需要安装并核验固定服务后另行执行。
 
-本模块尚未接入完整生产 NetworkDriver。生产聚合观察需要受信计划明确绑定专用管理 UID，并由规则及部署共同保护该身份；不能仅把本模块成功当成规则已经绑定独立管理身份。逐 socket 检查、核心运行观察、cgroup 身份、链路/邻居、DNS/TUN 探针、规则读回和资源归属必须由同一代驱动组合，缺失任何必要证据时保持阻断。
+[固定驱动](driver.md)已组合本模块与其他观察组件，完整生产部署未验收。聚合观察要求计划绑定专用管理 UID，并由规则及部署共同保护；逐 socket 检查、核心身份、链路、DNS/TUN 和资源回读必须属于同一代，缺失必要证据时保持阻断。
 
 针对性检查：`node --experimental-strip-types --test tests/network-sockets.test.ts`。实际内核读取与透明路径由开发说明中的 `test:network-kernel` 执行；合成测试成功不能替代真实服务或终端验收。

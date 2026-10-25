@@ -44,6 +44,6 @@ node --experimental-strip-types apps/cli/main.ts runtime-recover --state-dir /va
 
 `tests/runtime-native-observer.test.ts` 使用合成 reader 覆盖原生 capability 权限拒绝、受限证据标记、显式模式与未知错误拒绝、错误 unit/PID/UID/argv/cgroup、认证失败和观察期间身份变化；测试不会启动真实核心或修改服务、ptrace、dumpable、capability 配置。
 
-这些夹具测试不安装或控制真实系统服务，不构成节点协议、WAN DNS 或网关验收。另有显式的 mihomo-live 测试，已验证固定核心的 `/version`、回环 HTTP 代理和 localhost DNS；实际 systemd 沙箱、服务授权与服务重启恢复仍待验证。Node `process.execve` 在所用 22.x 文档中仍为实验 API；不支持时启动器明确拒绝，不能退回第二个子进程监管器。
+这些夹具测试不安装或控制真实系统服务，不构成节点协议、WAN DNS 或网关验收。mihomo-live 另检查固定核心的 `/version`、回环 HTTP 代理和 localhost DNS；固定发行的实机范围见[发行说明](../../docs/release-notes.md)。Node `process.execve` 在所用 22.x 文档中仍为实验 API；不支持时启动器明确拒绝，不能退回第二个子进程监管器。
 
 依据：[systemd service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)、[systemctl job 语义](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html#--job-mode=)、[Node 22 process.execve](https://nodejs.org/docs/latest-v22.x/api/process.html#processexecvefile-args-env)。

@@ -4,7 +4,7 @@
 
 工作区接口与旧草稿迁移见 `packages/management/README.md`，订阅内联配置和 provider 展开边界见 `packages/subscriptions/README.md`，本地模板来源与转换见 `packages/routing/README.md`。原生自动策略组继续由核心选择，前端不把手动选择写入其算法。旧运行配置在用户明确保存或切换前保持原状。
 
-状态：固定源码与 Git 树已核对，Server/UI 依赖已锁定并构建；Coproxy overlay 已通过真实 Server 与浏览器回环检查。验证范围为管理登录、草稿、捕获、冲突与注销，尚未验收真实 systemd 服务应用或完整网关组合。固定核心另通过独立回环及受限代理检查，范围见 review.json。
+固定源码与 Git 树依据保存在本目录，Server/UI 使用锁定依赖和 Coproxy overlay 构建。构建、Server 与浏览器回环检查分别验证相应边界；固定发行的实机部署与终端验收范围统一见[发行说明](../../docs/release-notes.md)。
 
 审查入口为 v1.273.1，其 Git 引用核对为 8bbc8f58fef71148a94fb5c0ff808f79b057337d。后续构建应核对提交，不只信任可移动 tag。上游是 pnpm 工作区；Agent 包是 private workspace 包，不能假定可从 npm 独立安装。根配置指定 pnpm 10.34.1。[根配置](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/package.json)、[Agent 包](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/package.json)
 
@@ -59,4 +59,4 @@ origin 必须与访问地址和可信 HTTPS 终止配置一致；上述 HTTP 仅
 
 上游代码使用 MIT 许可证；候选 Mihomo 的 LICENSE 为 GNU GPL v3。实际分发时核对具体资产和组合，保留对应许可与来源要求；本记录不表示已制作包含这些资产的发行包。[MetaCubeXD LICENSE](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/LICENSE)、[Mihomo LICENSE](https://github.com/MetaCubeX/mihomo/blob/3f27ef39f8c96bbfbc8b0b9bb10f5c9ef60149d8/LICENSE)
 
-overlay 中复用的上游界面代码沿用本目录 LICENSE 的 MIT 通知。下一关卡是服务安装与受限权限、真实协议输入、完整核心应用恢复，以及独立网络执行与单终端协作；通过前不得报告网关、节点或 LAN 已可用。
+overlay 中复用的上游界面代码沿用本目录 LICENSE 的 MIT 通知。复现构建与模块测试不替代新载荷的部署和终端验收。
