@@ -113,6 +113,20 @@ test('legacy migration retains manual and automatic groups and waits for an expl
   assert.equal((await f.view()).pending, false);
 });
 
+test('opening the new workspace keeps an already applied legacy config current without creating preferences', async t => {
+  const f = await fixture(t);
+  await f.call('/draft', 'PUT', { expectedRevision: 0, policy: profile });
+  const staged = await f.call<{ generation: string }>('/stage', 'POST', { expectedRevision: 1 });
+  await f.call('/apply', 'POST', { generation: staged.generation, expectedActive: null });
+  const before = [...f.events];
+  const opened = await f.view();
+  assert.equal(opened.active, staged.generation);
+  assert.equal(opened.pending, false);
+  assert.equal(opened.workspace.revision, 0);
+  assert.deepEqual(f.events, before);
+  assert.equal(await new WorkspaceStore(f.state).read(), null);
+});
+
 test('full subscription and local schemes preserve their own rules and selections across switches', async t => {
   const f = await fixture(t);
   await f.source('provider', { ...profile, 'mixed-port': 9999, dns: { nameserver: ['198.51.100.53'] } });
