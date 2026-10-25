@@ -42,6 +42,7 @@
       "dnsPort": 15353,
       "bootstrapResolvers": ["192.0.2.53"]
     },
-    "subscriptionPolicy": { "allowedOrigins": ["https://subscription.example"] }
+    "subscriptionPolicy": { "allowedOrigins": ["https://subscription.example"] },
+    "controllerPolicy": { "allowedProbeOrigins": ["https://www.gstatic.com"] }
   }
 }

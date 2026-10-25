@@ -7,7 +7,7 @@ import type { HttpsClientOptions } from '../subscriptions/http.ts';
 import { loadAdminCredential } from './auth.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { decodeSubscriptionProfile } from '../subscriptions/yaml.ts';
-import { createControllerProxy } from './controller.ts';
+import { createControllerProxy, DEFAULT_LATENCY_PROBE_ORIGIN } from './controller.ts';
 import { recoverManagementStartup } from './startup.ts';
 import { createManagementApplication } from './application.ts';
 import { createManagementGateway, exactRecord, managementOrigin, ManagementError } from './http.ts';
@@ -46,7 +46,12 @@ export async function loadManagementGateway(path: string) {
     }
     const runtime = new SystemdMihomoRuntime(runtimeSettings);
     const store = new FileTransactionStore(runtimeSettings.stateDirectory);
-    const controllerPolicy = settings.controllerPolicy === undefined ? {} : exactRecord(settings.controllerPolicy, ['allowedProbeOrigins']);
+    // Older settings omitted controllerPolicy entirely. Give those deployments
+    // the same safe HTTPS probe used by the dashboard. An explicitly configured
+    // empty list remains the operator's opt-out and disables latency probing.
+    const controllerPolicy = settings.controllerPolicy === undefined
+      ? { allowedProbeOrigins: [DEFAULT_LATENCY_PROBE_ORIGIN] }
+      : exactRecord(settings.controllerPolicy, ['allowedProbeOrigins']);
     if (controllerPolicy.allowedProbeOrigins !== undefined && (!Array.isArray(controllerPolicy.allowedProbeOrigins) ||
         controllerPolicy.allowedProbeOrigins.length > 16 || controllerPolicy.allowedProbeOrigins.some(item => typeof item !== 'string'))) throw new Error();
     async function isCurrent(generation: string): Promise<boolean> {

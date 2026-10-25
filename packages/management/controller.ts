@@ -10,6 +10,8 @@ export type ControllerProxyOptions = {
   allowedProbeOrigins?: readonly string[];
 };
 
+export const DEFAULT_LATENCY_PROBE_ORIGIN = 'https://www.gstatic.com';
+
 const HTTP_LIMIT = 2 * 1024 * 1024;
 const RULES_LIMIT = 4 * 1024 * 1024;
 const FRAME_LIMIT = 1024 * 1024;
@@ -64,36 +66,44 @@ function query(url: URL, allowed: readonly string[]): void {
   }
 }
 
-function httpRoute(request: Request, origins: ReadonlySet<string>): { path: string; mutation: boolean } {
+function httpRoute(request: Request, origins: ReadonlySet<string>): { path: string; mutation: boolean; deadlineMs: number; probe: boolean } {
   const { parts: p, url } = pathParts(request);
   const proxy = p[0] === 'proxies' && p.length === 2;
   const connection = p[0] === 'connections' && p.length <= 2;
-  const delay = (p[0] === 'proxies' || p[0] === 'group') && p.length === 3 && p[2] === 'delay';
+  const delay = ((p[0] === 'proxies' || p[0] === 'group') && p.length === 3 && p[2] === 'delay') ||
+    (p[0] === 'providers' && p[1] === 'proxies' && p.length === 5 && p[4] === 'healthcheck');
   const read = (p.length === 1 && ['version', 'configs', 'proxies', 'group', 'rules', 'connections'].includes(p[0])) || proxy ||
     (p[0] === 'group' && p.length === 2) || (p[0] === 'providers' && ['proxies', 'rules'].includes(p[1]) && [2, 3].includes(p.length));
   const mutation = (request.method === 'PUT' && proxy) || (request.method === 'DELETE' && (proxy || connection));
   if (!(request.method === 'GET' && (read || delay)) && !mutation) throw new ManagementError('CONTROLLER_ROUTE_DENIED', 405);
   if (request.method !== 'PUT' && request.body !== null) throw new ManagementError('CONTROLLER_REQUEST_DENIED');
   query(url, delay ? ['url', 'timeout'] : []);
+  let deadlineMs = 5000;
   if (delay) {
     let probe: URL;
     try { probe = new URL(url.searchParams.get('url') ?? ''); } catch { throw new ManagementError('CONTROLLER_PROBE_DENIED'); }
     const timeout = url.searchParams.get('timeout') ?? '';
     if (probe.protocol !== 'https:' || probe.username || probe.password || probe.hash || !origins.has(probe.origin) ||
         !/^[1-9]\d{0,4}$/.test(timeout) || Number(timeout) > 10000) throw new ManagementError('CONTROLLER_PROBE_DENIED');
+    // The controller deadline must outlive the core's requested probe budget.
+    // A fixed 5s deadline raced the UI's 5s default and converted valid slow
+    // measurements into an opaque controller failure.
+    deadlineMs = Number(timeout) + 2000;
   }
-  return { path: '/' + p.map(part => encodeURIComponent(part)).join('/') + url.search, mutation };
+  return { path: '/' + p.map(part => encodeURIComponent(part)).join('/') + url.search, mutation, deadlineMs, probe: delay };
 }
 
-async function upstream(target: ControllerTarget, path: string, method: string, body?: string): Promise<Response> {
+async function upstream(target: ControllerTarget, path: string, method: string, deadlineMs: number, probe: boolean, body?: string): Promise<Response> {
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), 5000);
+  const timer = setTimeout(() => abort.abort(), deadlineMs);
   try {
     const result = await fetch(`http://127.0.0.1:${target.port}${path}`, { method, redirect: 'manual', signal: abort.signal,
       headers: { authorization: `Bearer ${target.secret}`, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body }) });
     if (result.status >= 300 || result.status < 200) {
       await result.body?.cancel();
+      if (probe && result.status === 504)
+        return response({ error: { code: 'CONTROLLER_PROBE_TIMEOUT' } }, 504, target.generation);
       return response({ error: { code: 'CONTROLLER_UPSTREAM_FAILED' } }, 502, target.generation);
     }
     const rules = method === 'GET' && path === '/rules';
@@ -114,7 +124,10 @@ async function upstream(target: ControllerTarget, path: string, method: string, 
     if (result.status === 204 || result.status === 205) return response(null, result.status, target.generation);
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
     return response(redact(value, target.secret, rules ? 250_000 : 100_000), result.status, target.generation);
-  } catch { return response({ error: { code: 'CONTROLLER_UNAVAILABLE' } }, 502, target.generation); }
+  } catch (error) {
+    const timedOut = probe && error !== null && typeof error === 'object' && (error as { name?: unknown }).name === 'AbortError';
+    return response({ error: { code: timedOut ? 'CONTROLLER_PROBE_TIMEOUT' : 'CONTROLLER_UNAVAILABLE' } }, timedOut ? 504 : 502, target.generation);
+  }
   finally { clearTimeout(timer); }
 }
 
@@ -141,14 +154,14 @@ export function createControllerProxy(options: ControllerProxyOptions): {
         }
         const current = validateTarget(await options.target());
         generation = current.generation;
-        if (!route.mutation) return await upstream(current, route.path, request.method, body);
+        if (!route.mutation) return await upstream(current, route.path, request.method, route.deadlineMs, route.probe, body);
         const expected = request.headers.get('if-match');
         if (!expected || expected !== current.generation) throw new ManagementError('CONTROLLER_GENERATION_CONFLICT', 409);
         return await options.mutate(async () => {
           const locked = validateTarget(await options.target());
           generation = locked.generation;
           if (locked.generation !== expected) throw new ManagementError('CONTROLLER_GENERATION_CONFLICT', 409);
-          return upstream(locked, route.path, request.method, body);
+          return upstream(locked, route.path, request.method, route.deadlineMs, route.probe, body);
         });
       } catch (error) {
         return response({ error: { code: error instanceof ManagementError ? error.code : 'CONTROLLER_UNAVAILABLE' } }, error instanceof ManagementError ? error.status : 503, generation);

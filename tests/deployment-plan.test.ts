@@ -102,6 +102,7 @@ test('deployment proposal shares the private runtime identity and pins core byte
   assert.equal(settings.runtimeSettingsPath, value.runtime.settingsPath);
   assert.equal(settings.credentialPath, value.management.credentialPath);
   assert.deepEqual(settings.deployment, value.management.deployment);
+  assert.deepEqual(settings.controllerPolicy.allowedProbeOrigins, ['https://www.gstatic.com']);
   assert.equal(settings.schemaVersion, 1);
   for (const path of [value.runtime.settingsPath, value.management.settingsPath]) {
     assert.equal(find(path).owner, 12345); assert.equal(find(path).mode, '0600'); assert.equal(find(path).sensitive, true);
@@ -208,6 +209,10 @@ test('deployment validates exact origins, unprivileged distinct ports and bounde
   assert.deepEqual(settings.subscriptionPolicy.allowedOrigins, ['https://feeds.example']);
   assert.deepEqual(settings.subscriptionPolicy.allowedHttpOrigins, ['http://legacy-feed.example:8080']);
   assert.deepEqual(settings.controllerPolicy.allowedProbeOrigins, ['https://probe.example']);
+  const disabled = input();
+  Object.assign(disabled.management, { controllerPolicy: { allowedProbeOrigins: [] } });
+  const disabledSettings = JSON.parse(renderDeploymentPlan(disabled).files.find(file => file.path === disabled.management.settingsPath)!.content);
+  assert.deepEqual(disabledSettings.controllerPolicy.allowedProbeOrigins, []);
 });
 
 test('deployment accepts data only and errors do not expose secrets or evaluate accessors', () => {

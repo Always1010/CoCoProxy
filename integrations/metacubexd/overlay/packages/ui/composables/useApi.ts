@@ -13,6 +13,32 @@ import { useControlApi } from './useControlApi'
 import { useControlInfo } from './useControlInfo'
 import { useMockData } from './useMockData'
 import { useCoproxy } from './useCoproxy'
+import type { LatencyFailureReason } from './useLatencyFeedback'
+
+export class LatencyTestError extends Error {
+  constructor(readonly reason: LatencyFailureReason) {
+    super(reason)
+    this.name = 'LatencyTestError'
+  }
+}
+
+function isLatencyRequest(url: string): boolean {
+  const path = new URL(url).pathname
+  return (
+    /\/api\/clash\/(?:proxies|group)\/[^/]+\/delay$/.test(path) ||
+    /\/api\/clash\/providers\/proxies\/[^/]+\/[^/]+\/healthcheck$/.test(path)
+  )
+}
+
+export function latencyFailureReason(error: unknown): LatencyFailureReason {
+  if (error instanceof LatencyTestError) return error.reason
+  if (
+    error instanceof Error &&
+    (error.name === 'TimeoutError' || error.name === 'AbortError')
+  )
+    return 'timeout'
+  return 'failed'
+}
 
 // Mock mode support
 export function useMockMode() {
@@ -232,10 +258,27 @@ export function useRequest() {
         }
         if (response.status === 409)
           throw new Error('运行代次已变化，请重新读取状态。')
+        if (!response.ok && isLatencyRequest(request.url)) {
+          const body = (await response
+            .clone()
+            .json()
+            .catch(() => null)) as { error?: { code?: string } } | null
+          if (body?.error?.code === 'CONTROLLER_PROBE_DENIED')
+            throw new LatencyTestError('probe_denied')
+          if (body?.error?.code === 'CONTROLLER_PROBE_TIMEOUT')
+            throw new LatencyTestError('timeout')
+        }
         if (!response.ok)
           throw new Error('核心请求未完成，请重新读取状态。')
       }],
-      beforeError: [() => new Error('核心请求未完成；如连接中断，操作结果未知，请重新读取状态。')],
+      beforeError: [({ error, request }) => {
+        if (error instanceof LatencyTestError) return error
+        if (isLatencyRequest(request.url))
+          return new LatencyTestError(
+            error.name === 'TimeoutError' ? 'timeout' : 'failed',
+          )
+        return new Error('核心请求未完成；如连接中断，操作结果未知，请重新读取状态。')
+      }],
     },
   })
 }
@@ -385,7 +428,7 @@ export function unfixProxyInGroupAPI(groupName: string) {
   return request.delete(`proxies/${encodeURIComponent(groupName)}`)
 }
 
-export function proxyLatencyTestAPI(
+export async function proxyLatencyTestAPI(
   proxyName: string,
   provider: string,
   url: string,
@@ -401,20 +444,21 @@ export function proxyLatencyTestAPI(
     ? `providers/proxies/${encodeURIComponent(provider)}/${encodeURIComponent(proxyName)}/healthcheck`
     : `proxies/${encodeURIComponent(proxyName)}/delay`
 
-  return request
-    .get(path, {
-      searchParams: { url, timeout },
-      // `timeout` is the backend's per-node budget; the client round trip adds
-      // network overhead on top. ky's default 5s timeout equals the default
-      // backend timeout, so a slow-but-valid node was aborted client-side
-      // before the kernel answered and always showed as failed (#2041). Give
-      // the client comfortable headroom over the backend budget.
-      timeout: Math.max(20_000, timeout + 10_000),
-    })
-    .json<{ delay: number }>()
+  try {
+    return await request
+      .get(path, {
+        searchParams: { url, timeout },
+        timeout: Math.max(20_000, timeout + 10_000),
+      })
+      .json<{ delay: number }>()
+  } catch (error) {
+    throw error instanceof LatencyTestError
+      ? error
+      : new LatencyTestError(latencyFailureReason(error))
+  }
 }
 
-export function proxyGroupLatencyTestAPI(
+export async function proxyGroupLatencyTestAPI(
   groupName: string,
   url: string,
   timeout: number,
@@ -424,12 +468,18 @@ export function proxyGroupLatencyTestAPI(
   // The backend's `timeout` is per-node; the group test fans out to every
   // member, so the overall round trip easily exceeds ky's 5s default. Scale
   // the client timeout generously, floored at 30s, plus 10s of headroom.
-  return request
-    .get(`group/${encodeURIComponent(groupName)}/delay`, {
-      searchParams: { url, timeout },
-      timeout: Math.max(30_000, timeout * 2 + 10_000),
-    })
-    .json<Record<string, number>>()
+  try {
+    return await request
+      .get(`group/${encodeURIComponent(groupName)}/delay`, {
+        searchParams: { url, timeout },
+        timeout: Math.max(30_000, timeout * 2 + 10_000),
+      })
+      .json<Record<string, number>>()
+  } catch (error) {
+    throw error instanceof LatencyTestError
+      ? error
+      : new LatencyTestError(latencyFailureReason(error))
+  }
 }
 
 export function fetchRulesAPI() {

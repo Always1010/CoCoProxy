@@ -101,7 +101,9 @@ test('HTTP route and query allowlists reject core reconfiguration, token auth, a
 test('delay probes require an explicit HTTPS origin and a bounded timeout', async t => {
   const f = await fixture(t);
   const probe = (url: string, timeout = '1000') => request('/proxies/node/delay?url=' + encodeURIComponent(url) + '&timeout=' + timeout);
-  assert.equal((await createControllerProxy(f.options).fetch(probe('https://probe.example/ping'))).status, 400);
+  const disabled = await createControllerProxy(f.options).fetch(probe('https://probe.example/ping'));
+  assert.equal(disabled.status, 400);
+  assert.deepEqual(await disabled.json(), { error: { code: 'CONTROLLER_PROBE_DENIED' } });
   const proxy = createControllerProxy({ ...f.options, allowedProbeOrigins: ['https://probe.example'] });
   for (const url of ['http://probe.example/ping', 'https://127.0.0.1/ping', 'https://probe.example.evil/ping', 'https://user:pass@probe.example/ping', 'https://probe.example/ping#fragment']) {
     assert.equal((await proxy.fetch(probe(url))).status, 400);
@@ -109,6 +111,22 @@ test('delay probes require an explicit HTTPS origin and a bounded timeout', asyn
   for (const timeout of ['0', '10001', '-1', '1e3', '1000&timeout=5']) assert.equal((await proxy.fetch(probe('https://probe.example/ping', timeout))).status, 400);
   assert.equal(f.calls.length, 0);
   assert.equal((await proxy.fetch(probe('https://probe.example/ping'))).status, 200);
+  assert.equal((await proxy.fetch(request('/providers/proxies/provider/node/healthcheck?url=' +
+    encodeURIComponent('https://probe.example/ping') + '&timeout=1000'))).status, 200);
+  assert.equal(f.calls.at(-1)?.url, '/providers/proxies/provider/node/healthcheck?url=https%3A%2F%2Fprobe.example%2Fping&timeout=1000');
+});
+
+test('delay probe timeouts remain distinguishable without exposing upstream diagnostics', async t => {
+  const f = await fixture(t, (_request, response) => {
+    response.writeHead(504, { 'x-private-diagnostic': secret });
+    response.end(JSON.stringify({ error: secret }));
+  });
+  const proxy = createControllerProxy({ ...f.options, allowedProbeOrigins: ['https://probe.example'] });
+  const result = await proxy.fetch(request('/proxies/node/delay?url=' +
+    encodeURIComponent('https://probe.example/ping') + '&timeout=1000'));
+  assert.equal(result.status, 504);
+  assert.deepEqual(await result.json(), { error: { code: 'CONTROLLER_PROBE_TIMEOUT' } });
+  assert.equal(result.headers.has('x-private-diagnostic'), false);
 });
 
 test('temporary writes require If-Match and re-read the target inside the shared apply lock', async t => {
