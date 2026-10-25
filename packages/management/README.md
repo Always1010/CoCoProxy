@@ -18,11 +18,13 @@ node --experimental-strip-types apps/cli/main.ts admin-init --input /absolute/pr
 
 HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Strict; Path=/`。仅精确 loopback origin 可以使用 HTTP 测试 cookie；其他部署 origin 必须为 HTTPS。写操作要求精确匹配 Origin，跨站 Fetch、URL 查询令牌、Bearer 兼容入口与重复同名会话 cookie 均拒绝。所有 JSON 响应禁止缓存，错误只含固定码。JSON 请求有限量、严格 UTF-8 和读取时限；读取完成后才分派业务操作，不通过超时竞赛打断正在应用的事务。
 
-## 接口
+## 工作区与来源接口
 
 日常界面使用 `/api/coproxy/workspace`：GET 返回当前方案、来源摘要、策略组与规则来源；PUT 接收 `{expectedRevision, settings}` 保存独立的本地／订阅方案设置，POST `/workspace/apply` 接收 `{expectedRevision, expectedActive}`，统一编译、校验并应用。POST `/workspace/select` 接收相同版本条件及 `{group, name}`，持久保存手动组选择并应用；存在未应用设置时要求先应用，避免节点操作顺带发布其他编辑。自动组保留原算法。设置使用私有原子文件和运行事务共用锁；旧草稿在明确切换前沿用，不自动替换现有运行配置。
 
 订阅页独立管理来源，支持 PUT `{expectedRevision, name?, url?}` 重命名或替换地址、POST `/sources/:id/refresh` 更新、DELETE `{expectedRevision}` 删除。完整订阅保留策略组与规则，本地方案只使用其节点；来源更新不自动覆盖用户规则或替换当前配置。订阅自带方案只选一份基础配置，各方案分别保留用户覆盖。页面只返回节点名称与组引用，不向概览接口附加节点凭据或订阅地址。
+
+日常页面使用上述工作区入口；以下还列出会话、状态及兼容草稿接口。旧草稿接口仍可供 CLI／受控集成使用，不要求网页用户手动捕获候选。
 
 | 方法与路径 | 请求或结果 |
 | --- | --- |
@@ -37,8 +39,9 @@ HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Stric
 | POST `/api/coproxy/apply` | `{generation,expectedActive}`；首次 expectedActive 为 null |
 | POST `/api/coproxy/recover` | 空对象；恢复中断事务 |
 | GET `/api/coproxy/sources` | 来源摘要清单，不包含 URL、ETag 或节点凭据 |
-| GET/PUT `/api/coproxy/sources/:id` | 读取摘要；PUT `{expectedRevision,url}` 保存来源 |
+| GET/PUT `/api/coproxy/sources/:id` | 读取摘要；PUT `{expectedRevision,name?,url?}` 保存来源 |
 | POST `/api/coproxy/sources/:id/refresh` | `{expectedRevision}`；按部署许可策略刷新，不自动应用 |
+| DELETE `/api/coproxy/sources/:id` | `{expectedRevision}`；删除来源，页面先解除工作区引用 |
 
 除最小 health 外均要求管理会话；上表路径不接受查询参数。未知路由和原有 `/api/control/**` 返回 404，没有兼容的直接 start、配置热写、脚本、升级、WebDAV 或 geo 下载旁路。
 
@@ -46,7 +49,7 @@ HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Stric
 
 policy 可能包含管理员编辑的节点凭据，因此仍是敏感的已认证响应；部署 controller secret 不返回浏览器。stage 回执明确列出捕获的来源 revision、snapshotRevision 和 digest；刷新或保存完成不代表该版本已应用。
 
-## 生产构造与集成关卡
+## 服务构造与启动恢复
 
 `loadManagementService(absolutePrivateSettingsPath)` 返回 Fetch 处理器；`loadManagementGateway` 额外提供共享 `authorize`、`controller` 与 `recoverStartup` 给 Server 适配层。schemaVersion 1 私有配置包含 `origin`、`credentialPath`、`runtimeSettingsPath`、`deployment`，可选 `subscriptionPolicy`、`controllerPolicy`，合成格式见 examples/management-settings.json。运行设置沿用 runtime 模块；订阅策略沿用受限 HTTPS 许可字段，不接受可执行 resolver。工厂使用真实 `SystemdMihomoRuntime`，仅加载配置不会创建状态目录、监听网络或操作服务。
 

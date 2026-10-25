@@ -28,7 +28,7 @@ prepare 要求已有 `ip_forward=1`，不修改 sysctl、默认路由、系统 D
 
 停止核心或网络 unit 保留 guard。用户关闭代理由接入路由器撤销交付并恢复其 DNS，不能把核心停止等同于用户关闭。完整退役须先关闭路由器交付并停止核心，再由 root 显式执行 `python3 -I /installed/source/apps/gateway/network.py remove --settings /private/root/gateway-network.json`；remove 要求 TUN 已消失、回执完整、当前资源完全匹配，最后才移除 guard，不清理上游或其他操作者的资源。
 
-## 生成首轮部署计划
+## 部署计划
 
 [完整合成样本](../../examples/automatic-gateway-deployment.json)只描述角色和文档地址，不能直接安装。将其复制到私有输入并替换经核验的参数后，使用现有命令生成待审阅计划：
 
@@ -38,4 +38,4 @@ npm run cli -- deployment-plan --input /absolute/private/deployment.json --outpu
 
 原生计划包含三个 unit、服务 UID 的运行和管理设置、root 网络设置及既有精确 polkit 规则，共七个文件；另列出独立 root 回执目录。生成计划不会安装、启动、enable 或修改网络。实际部署须审阅 capability、接口／地址、mark／表／优先级冲突、转发前提和恢复路径，单独执行获准的安装步骤。只生成 `runtime-plan` 不会产生完整网络前置单元。
 
-浏览器仍可导入订阅、保存策略、捕获候选并应用；部署范围不能由浏览器修改。草稿 generation 是基础策略编译摘要，原生候选额外包含可信网络设置，实际应用以捕获回执 generation 为准。状态区分核心和待验收网关，不把单元 active 或配置成功表示为真实终端联网通过。
+网页工作区可导入订阅、保存和应用方案；候选捕获在应用流程内部执行，部署范围不能由浏览器修改。兼容草稿摘要只包含基础策略，原生候选额外包含可信网络设置，以最终候选 generation 为准。状态区分核心和待验收网关，不把单元 active 或配置成功表示为真实终端联网通过。

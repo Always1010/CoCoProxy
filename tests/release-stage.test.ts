@@ -21,6 +21,12 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'docs/deployment.md'), 'Synthetic role deployment instructions\n');
   await put(join(sourceDir, 'docs/cooperating-router-requirements.md'), 'Synthetic independent product and router capabilities\n');
   await put(join(sourceDir, 'docs/release-notes.md'), 'Synthetic fixed-version release scope and known limitations\n');
+  for (const name of ['usage.md', 'architecture.md', 'development.md']) {
+    await put(join(sourceDir, 'docs', name), 'Synthetic documentation\n');
+  }
+  for (const name of ['architecture-overview.svg', 'runtime-relations.svg', 'proxy-traffic-flow.svg']) {
+    await put(join(sourceDir, 'docs/images', name), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
+  }
   await put(join(sourceDir, 'examples/nginx-management.conf'), '# Synthetic HTTPS role template\n');
   await put(join(sourceDir, '.gitignore'), '.local/\n');
   const dependencies = { ws: '1.0.0', yaml: '1.0.0' };
@@ -70,6 +76,10 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.ok(manifest.files.some(file => file.path === 'source/docs/deployment.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/cooperating-router-requirements.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/release-notes.md'));
+  for (const path of ['usage.md', 'architecture.md', 'development.md', 'images/architecture-overview.svg',
+    'images/runtime-relations.svg', 'images/proxy-traffic-flow.svg']) {
+    assert.ok(manifest.files.some(file => file.path === `source/docs/${path}`));
+  }
   assert.ok(manifest.files.some(file => file.path === 'source/examples/nginx-management.conf'));
   assert.ok(manifest.files.every(file => !file.path.includes('.local') && !file.path.endsWith('.map') && !file.path.endsWith('nitro.json')));
   assert.ok(!bytes.toString().includes(options.sourceDir) && !bytes.toString().includes('SYNTHETIC_PRIVATE_VALUE'));
