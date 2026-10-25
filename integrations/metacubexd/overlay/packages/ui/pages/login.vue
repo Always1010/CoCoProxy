@@ -16,7 +16,7 @@ async function submit() {
   error.value = ''
   try {
     await login(username.value, password.value)
-    await navigateTo('/coproxy', { replace: true })
+    await navigateTo('/overview', { replace: true })
   } catch (cause) {
     error.value = coproxyErrorMessage(cause)
   } finally {

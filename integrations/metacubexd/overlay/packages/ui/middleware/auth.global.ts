@@ -12,8 +12,11 @@ export default defineNuxtRouteMiddleware(async (to) => {
   }
   if (!authenticated && to.path !== '/login')
     return navigateTo('/login', { replace: true })
-  if (authenticated && (
-    ['/', '/login', '/setup', '/config', '/profiles', '/control'].includes(to.path)
-    || /^\/profiles\/[^/]+\/edit\/?$/.test(to.path)
-  )) return navigateTo('/coproxy', { replace: true })
+  if (!authenticated) return
+  if (['/', '/login', '/setup'].includes(to.path))
+    return navigateTo('/overview', { replace: true })
+  if (to.path === '/profiles' || /^\/profiles\/[^/]+\/edit\/?$/.test(to.path))
+    return navigateTo('/subscriptions', { replace: true })
+  if (['/config', '/control'].includes(to.path))
+    return navigateTo('/coproxy', { replace: true })
 })

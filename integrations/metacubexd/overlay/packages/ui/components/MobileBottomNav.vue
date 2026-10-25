@@ -9,6 +9,7 @@ import {
   IconPlus,
   IconRuler,
   IconServerCog,
+  IconSettings,
   IconX,
 } from '@tabler/icons-vue'
 import {
@@ -33,9 +34,10 @@ const rightPrimaryItems = computed(() => primaryItems.value.slice(2, 4))
 
 // Secondary items in the FAB popup
 const secondaryItems = computed(() => [
-  { href: '/coproxy', name: '策略与订阅', icon: IconServerCog },
+  { href: '/subscriptions', name: '订阅', icon: IconServerCog },
   { href: '/traffic', name: t('dataUsage'), icon: IconChartAreaLine },
   { href: '/logs', name: t('logs'), icon: IconFileStack },
+  { href: '/coproxy', name: '设置', icon: IconSettings },
 ])
 
 const isActive = (href: string) => route.path === href
