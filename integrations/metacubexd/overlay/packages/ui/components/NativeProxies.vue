@@ -15,7 +15,7 @@ const configStore = useConfigStore()
 const recommendationStore = useNodeRecommendationStore()
 const workspace = useWorkspace()
 const proxyRefresh = useProxyRefresh()
-const { isRunning: isBatchTesting, testMultipleGroups, healthCheckAllProviders } = useBatchLatencyTest()
+const { isRunning: isBatchTesting, testMultipleGroups, healthCheckAllProviders, abortTest } = useBatchLatencyTest()
 const activeTab = ref<'proxies' | 'proxyProviders'>('proxies')
 const settingsModal = ref<{ open: () => void }>()
 const connectivityModal = ref<{ open: () => void }>()
@@ -81,7 +81,7 @@ watch(activeTab, () => { showScrollToTop.value = false })
         </button>
       </div>
       <ProxiesSortSelect />
-      <button v-if="activeTab === 'proxies'" class="btn btn-ghost btn-sm" title="测试全部组代理延迟" aria-label="测试全部组代理延迟" :disabled="isBatchTesting" @click="testAllGroups"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse': isBatchTesting }" /></button>
+      <button v-if="activeTab === 'proxies'" class="btn btn-ghost btn-sm" :title="isBatchTesting ? '取消延迟测试' : '测试全部组代理延迟'" :aria-label="isBatchTesting ? '取消延迟测试' : '测试全部组代理延迟'" @click="isBatchTesting ? abortTest() : testAllGroups()"><IconX v-if="isBatchTesting" :size="18" /><IconBrandSpeedtest v-else :size="18" /></button>
       <template v-else>
         <button class="btn btn-ghost btn-sm" title="检测全部代理提供者" aria-label="检测全部代理提供者" :disabled="isBatchTesting" @click="healthCheckAllProviders"><IconBrandSpeedtest :size="18" /></button>
         <button class="btn btn-ghost btn-sm" title="更新全部代理提供者" aria-label="更新全部代理提供者" :disabled="proxiesStore.isAllProviderUpdating" @click="proxiesStore.updateAllProvider"><IconReload :size="18" /></button>
