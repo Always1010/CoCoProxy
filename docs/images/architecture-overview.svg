@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1040" viewBox="0 0 1440 1040" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" fill="#182b43" role="img" aria-labelledby="title desc">
+  <title id="title">Coproxy 当前软件架构</title>
+  <desc id="desc">管理面使用经适配的 MetaCubeXD UI 和 Nitro Server，连接 Coproxy 自有认证、草稿、订阅、配置、事务和运行适配模块。数据面由唯一代理内核 Mihomo 处理。systemd 监管管理和核心服务；原生网关额外使用 root 网络 oneshot 配置独立 guard、出口与回程。接入路由器是外部协作组件。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#486079"/></marker>
+    <marker id="greenArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#16745b"/></marker>
+  </defs>
+  <rect width="1440" height="1040" fill="#ffffff"/>
+  <text x="48" y="53" font-size="31" font-weight="700">Coproxy · 软件组成与运行关系</text>
+  <text x="48" y="87" font-size="17" fill="#53677d">一个代理内核，两条业务入口；管理配置与终端数据分开流动</text>
+  <rect x="970" y="34" width="15" height="15" rx="3" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/><text x="994" y="48" font-size="15" fill="#53677d">开源应用</text>
+  <rect x="1100" y="34" width="15" height="15" rx="3" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/><text x="1124" y="48" font-size="15" fill="#53677d">自有模块</text>
+  <rect x="1230" y="34" width="15" height="15" rx="3" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/><text x="1254" y="48" font-size="15" fill="#53677d">系统 / 外部</text>
+
+  <rect x="48" y="130" width="330" height="118" rx="13" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
+  <text x="70" y="163" font-size="20" font-weight="700">浏览器 · MetaCubeXD UI</text>
+  <text x="70" y="193" font-size="17">Vue / Nuxt 静态界面 + Coproxy 页面</text>
+  <text x="70" y="222" font-size="15" fill="#53677d">策略、订阅、节点、连接、规则与日志</text>
+  <rect x="454" y="130" width="226" height="118" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="477" y="165" font-size="20" font-weight="700">HTTPS 入口</text>
+  <text x="477" y="195" font-size="17">独立反向代理</text>
+  <text x="477" y="224" font-size="15" fill="#53677d">例如 nginx；终止 TLS</text>
+  <rect x="756" y="130" width="636" height="118" rx="13" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
+  <text x="780" y="164" font-size="20" font-weight="700">管理服务 · 适配后的 MetaCubeXD Server</text>
+  <text x="780" y="194" font-size="17">Node / Nitro / h3：提供静态页面、API 与 WebSocket</text>
+  <text x="780" y="223" font-size="15" fill="#53677d">单实例、非 root；上游 Agent 与自动刷新监管已禁用</text>
+  <path d="M378 187 H454" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/><text x="390" y="171" font-size="15" fill="#53677d">同源</text>
+  <path d="M680 187 H756" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/><text x="687" y="171" font-size="15" fill="#53677d">loopback</text>
+
+  <rect x="48" y="306" width="816" height="334" rx="16" fill="#f7fcf9" stroke="#80bca6" stroke-width="1.5"/>
+  <text x="72" y="342" font-size="20" font-weight="700">Coproxy 控制模块 · 运行于管理进程内</text>
+  <text x="72" y="368" font-size="15" fill="#53677d">management：独立认证、会话、管理 API 与启动恢复</text>
+  <rect x="72" y="393" width="220" height="105" rx="10" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
+  <text x="89" y="425" font-size="20" font-weight="700">草稿与订阅</text>
+  <text x="89" y="454" font-size="17">drafts / subscriptions</text>
+  <text x="89" y="481" font-size="15" fill="#53677d">策略、修订号、节点快照</text>
+  <rect x="334" y="393" width="220" height="105" rx="10" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
+  <text x="351" y="425" font-size="20" font-weight="700">配置编译</text>
+  <text x="351" y="454" font-size="17">config / gateway</text>
+  <text x="351" y="481" font-size="15" fill="#53677d">完整候选 + 内容代次</text>
+  <rect x="596" y="393" width="244" height="105" rx="10" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
+  <text x="613" y="425" font-size="20" font-weight="700">应用事务与运行适配</text>
+  <text x="613" y="454" font-size="17">transaction / runtime</text>
+  <text x="613" y="481" font-size="15" fill="#53677d">校验、启停、确认、失败恢复</text>
+  <path d="M292 446 H334" fill="none" stroke="#16745b" stroke-width="2" marker-end="url(#greenArrow)"/><path d="M554 446 H596" fill="none" stroke="#16745b" stroke-width="2" marker-end="url(#greenArrow)"/>
+  <rect x="72" y="534" width="482" height="76" rx="10" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
+  <text x="89" y="565" font-size="20" font-weight="700">受限 controller 代理 · management</text>
+  <text x="89" y="593" font-size="15" fill="#53677d">/api/clash/* · 会话鉴权、代次检查、服务端持有密钥</text>
+  <text x="72" y="628" font-size="15" fill="#53677d">共同底层：私有文件存储 · 草稿 / 快照 / 候选 / 事务 / selection</text>
+  <path d="M1074 248 V278 H456 V306" fill="none" stroke="#16745b" stroke-width="2" marker-end="url(#greenArrow)"/>
+  <rect x="579" y="264" width="320" height="27" fill="#ffffff"/>
+  <text x="590" y="284" font-size="15" fill="#53677d">管理请求由 Server 挂载到自有模块</text>
+
+  <rect x="956" y="306" width="436" height="334" rx="16" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
+  <text x="980" y="345" font-size="20" font-weight="700">Mihomo v1.19.33 · 唯一代理内核</text>
+  <text x="980" y="376" font-size="15" fill="#53677d">独立进程；systemd 监管</text>
+  <text x="980" y="423" font-size="17">代理协议与加密 · 规则与策略组</text>
+  <text x="980" y="455" font-size="17">显式 HTTP / SOCKS · 受限 DNS</text>
+  <text x="980" y="487" font-size="17">原生网关：TUN / 自动路由 / 重定向</text>
+  <text x="980" y="548" font-size="17">loopback controller · HTTP / WS</text>
+  <text x="980" y="593" font-size="15" fill="#53677d">业务出站 → 代理节点 / 允许的直连目标</text>
+  <path d="M864 446 H956" fill="none" stroke="#16745b" stroke-width="2" marker-end="url(#greenArrow)"/>
+  <text x="877" y="409" font-size="15" fill="#53677d">配置应用</text>
+  <text x="877" y="431" font-size="15" fill="#53677d">经 systemd</text>
+  <path d="M554 573 H956" fill="none" stroke="#16745b" stroke-width="2" marker-end="url(#greenArrow)"/>
+  <rect x="657" y="556" width="205" height="27" fill="#f7fcf9"/>
+  <text x="667" y="575" font-size="15" fill="#53677d">认证 HTTP / WS 状态与控制</text>
+
+  <rect x="48" y="693" width="330" height="105" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="70" y="726" font-size="20" font-weight="700">systemd + polkit</text>
+  <text x="70" y="755" font-size="17">监管管理服务与 Mihomo</text>
+  <text x="70" y="782" font-size="15" fill="#53677d">管理身份只获固定核心 start / stop</text>
+  <rect x="454" y="693" width="410" height="105" rx="13" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
+  <text x="477" y="726" font-size="20" font-weight="700">root 网络 oneshot · 仅原生网关</text>
+  <text x="477" y="755" font-size="17">Python → ip / nft；执行后退出</text>
+  <text x="477" y="782" font-size="15" fill="#53677d">独立 guard、标记出口、终端回程</text>
+  <rect x="956" y="693" width="436" height="105" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="980" y="726" font-size="20" font-weight="700">终端 → 接入路由器 → 网关入口</text>
+  <text x="980" y="755" font-size="17">业务流量与受管公网 DNS 交给核心</text>
+  <text x="980" y="782" font-size="15" fill="#53677d">路由器负责交付与用户关闭后的恢复</text>
+  <path d="M1174 693 V640" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="1188" y="674" font-size="15" fill="#53677d">数据面</text>
+  <path d="M378 745 H454" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+  <path d="M864 714 H913 V615 H956" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+  <text x="878" y="744" font-size="15" fill="#53677d">核心启动</text>
+  <text x="878" y="768" font-size="15" fill="#53677d">依赖准备</text>
+
+  <rect x="48" y="844" width="1344" height="71" rx="12" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="70" y="874" font-size="20" font-weight="700">Linux 运行环境</text>
+  <text x="70" y="901" font-size="17">TUN / 策略路由 / nftables 由核心与独立网络单元分别管理；本机流量通过 UID 排除保持原有出口</text>
+  <path d="M659 798 V844" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+  <path d="M1392 610 H1415 V879 H1392" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+  <text x="1041" y="947" font-size="15" fill="#53677d">实线：请求 / 配置 / 数据</text>
+  <text x="1041" y="974" font-size="15" fill="#53677d">虚线：监管 / 依赖 / 资源配置</text>
+  <text x="48" y="953" font-size="15" fill="#53677d">边界：当前自动网关为单终端 IPv4；核心就绪与终端路径验收分开报告。</text>
+  <text x="48" y="981" font-size="15" fill="#53677d">sing-box 仅用于协议测试；旧 packages/network 不在本图启动链路；AlwayRoute 是可选路由器侧实现。</text>
+</svg>
