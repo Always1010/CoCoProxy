@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeNodeSnapshot, SnapshotDecodeError } from '../packages/subscriptions/yaml.ts';
+import { decodeNodeSnapshot, decodeSubscriptionProfile, SnapshotDecodeError } from '../packages/subscriptions/yaml.ts';
 import { compileConfig } from '../packages/config/index.ts';
 
 const node = { name: 'Example', type: 'ss', server: '192.0.2.10', port: 443, cipher: 'aes-128-gcm', password: 'synthetic-password' };
@@ -119,4 +119,19 @@ test('decoder preserves node safety fields for the compiler to reject', () => {
     policy: { rules: ['MATCH,REJECT'] }, sources: [{ id: 'source', proxies: decoded.proxies }],
   }), { code: 'PROTECTED_FIELD' });
   reject('proxies: [\n  password: synthetic-password\n  url: https://subscription.example/private\n');
+});
+
+test('profile decoder preserves complete inline policy and discloses deployment fields', () => {
+  const policy = { proxies: [node], 'proxy-groups': [{ name: 'Automatic', type: 'url-test',
+    proxies: ['Example'], url: 'https://probe.example/check', interval: 300 }],
+    rules: ['DOMAIN,example.test,Automatic', 'MATCH,DIRECT'],
+    'sub-rules': { local: ['DOMAIN-SUFFIX,example.test,DIRECT'] }, 'log-level': 'info' };
+  const result = decodeSubscriptionProfile(JSON.stringify({ ...policy, tun: { enable: true }, 'mixed-port': 9999 }));
+  assert.deepEqual(result, { proxies: [node], policy, unsupportedFields: ['mixed-port', 'tun'] });
+  assert.deepEqual(decodeSubscriptionProfile('rules: ["MATCH,DIRECT"]'), { proxies: [], policy: { proxies: [], rules: ['MATCH,DIRECT'] } });
+  assert.deepEqual(decodeSubscriptionProfile(JSON.stringify({ proxies: [node] })), { proxies: [node] });
+  for (const key of ['proxy-providers', 'rule-providers']) {
+    assert.throws(() => decodeSubscriptionProfile(JSON.stringify({ proxies: [node], [key]: {} })), { code: 'SNAPSHOT_UNSUPPORTED' });
+  }
+  assert.throws(() => decodeSubscriptionProfile('proxies: []\nproxies: []'), { code: 'SNAPSHOT_DECODE_FAILED' });
 });

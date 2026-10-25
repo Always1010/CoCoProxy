@@ -38,7 +38,8 @@ async function fixture(run: (origin: string, options: HttpsClientOptions, hits: 
       else if (req.url!.startsWith('/stall')) { res.writeHead(200); res.write('{'); }
       else if (req.headers['if-none-match'] === '"v1"') { res.writeHead(304); res.end(); }
       else if (req.url!.startsWith('/nodes')) {
-        res.writeHead(200, { etag: '"v1"', 'content-type': 'application/json' });
+        res.writeHead(200, { etag: '"v1"', 'content-type': 'application/json',
+          'subscription-userinfo': 'upload=100; download=200; total=10000; expire=2000000000' });
         res.end(JSON.stringify({ proxies: [{ name: 'Fetched', type: 'socks5', server: '192.0.2.10', port: 1080, password: sensitive }] }));
       }
       else { res.writeHead(200, { etag: '"v1"', 'content-type': 'application/json' }); res.end(JSON.stringify({ host: req.headers.host, proxies: [] })); }
@@ -88,6 +89,14 @@ test('TLS trust and original hostname checks cannot be bypassed by pinned IP', a
     const wrongOrigin = origin.replace('snapshot.test', 'wrong.test');
     const wrongName = new HttpsSnapshotClient({ ...options, allowedOrigins: [wrongOrigin] });
     await assert.rejects(wrongName.fetch(wrongOrigin + '/snapshot'), code('SOURCE_FETCH_FAILED'));
+  });
+});
+
+test('optional subscription accounting is parsed into bounded public numeric data', async () => {
+  await fixture(async (origin, options) => {
+    const response = await new HttpsSnapshotClient(options).fetch(origin + '/nodes');
+    assert.equal(response.status, 'modified');
+    assert.deepEqual(response.usage, { upload: 100, download: 200, total: 10000, expire: 2000000000 });
   });
 });
 
