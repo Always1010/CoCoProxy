@@ -34,6 +34,7 @@ export interface WorkspaceView {
   pending: boolean
   active: string | null
   error?: string
+  invalidSelections?: string[]
 }
 
 export function useWorkspace() {

@@ -75,6 +75,15 @@ async function remove() {
   const source = deleting.value
   if (!source) return
   await run(async () => {
+    if (workspace.value?.sourceIds.includes(source.id) || workspace.value?.subscriptionId === source.id) {
+      await save(settings => {
+        settings.sourceIds = settings.sourceIds.filter(id => id !== source.id)
+        if (settings.subscriptionId === source.id) {
+          settings.subscriptionId = null
+          settings.mode = 'local'
+        }
+      })
+    }
     await api.request(sourcePath(source.id), { method: 'DELETE', body: { expectedRevision: source.revision } })
     deleting.value = null
     await load()
