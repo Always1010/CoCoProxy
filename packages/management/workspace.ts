@@ -112,10 +112,6 @@ export class WorkspaceStore {
 
 /** Preserve an existing draft until the user explicitly chooses another scheme. */
 export function initialWorkspace(policy: JsonObject | null, sourceIds: string[]): Workspace {
-  const selections: Record<string, string> = {};
-  if (Array.isArray(policy?.['proxy-groups'])) for (const value of policy['proxy-groups']) {
-    if (value && typeof value === 'object' && !Array.isArray(value) && value.type === 'select' && typeof value.name === 'string' && Array.isArray(value.proxies) && typeof value.proxies[0] === 'string' && !['__proto__', 'constructor', 'prototype'].includes(value.name)) selections[value.name] = value.proxies[0];
-  }
   return { revision: 0, mode: policy ? 'legacy' : 'local', subscriptionId: null, sourceIds, runMode: 'rule',
-    local: { selections: {}, rules: [] }, subscriptionOverrides: { legacy: { selections, rules: [] } } };
+    local: { selections: {}, rules: [] }, subscriptionOverrides: { legacy: { selections: {}, rules: [] } } };
 }

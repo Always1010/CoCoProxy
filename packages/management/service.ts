@@ -80,7 +80,16 @@ export async function loadManagementGateway(path: string) {
       },
     });
     const action = createManagementApplication({ stateDirectory: runtimeSettings.stateDirectory, deployment: settings.deployment,
-      runtime, sourceClient, sourceDecoder: decodeSubscriptionProfile, automaticGateway: runtimeSettings.automaticGateway });
+      runtime, sourceClient, sourceDecoder: decodeSubscriptionProfile, automaticGateway: runtimeSettings.automaticGateway,
+      observeSelections: async () => {
+        const response = await controller.fetch(new Request(settings.origin + '/proxies'));
+        const generation = response.headers.get('x-coproxy-generation');
+        if (!response.ok || !generation) throw new ManagementError('CONTROLLER_UNAVAILABLE', 503);
+        const body = await response.json() as { proxies: Record<string, { now?: unknown }> };
+        const selections: Record<string, string> = Object.create(null);
+        for (const [name, value] of Object.entries(body.proxies)) if (typeof value.now === 'string') selections[name] = value.now;
+        return { generation, selections };
+      } });
     const gateway = createManagementGateway({ origin: settings.origin, credential }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime) };
