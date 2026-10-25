@@ -9,6 +9,8 @@ import type { CoreObservation } from '../runtime/types.ts';
 import { privateRead } from '../storage/private-files.ts';
 import { exactRecord, ManagementError, readJsonBody } from './http.ts';
 import type { ManagementAction } from './http.ts';
+import { compileAutomaticGatewayConfig, parseAutomaticGatewaySettings, automaticGatewayPolicy, AutomaticGatewayConfigError } from '../gateway/profile.ts';
+import type { AutomaticGatewaySettings } from '../gateway/profile.ts';
 
 export interface ManagementRuntime extends RuntimeAdapter { observe(generation: string): Promise<CoreObservation> }
 const protectedKeys = ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns'];
@@ -16,10 +18,13 @@ const digest = (value: unknown): value is string => typeof value === 'string' &&
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
 /** Routes only Coproxy operations; the stock upstream write router is not used. */
-export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient; sourceDecoder?: SnapshotDecoder }): ManagementAction {
+export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient; sourceDecoder?: SnapshotDecoder; automaticGateway?: AutomaticGatewaySettings }): ManagementAction {
   // Compile before cloning so getters and non-JSON values cannot run here.
   compileConfig({ schemaVersion: 1, deployment: options.deployment, policy: { rules: ['MATCH,REJECT'] } });
   const deployment = structuredClone(options.deployment);
+  const automaticGateway = options.automaticGateway === undefined ? undefined : parseAutomaticGatewaySettings(options.automaticGateway);
+  const compile = (input: unknown) => automaticGateway ? compileAutomaticGatewayConfig(input, automaticGateway) : compileConfig(input);
+  compile({ schemaVersion: 1, deployment, policy: { rules: ['MATCH,REJECT'] } });
   const store = new FileTransactionStore(options.stateDirectory);
   const drafts = new DraftStore(options.stateDirectory);
   const subscriptions = new SubscriptionStore(options.stateDirectory, options.sourceClient, options.sourceDecoder);
@@ -41,7 +46,8 @@ export function createManagementApplication(options: { stateDirectory: string; d
           catch { core = { ready: false, generation: status.active, checkedAt: new Date().toISOString(), reason: 'OBSERVATION_UNAVAILABLE' }; }
         }
         return { ...status, draft: await drafts.metadata(), core, scope: 'core_only',
-          gateway: { ready: false, reason: 'GATEWAY_NOT_IMPLEMENTED' } };
+          gateway: { ready: false, reason: automaticGateway ? 'GATEWAY_PATH_UNVERIFIED' : 'GATEWAY_NOT_IMPLEMENTED',
+            ...(automaticGateway ? { profile: 'mihomo-automatic', terminalPath: 'unverified' } : {}) } };
       }
       if (path === '/api/coproxy/draft' && request.method === 'GET') {
         const metadata = await drafts.metadata();
@@ -70,7 +76,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
           sources.push({ id: snapshot.id, proxies: snapshot.proxies });
           captures.push({ id: snapshot.id, expectedRevision: source.expectedRevision, snapshotRevision: snapshot.sourceRevision, snapshotDigest: snapshot.sha256 });
         }
-        const candidate = compileConfig({ schemaVersion: 1, deployment, policy: draft.input.policy, sources });
+        const candidate = compile({ schemaVersion: 1, deployment, policy: draft.input.policy, sources });
         await store.stage(candidate);
         return { generation: candidate.id, stagedRevision: draft.revision, sources: captures, staged: true, runtime: 'not_started' };
       }
@@ -78,9 +84,9 @@ export function createManagementApplication(options: { stateDirectory: string; d
         const body = exactRecord(await readJsonBody(request), ['generation', 'expectedActive']);
         if (!digest(body.generation) || !(body.expectedActive === null || digest(body.expectedActive))) throw new ManagementError('INVALID_GENERATION');
         const candidate = JSON.parse(await privateRead(await store.readCandidate(body.generation)));
-        const policy = { ...candidate };
+        const policy = automaticGateway ? automaticGatewayPolicy(candidate) : { ...candidate };
         for (const key of protectedKeys) delete policy[key];
-        const expected = compileConfig({ schemaVersion: 1, deployment, policy });
+        const expected = compile({ schemaVersion: 1, deployment, policy });
         if (expected.id !== body.generation) throw new ManagementError('DEPLOYMENT_MISMATCH', 409);
         return { ...await manager.apply(body.generation, body.expectedActive) };
       }
@@ -107,6 +113,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
     } catch (error) {
       if (error instanceof ManagementError) throw error;
       if (error instanceof ConfigError) throw new ManagementError(error.code);
+      if (error instanceof AutomaticGatewayConfigError) throw new ManagementError(error.code);
       if (error instanceof DraftError || error instanceof TransactionError || error instanceof SubscriptionError) {
         const code = error.code;
         const status = /CONFLICT|STORE_LOCKED|RECOVERY_REQUIRED|DEPLOYMENT_MISMATCH/.test(code) ? 409

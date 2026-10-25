@@ -5,6 +5,7 @@ import type { JsonObject, JsonValue } from '../config/index.ts';
 import { renderRuntimePlan } from '../runtime/plan.ts';
 import { HttpsSnapshotClient } from '../subscriptions/http.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
+import { renderAutomaticGatewayHostPlan } from '../gateway/host-plan.ts';
 
 export class DeploymentPlanError extends Error {
   readonly code = 'DEPLOYMENT_PLAN_INVALID';
@@ -124,7 +125,7 @@ function render(input: unknown): DeploymentPlan {
   const envelope = record(jsonData(input), ['schemaVersion', 'runtime', 'management']);
   if (envelope.schemaVersion !== 1) fail();
   const runtime = record(envelope.runtime, ['schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256',
-    'systemctlPath', 'nodePath', 'sourceDirectory', 'settingsPath', 'unitPath', 'serviceUid']);
+    'systemctlPath', 'nodePath', 'sourceDirectory', 'settingsPath', 'unitPath', 'serviceUid'], ['automaticGateway']);
   const core = renderRuntimePlan(runtime);
   const management = record(envelope.management, ['origin', 'listenPort', 'serviceUser', 'serverEntry', 'settingsPath',
     'credentialPath', 'unitPath', 'policyPath', 'deployment'], ['subscriptionPolicy', 'controllerPolicy']);
@@ -141,6 +142,12 @@ function render(input: unknown): DeploymentPlan {
   const credentialPath = path(management.credentialPath);
   const unitPath = path(management.unitPath);
   const policyPath = path(management.policyPath);
+  const networkSettingsPath = posix.join(posix.dirname(runtimeSettingsPath), 'gateway-network.json');
+  const networkStateDirectory = '/var/lib/coproxy-gateway-network';
+  const networkPlan = core.settings.automaticGateway ? renderAutomaticGatewayHostPlan({
+    network: core.settings.automaticGateway, sourceDirectory, pythonPath: '/usr/bin/python3',
+    settingsPath: networkSettingsPath, stateDirectory: networkStateDirectory,
+  }) : null;
   if (coreUnitPath !== '/etc/systemd/system/coproxy-mihomo.service' ||
     unitPath !== '/etc/systemd/system/coproxy-management.service' ||
     policyPath !== '/etc/polkit-1/rules.d/50-coproxy-management.rules') fail();
@@ -155,7 +162,12 @@ function render(input: unknown): DeploymentPlan {
 
   const controlledFiles = [binaryPath, systemctlPath, nodePath, runtimeSettingsPath, coreUnitPath,
     serverEntry, settingsPath, credentialPath, unitPath, policyPath,
-    posix.join(sourceDirectory, 'apps/runtime/launch-core.ts')];
+    posix.join(sourceDirectory, 'apps/runtime/launch-core.ts'),
+    ...(networkPlan ? [networkSettingsPath, '/etc/systemd/system/coproxy-gateway-network.service',
+      posix.join(sourceDirectory, 'apps/gateway/network.py'), '/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft',
+      '/usr/bin/ip', '/usr/bin/nft'] : [])];
+  if (networkPlan && (overlap(networkStateDirectory, stateDirectory) || overlap(networkStateDirectory, sourceDirectory) ||
+      controlledFiles.some(file => overlap(networkStateDirectory, file)) || overlap(networkSettingsPath, sourceDirectory))) fail();
   if (overlap(stateDirectory, sourceDirectory) || controlledFiles.some(file => overlap(stateDirectory, file))) fail();
   for (let index = 0; index < controlledFiles.length; index++) {
     if (controlledFiles.slice(index + 1).some(file => overlap(controlledFiles[index], file))) fail();
@@ -221,14 +233,25 @@ function render(input: unknown): DeploymentPlan {
     { path: unitPath, mode: '0644', owner: 'root', sensitive: false, content: managementUnit },
     { path: settingsPath, mode: '0600', owner: serviceUid, sensitive: true, content: settingsContent },
     { path: policyPath, mode: '0644', owner: 'root', sensitive: false, content: policy },
+    ...(networkPlan ? [
+      { path: '/etc/systemd/system/coproxy-gateway-network.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.unit },
+      { path: networkSettingsPath, mode: '0600' as const, owner: 'root' as const, sensitive: true, content: JSON.stringify(networkPlan.settings, null, 2) + '\n' },
+    ] : []),
   ];
   const parents = [...new Set(files.map(file => posix.dirname(file.path)).concat(posix.dirname(credentialPath)))];
   if (parents.some(parent => parent === '/' || inside(parent, stateDirectory))) fail();
   return {
     schemaVersion: 1, sensitive: true, files,
     directories: [{ path: stateDirectory, mode: '0700', owner: serviceUid },
+      ...(networkPlan ? [{ path: networkStateDirectory, mode: '0700' as const, owner: 'root' as const }] : []),
       ...parents.map(parent => ({ path: parent, mode: '0755' as const, owner: 'root' as const }))],
     requirements: [
+      ...(networkPlan ? [
+        '自动网关模式另含 root 网络 oneshot：独立阻断规则、一张带 mark 的出口表和终端回程路由；Mihomo 独占自动接管资源。需要另行审阅并授权真实网络变更，不能按显式代理安装范围执行。',
+        '网络设置及其祖先必须为 root 控制，网络回执目录 root:0700；不得交给管理服务 UID 写入。Python 3 与 ip/nft 使用系统现有受信路径；本计划不安装工具。',
+        '启动前现场核验接口、地址、路由器 MAC、路由表/优先级/mark 和 TUN 冲突，并另行准备 IPv4 转发；网络 oneshot 要求 ip_forward 已为 1，不自行修改 sysctl。核心仅获 CAP_NET_ADMIN/CAP_NET_RAW。',
+        '停止核心或网络单元不会清除独立 guard；用户关闭直连由接入路由器独立完成。完整退役先关闭路由器交付并停止核心，再显式运行 root 网络 remove；部分执行须人工核验，不自动猜测恢复。',
+      ] : []),
       '本计划含 controllerSecret，输入、整个计划及管理设置必须作为私有敏感资料保存；不得提交、公开打印或放入发行包。',
       '目标必须为具备 systemd 与 JavaScript polkit 规则的 Linux；Node 须支持运行项目和 process.execve，管理 Server 必须完成受审阅的构建。',
       `部署前核对账户 ${management.serviceUser} 唯一解析为非 root UID ${serviceUid}，服务与 CLI 使用该身份；本计划不创建账户或更改组。`,

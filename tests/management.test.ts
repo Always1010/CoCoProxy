@@ -12,6 +12,7 @@ import { FileTransactionStore } from '../packages/transaction/index.ts';
 import { canonicalJson, compileConfig } from '../packages/config/index.ts';
 import type { JsonObject } from '../packages/config/index.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
+import type { AutomaticGatewaySettings } from '../packages/gateway/profile.ts';
 
 const origin = 'https://management.example';
 const username = 'synthetic-admin';
@@ -57,7 +58,7 @@ async function login(handler: (r: Request) => Promise<Response>) {
   assert.equal(response.headers.get('cache-control'), 'no-store');
   return cookie.split(';')[0];
 }
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, automaticGateway?: AutomaticGatewaySettings) {
   const root = await mkdtemp(join(tmpdir(), 'coproxy-management-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const state = join(root, 'state');
@@ -67,7 +68,7 @@ async function fixture(t: test.TestContext) {
     confirm: async () => { events.push('confirm'); return true; }, restore: async () => { events.push('restore'); },
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }) };
   const sourceClient = { fetch: async () => ({ status: 'modified' as const, text: JSON.stringify({ proxies: [{ name: 'synthetic-node', type: 'socks5', server: '192.0.2.10', port: 1080 }] }) }) };
-  const action = createManagementApplication({ stateDirectory: state, deployment, runtime, sourceClient });
+  const action = createManagementApplication({ stateDirectory: state, deployment, runtime, sourceClient, automaticGateway });
   return { root, state, events, handler: createManagementHandler({ origin, credential }, action), setFailure: () => { fails = true; } };
 }
 
@@ -145,8 +146,12 @@ test('JSON transport rejects oversize, invalid encoding, conflicting length and 
   assert.equal(cancelled, true);
 });
 
-test('authenticated saves pin server deployment, stage captures a revision and only explicit apply runs the transaction', async t => {
-  const f = await fixture(t);
+for (const profile of ['explicit', 'automatic'] as const) test(`authenticated ${profile} saves pin deployment and apply through the same transaction`, async t => {
+  const automaticGateway: AutomaticGatewaySettings | undefined = profile === 'explicit' ? undefined : {
+    schemaVersion: 1, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', routerIPv4: '192.0.2.1',
+    routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24, dnsPort: 15353,
+    egressMark: 65536, egressTable: 2024, egressPriority: 8000, tunMtu: 1500 };
+  const f = await fixture(t, automaticGateway);
   const cookie = await login(f.handler);
   const call = async (path: string, method = 'GET', body?: unknown) => f.handler(request(path, method, body, cookie));
   assert.equal((await call('/api/coproxy/status')).status, 200);
@@ -167,7 +172,8 @@ test('authenticated saves pin server deployment, stage captures a revision and o
   assert.deepEqual(JSON.parse(draftText).draft.policy, policy);
   const staged = await (await call('/api/coproxy/stage', 'POST', { expectedRevision: 1 })).json();
   assert.equal(staged.stagedRevision, 1);
-  assert.equal(staged.generation, metadata.generation);
+  if (profile === 'explicit') assert.equal(staged.generation, metadata.generation);
+  else assert.notEqual(staged.generation, metadata.generation);
   assert.deepEqual(f.events, []);
   const conflict = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy });
   assert.equal(conflict.status, 409);
@@ -178,6 +184,7 @@ test('authenticated saves pin server deployment, stage captures a revision and o
   assert.equal(status.active, staged.generation);
   assert.equal(status.core.ready, true);
   assert.equal(status.gateway.ready, false);
+  if (automaticGateway) assert.equal(status.gateway.reason, 'GATEWAY_PATH_UNVERIFIED');
   assert.equal(status.readiness, 'unknown');
   assert.ok(!JSON.stringify(status).includes(secret));
   const wrongCAS = await call('/api/coproxy/apply', 'POST', { generation: staged.generation, expectedActive: null });
@@ -198,6 +205,7 @@ test('authenticated saves pin server deployment, stage captures a revision and o
   assert.deepEqual(f.events, ['validate', 'activate', 'confirm']);
   const privateConfig = JSON.parse(await readFile(join(f.state, 'candidates', staged.generation + '.json'), 'utf8'));
   assert.equal(privateConfig.secret, secret);
+  assert.equal(privateConfig.tun.enable, automaticGateway !== undefined);
 });
 
 test('browser source updates expose metadata and capture exact snapshots without URLs or automatic apply', async t => {

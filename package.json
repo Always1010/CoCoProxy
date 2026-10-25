@@ -8,6 +8,7 @@
   "dependencies": { "ws": "8.22.0", "yaml": "2.9.0" },
   "devDependencies": { "@types/node": "22.18.13", "@types/ws": "8.18.2" },
   "scripts": {
+    "test:gateway": "node --experimental-strip-types --test tests/gateway-profile.test.ts tests/gateway-host-plan.test.ts",
     "cli": "node --experimental-strip-types apps/cli/main.ts",
     "typecheck": "node tooling/node_modules/typescript/bin/tsc -p tsconfig.json",
     "test:config": "node --experimental-strip-types --test tests/config.test.ts",

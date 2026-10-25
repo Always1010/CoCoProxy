@@ -3,6 +3,7 @@ import { posix } from 'node:path';
 import { parseRuntimeSettings } from './settings.ts';
 import { RuntimeError } from './types.ts';
 import type { RuntimeSettings } from './types.ts';
+import { parseAutomaticGatewaySettings } from '../gateway/profile.ts';
 
 const fields = new Set([
   'schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256', 'systemctlPath',
@@ -32,7 +33,8 @@ export function renderRuntimePlan(input: unknown): { unit: string; settings: Run
       ![Object.prototype, null].includes(Object.getPrototypeOf(input))) invalid();
   const descriptors = Object.getOwnPropertyDescriptors(input);
   const keys = Reflect.ownKeys(descriptors);
-  if (keys.length !== fields.size || keys.some(key => typeof key !== 'string' || !fields.has(key))) invalid();
+  if ([...fields].some(key => !keys.includes(key)) ||
+      keys.some(key => typeof key !== 'string' || (!fields.has(key) && key !== 'automaticGateway'))) invalid();
   const values: Record<string, unknown> = {};
   for (const [key, descriptor] of Object.entries(descriptors)) {
     if (!descriptor.enumerable || !('value' in descriptor)) invalid();
@@ -48,6 +50,7 @@ export function renderRuntimePlan(input: unknown): { unit: string; settings: Run
   const sourceDirectory = absolutePath(values.sourceDirectory);
   const settingsPath = absolutePath(values.settingsPath);
   const unitPath = absolutePath(values.unitPath);
+  const automaticGateway = values.automaticGateway === undefined ? undefined : parseAutomaticGatewaySettings(values.automaticGateway);
   if (posix.basename(unitPath) !== 'coproxy-mihomo.service') invalid();
   for (const path of [stateDirectory, binaryPath, nodePath, sourceDirectory, settingsPath]) visibleToService(path);
   const command = [nodePath, '--experimental-strip-types', posix.join(sourceDirectory, 'apps/runtime/launch-core.ts'),
@@ -55,6 +58,8 @@ export function renderRuntimePlan(input: unknown): { unit: string; settings: Run
   const unit = [
     '[Unit]',
     'Description=Coproxy Mihomo runtime',
+    ...(automaticGateway ? ['Requires=coproxy-gateway-network.service', 'After=coproxy-gateway-network.service',
+      'BindsTo=coproxy-gateway-network.service'] : []),
     '',
     '[Service]',
     'Type=exec',
@@ -66,6 +71,9 @@ export function renderRuntimePlan(input: unknown): { unit: string; settings: Run
     'TimeoutStopSec=10',
     'UMask=0077',
     'NoNewPrivileges=true',
+    ...(automaticGateway ? ['CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW',
+      'AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW', 'DevicePolicy=closed',
+      'DeviceAllow=/dev/net/tun rw', 'PrivateDevices=false'] : []),
     'PrivateTmp=true',
     'ProtectSystem=strict',
     'ProtectHome=true',
@@ -79,6 +87,7 @@ export function renderRuntimePlan(input: unknown): { unit: string; settings: Run
     schemaVersion: 1, stateDirectory, binaryPath, binarySha256: values.binarySha256,
     systemctlPath, unitPath, unitSha256: createHash('sha256').update(unit, 'utf8').digest('hex'),
     serviceUid: values.serviceUid,
+    ...(automaticGateway ? { automaticGateway } : {}),
   });
   return { unit, settings };
 }

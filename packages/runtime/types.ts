@@ -13,6 +13,8 @@ export interface RuntimeSettings {
   unitPath: string;
   unitSha256: string;
   serviceUid: number;
+  /** Private deployment opt-in; ordinary explicit services never accept TUN. */
+  automaticGateway?: import('../gateway/profile.ts').AutomaticGatewaySettings;
 }
 
 export interface RuntimeUnitState {

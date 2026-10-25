@@ -20,7 +20,7 @@ import { renderDeploymentPlan, DeploymentPlanError } from '../../packages/deploy
 
 const MAX_INPUT_BYTES = 1_048_576;
 const HELP = [
-  'Coproxy 开发 CLI（显式代理配置；尚不部署或接管 LAN）',
+  'Coproxy 开发 CLI（显式配置、候选和待审阅部署计划）',
   '',
   'compile  --input <JSON> --output <绝对路径>  编译私有核心配置',
   'validate --input <JSON> --mihomo-bin <绝对路径>  调用现有核心作语法校验',
@@ -172,7 +172,8 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
     catch { throw new CliError('INVALID_DEPLOYMENT_INPUT'); }
     const plan = renderDeploymentPlan(input);
     await writePrivateOutput(flags.get('--output')!, JSON.stringify(plan, null, 2) + '\n');
-    return { planned: true, fileCount: plan.files.length, scope: 'explicit_proxy_deployment', runtime: 'not_started' };
+    return { planned: true, fileCount: plan.files.length,
+      scope: plan.files.some(file => file.path.endsWith('/coproxy-gateway-network.service')) ? 'automatic_gateway_deployment' : 'explicit_proxy_deployment', runtime: 'not_started' };
   }
   if (command === 'runtime-plan') {
     const plan = renderRuntimePlan(await readInput(flags.get('--input')!));

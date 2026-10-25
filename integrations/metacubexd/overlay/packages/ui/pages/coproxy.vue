@@ -181,8 +181,8 @@ onMounted(() => run('load', async () => {
       </div>
       <div class="rounded-box border border-base-content/10 bg-base-200 p-4">
         <h2 class="mb-2 text-sm text-base-content/60">网关状态</h2>
-        <p class="font-medium text-warning">{{ status ? '尚未实现' : '尚未读取' }}</p>
-        <p class="mt-3 text-xs text-base-content/55">网关接管与真实流量验收尚未提供，不能据此判断整条链路健康。</p>
+        <p class="font-medium text-warning">{{ !status ? '尚未读取' : status.gateway.profile === 'mihomo-automatic' ? '已配置，待联网验收' : '未启用网关模式' }}</p>
+        <p class="mt-3 text-xs text-base-content/55">核心状态与终端联网分别核验；配置成功不代表整条链路已通过。</p>
       </div>
     </section>
 
