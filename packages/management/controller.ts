@@ -138,6 +138,16 @@ export function createControllerProxy(options: ControllerProxyOptions): {
   relay: (request: Request, client: ControllerClient, authorized: () => boolean) => Promise<() => void>;
 } {
   const readTarget = singleFlight(options.target);
+  const waitForReadTarget = (signal: AbortSignal): Promise<ControllerTarget> => {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const cancel = () => { signal.removeEventListener('abort', cancel); reject(signal.reason); };
+      signal.addEventListener('abort', cancel, { once: true });
+      // An individual waiter can leave without cancelling other readers.
+      void readTarget().then(value => { signal.removeEventListener('abort', cancel); resolve(value); },
+        error => { signal.removeEventListener('abort', cancel); reject(error); });
+    });
+  };
   let probing = 0;
   const origins = new Set((options.allowedProbeOrigins ?? []).map(input => {
     const url = new URL(input);
@@ -160,12 +170,14 @@ export function createControllerProxy(options: ControllerProxyOptions): {
           if (typeof record.name !== 'string' || !record.name || record.name.length > 1024 || /[\x00-\x1f\x7f]/.test(record.name)) throw new ManagementError('CONTROLLER_REQUEST_DENIED');
           body = JSON.stringify(record);
         }
-        const current = validateTarget(await (route.mutation ? options.target() : readTarget()));
+        const current = validateTarget(await (route.mutation ? options.target() : waitForReadTarget(request.signal)));
         generation = current.generation;
         if (!route.mutation) {
           request.signal.throwIfAborted();
           if (!await options.isCurrent(current.generation)) throw new ManagementError('CONTROLLER_GENERATION_CONFLICT', 409);
-          return await upstream(current, route.path, request.method, route.deadlineMs, route.probe, body, request.signal);
+          const result = await upstream(current, route.path, request.method, route.deadlineMs, route.probe, body, request.signal);
+          if (!await options.isCurrent(current.generation)) throw new ManagementError('CONTROLLER_GENERATION_CONFLICT', 409);
+          return result;
         }
         const expected = request.headers.get('if-match');
         if (!expected || expected !== current.generation) throw new ManagementError('CONTROLLER_GENERATION_CONFLICT', 409);
