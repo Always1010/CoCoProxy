@@ -38,14 +38,14 @@ onMounted(() => run(load))
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-3">
-    <WorkspaceToolbar :dirty="dirty" :before-apply="saveRules" />
+    <WorkspaceToolbar :dirty="dirty" />
     <div role="tablist" class="tabs tabs-box w-fit shrink-0">
       <button role="tab" class="tab" :class="{ 'tab-active': tab === 'effective' }" :aria-selected="tab === 'effective'" @click="tab = 'effective'">生效规则</button>
       <button role="tab" class="tab" :class="{ 'tab-active': tab === 'custom' }" :aria-selected="tab === 'custom'" @click="tab = 'custom'">自定义规则<span v-if="entries.length" class="badge badge-sm ml-2">{{ entries.length }}</span></button>
     </div>
     <NativeRules v-if="tab === 'effective'" :key="view?.active ?? 'initial'" class="min-h-0 flex-1" />
     <div v-else class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-      <div class="flex items-center justify-between gap-2 px-1"><span class="text-xs text-base-content/50">优先匹配 · {{ workspace?.mode === 'local' ? '本地规则' : '仅覆盖当前配置' }}</span><button class="btn btn-ghost btn-sm" title="保存规则" aria-label="保存规则" :disabled="!dirty || busy" @click="run(saveRules)"><IconDeviceFloppy :size="18" />保存</button></div>
+      <div class="flex items-center justify-between gap-2 px-1"><span class="text-xs text-base-content/50">优先匹配 · {{ workspace?.mode === 'local' ? '本地规则' : '仅覆盖当前配置' }} · 保存即生效</span><button class="btn btn-ghost btn-sm" title="保存规则并立即生效" aria-label="保存规则" :disabled="!dirty || busy" @click="run(saveRules)"><IconDeviceFloppy :size="18" />保存</button></div>
       <template v-if="workspace">
         <form class="flex flex-wrap items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/60 p-3" @submit.prevent="add">
           <select v-model="type" class="select select-sm w-44" aria-label="规则类型"><option v-for="value in ruleTypes" :key="value">{{ value }}</option></select>
