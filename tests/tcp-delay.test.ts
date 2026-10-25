@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import test from 'node:test';
-import { describeTcpNode, probeTcpEndpoint, tcpEndpoint } from '../packages/management/tcp-delay.ts';
+import { describeTcpNode, probeTcpEndpoint, tcpEndpoint, type TcpDelayResult } from '../packages/management/tcp-delay.ts';
 
 test('TCP measurement only establishes a connection, sends no proxy data, and excludes DNS time', async t => {
   let bytes = 0;
@@ -51,4 +51,47 @@ test('TCP metadata never exposes endpoints or credentials, invalidates edits, an
   assert.equal(tcpEndpoint({ ...node, network: 'quic' }), null);
   assert.equal(tcpEndpoint({ ...node, 'dialer-proxy': 'synthetic-chain' }), null);
   assert.equal(tcpEndpoint({ ...node, port: 0 }), null);
+});
+
+test('TCP races past a blackholed first address and closes the loser without measuring DNS', async () => {
+  const started: string[] = [];
+  let live = 0;
+  const result = await probeTcpEndpoint({ host: 'synthetic.example', port: 443 }, undefined, 1000,
+    async () => ['192.0.2.1', '192.0.2.2'],
+    async (address, _port, signal) => {
+      started.push(address);
+      if (address === '192.0.2.2') return { status: 'success', delay: 7 };
+      live++;
+      return new Promise<TcpDelayResult>(resolve => signal.addEventListener('abort', () => {
+        live--;
+        resolve({ status: 'cancelled', delay: null });
+      }, { once: true }));
+    });
+  assert.deepEqual(started, ['192.0.2.1', '192.0.2.2']);
+  assert.deepEqual(result, { status: 'success', delay: 7 });
+  assert.equal(live, 0);
+});
+
+test('TCP cancellation bounds concurrent addresses and stops queued connects', async () => {
+  const controller = new AbortController();
+  let started = 0;
+  let live = 0;
+  const result = await probeTcpEndpoint({ host: 'synthetic.example', port: 443 }, controller.signal, 1000,
+    async () => Array.from({ length: 12 }, (_, i) => `192.0.2.${i + 1}`),
+    async (_address, _port, signal) => new Promise<TcpDelayResult>(resolve => {
+      live++;
+      started++;
+      signal.addEventListener('abort', () => { live--; resolve({ status: 'cancelled', delay: null }); }, { once: true });
+      if (started === 2) controller.abort();
+    }));
+  assert.deepEqual(result, { status: 'cancelled', delay: null });
+  assert.equal(started, 2);
+  assert.equal(live, 0);
+  let attempts = 0;
+  await probeTcpEndpoint({ host: 'synthetic.example', port: 443 }, undefined, 1000,
+    async () => Array.from({ length: 12 }, (_, i) => `192.0.2.${i + 1}`),
+    async () => { attempts++; return { status: 'refused', delay: null }; });
+  assert.equal(attempts, 4);
+  assert.deepEqual(await probeTcpEndpoint({ host: 'synthetic.example', port: 443 }, undefined, 10,
+    async () => new Promise(() => {})), { status: 'timeout', delay: null });
 });
