@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1160" viewBox="0 0 1440 1160" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" fill="#182b43" role="img" aria-labelledby="title desc">
+  <title id="title">Coproxy 系统运行：服务启动、网络准备与权限检查</title>
+  <desc id="desc">Linux 是包围所有组件的运行底座。上半图中 systemd 启动监管管理服务，确保原生网关网络准备单元就绪后再启动监管 Mihomo。网络准备程序执行后退出，规则保留。下半图单独展示管理服务向 systemd 申请启停核心，systemd 请求 polkit 检查权限，允许后才执行。下半图的同名组件是相同组件的重复展示。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#486079"/></marker>
+  </defs>
+  <rect width="1440" height="1160" fill="#ffffff"/>
+  <text x="48" y="53" font-size="31" font-weight="700">系统运行 · 谁启动谁，谁检查权限</text>
+  <text x="48" y="87" font-size="17" fill="#53677d">上下两部分分别展示启动与权限流程；同名组件为同一组件的重复展示。</text>
+
+  <rect x="32" y="118" width="1376" height="970" rx="18" fill="#f5f7fa" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="56" y="153" font-size="20" font-weight="700">Linux 主机 · 所有组件所在的运行底座</text>
+  <text x="80" y="194" font-size="20" font-weight="700">A. 服务启动与监管</text>
+
+  <rect x="80" y="222" width="320" height="410" rx="13" fill="#ffffff" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="104" y="269" font-size="24" font-weight="700">systemd</text>
+  <text x="104" y="304" font-size="18">Linux 服务管理员</text>
+  <text x="104" y="360" font-size="17">根据 unit 定义启动和停止服务</text>
+  <text x="104" y="392" font-size="17">监管管理服务和 Mihomo 进程</text>
+  <text x="104" y="424" font-size="17">按配置处理异常退出后的重启</text>
+  <text x="104" y="491" font-size="16" fill="#53677d">原生网关通过服务依赖</text>
+  <text x="104" y="519" font-size="16" fill="#53677d">保证网络准备先于核心启动</text>
+  <text x="104" y="585" font-size="16" fill="#53677d">管理服务可独立运行</text>
+  <text x="104" y="613" font-size="16" fill="#53677d">不依赖核心已启动</text>
+
+  <rect x="670" y="222" width="674" height="95" rx="13" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
+  <text x="694" y="258" font-size="21" font-weight="700">Coproxy 管理服务 · Node / Nitro</text>
+  <text x="694" y="290" font-size="17">提供网页与 API；不自行创建第二个核心监管器</text>
+  <path d="M400 270 H670" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="462" y="253" font-size="17" fill="#53677d">启动并监管</text>
+
+  <rect x="670" y="366" width="674" height="117" rx="13" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
+  <text x="694" y="401" font-size="21" font-weight="700">网络准备程序 · Coproxy 自有 Python 程序</text>
+  <text x="694" y="433" font-size="17">root oneshot 调用 ip / nft，准备防护规则、出口与回程</text>
+  <text x="694" y="463" font-size="16" fill="#53677d">执行后退出，规则保留；网络单元已就绪时无需每次重新执行</text>
+  <path d="M400 424 H670" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="416" y="401" font-size="17" fill="#53677d">① 确保网络单元已就绪</text>
+  <text x="465" y="450" font-size="15" fill="#53677d">仅原生网关模式</text>
+
+  <rect x="670" y="537" width="674" height="95" rx="13" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
+  <text x="694" y="573" font-size="21" font-weight="700">Mihomo · 独立代理内核进程</text>
+  <text x="694" y="605" font-size="17">实际处理代理业务；原生网关另管理 TUN、自动路由和重定向</text>
+  <path d="M400 585 H670" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="431" y="566" font-size="17" fill="#53677d">② 再启动并监管核心</text>
+
+  <text x="80" y="672" font-size="16" fill="#53677d">网络准备程序不转发业务流量；它创建的规则留在 Linux 中生效。Mihomo 与准备程序各自管理不同资源。</text>
+  <path d="M56 704 H1384" fill="none" stroke="#ccd5df" stroke-width="1.5"/>
+
+  <text x="80" y="748" font-size="20" font-weight="700">B. 管理页面申请启动 / 停止核心时，如何检查权限</text>
+  <rect x="80" y="800" width="300" height="100" rx="13" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
+  <text x="104" y="838" font-size="21" font-weight="700">Coproxy 管理服务</text>
+  <text x="104" y="870" font-size="17">以非 root 专用身份提出申请</text>
+  <rect x="550" y="800" width="320" height="100" rx="13" fill="#ffffff" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="574" y="838" font-size="21" font-weight="700">systemd</text>
+  <text x="574" y="870" font-size="17">接收指定核心的 start / stop</text>
+  <rect x="1040" y="800" width="304" height="100" rx="13" fill="#ffffff" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="1064" y="838" font-size="21" font-weight="700">polkit</text>
+  <text x="1064" y="870" font-size="17">检查账户、服务名和操作权限</text>
+  <path d="M380 850 H550" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="389" y="828" font-size="16" fill="#53677d">① 申请启停核心</text>
+  <path d="M870 850 H1040" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="879" y="828" font-size="16" fill="#53677d">② 请求权限检查</text>
+  <path d="M1192 900 V961 H710 V900" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="837" y="946" font-size="17" fill="#53677d">③ 返回允许 / 拒绝</text>
+  <text x="80" y="1012" font-size="18">④ 只有获准后，systemd 才执行核心启停；拒绝时不执行。</text>
+  <text x="80" y="1047" font-size="16" fill="#53677d">polkit 只检查权限，不转发业务流量，也不负责进程监管。网络准备程序由系统服务依赖触发，不由管理身份直接提权执行。</text>
+
+  <text x="48" y="1125" font-size="16" fill="#53677d">读图：箭头旁的动词就是关系含义；A 图表示服务管理和先后顺序，B 图表示权限请求与结果，均非终端业务流量。</text>
+</svg>
