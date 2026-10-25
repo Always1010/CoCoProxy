@@ -132,7 +132,22 @@ export async function stageExplicitRelease(options) {
     if (review.schemaVersion !== 1) fail('REVIEW_INVALID');
     const coreReview = review.coreCandidate;
     const managementReview = review.management;
-    const reviewedHash = requireString(options.reviewedCoreSha256 ?? coreReview?.binarySha256, /^[a-f0-9]{64}$/u);
+    const coreBytes = await regular(core);
+    let reviewedHash = requireString(options.reviewedCoreSha256 ?? coreReview?.binarySha256, /^[a-f0-9]{64}$/u);
+    let corePlatform;
+    if (options.reviewedCoreSha256 === undefined && coreReview?.platforms !== undefined) {
+      const catalog = coreReview.platforms;
+      if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)) fail('CORE_REVIEW_INVALID');
+      const matches = Object.entries(catalog).filter(([, entry]) => entry?.binarySha256 === sha256(coreBytes));
+      if (matches.length === 0) fail('CORE_HASH_MISMATCH');
+      if (matches.length !== 1) fail('CORE_REVIEW_INVALID');
+      const [name, entry] = matches[0];
+      const expected = { 'linux-arm64': { architecture: 'arm64', machine: 183 }, 'linux-amd64-v1': { architecture: 'x64', machine: 62 } }[name];
+      if (!expected || entry.architecture !== expected.architecture || entry.elfMachine !== expected.machine || entry.downloadedAssetVerified !== true) fail('CORE_REVIEW_INVALID');
+      if (coreBytes.length < 20 || !coreBytes.subarray(0, 6).equals(Buffer.from([127, 69, 76, 70, 2, 1])) || coreBytes.readUInt16LE(18) !== expected.machine) fail('CORE_ARCH_MISMATCH');
+      reviewedHash = requireString(entry.binarySha256, /^[a-f0-9]{64}$/u);
+      corePlatform = name;
+    }
     const coreCommit = requireString(coreReview?.commit, /^[a-f0-9]{40}$/u);
     const uiCommit = requireString(managementReview?.commit, /^[a-f0-9]{40}$/u);
     const coreTag = requireString(coreReview?.tag, /^v[0-9]+\.[0-9]+\.[0-9]+$/u);
@@ -236,13 +251,12 @@ export async function stageExplicitRelease(options) {
       }
     }
     if (!files.some(file => file.path === 'server/.output/server/index.mjs')) fail('SERVER_ENTRY_MISSING');
-    const coreBytes = await regular(core);
     if (sha256(coreBytes) !== reviewedHash) fail('CORE_HASH_MISMATCH');
     await write('bin/mihomo', coreBytes, '0755');
     const manifest = {
       schemaVersion: 1, scope: 'local-explicit-proxy-payload', commit,
       components: { coproxy: { version: pkg.version, lockSha256: sha256(lockBytes) },
-        metacubexd: { version: uiTag, commit: uiCommit }, mihomo: { version: coreTag, commit: coreCommit, binarySha256: reviewedHash },
+        metacubexd: { version: uiTag, commit: uiCommit }, mihomo: { version: coreTag, commit: coreCommit, binarySha256: reviewedHash, ...(corePlatform ? { platform: corePlatform } : {}) },
         runtimeDependencies: dependencyVersions },
       sourceSelection: 'HEAD blobs: apps, packages, root package metadata and license/source notices; no links or local/build data',
       files: files.sort((a, b) => a.path.localeCompare(b.path, 'en')),
