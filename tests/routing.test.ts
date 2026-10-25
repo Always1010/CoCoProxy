@@ -155,8 +155,9 @@ test('offline template compacts only pinned blocks and round-trips without accep
   assert.equal(nodes[0].name, 'example-node');
   assert.ok(Buffer.byteLength(JSON.stringify(result.config)) < 4 * 1024 * 1024);
   const dns = result.config.dns as JsonObject;
-  assert.deepEqual((dns['nameserver-policy'] as JsonObject)[`rule-set:${DOMESTIC_DOMAIN_PROVIDER}`], deployment.bootstrapResolvers);
-  assert.deepEqual((dns['nameserver-policy'] as JsonObject)['+.cn'], deployment.bootstrapResolvers);
+  const directDns = deployment.bootstrapResolvers.map(server => `${server}#DIRECT`);
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)[`rule-set:${DOMESTIC_DOMAIN_PROVIDER}`], directDns);
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)['+.cn'], directDns);
   const proxiedDomestic = compileConfig({ schemaVersion: 1, deployment, policy: policy({ selections: { Domestic: 'Proxy' } }) });
   assert.equal((proxiedDomestic.config.dns as JsonObject)['nameserver-policy'], undefined);
 });
