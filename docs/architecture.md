@@ -26,9 +26,10 @@ sing-box 只作为[协议测试对端](../integrations/protocol-fixture/README.m
 | `cocoproxy-management.service` | 单个非 root Node/Nitro 进程，承载管理与静态页面；通过受限 polkit 请求固定核心 start/stop，不取得网络 capability |
 | `cocoproxy-mihomo.service` | 启动器核验选择和二进制后以 `execve` 替换为 Mihomo；systemd 为唯一失败重启者 |
 | `cocoproxy-gateway-network.service` | 原生模式的 root oneshot，执行 `network.py prepare` 后退出；核心以 Requires/After/BindsTo 依赖它 |
+| `cocoproxy-gateway-guard.service` | 原生模式的独立 root oneshot，在本地文件系统就绪后、network-pre 之前执行固定 guard，不等待接口地址；显式 enable，停止仍保留保护 |
 | CLI | 按需复用模块，不常驻 |
 
-管理启动时对未完成事务执行一次恢复检查，不自动应用新设置。草稿、工作区、来源快照、候选、事务和 selection 存于私有文件；候选可能含凭据。会话仅在管理进程内存中，重启失效。root 网络回执与管理状态分开存放。
+管理启动时先对未完成事务执行恢复检查。显式启用持久 lifecycle 后，同一管理进程串行检查已提交 active、网络前置及实际核心，依赖晚到或断线恢复后重试；不应用新草稿，systemd 仍是唯一核心进程监管者。pause 与配置事务共锁，跨重启禁止启动器执行，维护仍须 stop 并确认 PID/Job 清零。草稿、工作区、来源快照、候选、事务、selection 和生命周期标记存于私有文件；候选可能含凭据。会话仅在管理进程内存中，重启失效。root 网络回执与管理状态分开存放。
 
 ## 终端流量
 

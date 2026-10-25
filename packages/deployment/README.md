@@ -25,15 +25,15 @@
 | `directories` | 需要的路径、身份和权限 |
 | `requirements`、`steps` | 部署前提及操作说明，无任意可执行 shell |
 
-显式模式五文件：核心 unit、runtime 设置、管理 unit、management 设置、polkit 规则。原生模式增加 root 网络 unit 和网络设置，共七文件，并增加独立 root:0700 回执目录。运行／管理设置为服务 UID:0600，网络设置为 root:0600。管理员凭据不在输出清单。
+显式模式五文件：核心 unit、runtime 设置、管理 unit、management 设置、polkit 规则。原生模式增加 root 早期 guard unit、网络 unit 和网络设置，共八文件，并增加独立 root:0700 回执目录。早期 unit 在 network-pre 之前只建立保护，网络 unit 随后核对实际有线接口并准备路由。运行／管理设置为服务 UID:0600，网络设置为 root:0600。管理员凭据不在输出清单。
 
-系统 unit 固定为 `/etc/systemd/system/cocoproxy-mihomo.service`、`cocoproxy-management.service`，原生另有 `cocoproxy-gateway-network.service`；polkit 固定为 `/etc/polkit-1/rules.d/50-cocoproxy-management.rules`。unit 摘要覆盖完整 UTF-8/LF 字节。
+系统 unit 固定为 `/etc/systemd/system/cocoproxy-mihomo.service`、`cocoproxy-management.service`，原生另有 `cocoproxy-gateway-guard.service` 和 `cocoproxy-gateway-network.service`；polkit 固定为 `/etc/polkit-1/rules.d/50-cocoproxy-management.rules`。unit 摘要覆盖完整 UTF-8/LF 字节。旧七文件网关升级仅允许新增这一固定 root 早期 unit，目标存在则拒绝，不接受其他文件集增删。
 
 ## 服务与权限边界
 
-管理 unit 为单进程 `Type=exec`，与当前核心使用相同非 root UID，绑定 loopback，以环境变量引用私有配置；有失败重启、只读系统、私有临时目录和空 capability 集。它没有核心启动依赖，启动恢复通过同一事务锁执行一次，不自动捕获或应用新设置。
+管理 unit 为单进程 `Type=exec`，与当前核心使用相同非 root UID，绑定 loopback，以环境变量引用私有配置；有失败重启、只读系统、私有临时目录和空 capability 集。它没有核心启动依赖，启动先恢复未完成事务；显式启用 lifecycle 后通过同一事务锁周期协调已提交 active，不自动捕获或应用新草稿。维护前必须成功 pause；安装预检拒绝已启用但未暂停的恢复标记。
 
-原生核心的网络权限、网络单元依赖和启动器见运行模块；管理进程不因此获得网络 capability。polkit 只允许指定用户名 start/stop 固定核心，拒绝该用户其他 unit/verb 和 manage-unit-files；show 无需额外授权。目标须审阅账号映射、既有更早规则和实际允许／拒绝矩阵。
+原生核心的网络权限、网络单元依赖和启动器见运行模块；管理进程不因此获得网络 capability。polkit 只允许指定用户名 start/stop 固定核心，原生模式另允许 start/reload 固定网络单元；拒绝其余 unit/verb、早期 unit 控制和 manage-unit-files，show 无需额外授权。目标须审阅账号映射、既有更早规则和实际允许／拒绝矩阵。
 
 路径为规范 POSIX 绝对路径，状态不得与源码、二进制、设置、凭据或系统文件重叠，拒绝沙箱隐藏目录和相互嵌套文件目标。systemd 参数与环境分别转义，不经 shell。祖先、链接目标、ACL、挂载与现场身份仍由安装预检核对。
 
