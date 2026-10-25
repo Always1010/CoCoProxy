@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1480" viewBox="0 0 1440 1480" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" fill="#182b43" role="img" aria-labelledby="title desc">
+  <title id="title">终端如何经接入路由器和外接代理设备访问外部网站</title>
+  <desc id="desc">五列固定表示受管终端、同一台接入路由器、外接代理设备、外部代理节点和目标网站。按一到十从上往下读：终端请求先经路由器交付代理设备，Mihomo 向代理节点建立或复用出站连接，再交回同一路由器从 WAN 发出，节点访问网站。网站响应经节点、路由器、代理设备、路由器回到终端。箭头表示消息传递顺序，竖虚线只是同一角色的时间线。</desc>
+  <defs>
+    <marker id="request" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#16745b"/></marker>
+    <marker id="response" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#3167a0"/></marker>
+  </defs>
+  <rect width="1440" height="1480" fill="#ffffff"/>
+  <text x="48" y="53" font-size="29" font-weight="700">终端访问公网 · 请求怎样出去，响应怎样回来</text>
+  <text x="48" y="87" font-size="17" fill="#53677d">示例：命中代理规则的访问。每列是同一个角色，按 ① 至 ⑩ 从上往下读；路由器始终是同一台。</text>
+
+  <rect x="48" y="132" width="190" height="95" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="143" y="168" text-anchor="middle" font-size="21" font-weight="700">受管终端</text>
+  <text x="143" y="201" text-anchor="middle" font-size="16" fill="#53677d">发起网站访问</text>
+  <rect x="320" y="132" width="200" height="95" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="420" y="168" text-anchor="middle" font-size="21" font-weight="700">接入路由器</text>
+  <text x="420" y="201" text-anchor="middle" font-size="16" fill="#53677d">LAN 交付 / WAN 出口</text>
+  <rect x="595" y="132" width="250" height="95" rx="13" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
+  <text x="720" y="168" text-anchor="middle" font-size="21" font-weight="700">外接代理设备</text>
+  <text x="720" y="201" text-anchor="middle" font-size="16" fill="#53677d">Coproxy / Mihomo</text>
+  <rect x="925" y="132" width="170" height="95" rx="13" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
+  <text x="1010" y="168" text-anchor="middle" font-size="21" font-weight="700">代理节点</text>
+  <text x="1010" y="201" text-anchor="middle" font-size="16" fill="#53677d">外部代理协议对端</text>
+  <rect x="1205" y="132" width="170" height="95" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="1290" y="168" text-anchor="middle" font-size="21" font-weight="700">目标网站</text>
+  <text x="1290" y="201" text-anchor="middle" font-size="16" fill="#53677d">实际业务服务</text>
+
+  <rect x="32" y="251" width="1376" height="490" rx="14" fill="#f5fbf7"/>
+  <rect x="32" y="776" width="1376" height="475" rx="14" fill="#f5f8fd"/>
+  <path d="M143 227 V1240 M420 227 V1240 M720 227 V1240 M1010 227 V1240 M1290 227 V1240" fill="none" stroke="#b7c3d0" stroke-width="1.5" stroke-dasharray="5 6"/>
+  <rect x="48" y="263" width="200" height="31" fill="#f5fbf7"/>
+  <text x="60" y="286" font-size="20" font-weight="700" fill="#16745b">请求向外传递</text>
+  <rect x="48" y="789" width="200" height="31" fill="#f5f8fd"/>
+  <text x="60" y="812" font-size="20" font-weight="700" fill="#3167a0">响应返回终端</text>
+
+  <text x="169" y="326" font-size="17" fill="#16745b">① 终端发起网站访问</text>
+  <path d="M143 345 H420" fill="none" stroke="#16745b" stroke-width="2.5" marker-end="url(#request)"/>
+  <text x="445" y="416" font-size="17" fill="#16745b">② 原始流量交给代理设备</text>
+  <path d="M420 435 H720" fill="none" stroke="#16745b" stroke-width="2.5" marker-end="url(#request)"/>
+  <text x="442" y="506" font-size="17" fill="#16745b">③ 核心出站：发给代理节点</text>
+  <path d="M720 525 H420" fill="none" stroke="#16745b" stroke-width="2.5" marker-end="url(#request)"/>
+  <text x="470" y="596" font-size="17" fill="#16745b">④ 经 WAN 和上级网络，把代理连接送到节点</text>
+  <path d="M420 615 H1010" fill="none" stroke="#16745b" stroke-width="2.5" marker-end="url(#request)"/>
+  <text x="1045" y="686" font-size="17" fill="#16745b">⑤ 节点连接目标网站</text>
+  <path d="M1010 705 H1290" fill="none" stroke="#16745b" stroke-width="2.5" marker-end="url(#request)"/>
+
+  <text x="1045" y="836" font-size="17" fill="#3167a0">⑥ 网站响应代理节点</text>
+  <path d="M1290 855 H1010" fill="none" stroke="#3167a0" stroke-width="2.5" marker-end="url(#response)"/>
+  <text x="457" y="926" font-size="17" fill="#3167a0">⑦ 响应沿代理连接，经上级网络回到路由器 WAN</text>
+  <path d="M1010 945 H420" fill="none" stroke="#3167a0" stroke-width="2.5" marker-end="url(#response)"/>
+  <text x="442" y="1016" font-size="17" fill="#3167a0">⑧ 代理连接回包送到外接设备</text>
+  <path d="M420 1035 H720" fill="none" stroke="#3167a0" stroke-width="2.5" marker-end="url(#response)"/>
+  <text x="452" y="1106" font-size="17" fill="#3167a0">⑨ 核心还原终端会话响应</text>
+  <path d="M720 1125 H420" fill="none" stroke="#3167a0" stroke-width="2.5" marker-end="url(#response)"/>
+  <text x="157" y="1196" font-size="17" fill="#3167a0">⑩ 经 LAN / Wi-Fi 回到终端</text>
+  <path d="M420 1215 H143" fill="none" stroke="#3167a0" stroke-width="2.5" marker-end="url(#response)"/>
+
+  <text x="48" y="1294" font-size="17" font-weight="700">①②是终端的原始访问；③④是 Mihomo 建立或复用的代理连接；⑤是代理节点到目标网站的连接。</text>
+  <text x="48" y="1326" font-size="16" fill="#53677d">防循环：路由器只把受管终端的原始流量交付外设；代理设备出站和终端回程不再次交付外设。</text>
+  <text x="48" y="1358" font-size="16" fill="#53677d">回程：当前模式要求响应也经接入路由器返回终端，不能因同一 LAN 可直达就省略步骤 ⑨⑩。</text>
+  <text x="48" y="1390" font-size="16" fill="#53677d">同一网口可承载步骤 ②③⑧⑨；方向和会话不同，不表示设备需要串联在路由器与上级网络之间。</text>
+  <text x="48" y="1422" font-size="16" fill="#53677d">横向实线箭头是传递步骤；竖虚线只是角色时间线。DNS、规则直连和关闭代理时的路径见正文。</text>
+  <text x="48" y="1454" font-size="16" fill="#53677d">本图是角色与会话顺序示意，不是单个 IP 包原样穿过所有角色；不绑定具体设备型号、地址或接线。</text>
+</svg>

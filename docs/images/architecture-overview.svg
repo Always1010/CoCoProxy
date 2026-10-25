@@ -88,7 +88,7 @@
   <text x="1188" y="682" font-size="15" fill="#53677d">业务流量 / DNS 请求</text>
 
   <text x="48" y="859" font-size="15" fill="#53677d">网关入口与上方 Mihomo 位于同一台 Coproxy 主机；入口后的业务转发和 DNS 解析由核心处理。</text>
-  <text x="48" y="887" font-size="15" fill="#53677d">服务启动、网络准备及权限检查见独立「系统运行图」。本图响应省略，所有传递关系均使用框外连线。</text>
+  <text x="48" y="887" font-size="15" fill="#53677d">完整 WAN 出口与回程见「终端访问公网数据流图」；服务启动和权限检查见「系统运行图」。</text>
   <text x="48" y="915" font-size="15" fill="#53677d">读图：箭头只表示请求 / 配置 / 业务数据从谁传给谁；框内只描述该对象的身份和职责。</text>
   <text x="48" y="943" font-size="15" fill="#53677d">边界：自动网关当前为单终端 IPv4；sing-box 仅用于测试，旧 network 不在启动链路，AlwayRoute 为可选路由器侧实现。</text>
 </svg>
