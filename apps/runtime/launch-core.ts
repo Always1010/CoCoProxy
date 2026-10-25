@@ -4,6 +4,7 @@ import { loadRuntimeSettings, readSelection, verifyBinary, loadRuntimeCandidate 
 import { RuntimeError } from '../../packages/runtime/types.ts';
 import { privateDirectory } from '../../packages/storage/private-files.ts';
 import { FileTransactionStore } from '../../packages/transaction/index.ts';
+import { assertRuntimeLaunch } from '../../packages/runtime/launch-authorization.ts';
 
 /** Replaces the service process, preserving systemd's MainPID and cgroup. */
 export async function runCore(settingsPath: string): Promise<void> {
@@ -15,20 +16,15 @@ export async function runCore(settingsPath: string): Promise<void> {
     if (typeof process.geteuid !== 'function' || process.geteuid() === 0 || process.geteuid() !== settings.serviceUid) {
       throw new RuntimeError('RUNTIME_IDENTITY_INVALID');
     }
-    const state = await new FileTransactionStore(settings.stateDirectory).readState();
+    const store = new FileTransactionStore(settings.stateDirectory);
     const generation = await readSelection(settings);
-    // A fault cannot reboot into its last failed selection. Explicit recover
-    // first persists `restoring` and may launch only that transaction's previous
-    // generation; otherwise a fault would also prevent its own recovery.
-    if (state.fault !== null && !(generation !== null &&
-        ((state.pending?.phase === 'restoring' && state.pending.previous === generation) ||
-         (state.pending?.phase === 'recovering-target' && state.pending.target === generation && state.desired === generation)))) {
-      throw new RuntimeError('RUNTIME_RECOVERY_REQUIRED');
-    }
     if (generation === null) throw new RuntimeError('RUNTIME_SELECTION_MISSING');
+    await assertRuntimeLaunch(store, generation);
     const binary = await verifyBinary(settings);
     const { path, home } = await loadRuntimeCandidate(settings, generation);
     await privateDirectory(home);
+    if (await readSelection(settings) !== generation) throw new RuntimeError('RUNTIME_RECOVERY_REQUIRED');
+    await assertRuntimeLaunch(store, generation);
     // The controller cannot inherit proxy settings, loader injections or core
     // feature switches from an operator's shell or the launcher environment.
     const environment = { PATH: '/usr/bin:/bin', LANG: 'C', HOME: home };
