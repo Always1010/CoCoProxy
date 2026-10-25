@@ -86,6 +86,34 @@ test('probe admission is bounded across clients and cancellation releases capaci
   assert.notEqual((await proxy.fetch(new Request(url, { signal: cancelled.signal }))).status, 429);
 });
 
+test('cancelled probe waiters release slots while another reader keeps shared verification alive', async t => {
+  const f = await fixture(t), original = f.options.target;
+  let checking = false, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const proxy = createControllerProxy({ ...f.options, allowedProbeOrigins: ['https://probe.example'],
+    target: async () => { checking = true; await gate; return original(); } });
+  const abort = new AbortController();
+  const url = origin + '/proxies/node/delay?url=https%3A%2F%2Fprobe.example%2Fping&timeout=1000';
+  const probes = Array.from({ length: 16 }, () => proxy.fetch(new Request(url, { signal: abort.signal })));
+  const reader = proxy.fetch(request('/version'));
+  await until(() => checking);
+  abort.abort();
+  await Promise.all(probes);
+  const replacement = proxy.fetch(new Request(url));
+  release();
+  assert.equal((await replacement).status, 200);
+  assert.equal((await reader).status, 200);
+});
+
+test('a generation changed while reading the upstream body cannot label new data with the old generation', async t => {
+  let change!: () => void;
+  const f = await fixture(t, (_request, response) => { change(); response.end('{"from":"new-generation"}'); });
+  change = f.changeGeneration;
+  const result = await createControllerProxy(f.options).fetch(request('/version'));
+  assert.equal(result.status, 409);
+  assert.deepEqual(await result.json(), { error: { code: 'CONTROLLER_GENERATION_CONFLICT' } });
+});
+
 test('HTTP reads redact nested credentials and actual secrets while isolating upstream and downstream headers', async t => {
   const f = await fixture(t, (_req, res) => {
     res.setHeader('set-cookie', 'upstream=private'); res.setHeader('location', '/private');
