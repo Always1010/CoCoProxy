@@ -211,7 +211,8 @@ export async function stageExplicitRelease(options) {
           'docs/usage.md', 'docs/architecture.md', 'docs/development.md',
           'docs/images/architecture-overview.svg', 'docs/images/runtime-relations.svg', 'docs/images/proxy-traffic-flow.svg',
           'docs/cooperating-router-requirements.md', 'docs/release-notes.md',
-          'examples/deployment-plan.json', 'examples/automatic-gateway-deployment.json',
+          'examples/deployment-plan.json', 'examples/automatic-gateway-deployment.json', 'examples/deployment-options.md',
+          'scripts/measure-latency.mjs',
           'examples/nginx-management.conf', 'examples/coproxy-web.service'].includes(entry.path);
       if (selected) {
         if (sensitive(entry.path)) fail('SOURCE_FILE_FORBIDDEN');
