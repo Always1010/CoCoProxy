@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "reviewedOn": "2026-10-25",
+  "reviewedOn": "2026-10-26",
   "repository": "https://github.com/MetaCubeX/meta-rules-dat",
   "commit": "620722145f883fc5ef450e9a909011c0528c1424",
   "license": "GPL-3.0-only",
@@ -8,6 +8,8 @@
   "aggregateDomainRules": 110446,
   "domainRules": 111813,
   "ipv4Rules": 6525,
+  "overseasDomainRules": 27268,
+  "overseasExcludedRegexRules": 151,
   "sources": [
     {
       "name": "domestic-domain",
@@ -28,6 +30,11 @@
       "name": "LICENSE",
       "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/4178770badecb1b349fbcd62c737e0d7a2079729/LICENSE",
       "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "name": "overseas-domain",
+      "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/620722145f883fc5ef450e9a909011c0528c1424/geo/geosite/geolocation-!cn.json",
+      "sha256": "500577cdb7433ec23aed54489c0f559c7462df86eba323d3745f9977cb3877f3"
     }
   ]
 }
