@@ -89,7 +89,7 @@ function candidate(): Candidate {
   }, policy: { rules: ['MATCH,DIRECT'] } });
 }
 
-async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash' | 'tun' | 'fault' | 'recovering' = 'good') {
+async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash' | 'tun' | 'fault' | 'recovering' | 'recovering-target' | 'wrong-target' = 'good') {
   const root = await mkdtemp(join(tmpdir(), 'coproxy-launcher-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const stateDirectory = join(root, 'state');
@@ -114,8 +114,9 @@ async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash'
   }
   const staged = await new FileTransactionStore(stateDirectory).stage(target);
   const statePath = join(stateDirectory, 'state.json');
-  if (variant === 'fault' || variant === 'recovering') await writeFile(statePath, JSON.stringify({ version: 1, desired: 'b'.repeat(64), active: null,
-    pending: { id: '00000000-0000-4000-8000-000000000001', previous: target.id, target: 'b'.repeat(64), phase: variant === 'fault' ? 'fault' : 'restoring' },
+  const forward = variant === 'recovering-target' || variant === 'wrong-target';
+  if (variant === 'fault' || variant === 'recovering' || forward) await writeFile(statePath, JSON.stringify({ version: 1, desired: variant === 'recovering-target' ? target.id : 'b'.repeat(64), active: null,
+    pending: { id: '00000000-0000-4000-8000-000000000001', previous: forward ? 'c'.repeat(64) : target.id, target: variant === 'recovering-target' ? target.id : 'b'.repeat(64), phase: forward ? 'recovering-target' : variant === 'fault' ? 'fault' : 'restoring' },
     fault: 'RESTORE_FAILED', checkedAt: new Date().toISOString() }), { mode: 0o600 });
   const selectionPath = join(stateDirectory, 'selection.json');
   if (variant !== 'missing') await writeFile(selectionPath, JSON.stringify({ schemaVersion: 1, generation: target.id }), { mode: 0o600 });
@@ -124,7 +125,7 @@ async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash'
     // Only disposable fixture files change ownership; the child proves non-root execution.
     const paths = [root, stateDirectory, join(stateDirectory, 'candidates'), staged.path, binaryPath, settingsPath];
     if (variant !== 'missing') paths.push(selectionPath);
-    if (variant === 'fault' || variant === 'recovering') paths.push(statePath);
+    if (variant === 'fault' || variant === 'recovering' || forward) paths.push(statePath);
     for (const path of paths) await chown(path, uid, uid);
   }
   await chmod(root, 0o700);
@@ -151,7 +152,7 @@ async function launch(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 test('launcher exec replaces its child PID and passes only pinned core arguments', { skip: !linuxExec }, async t => {
-  for (const variant of ['good', 'recovering'] as const) {
+  for (const variant of ['good', 'recovering', 'recovering-target'] as const) {
     const f = await fixture(t, variant);
     const result = await launch(f);
     assert.equal(result.exit, 0, result.stderr);
@@ -164,7 +165,7 @@ test('launcher exec replaces its child PID and passes only pinned core arguments
 });
 
 test('launcher refuses missing selection, hash mismatch, enabled TUN and persistent fault before exec', { skip: !linuxExec }, async t => {
-  for (const [variant, code] of [['missing', 'RUNTIME_SELECTION_MISSING'], ['hash', 'BINARY_UNTRUSTED'], ['tun', 'CANDIDATE_UNTRUSTED'], ['fault', 'RUNTIME_RECOVERY_REQUIRED']] as const) {
+  for (const [variant, code] of [['missing', 'RUNTIME_SELECTION_MISSING'], ['hash', 'BINARY_UNTRUSTED'], ['tun', 'CANDIDATE_UNTRUSTED'], ['fault', 'RUNTIME_RECOVERY_REQUIRED'], ['wrong-target', 'RUNTIME_RECOVERY_REQUIRED']] as const) {
     const f = await fixture(t, variant);
     const result = await launch(f);
     assert.equal(result.exit, 1);
