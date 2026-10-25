@@ -208,7 +208,7 @@ export async function stageExplicitRelease(options) {
       if (!allowed(entry.path)) continue;
       const selected = /^(apps|packages)\//u.test(entry.path) || /^(package(?:-lock)?\.json|LICENSE(?:\.[A-Za-z0-9-]+)?|NOTICE(?:\.[A-Za-z0-9-]+)?)$/u.test(entry.path)
         || ['docs/deployment.md', 'docs/management-https.md', 'docs/release-staging.md', 'docs/router-cooperation.md',
-          'docs/cooperating-router-requirements.md',
+          'docs/cooperating-router-requirements.md', 'docs/release-notes.md',
           'examples/deployment-plan.json', 'examples/automatic-gateway-deployment.json',
           'examples/nginx-management.conf', 'examples/coproxy-web.service'].includes(entry.path);
       if (selected) {
@@ -262,7 +262,7 @@ export async function stageExplicitRelease(options) {
       components: { coproxy: { version: pkg.version, lockSha256: sha256(lockBytes) },
         metacubexd: { version: uiTag, commit: uiCommit }, mihomo: { version: coreTag, commit: coreCommit, binarySha256: reviewedHash, ...(corePlatform ? { platform: corePlatform } : {}) },
         runtimeDependencies: dependencyVersions },
-      sourceSelection: 'HEAD blobs: apps, packages, root package metadata and license/source notices; no links or local/build data',
+      sourceSelection: 'HEAD blobs: apps, packages, selected deployment docs/examples, root package metadata and license/source notices; no links or local/build data',
       files: files.sort((a, b) => a.path.localeCompare(b.path, 'en')),
     };
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);

@@ -1,6 +1,6 @@
 {
   "name": "coproxy",
-  "version": "0.1.0-dev",
+  "version": "0.1.0-preview.1",
   "private": true,
   "type": "module",
   "description": "Linux 代理网关的配置与可靠性集成",
