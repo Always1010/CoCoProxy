@@ -1,5 +1,7 @@
 # 配置编译
 
+工作区持久保存策略组选择时，仅允许 `profile: {"store-selected": false}` 禁用核心自身的选择缓存，避免旧缓存覆盖应用或回滚后的组选择；其他 profile 字段或启用缓存均拒绝。未使用此字段的既有配置摘要保持不变。
+
 `index.ts` 导出 `compileConfig(input: unknown): Candidate`、`ConfigError`、`canonicalJson(value: JsonValue): string` 与 JSON 类型。无第三方运行时依赖；模块使用 Node 原生类型剥离支持的 TypeScript 语法。
 
 输入结构见 `examples/explicit-proxy.json`。`schemaVersion` 仅支持 `1`；`deployment` 的三个端口必须是 1–65535 的不同整数，控制凭据不能为空，bootstrap DNS 必须是 IP 字面量。示例使用文档专用地址，必须替换后才能实际连接。

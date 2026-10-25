@@ -32,6 +32,17 @@ function fails(value: unknown, code: string): void {
   });
 }
 
+test('managed choices may disable the selector cache without enabling other profile features', () => {
+  const value = input();
+  (value.policy as JsonObject).profile = { 'store-selected': false };
+  assert.deepEqual(compileConfig(value).config.profile, { 'store-selected': false });
+  const profiles: JsonObject[] = [{ 'store-selected': true }, { 'store-selected': false, 'store-fake-ip': true }, {}];
+  for (const profile of profiles) {
+    (value.policy as JsonObject).profile = profile;
+    fails(value, 'PROTECTED_FIELD');
+  }
+});
+
 test('compiles loopback explicit proxy with real-address DNS and disabled TUN', () => {
   const candidate = compileConfig(input());
   const config = candidate.config;

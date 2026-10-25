@@ -20,6 +20,10 @@ HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Stric
 
 ## 接口
 
+日常界面使用 `/api/coproxy/workspace`：GET 返回当前方案、来源摘要、策略组与规则来源；PUT 接收 `{expectedRevision, settings}` 保存独立的本地／订阅方案设置，POST `/workspace/apply` 接收 `{expectedRevision, expectedActive}`，统一编译、校验并应用。POST `/workspace/select` 接收相同版本条件及 `{group, name}`，持久保存手动组选择并应用；存在未应用设置时要求先应用，避免节点操作顺带发布其他编辑。自动组保留原算法。设置使用私有原子文件和运行事务共用锁；旧草稿在明确切换前沿用，不自动替换现有运行配置。
+
+订阅页独立管理来源，支持 PUT `{expectedRevision, name?, url?}` 重命名或替换地址、POST `/sources/:id/refresh` 更新、DELETE `{expectedRevision}` 删除。完整订阅保留策略组与规则，本地方案只使用其节点；来源更新不自动覆盖用户规则或替换当前配置。订阅自带方案只选一份基础配置，各方案分别保留用户覆盖。页面只返回节点名称与组引用，不向概览接口附加节点凭据或订阅地址。
+
 | 方法与路径 | 请求或结果 |
 | --- | --- |
 | POST `/api/session/login` | `{username,password}`；仅 cookie 返回令牌 |

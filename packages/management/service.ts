@@ -6,7 +6,7 @@ import { HttpsSnapshotClient } from '../subscriptions/http.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
 import { loadAdminCredential } from './auth.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
-import { decodeNodeSnapshot } from '../subscriptions/yaml.ts';
+import { decodeSubscriptionProfile } from '../subscriptions/yaml.ts';
 import { createControllerProxy } from './controller.ts';
 import { recoverManagementStartup } from './startup.ts';
 import { createManagementApplication } from './application.ts';
@@ -80,7 +80,7 @@ export async function loadManagementGateway(path: string) {
       },
     });
     const action = createManagementApplication({ stateDirectory: runtimeSettings.stateDirectory, deployment: settings.deployment,
-      runtime, sourceClient, sourceDecoder: decodeNodeSnapshot, automaticGateway: runtimeSettings.automaticGateway });
+      runtime, sourceClient, sourceDecoder: decodeSubscriptionProfile, automaticGateway: runtimeSettings.automaticGateway });
     const gateway = createManagementGateway({ origin: settings.origin, credential }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime) };

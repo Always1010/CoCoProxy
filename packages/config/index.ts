@@ -46,7 +46,7 @@ const PROTECTED_ROOT_KEYS = new Set([
   'external-controller-routing-mark', 'external-doh-server',
   'external-ui', 'external-ui-url', 'external-ui-name', 'tls',
   'iptables', 'tuic-server', 'ss-config', 'vmess-config', 'ntp', 'clash-for-android',
-  'dns', 'hosts', 'sniffer', 'ipv6', 'profile',
+  'dns', 'hosts', 'sniffer', 'ipv6',
   'x-coproxy-network',
   'x-coproxy-gateway',
   'geodata-mode', 'geodata-loader', 'geosite-matcher', 'geo-auto-update',
@@ -236,6 +236,13 @@ export function compileConfig(input: unknown): Candidate {
     if (PROTECTED_ROOT_KEYS.has(key)) protectedField();
   }
   checkProtected(policy);
+  if (policy.profile !== undefined) {
+    if (policy.profile === null || typeof policy.profile !== 'object' || Array.isArray(policy.profile)) protectedField();
+    const profile = object(policy.profile);
+    // Managed choices live in the versioned workspace. A core cache must not
+    // override the selected first member after apply, rollback or plan switch.
+    if (Object.keys(profile).length !== 1 || profile['store-selected'] !== false) protectedField();
+  }
   if (policy.mode !== undefined && policy.mode !== 'rule') protectedField();
   if (policy.rules !== undefined) {
     for (const rule of array(policy.rules)) if (typeof rule !== 'string') invalid();

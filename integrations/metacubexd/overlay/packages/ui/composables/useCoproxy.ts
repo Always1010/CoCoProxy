@@ -52,6 +52,7 @@ const messages: Record<string, string> = {
   DRAFT_CONFLICT: '配置已被其他操作修改，请刷新后重试。',
   SOURCE_CONFLICT: '来源版本已变化，请重新读取来源后再操作。',
   WORKSPACE_CONFLICT: '配置已被其他操作修改，请刷新后重试。',
+  WORKSPACE_PENDING: '请先应用待生效的配置，再切换节点。',
   WORKSPACE_INVALID: '配置内容无效，请检查策略组和规则。',
   WORKSPACE_CORRUPT: '配置无法读取，请检查服务存储。',
   WORKSPACE_UNAVAILABLE: '配置暂时无法读取，请稍后刷新。',

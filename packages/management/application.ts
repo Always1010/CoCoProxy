@@ -11,6 +11,8 @@ import { exactRecord, ManagementError, readJsonBody } from './http.ts';
 import type { ManagementAction } from './http.ts';
 import { compileAutomaticGatewayConfig, parseAutomaticGatewaySettings, automaticGatewayPolicy, AutomaticGatewayConfigError } from '../gateway/profile.ts';
 import type { AutomaticGatewaySettings } from '../gateway/profile.ts';
+import { createWorkspaceApplication } from './workspace-application.ts';
+import { WorkspaceError } from './workspace.ts';
 
 export interface ManagementRuntime extends RuntimeAdapter { observe(generation: string): Promise<CoreObservation> }
 const protectedKeys = ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns'];
@@ -35,9 +37,22 @@ export function createManagementApplication(options: { stateDirectory: string; d
     if (canonicalJson(draft.input.deployment) !== canonicalJson(deployment as JsonObject)) throw new ManagementError('DEPLOYMENT_MISMATCH', 409);
     return draft;
   }
+  const workspace = createWorkspaceApplication({ stateDirectory: options.stateDirectory, subscriptions, store, manager,
+    compile: policy => compile({ schemaVersion: 1, deployment, policy }),
+    legacyPolicy: async () => {
+      const metadata = await drafts.metadata();
+      if (metadata) return (await managedDraft(metadata.revision)).input.policy as JsonObject;
+      const active = (await store.status()).active;
+      if (!active) return null;
+      const candidate = JSON.parse(await privateRead(await store.readCandidate(active))) as JsonObject;
+      const policy = automaticGateway ? automaticGatewayPolicy(candidate) : { ...candidate };
+      for (const key of protectedKeys) delete policy[key];
+      return policy;
+    } });
   return async request => {
     try {
       const path = new URL(request.url).pathname;
+      if (path === '/api/coproxy/workspace' || path.startsWith('/api/coproxy/workspace/')) return await workspace(request);
       if (path === '/api/coproxy/status' && request.method === 'GET') {
         const status = await store.status();
         let core: CoreObservation | null = null;
@@ -99,9 +114,16 @@ export function createManagementApplication(options: { stateDirectory: string; d
       if (source !== null) {
         if (request.method === 'GET' && !source[2]) return { source: await subscriptions.status(source[1]) };
         if (request.method === 'PUT' && !source[2]) {
-          const body = exactRecord(await readJsonBody(request, 16_384), ['expectedRevision', 'url']);
+          const body = exactRecord(await readJsonBody(request, 16_384), ['expectedRevision'], ['url', 'name']);
           if (!revision(body.expectedRevision)) throw new ManagementError('INVALID_REVISION');
-          return { ...await subscriptions.configure({ id: source[1], url: body.url as string }, body.expectedRevision) };
+          return { ...await subscriptions.configure({ id: source[1], ...(body.url === undefined ? {} : { url: body.url as string }),
+            ...(body.name === undefined ? {} : { name: body.name as string }) }, body.expectedRevision) };
+        }
+        if (request.method === 'DELETE' && !source[2]) {
+          const body = exactRecord(await readJsonBody(request, 128), ['expectedRevision']);
+          if (!revision(body.expectedRevision)) throw new ManagementError('INVALID_REVISION');
+          await subscriptions.remove(source[1], body.expectedRevision);
+          return { removed: true };
         }
         if (request.method === 'POST' && source[2]) {
           const body = exactRecord(await readJsonBody(request, 128), ['expectedRevision']);
@@ -114,11 +136,11 @@ export function createManagementApplication(options: { stateDirectory: string; d
       if (error instanceof ManagementError) throw error;
       if (error instanceof ConfigError) throw new ManagementError(error.code);
       if (error instanceof AutomaticGatewayConfigError) throw new ManagementError(error.code);
-      if (error instanceof DraftError || error instanceof TransactionError || error instanceof SubscriptionError) {
+      if (error instanceof DraftError || error instanceof TransactionError || error instanceof SubscriptionError || error instanceof WorkspaceError) {
         const code = error.code;
         const status = /CONFLICT|STORE_LOCKED|RECOVERY_REQUIRED|DEPLOYMENT_MISMATCH/.test(code) ? 409
           : /NOT_FOUND/.test(code) ? 404
-          : /INVALID|PROTECTED|NAME_CONFLICT|LIMIT|SOURCE_PENDING/.test(code) ? 400 : 503;
+          : /INVALID|PROTECTED|NAME_CONFLICT|LIMIT|SOURCE_PENDING|PROFILE_REQUIRED|PROFILE_RULES_REQUIRED|PROFILE_NO_PROXY|GROUP_REFERENCE|GROUP_SELECTION_UNSUPPORTED/.test(code) ? 400 : 503;
         throw new ManagementError(code, status);
       }
       throw new ManagementError('MANAGEMENT_UNAVAILABLE', 503);
