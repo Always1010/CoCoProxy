@@ -1,32 +1,44 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import http from 'node:http';
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { parseOptions, createRunner, summarizePhase, runBenchmark } from '../scripts/network-benchmark.mjs';
+import { mkdir, mkdtemp, readFile, readdir, rm, appendFile } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { createRunner } from '../scripts/network-benchmark.mjs';
+import { defaultTargets, validateConfig, runSuite, summarizeSiteProbes, routeSummary } from '../scripts/network-benchmark-suite.mjs';
 
-async function fixture(t) {
+async function outputDirectory(t) {
+  const parent = resolve('.local/experiments');
+  await mkdir(parent, { recursive: true });
+  const path = await mkdtemp(join(parent, 'network-benchmark-test-'));
+  t.after(async () => {
+    assert.ok(resolve(path).startsWith(parent + sep));
+    await rm(path, { recursive: true, force: true });
+  });
+  return path;
+}
+
+async function fixture(t, onRequest = () => {}) {
   const server = http.createServer((request, response) => {
-    const url = new URL(request.url, 'http://localhost');
-    if (url.pathname === '/stall') return;
-    if (url.pathname === '/failed') { response.writeHead(503); response.end('SYNTHETIC_RESPONSE_SECRET'); return; }
-    if (request.method === 'POST') {
-      request.on('data', () => { request.pause(); setTimeout(() => request.resume(), 3); });
-      request.on('end', () => { response.writeHead(200); response.end('ok'); });
-      return;
-    }
-    const bytes = Number(url.searchParams.get('bytes') ?? 0);
-    response.writeHead(200, { 'Content-Length': bytes });
-    if (!bytes) { response.end(); return; }
-    const chunk = Buffer.alloc(256 * 1024, 42);
-    let remaining = bytes;
+    onRequest();
+    if (request.url.startsWith('/stall')) return;
+    if (request.url.startsWith('/failed')) { response.writeHead(503); response.end('SYNTHETIC_SECRET'); return; }
+    if (request.url.startsWith('/html')) { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end('not data'); return; }
+    if (request.method === 'POST') { request.resume(); request.on('end', () => response.end('ok')); return; }
+    if (request.url.startsWith('/probe')) { response.writeHead(204); response.end(); return; }
+    const range = /^bytes=(\d+)-(\d+)$/.exec(request.headers.range ?? '');
+    const bytes = range ? Number(range[2]) - Number(range[1]) + 1 : Number(new URL(request.url, 'http://localhost').searchParams.get('bytes') ?? 0);
+    response.writeHead(range ? 206 : 200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes,
+      ...(range ? { 'Content-Range': `bytes ${range[1]}-${range[2]}/8388608` } : {}) });
+    let left = bytes;
+    if (!left) { response.end(); return; }
+    const buffer = Buffer.alloc(65536, 42);
     const timer = setInterval(() => {
       if (response.writableNeedDrain) return;
-      const size = Math.min(remaining, chunk.length);
-      response.write(chunk.subarray(0, size));
-      remaining -= size;
-      if (!remaining) { clearInterval(timer); response.end(); }
-    }, 10);
+      const size = Math.min(left, buffer.length);
+      response.write(buffer.subarray(0, size)); left -= size;
+      if (!left) { clearInterval(timer); response.end(); }
+    }, 8);
     response.on('close', () => clearInterval(timer));
   });
   await new Promise(resolveReady => server.listen(0, '127.0.0.1', resolveReady));
@@ -34,112 +46,114 @@ async function fixture(t) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-test('safe defaults and endpoint validation prevent ambiguous or credential-bearing tests', () => {
-  const defaults = parseOptions([]);
-  assert.equal(defaults.parallel, 4);
-  assert.equal(defaults.durationSeconds, 20);
-  assert.ok(defaults.outputDir.startsWith(resolve('.local/reports')));
-  for (const args of [['--duration-seconds', '0'], ['--parallel', '99'], ['--rounds', '2', '--rounds', '3'],
-    ['--download-url', 'http://example.invalid/', '--allow-http'],
-    ['--upload-url', 'https://user:SYNTHETIC_PASSWORD@example.invalid/'],
-    ['--label', 'bad\nlabel'], ['--download-url', 'file:///tmp/test'], ['--unknown']]) {
-    assert.throws(() => parseOptions(args));
+test('multi-site config never equates geography to routing or permits credential-bearing endpoints', () => {
+  const config = validateConfig({ schemaVersion: 1, targets: defaultTargets });
+  assert.ok(config.targets.filter(t => t.region === 'domestic').length >= 3);
+  assert.ok(config.targets.filter(t => t.region === 'overseas').length >= 3);
+  for (const bad of [[], [{ id: 'bad', name: 'bad', region: 'domestic', probeUrl: 'https://user:SECRET@example.invalid/' }],
+    [{ id: 'bad', name: 'bad', region: 'domestic', probeUrl: 'http://example.invalid/' }], [defaultTargets[0], defaultTargets[0]]]) {
+    assert.throws(() => validateConfig({ schemaVersion: 1, targets: bad }, true));
   }
+  assert.equal(routeSummary([{ region: 'domestic', countedDownloadBytes: 100 }]).route, 'unknown');
+  const partial = routeSummary([{ countedDownloadBytes: 100, known: true }, { countedDownloadBytes: 200 }],
+    r => r.known ? { status: 'verified', route: 'direct', fingerprint: 'stable' } : { status: 'unverified', route: 'unknown' });
+  assert.equal(partial.route, 'partial-direct');
+  assert.equal(partial.downloadBytes.direct, 100);
+  assert.equal(partial.downloadBytes.unknown, 200);
 });
 
-test('curl rejects HTTP errors, bounds stalls and ignores environment proxies without leaking bodies', async t => {
-  const base = await fixture(t);
-  const run = createRunner();
-  const prior = process.env.http_proxy;
-  process.env.http_proxy = 'http://127.0.0.1:1';
-  try {
-    const ok = await run(`${base}/down?bytes=65536`, { bytes: 65536, timeoutSeconds: 2 });
-    assert.equal(ok.successful, true);
-    assert.equal(ok.downloadedBytes, 65536);
-    const failed = await run(`${base}/failed?token=SYNTHETIC_QUERY_SECRET`, { timeoutSeconds: 2 });
-    assert.equal(failed.failure, 'HTTP_STATUS');
-    assert.equal(failed.countedDownloadBytes, 0);
-    assert.ok(!JSON.stringify(failed).includes('SYNTHETIC_'));
-    const stalled = await run(`${base}/stall`, { timeoutSeconds: 0.1 });
-    assert.equal(stalled.failure, 'TIMEOUT');
-    assert.equal(stalled.deadlineTimeout, false);
-    assert.ok(stalled.elapsedMs < 2000);
-  } finally {
-    if (prior === undefined) delete process.env.http_proxy; else process.env.http_proxy = prior;
-  }
+test('HTTP errors, false binary bodies, wrong lengths and zero-progress deadline failures are excluded', async t => {
+  const base = await fixture(t), run = createRunner();
+  const failed = await run(`${base}/failed?token=SYNTHETIC_QUERY_SECRET`, { timeoutSeconds: 1 });
+  assert.equal(failed.countedDownloadBytes, 0);
+  assert.ok(!JSON.stringify(failed).includes('SYNTHETIC_'));
+  const html = await run(`${base}/html`, { binary: true });
+  assert.equal(html.failure, 'CONTENT_TYPE');
+  assert.equal(html.countedDownloadBytes, 0);
+  const wrongLength = await run(`${base}/data?bytes=64`, { bytes: 128 });
+  assert.equal(wrongLength.successful, false);
+  assert.equal(wrongLength.countedDownloadBytes, 0);
+  const timeout = await run(`${base}/stall`, { timeoutSeconds: 0.1, phaseDeadline: performance.now() + 100 });
+  assert.equal(timeout.failure, 'TIMEOUT');
+  assert.equal(timeout.deadlineTimeout, false);
+  const partial = await run(`${base}/data`, { range: { start: 0, end: 8388607 }, bytes: 8388608,
+    binary: true, expectedStatus: 206, timeoutSeconds: 0.15, phaseDeadline: performance.now() + 150 });
+  assert.equal(partial.deadlineTimeout, true);
+  assert.ok(partial.countedDownloadBytes > 0);
+  assert.ok(partial.localPort > 0 && partial.remotePort > 0 && partial.endedAtMs >= partial.startedAtMs);
 });
 
-test('partial uploads and boundary probes cannot silently become receiver goodput or successful latency', () => {
-  const transfer = { kind: 'transfer', successful: false, deadlineTimeout: true, countedDownloadBytes: 0,
-    countedUploadBytes: 1000, acknowledgedUploadBytes: 0 };
-  const summary = summarizePhase({ direction: 'upload', elapsedMs: 1000 }, [transfer,
-    { kind: 'probe', successful: true, fullyWithinPhase: false, ttfbMs: 1 }]);
-  assert.equal(summary.averageMbps, 0.008);
-  assert.equal(summary.acknowledgedUploadBytes, 0);
-  assert.equal(summary.latency.attempts, 0);
-  assert.equal(summary.latency.httpsColdTtfbMs.p50, null);
-  assert.equal(summary.latency.excludedBoundarySamples, 1);
-  assert.ok(summary.warnings.includes('NO_COMPLETED_LOAD_REQUEST'));
-  assert.ok(summary.warnings.includes('NO_VALID_LATENCY'));
+test('slow boundary probes remain in attempts and failures instead of vanishing from the denominator', () => {
+  const stats = summarizeSiteProbes([
+    { kind: 'probe', targetId: 'site', successful: true, endedAtMs: 90, ttfbMs: 10, totalMs: 20 },
+    { kind: 'probe', targetId: 'site', successful: false, endedAtMs: 110, failureStage: 'tcp' },
+    { kind: 'probe', targetId: 'site', successful: true, endedAtMs: 120, ttfbMs: 80, totalMs: 90 },
+  ], { endedAtMs: 100 }).site;
+  assert.equal(stats.attempts, 3);
+  assert.equal(stats.failures, 1);
+  assert.equal(stats.boundaryCensored, 1);
+  assert.equal(stats.successRate, 1 / 3);
+  assert.equal(stats.coldTtfbMs.p50, 10);
 });
 
-test('one complete synthetic run overlaps probes with load, saves bounded results and removes payloads', { timeout: 55000 }, async t => {
-  const base = await fixture(t);
-  const parent = resolve('.local/experiments');
-  await mkdir(parent, { recursive: true });
-  const output = await mkdtemp(join(parent, 'network-benchmark-test-'));
-  t.after(() => rm(output, { recursive: true, force: true }));
-  const options = parseOptions(['--allow-http', '--download-url', `${base}/down?token=SYNTHETIC_QUERY_SECRET`,
-    '--upload-url', `${base}/up`, '--latency-url', `${base}/probe`, '--duration-seconds', '5', '--idle-seconds', '5',
-    '--output-dir', output]);
-  const { directory, report } = await runBenchmark(options, { log: () => {}, captureNetwork: false });
-  assert.ok(['completed', 'completed-with-warnings'].includes(report.status));
-  assert.equal(report.phases.length, 5);
-  assert.equal(report.preflight.length, 3);
-  for (const phase of report.phases) {
-    assert.ok(phase.elapsedMs >= 4900 && phase.elapsedMs < 8000);
-    assert.ok(phase.latency.successes >= 3);
-    if (phase.direction) assert.ok(phase.averageMbps > 0);
-  }
-  const files = await readdir(directory);
-  assert.deepEqual(files.sort(), ['report.json', 'samples.jsonl', 'summary.csv', 'summary.txt']);
-  const serialized = await readFile(join(directory, 'report.json'), 'utf8');
-  assert.ok(!serialized.includes('SYNTHETIC_QUERY_SECRET'));
-  assert.equal(JSON.parse(serialized).status, report.status);
-  const records = (await readFile(join(directory, 'samples.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
-  for (const phase of report.phases.filter(row => row.direction)) {
-    const samples = records.filter(row => row.phaseId === phase.id);
-    assert.ok(samples.some(row => row.kind === 'probe' && row.atMs < phase.elapsedMs));
-    const transfers = samples.filter(row => row.kind === 'transfer');
-    const bytes = transfers.reduce((n, row) => n + (phase.direction === 'download' ? row.countedDownloadBytes : row.countedUploadBytes), 0);
-    assert.equal(phase.averageMbps, Math.round(bytes * 8 / (phase.elapsedMs / 1000) / 1e6 * 1000) / 1000);
-  }
+test('a failed first site and unsupported upload do not stop other downloads, probes or DIRECT aggregate', { timeout: 30000 }, async t => {
+  const base = await fixture(t), outputDir = await outputDirectory(t);
+  const target = (id, url) => ({ id, name: id, region: 'domestic', probeUrl: `${base}/probe`, download: { mode: 'range', url } });
+  const targets = [target('first-fails', `${base}/failed`), target('first-good', `${base}/data`),
+    { ...target('second-good', `${base}/data`), uploadUrl: `${base}/failed` },
+    { id: 'overseas-probe', name: 'probe', region: 'overseas', probeUrl: `${base}/probe` }];
+  let stopped = false;
+  const observer = { available: true, events: [], stop: async () => { stopped = true; },
+    classify: () => ({ status: 'verified', route: 'direct', fingerprint: 'synthetic' }) };
+  const { directory, report } = await runSuite({ targets, observer: {}, outputDir, label: 'synthetic', rounds: 1,
+    idleSeconds: 0.5, durationSeconds: 0.6, parallel: 2, maxBytes: 64 * 1024 * 1024 },
+  { captureNetwork: false, observerFactory: async () => observer, log: () => {} });
+  assert.equal(stopped, true);
+  assert.equal(report.status, 'completed-with-limitations');
+  assert.equal(report.capabilities['first-fails'].download.status, 'failed');
+  assert.equal(report.capabilities['second-good'].upload.status, 'failed');
+  assert.ok(report.phases.some(p => p.name === 'first-good-download-single' && p.loadMbps > 0));
+  assert.ok(report.phases.some(p => p.name === 'second-good-download-single' && p.loadMbps > 0));
+  assert.ok(report.phases.some(p => p.name === 'direct-candidates-multi-site' && p.loadMbps > 0));
+  const parallel = report.phases.find(p => p.name === 'first-good-download-parallel');
+  assert.equal(parallel.startedWorkers, 2);
+  const aggregate = report.phases.find(p => p.name === 'direct-candidates-multi-site');
+  assert.equal(aggregate.targetIdsUsed.length, 2);
+  assert.ok(aggregate.verifiedDirectMbps > 0);
+  assert.ok(report.loadBytes <= 64 * 1024 * 1024);
+  assert.ok(report.phases.every(p => p.probes['overseas-probe']?.attempts >= 1));
+  const rows = (await readFile(join(directory, 'samples.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(rows.some(r => r.kind === 'probe' && r.underLoadAtStart));
+  assert.ok(!(await readdir(directory)).some(name => name.endsWith('.tmp')));
+  assert.equal(JSON.parse(await readFile(join(directory, 'report.json'), 'utf8')).status, report.status);
 });
 
-test('preflight failure stops before load and cancellation preserves partial records without payloads', { timeout: 10000 }, async t => {
-  const base = await fixture(t);
-  const parent = resolve('.local/experiments');
-  await mkdir(parent, { recursive: true });
-  const output = await mkdtemp(join(parent, 'network-benchmark-stop-test-'));
-  t.after(() => rm(output, { recursive: true, force: true }));
-  const flags = ['--allow-http', '--download-url', `${base}/down`, '--upload-url', `${base}/up`,
-    '--latency-url', `${base}/probe`, '--duration-seconds', '5', '--idle-seconds', '5', '--output-dir', output];
-  const failedOptions = parseOptions(flags);
-  failedOptions.uploadUrl = `${base}/failed`;
-  const failed = await runBenchmark(failedOptions, { log: () => {}, captureNetwork: false });
-  assert.equal(failed.report.status, 'preflight-failed');
-  assert.equal(failed.report.phases.length, 0);
-  assert.equal(failed.report.preflight.at(-1).httpStatus, 503);
-  assert.ok(!(await readdir(failed.directory)).some(name => name.endsWith('.tmp')));
-  let signalled = false;
-  const stopped = await runBenchmark(parseOptions(flags), { captureNetwork: false, log: message => {
-    if (message.startsWith('[1/')) {
-      setTimeout(() => { signalled = true; process.emit('SIGINT'); }, 100);
-    }
+test('a sample write failure stops and settles all schedulers before final output', { timeout: 8000 }, async t => {
+  let calls = 0;
+  const base = await fixture(t, () => calls++), outputDir = await outputDirectory(t);
+  const { report } = await runSuite({ targets: [{ id: 'site', name: 'site', region: 'custom',
+    probeUrl: `${base}/probe`, download: { mode: 'range', url: `${base}/data` } }], outputDir,
+    label: 'io-failure', idleSeconds: 0.2, durationSeconds: 5, parallel: 2, rounds: 1, maxBytes: 16 * 1024 * 1024 },
+  { captureNetwork: false, log: () => {}, appendSample: async (path, text) => {
+    const row = JSON.parse(text);
+    if (row.phaseId === 2 && row.kind === 'probe') throw new Error('SYNTHETIC_WRITE_FAILURE');
+    await appendFile(path, text);
   } });
+  assert.equal(report.status, 'error');
+  const atCompletion = calls;
+  await new Promise(resolveDone => setTimeout(resolveDone, 300));
+  assert.equal(calls, atCompletion);
+});
+
+test('cancellation during preflight preserves results and leaves no load process', { timeout: 5000 }, async t => {
+  const base = await fixture(t), outputDir = await outputDirectory(t);
+  let signalled = false;
+  const { report, directory } = await runSuite({ targets: [{ id: 'stall', name: 'stall', region: 'custom',
+    probeUrl: `${base}/probe`, download: { mode: 'range', url: `${base}/stall` } }], outputDir,
+    label: 'cancel', idleSeconds: 5, durationSeconds: 5, parallel: 2, rounds: 1, maxBytes: 16 * 1024 * 1024 },
+  { captureNetwork: false, log: text => { if (text.startsWith('逐站检查')) setTimeout(() => { signalled = true; process.emit('SIGINT'); }, 100); } });
   assert.equal(signalled, true);
-  assert.equal(stopped.report.status, 'cancelled');
-  assert.equal(JSON.parse(await readFile(join(stopped.directory, 'report.json'), 'utf8')).status, 'cancelled');
-  assert.ok(!(await readdir(stopped.directory)).some(name => name.endsWith('.tmp')));
-  assert.ok((await readFile(join(stopped.directory, 'samples.jsonl'), 'utf8')).length > 0);
+  assert.equal(report.status, 'cancelled');
+  assert.equal(report.phases.length, 0);
+  assert.equal(JSON.parse(await readFile(join(directory, 'report.json'), 'utf8')).status, 'cancelled');
 });
