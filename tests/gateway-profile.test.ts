@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { canonicalJson, compileConfig, type JsonObject } from '../packages/config/index.ts';
-import { AUTOMATIC_GATEWAY_CORE_SHA256, AutomaticGatewayConfigError, automaticGatewayPolicy,
+import { AUTOMATIC_GATEWAY_CORE_SHA256, AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM, AutomaticGatewayConfigError, automaticGatewayPolicy,
   compileAutomaticGatewayConfig, parseAutomaticGatewaySettings, recompileAutomaticGatewayConfig } from '../packages/gateway/profile.ts';
 import { validateWithMihomo } from '../packages/mihomo/validator.ts';
-import { loadRuntimeCandidate } from '../packages/runtime/settings.ts';
+import { loadRuntimeCandidate, parseRuntimeSettings } from '../packages/runtime/settings.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
 
 function base(): JsonObject {
@@ -118,6 +118,19 @@ test('trusted recompile derives overlay from deployment and requires generation 
   assert.notEqual(recompileAutomaticGatewayConfig(candidate.config, { ...settings(), routerMAC: '02:00:00:00:00:02' }).id, candidate.id);
   changed['external-controller'] = '0.0.0.0:19090';
   invalid(() => recompileAutomaticGatewayConfig(changed, settings()));
+});
+
+test('native runtime pins exactly the platform review catalog without trusting deployment-supplied hashes', async () => {
+  const review = JSON.parse(await readFile(new URL('../integrations/metacubexd/review.json', import.meta.url), 'utf8'));
+  assert.deepEqual(AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM,
+    Object.fromEntries(Object.entries(review.coreCandidate.platforms).map(([key, value]) => [key, (value as { binarySha256: string }).binarySha256])));
+  const runtime = { schemaVersion: 1, stateDirectory: '/var/lib/synthetic-proxy', binaryPath: '/opt/synthetic-proxy/bin/mihomo',
+    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/coproxy-mihomo.service',
+    unitSha256: 'c'.repeat(64), serviceUid: 12345, automaticGateway: settings() };
+  for (const binarySha256 of Object.values(AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM)) {
+    assert.equal(parseRuntimeSettings({ ...runtime, binarySha256 }).binarySha256, binarySha256);
+  }
+  assert.throws(() => parseRuntimeSettings({ ...runtime, binarySha256: 'a'.repeat(64) }), /INVALID_RUNTIME_SETTINGS/);
 });
 
 test('runtime accepts native candidates only with matching explicit deployment opt-in', { skip: process.platform !== 'linux' }, async t => {

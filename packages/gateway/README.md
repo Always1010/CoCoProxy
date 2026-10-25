@@ -4,6 +4,8 @@
 
 `profile.ts` 复用现有离线策略编译器，并为固定审核版本 Mihomo v1.19.33 生成原生 TUN `auto-route` / `auto-redirect` 配置。配置编译不执行网络命令、启动核心或安装依赖。默认显式代理路径继续拒绝此类候选；可信 `RuntimeSettings.automaticGateway` 明确选择原生模式后，管理保存／捕获／应用与现有 `SystemdMihomoRuntime` 使用同一入口和事务。
 
+原生运行设置只接受 `AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM` 中固定审阅的 ARM64 或 x86-64 v1 二进制摘要，目录须与发行审阅记录一致；部署 JSON 无法自行扩充信任。目标机还须通过真实 ELF、主机架构、系统工具和内核能力预检。x86-64 下载摘要和 ELF 已核验，仍须在目标架构上完成运行及终端验收，不能把跨架构打包成功当作实际联网通过。
+
 `parseAutomaticGatewaySettings` 只接受字段完整的 schema 1 普通 JSON 对象。三种 IPv4 角色必须不同、属于同一子网且为有效主机地址，子网不得覆盖固定 TUN 地址 `198.18.0.1/30`；接口不得为 loopback 或 TUN。MAC 必须为单播地址。DNS 使用非特权端口，MTU 范围为 1280–9000。部署出口表范围为 2000–19999 并保留上游表 2022；出口优先级为 1000–8997，其后两个优先级用于终端接管，均先于原生规则 9000；出口 mark 必须为正 32 位整数，并避开上游 2023/2024。
 
 `compileAutomaticGatewayConfig(base, settings)` 先调用 `compileConfig` 验证策略、内存来源快照和部署隔离，再覆盖固定原生配置。显式代理和控制入口保持回环监听；DNS 仅监听部署网关地址和专用端口，关闭 TUN DNS 接管，沿用真实地址解析。核心连接绑定入口接口及出口 mark；直连子网从自动 TUN 路由排除。原生路由表、规则优先级和重定向 mark 固定为上述已审阅值。部署出口表和优先级由独立网络服务落实，不能仅凭配置存在就宣称生效。

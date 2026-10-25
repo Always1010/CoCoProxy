@@ -3,8 +3,13 @@ import { isIP } from 'node:net';
 import { types } from 'node:util';
 import { canonicalJson, compileConfig, type Candidate, type JsonObject } from '../config/index.ts';
 
-/** Reviewed Linux/arm64 Mihomo v1.19.33; runtime verifies the actual executable. */
+/** Legacy ARM64 pin retained for existing fixtures and deployment inputs. */
 export const AUTOMATIC_GATEWAY_CORE_SHA256 = '8c73570d9a5f388bc2f58eee0b347ccfab84fb3cf1a0f8f2cf5eac7005fbcdc0';
+/** Fixed reviewed v1.19.33 bytes only; target installation also verifies ELF architecture. */
+export const AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM: Readonly<Record<'linux-arm64' | 'linux-amd64-v1', string>> = Object.freeze({
+  'linux-arm64': AUTOMATIC_GATEWAY_CORE_SHA256,
+  'linux-amd64-v1': '19cbe7ba1523a92ed2d0a30716ea093de57db05b7844db23de2b9c21fd7a1afa',
+});
 export const AUTOMATIC_GATEWAY_TUN_ADDRESS = '198.18.0.1/30';
 
 export type AutomaticGatewaySettings = {
