@@ -4,6 +4,7 @@ import { compileConfig } from '../config/index.ts';
 import type { JsonObject, JsonValue } from '../config/index.ts';
 import { renderRuntimePlan } from '../runtime/plan.ts';
 import { HttpsSnapshotClient } from '../subscriptions/http.ts';
+import { DEFAULT_LATENCY_PROBE_ORIGIN } from '../management/controller.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
 import { renderAutomaticGatewayHostPlan } from '../gateway/host-plan.ts';
 
@@ -192,15 +193,15 @@ function render(input: unknown): DeploymentPlan {
     // The constructor validates bounds only; it does not resolve or connect.
     new HttpsSnapshotClient(policy as unknown as HttpsClientOptions);
   }
-  if (management.controllerPolicy !== undefined) {
-    const policy = record(management.controllerPolicy, ['allowedProbeOrigins']);
-    origins(policy.allowedProbeOrigins, 16);
-  }
+  const controllerPolicy = management.controllerPolicy === undefined
+    ? { allowedProbeOrigins: [DEFAULT_LATENCY_PROBE_ORIGIN] }
+    : record(management.controllerPolicy, ['allowedProbeOrigins']);
+  origins(controllerPolicy.allowedProbeOrigins, 16);
 
   const settings: JsonObject = { schemaVersion: 1, origin: managementOrigin, credentialPath,
     runtimeSettingsPath, deployment,
     ...(management.subscriptionPolicy === undefined ? {} : { subscriptionPolicy: management.subscriptionPolicy }),
-    ...(management.controllerPolicy === undefined ? {} : { controllerPolicy: management.controllerPolicy }) };
+    controllerPolicy };
   const settingsContent = JSON.stringify(settings, null, 2) + '\n';
   if (Buffer.byteLength(settingsContent, 'utf8') > 64 * 1024) fail();
   const managementUnit = [

@@ -56,6 +56,7 @@ const proxyRefresh = useProxyRefresh()
 const connectionsStore = useConnectionsStore()
 const configStore = useConfigStore()
 const nodeRecommendationStore = useNodeRecommendationStore()
+const workspace = useWorkspace()
 
 // Batch latency test
 const {
@@ -161,7 +162,6 @@ const getRecommendedNode = (proxyGroup: ProxyType) => {
 const testAllGroups = async () => {
   const groupNames = renderProxies.value.map((p) => p.name)
   await testMultipleGroups(groupNames)
-  autoSwitchAfterTest(renderProxies.value)
 }
 
 // Switch to recommended node in a group. No-op when there is no better node
@@ -175,28 +175,13 @@ const switchToRecommended = (proxyGroup: ProxyType) => {
   }
 }
 
-// Honor the "auto switch to recommended" setting (#1971): once a latency test
-// has refreshed the performance data, move the tested group(s) to their
-// recommended node. Does nothing unless the user enabled the toggle.
-const autoSwitchAfterTest = (proxyGroups: ProxyType[]) => {
-  if (!nodeRecommendationStore.autoSwitchEnabled) return
-  // A member that is itself a group (selector/url-test/…) must never be
-  // auto-selected: picking a nested group by its transitive latency silently
-  // overrides the user's manual select-group choice (#2040 — a `select` group
-  // jumping to a sub-group on test). Matches clash-verge-rev: a test never
-  // reselects. The explicit "Switch to Recommended" button still allows it.
-  const groupNames = new Set(proxiesStore.proxies.map((group) => group.name))
-  for (const proxyGroup of proxyGroups) {
-    if (!canSelect(proxyGroup)) continue
-    const recommended = getRecommendedNode(proxyGroup)
-    if (!recommended || recommended === proxyGroup.now) continue
-    if (groupNames.has(recommended)) continue
-    proxiesStore.selectProxyInGroup(proxyGroup, recommended)
-  }
-}
-
 const renderProxies = computed(() =>
-  proxiesStore.proxies.filter((proxy) => !proxy.hidden),
+  proxiesStore.proxies.filter(
+    (proxy) =>
+      !proxy.hidden &&
+      (proxy.name !== 'GLOBAL' ||
+        !!workspace.view.value?.groups.some((group) => group.name === 'GLOBAL')),
+  ),
 )
 
 // Whether any rendered proxy group is currently expanded. Drives the
@@ -455,12 +440,13 @@ const ProxyGroupTitle = defineComponent({
                     proxiesStore.proxyGroupLatencyTestingMap[
                       props.proxyGroup.name
                     ],
+                  title: '测试此策略组的节点延迟',
+                  'aria-label': '测试此策略组的节点延迟',
                   onClick: async (e: MouseEvent) => {
                     e.stopPropagation()
                     await proxiesStore.proxyGroupLatencyTest(
                       props.proxyGroup.name,
                     )
-                    autoSwitchAfterTest([props.proxyGroup])
                   },
                 },
                 {
@@ -474,7 +460,7 @@ const ProxyGroupTitle = defineComponent({
                           ],
                       },
                     }),
-                    h('span', '测速'),
+                    h('span', '测延迟'),
                   ],
                 },
               ),
@@ -707,6 +693,8 @@ const ProxyProviderTitle = defineComponent({
                     proxiesStore.proxyProviderLatencyTestingMap[
                       props.provider.name
                     ],
+                  title: '测试此订阅的节点延迟',
+                  'aria-label': '测试此订阅的节点延迟',
                   onClick: (e: MouseEvent) => {
                     e.stopPropagation()
                     proxiesStore.proxyProviderLatencyTest(props.provider.name)
@@ -723,7 +711,7 @@ const ProxyProviderTitle = defineComponent({
                           ],
                       },
                     }),
-                    h('span', '测速'),
+                    h('span', '测延迟'),
                   ],
                 },
               ),
@@ -888,13 +876,14 @@ const ProviderProxyNodes = defineComponent({
           class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-base-content/10 bg-base-200/80 px-2 text-sm transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
           :disabled="isBatchTesting"
           :title="t('recommendation.testAllGroups', 'Test All Groups')"
+          :aria-label="t('recommendation.testAllGroups', 'Test All Groups')"
           @click="testAllGroups"
         >
           <IconBrandSpeedtest
             :size="18"
             :class="{ 'animate-pulse text-success': isBatchTesting }"
           />
-          <span>测速</span>
+          <span>测延迟</span>
         </Button>
 
         <!-- Batch Test Progress Indicator -->
@@ -922,6 +911,7 @@ const ProviderProxyNodes = defineComponent({
           class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-base-content/10 bg-base-200/80 px-2 text-sm transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
           :disabled="isBatchTesting"
           :title="t('healthCheckAllProviders')"
+          :aria-label="t('healthCheckAllProviders')"
           @click="healthCheckAllProviders"
         >
           <IconBrandSpeedtest

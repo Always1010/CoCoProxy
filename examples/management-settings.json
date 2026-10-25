@@ -11,5 +11,5 @@
     "bootstrapResolvers": ["192.0.2.53"]
   },
   "subscriptionPolicy": { "allowedOrigins": ["https://subscription.example"] },
-  "controllerPolicy": { "allowedProbeOrigins": ["https://probe.example"] }
+  "controllerPolicy": { "allowedProbeOrigins": ["https://www.gstatic.com"] }
 }
