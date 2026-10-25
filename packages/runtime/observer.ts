@@ -53,29 +53,51 @@ export async function assertManagedUnit(input: RuntimeSettings, unit: RuntimeUni
   } catch { fail('UNIT_UNTRUSTED'); }
 }
 
-type Identity = { startTime: string; executable: string };
+type Identity = { startTime: string; executable: string | null; nativeCapabilities: boolean };
+/** Code-only synthetic seam; production always uses the fixed reader below. */
+export interface CoreObserverFixtureReader {
+  read(path: string, maximum: number): Promise<Buffer>;
+  realpath(path: string): Promise<string>;
+  entries(path: string): Promise<string[]>;
+  link(path: string): Promise<string>;
+  unit: typeof assertManagedUnit;
+  binary: typeof verifyBinary;
+  candidate: typeof loadRuntimeCandidate;
+  version: typeof probeVersion;
+}
+const permissionDenied = (error: unknown): boolean => ['EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException)?.code ?? '');
+class RestrictedProcAccess extends Error {}
 
-async function identity(pid: number, binary: string, uid: number, suffix: string[]): Promise<Identity> {
+async function identity(pid: number, binary: string, uid: number, suffix: string[], native: boolean,
+  reader: CoreObserverFixtureReader): Promise<Identity> {
   const root = `/proc/${pid}`;
-  const stat = (await boundedRead(`${root}/stat`, 64 * 1024)).toString('utf8');
+  const stat = (await reader.read(`${root}/stat`, 64 * 1024)).toString('utf8');
   // comm is allowed to contain ')' and spaces. Field 22 is offset 19 after it.
   const boundary = stat.lastIndexOf(')');
   const startTime = stat.slice(boundary + 2).trim().split(/\s+/)[19];
-  if (boundary < 1 || !/^\d+$/.test(startTime ?? '')) fail('PROCESS_UNVERIFIED');
-  const status = (await boundedRead(`${root}/status`, 64 * 1024)).toString('utf8');
+  if (stat.slice(0, stat.indexOf(' (')) !== String(pid) || boundary < 1 || !/^[1-9]\d*$/.test(startTime ?? '')) fail('PROCESS_UNVERIFIED');
+  const status = (await reader.read(`${root}/status`, 64 * 1024)).toString('utf8');
   const uids = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/m.exec(status);
-  if (!uids || Number(uids[2]) !== uid) fail('PROCESS_UNVERIFIED');
-  const executable = await realpath(`${root}/exe`);
-  if (executable !== binary) fail('PROCESS_UNVERIFIED');
-  const command = await boundedRead(`${root}/cmdline`, 1024 * 1024);
+  if (!uids || Number(uids[2]) !== uid || native && !uids.slice(1).every(value => Number(value) === uid)) fail('PROCESS_UNVERIFIED');
+  const capabilities = /^CapPrm:\s+([a-fA-F0-9]{1,16})\s*$/m.exec(status);
+  const nativeCapabilities = !!capabilities && BigInt('0x' + capabilities[1]) === 0x3000n; // NET_ADMIN and NET_RAW only.
+  const command = await reader.read(`${root}/cmdline`, 1024 * 1024);
   if (command.length === 0 || command[command.length - 1] !== 0) fail('PROCESS_UNVERIFIED');
   const args = command.subarray(0, -1).toString('utf8').split('\0');
   if (args.length < suffix.length || !suffix.every((value, offset) => args[args.length - suffix.length + offset] === value)) fail('PROCESS_UNVERIFIED');
-  return { startTime, executable };
+  if (native) {
+    if (args.length !== suffix.length + 1 || args[0] !== binary ||
+        (await reader.read(`${root}/cgroup`, 64 * 1024)).toString('utf8') !== '0::/system.slice/coproxy-mihomo.service\n') fail('PROCESS_UNVERIFIED');
+  }
+  let executable: string | null;
+  try { executable = await reader.realpath(`${root}/exe`); }
+  catch (error) { if (!native || !nativeCapabilities || !permissionDenied(error)) throw error; executable = null; }
+  if (executable !== null && executable !== binary) fail('PROCESS_UNVERIFIED');
+  return { startTime, executable, nativeCapabilities };
 }
 
-async function ownsController(pid: number, port: number): Promise<boolean> {
-  const table = (await boundedRead(`/proc/${pid}/net/tcp`, 4 * 1024 * 1024)).toString('ascii');
+async function ownsController(pid: number, port: number, reader: CoreObserverFixtureReader): Promise<boolean> {
+  const table = (await reader.read(`/proc/${pid}/net/tcp`, 4 * 1024 * 1024)).toString('ascii');
   const local = `0100007F:${port.toString(16).toUpperCase().padStart(4, '0')}`;
   const inodes = new Set<string>();
   for (const line of table.split('\n').slice(1)) {
@@ -83,13 +105,19 @@ async function ownsController(pid: number, port: number): Promise<boolean> {
     if (fields[1] === local && fields[3] === '0A' && /^[1-9]\d*$/.test(fields[9] ?? '')) inodes.add(fields[9]);
   }
   if (inodes.size === 0) return false;
-  const descriptors = await readdir(`/proc/${pid}/fd`);
+  let descriptors: string[];
+  try { descriptors = await reader.entries(`/proc/${pid}/fd`); }
+  catch (error) { if (permissionDenied(error)) throw new RestrictedProcAccess(); throw error; }
   if (descriptors.length > 65_536) return false;
   for (const descriptor of descriptors) {
     if (!/^\d+$/.test(descriptor)) continue;
     let target: string;
-    try { target = await readlink(`/proc/${pid}/fd/${descriptor}`); }
-    catch { continue; } // A descriptor can close while the process remains alive.
+    try { target = await reader.link(`/proc/${pid}/fd/${descriptor}`); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue; // Concurrent close.
+      if (permissionDenied(error)) throw new RestrictedProcAccess();
+      throw error;
+    }
     const socket = /^socket:\[(\d+)\]$/.exec(target);
     if (socket) inodes.delete(socket[1]);
     if (inodes.size === 0) return true;
@@ -133,8 +161,11 @@ async function probeVersion(port: number, secret: string): Promise<void> {
   });
 }
 
-/** Live evidence of this explicit-proxy core only; no DNS/TUN/egress claim. */
-export async function observeCore(input: RuntimeSettings, generation: string, unit: RuntimeUnitState): Promise<CoreObservation> {
+const liveReader: CoreObserverFixtureReader = { read: boundedRead, realpath, entries: path => readdir(path), link: readlink,
+  unit: assertManagedUnit, binary: verifyBinary, candidate: loadRuntimeCandidate, version: probeVersion };
+
+async function observe(input: RuntimeSettings, generation: string, unit: RuntimeUnitState,
+  reader: CoreObserverFixtureReader): Promise<CoreObservation> {
   const settings = parseRuntimeSettings(input);
   if (typeof generation !== 'string' || !/^[a-f0-9]{64}$/.test(generation)) fail('INVALID_RUNTIME_GENERATION');
   const result = (reason: string | null): CoreObservation => ({ ready: reason === null, generation,
@@ -142,24 +173,53 @@ export async function observeCore(input: RuntimeSettings, generation: string, un
   if (process.platform !== 'linux') return result('UNSUPPORTED_PLATFORM');
   if (!unit || unit.activeState !== 'active' || unit.subState !== 'running' ||
       !Number.isSafeInteger(unit.mainPid) || unit.mainPid <= 1 || unit.jobPending !== false) return result('CORE_INACTIVE');
+  const native = settings.automaticGateway !== undefined;
+  if (native) {
+    try { await reader.unit(settings, unit); }
+    catch { return result('UNIT_UNTRUSTED'); }
+  }
   let target: Awaited<ReturnType<typeof loadRuntimeCandidate>>;
-  try { target = await loadRuntimeCandidate(settings, generation); }
+  try { target = await reader.candidate(settings, generation); }
   catch { return result('CANDIDATE_UNTRUSTED'); }
   let binary: string;
-  try { binary = await verifyBinary(settings); }
+  try { binary = await reader.binary(settings); }
   catch { return result('BINARY_UNTRUSTED'); }
   const suffix = ['-d', target.home, '-f', target.path];
   let before: Identity;
-  try { before = await identity(unit.mainPid, binary, settings.serviceUid, suffix); }
+  try { before = await identity(unit.mainPid, binary, settings.serviceUid, suffix, native, reader); }
   catch { return result('PROCESS_UNVERIFIED'); }
-  try { if (!await ownsController(unit.mainPid, target.controller.port)) return result('CONTROLLER_NOT_OWNED'); }
+  let restricted = before.executable === null;
+  const controllerAcceptable = async (process: Identity): Promise<boolean> => {
+    try { return await ownsController(unit.mainPid, target.controller.port, reader); }
+    catch (error) {
+      if (!native || !process.nativeCapabilities || !(error instanceof RestrictedProcAccess)) throw error;
+      restricted = true; return true;
+    }
+  };
+  try { if (!await controllerAcceptable(before)) return result('CONTROLLER_NOT_OWNED'); }
   catch { return result('CONTROLLER_NOT_OWNED'); }
-  try { await probeVersion(target.controller.port, target.controller.secret); }
+  try { await reader.version(target.controller.port, target.controller.secret); }
   catch { return result('CONTROLLER_UNREADY'); }
   try {
-    const after = await identity(unit.mainPid, binary, settings.serviceUid, suffix);
+    const after = await identity(unit.mainPid, binary, settings.serviceUid, suffix, native, reader);
     if (after.startTime !== before.startTime || after.executable !== before.executable ||
-        await realpath(settings.binaryPath) !== binary || !await ownsController(unit.mainPid, target.controller.port)) return result('PROCESS_CHANGED');
+        after.nativeCapabilities !== before.nativeCapabilities || await reader.realpath(settings.binaryPath) !== binary ||
+        !await controllerAcceptable(after)) return result('PROCESS_CHANGED');
+    if (native) {
+      await reader.unit(settings, unit);
+      if (restricted && await reader.binary(settings) !== binary) return result('PROCESS_CHANGED');
+    }
   } catch { return result('PROCESS_CHANGED'); }
-  return result(null);
+  return { ...result(null), evidence: restricted ? 'native-unit-and-controller' : 'proc-exe-and-fd' };
+}
+
+/** Core readiness only. Native restricted evidence never proves /proc exe or FD ownership. */
+export async function observeCore(input: RuntimeSettings, generation: string, unit: RuntimeUnitState): Promise<CoreObservation> {
+  return observe(input, generation, unit, liveReader);
+}
+
+/** Synthetic readers are code-only and cannot be supplied through deployment JSON. */
+export async function observeCoreFixture(input: RuntimeSettings, generation: string, unit: RuntimeUnitState,
+  reader: CoreObserverFixtureReader): Promise<CoreObservation & { scope: 'fixture' }> {
+  return { ...await observe(input, generation, unit, reader), scope: 'fixture' };
 }

@@ -35,4 +35,6 @@ export interface CoreObservation {
   generation: string;
   checkedAt: string;
   reason: string | null;
+  /** Native fallback does not prove /proc executable or controller FD ownership. */
+  evidence?: 'proc-exe-and-fd' | 'native-unit-and-controller';
 }
