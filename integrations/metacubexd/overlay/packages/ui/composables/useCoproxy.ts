@@ -125,6 +125,7 @@ export function useCoproxy() {
     useState('coproxy-workspace-operation').value = ''
     useState('coproxy-latency-feedback').value = {}
     useState('coproxy-proxy-read-error').value = ''
+    useState('coproxy-proxy-workbenches').value = {}
   }
 
   async function request<T>(path: string, options: {
