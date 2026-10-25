@@ -12,7 +12,7 @@ import type { ManagementAction } from './http.ts';
 import { compileAutomaticGatewayConfig, parseAutomaticGatewaySettings, automaticGatewayPolicy, AutomaticGatewayConfigError } from '../gateway/profile.ts';
 import type { AutomaticGatewaySettings } from '../gateway/profile.ts';
 import { createWorkspaceApplication } from './workspace-application.ts';
-import { WorkspaceError } from './workspace.ts';
+import { WorkspaceError, WorkspaceStore, initialWorkspace } from './workspace.ts';
 
 export interface ManagementRuntime extends RuntimeAdapter { observe(generation: string): Promise<CoreObservation> }
 const protectedKeys = ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns'];
@@ -124,7 +124,11 @@ export function createManagementApplication(options: { stateDirectory: string; d
         if (request.method === 'DELETE' && !source[2]) {
           const body = exactRecord(await readJsonBody(request, 128), ['expectedRevision']);
           if (!revision(body.expectedRevision)) throw new ManagementError('INVALID_REVISION');
-          await subscriptions.remove(source[1], body.expectedRevision);
+          await subscriptions.remove(source[1], body.expectedRevision, async () => {
+            const current = await new WorkspaceStore(options.stateDirectory).read()
+              ?? initialWorkspace(null, (await subscriptions.list()).filter(item => item.snapshotCurrent).map(item => item.id));
+            return current.mode === 'subscription' ? current.subscriptionId !== source[1] : !current.sourceIds.includes(source[1]);
+          });
           return { removed: true };
         }
         if (request.method === 'POST' && source[2]) {
@@ -140,9 +144,9 @@ export function createManagementApplication(options: { stateDirectory: string; d
       if (error instanceof AutomaticGatewayConfigError) throw new ManagementError(error.code);
       if (error instanceof DraftError || error instanceof TransactionError || error instanceof SubscriptionError || error instanceof WorkspaceError) {
         const code = error.code;
-        const status = /CONFLICT|STORE_LOCKED|RECOVERY_REQUIRED|DEPLOYMENT_MISMATCH/.test(code) ? 409
+        const status = /CONFLICT|STORE_LOCKED|RECOVERY_REQUIRED|DEPLOYMENT_MISMATCH|SOURCE_IN_USE/.test(code) ? 409
           : /NOT_FOUND/.test(code) ? 404
-          : /INVALID|PROTECTED|NAME_CONFLICT|LIMIT|SOURCE_PENDING|PROFILE_REQUIRED|PROFILE_RULES_REQUIRED|PROFILE_NO_PROXY|GROUP_REFERENCE|GROUP_SELECTION_UNSUPPORTED/.test(code) ? 400 : 503;
+          : /INVALID|PROTECTED|NAME_CONFLICT|LIMIT|SOURCE_PENDING|SOURCE_REQUIRED|PROFILE_REQUIRED|PROFILE_RULES_REQUIRED|PROFILE_NO_PROXY|GROUP_REFERENCE|GROUP_SELECTION_UNSUPPORTED/.test(code) ? 400 : 503;
         throw new ManagementError(code, status);
       }
       throw new ManagementError('MANAGEMENT_UNAVAILABLE', 503);

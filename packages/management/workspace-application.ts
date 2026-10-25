@@ -218,6 +218,8 @@ export function createWorkspaceApplication(options: {
       const current = await load();
       if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
       const settings = await seedLegacyChoices(current, parseWorkspaceSettings(body.settings));
+      if (settings.mode !== 'subscription' && settings.sourceIds.length !== 1 &&
+          (await subscriptions.list()).some(source => source.snapshotCurrent)) invalid('SOURCE_REQUIRED');
       return { workspace: await preferences.save(settings, current.revision) };
     }
     if (path === '/api/coproxy/workspace/apply' && request.method === 'POST') {

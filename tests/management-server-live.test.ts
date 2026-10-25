@@ -50,6 +50,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
     const credentialPath = join(root, 'admin.json');
     const runtimeSettingsPath = join(root, 'runtime.json');
     const settingsPath = join(root, 'management.json');
+    let refreshBrowserSource: ((id: string, revision: number) => Promise<unknown>) | undefined;
     await writeFile(credentialPath, JSON.stringify(await createAdminCredential({ username, password })), { mode: 0o600 });
     await writeFile(runtimeSettingsPath, JSON.stringify({ schemaVersion: 1, stateDirectory: join(root, 'state'),
       binaryPath: '/synthetic/not-installed', binarySha256: automatic ? AUTOMATIC_GATEWAY_CORE_SHA256 : 'a'.repeat(64), systemctlPath: '/synthetic/not-systemctl',
@@ -69,8 +70,11 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
       const sources = new SubscriptionStore(join(root, 'state'), {
         fetch: async () => ({ status: 'modified', text: JSON.stringify(profile) }),
       }, decodeSubscriptionProfile);
+      refreshBrowserSource = (id, revision) => sources.refresh(id, revision);
       const source = await sources.configure({ id: 'browser-provider', name: '浏览器测试订阅', url: 'https://subscription.example/profile?token=EXAMPLE_ONLY_TOKEN' }, 0);
       await sources.refresh(source.id, source.revision);
+      const alternative = await sources.configure({ id: 'browser-zbackup', name: '浏览器备用订阅', url: 'https://subscription.example/backup?token=EXAMPLE_ONLY_TOKEN' }, 0);
+      await sources.refresh(alternative.id, alternative.revision);
     }
     const child = spawn(process.execPath, [entry!], { env: { ...process.env, NITRO_HOST: '127.0.0.1', NITRO_PORT: new URL(origin).port,
       COPROXY_MANAGEMENT_CONFIG: settingsPath, CONTROL_TOKEN: secret, GITHUB_TOKEN: secret }, cwd: '/', stdio: ['ignore', 'pipe', 'pipe'], detached: true });
@@ -164,14 +168,67 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
             assert.equal(response.status(), 200);
             return response.json();
           };
+          // Present the empty first-import state while the offline source
+          // store supplies the actual downloaded fixture. Refresh must lead
+          // to an activation attempt even when GET derives a current source.
+          const beforeImport = await workspace();
+          let emptyImportView = true;
+          let importedId = '';
+          await context.route('**/api/coproxy/workspace', async (route: any) => {
+            if (!emptyImportView || route.request().method() !== 'GET') { await route.continue(); return; }
+            const response = await route.fetch(); const body = await response.json();
+            body.sources = []; body.workspace.mode = 'local'; body.workspace.sourceIds = [];
+            await route.fulfill({ response, json: body });
+          });
+          await context.route('**/api/coproxy/sources/*', async (route: any) => {
+            if (route.request().method() === 'PUT') emptyImportView = false;
+            await route.continue();
+          });
+          await context.route('**/api/coproxy/sources/*/refresh', async (route: any) => {
+            importedId = new URL(route.request().url()).pathname.split('/').at(-2)!;
+            emptyImportView = false;
+            await route.fulfill({ json: await refreshBrowserSource!(importedId, route.request().postDataJSON().expectedRevision) });
+          });
+          await navigate('subscriptions');
+          await page.getByRole('button', { name: '导入订阅', exact: true }).first().click();
+          await page.getByPlaceholder('订阅名称', { exact: true }).fill('首次导入测试');
+          await page.getByPlaceholder('https://…', { exact: true }).fill('https://subscription.example/first-import');
+          const [firstActivation] = await Promise.all([
+            page.waitForResponse((response: any) => new URL(response.url()).pathname === '/api/coproxy/workspace/apply'),
+            page.getByRole('button', { name: '导入', exact: true }).click(),
+          ]);
+          assert.equal(firstActivation.status(), 503);
+          await page.waitForFunction(() => !(document.querySelector('select[aria-label="配置方案"]') as HTMLSelectElement)?.disabled);
+          const imported = await workspace();
+          assert.deepEqual(imported.workspace.sourceIds, [importedId]);
+          await context.unroute('**/api/coproxy/workspace');
+          await context.unroute('**/api/coproxy/sources/*/refresh');
+          await context.unroute('**/api/coproxy/sources/*');
+          const { revision: _revision, ...originalSettings } = beforeImport.workspace;
+          assert.equal((await context.request.put(origin + '/api/coproxy/workspace', { headers: { origin },
+            data: { expectedRevision: imported.workspace.revision, settings: originalSettings } })).status(), 200);
+          const importedSource = await (await context.request.get(`${origin}/api/coproxy/sources/${importedId}`)).json();
+          assert.equal((await context.request.delete(`${origin}/api/coproxy/sources/${importedId}`, { headers: { origin },
+            data: { expectedRevision: importedSource.source.revision } })).status(), 200);
+          await page.reload();
           await navigate('subscriptions');
           const card = page.locator('article').filter({ has: page.getByRole('heading', { name: '浏览器测试订阅', exact: true }) });
           await card.getByText('2 个节点', { exact: true }).waitFor();
           assert.ok(!(await card.textContent()).includes('EXAMPLE_ONLY_TOKEN'));
           await screenshot('subscriptions-desktop');
           await savedChange(() => page.getByLabel('配置方案', { exact: true }).selectOption('subscription'));
-          assert.equal(await page.getByLabel('基础订阅', { exact: true }).inputValue(), 'browser-provider');
-          assert.equal(await card.getByRole('button', { name: '选择 浏览器测试订阅', exact: true }).getAttribute('aria-pressed'), 'true');
+          assert.equal((await workspace()).workspace.subscriptionId, 'browser-provider');
+          const currentSubscription = card.getByRole('radio', { name: '切换到 浏览器测试订阅', exact: true });
+          assert.equal(await currentSubscription.getAttribute('aria-checked'), 'true');
+          const lockedRevision = (await workspace()).workspace.revision;
+          await currentSubscription.dispatchEvent('click');
+          assert.equal((await workspace()).workspace.revision, lockedRevision);
+          assert.equal(await page.getByRole('button', { name: /已选|未选|选用/, exact: true }).count(), 0);
+          await savedChange(() => page.getByRole('radio', { name: '切换到 浏览器备用订阅', exact: true }).click());
+          assert.equal((await workspace()).workspace.subscriptionId, 'browser-zbackup');
+          await savedChange(() => currentSubscription.click());
+          assert.equal((await workspace()).workspace.subscriptionId, 'browser-provider');
+          assert.equal(await currentSubscription.getAttribute('aria-checked'), 'true');
           await navigate('proxies');
           await page.getByLabel('Browser Provider 策略', { exact: true }).waitFor();
           assert.equal(await page.getByLabel('Browser Provider 策略', { exact: true }).inputValue(), 'browser-node-a');
@@ -248,12 +305,16 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
             for (const group of body.groups) group.activeSelected = effectiveGroups.find(item => item.name === group.name)?.selected ?? null;
             await route.fulfill({ response, json: body });
           });
-          await context.route('**/api/clash/proxies', (route: any) => route.fulfill({
-            headers: { 'x-coproxy-generation': observedActive },
-            json: { proxies: Object.fromEntries(effectiveGroups.map(group => [group.name, {
-              name: group.name, type: 'Selector', now: group.selected, all: group.options,
-            }])) },
-          }));
+          await context.route('**/api/clash/proxies', (route: any) => {
+            const proxies: Record<string, unknown> = Object.fromEntries(effectiveGroups.map(group => [group.name, {
+              name: group.name, type: 'Selector', now: group.selected, all: group.options, history: [], udp: true,
+            }]));
+            for (const name of new Set(effectiveGroups.flatMap(group => group.options))) if (!proxies[name])
+              proxies[name] = { name, type: name === 'DIRECT' ? 'Direct' : name === 'REJECT' ? 'Reject' : 'Socks5', history: [], udp: true };
+            proxies.GLOBAL = { name: 'GLOBAL', type: 'Selector', now: 'DIRECT', all: Object.keys(proxies), history: [], udp: true };
+            return route.fulfill({ headers: { 'x-coproxy-generation': observedActive }, json: { proxies } });
+          });
+          await context.route('**/api/clash/providers/proxies', (route: any) => route.fulfill({ json: { providers: {} } }));
           await navigate('proxies');
           await savedChange(() => page.getByLabel('国内直连 策略', { exact: true }).selectOption('DIRECT'));
           await page.getByRole('status').filter({ hasText: '已切换：Domestic → DIRECT' }).waitFor();
@@ -271,6 +332,35 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           await page.getByText('当前生效：REJECT', { exact: true }).first().waitFor();
           assert.equal(await page.getByRole('status').filter({ hasText: /已切换|已生效/ }).count(), 0);
           assert.equal(activations, 3);
+          // Reproduce the original latency failure, then a permitted result and
+          // a timeout. All three must settle visibly without changing a node.
+          let probeState = 'denied';
+          await context.route('**/api/clash/group/*/delay?*', (route: any) => {
+            if (probeState !== 'success') return route.fulfill({ status: probeState === 'timeout' ? 504 : 400,
+              json: { error: { code: probeState === 'timeout' ? 'CONTROLLER_PROBE_TIMEOUT' : 'CONTROLLER_PROBE_DENIED' } } });
+            const groupName = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)!);
+            const group = effectiveGroups.find(item => item.name === groupName)!;
+            return route.fulfill({ json: Object.fromEntries(group.options.map(name => [name, name === 'REJECT' ? 0 : 88])) });
+          });
+          await page.getByRole('tab', { name: '节点', exact: true }).click();
+          const testLatency = page.getByRole('button').filter({ hasText: /^测延迟$/ }).first();
+          await testLatency.waitFor();
+          assert.equal(await page.getByText('GLOBAL', { exact: true }).count(), 0);
+          const revisionBeforeProbes = (await workspace()).workspace.revision;
+          await testLatency.click();
+          await page.getByText('未启用', { exact: true }).first().waitFor();
+          await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '测延迟')?.disabled);
+          probeState = 'success';
+          await testLatency.click();
+          await page.getByText('88 ms', { exact: true }).first().waitFor();
+          await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '测延迟')?.disabled);
+          probeState = 'timeout';
+          await testLatency.click();
+          await page.getByText('超时', { exact: true }).first().waitFor();
+          await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '测延迟')?.disabled);
+          assert.equal((await workspace()).workspace.revision, revisionBeforeProbes);
+          assert.equal(activations, 3);
+          await page.getByRole('tab', { name: '策略组', exact: true }).click();
           for (const viewport of [
             { name: 'tablet-portrait', width: 768, height: 1024 },
             { name: 'tablet-landscape', width: 1024, height: 768 },
@@ -284,7 +374,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
               // Common controls must have words rendered on touch devices;
               // an aria-label or hover tooltip alone does not meet this check.
               assert.match(await page.getByRole('button', { name: '刷新', exact: true }).innerText(), /刷新/);
-              assert.match(await page.locator('a[href$="/coproxy"]:visible').first().innerText(), /设置/);
+              assert.equal(await page.locator('select[aria-label="配置方案"]').locator('..').locator('a[href$="/coproxy"]').count(), 0);
               if (route === 'subscriptions') {
                 await page.getByRole('heading', { name: '浏览器测试订阅', exact: true }).waitFor();
                 for (const action of ['更新', '编辑', '删除']) {
@@ -308,7 +398,11 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
                 // Tablet navigation may use the labeled drawer at portrait
                 // width; desktop-width tablet navigation stays visible.
                 let openedDrawer = false;
-                if (!await page.locator('a[href$="/proxies"]:visible').count()) {
+                let openedMore = false;
+                if (!await page.locator('a[href$="/subscriptions"]:visible').count() && await page.getByRole('button', { name: 'More menu', exact: true }).isVisible()) {
+                  await page.getByRole('button', { name: 'More menu', exact: true }).click();
+                  openedMore = true;
+                } else if (!await page.locator('a[href$="/subscriptions"]:visible').count()) {
                   const menu = page.locator('label[for="main-drawer"]:visible').first();
                   assert.ok((await menu.innerText()).trim(), 'tablet menu needs a visible label');
                   await menu.click();
@@ -320,11 +414,13 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
                   assert.ok((await link.innerText()).trim(), `${destination} tablet navigation needs visible text`);
                 }
                 if (openedDrawer) await page.locator('label[aria-label="close sidebar"]').click({ position: { x: viewport.width - 10, y: 10 } });
+                if (openedMore) await page.getByRole('button', { name: 'More menu', exact: true }).click();
               }
               assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, `${route} overflows ${viewport.name}`);
               await screenshot(`${route}-${viewport.name}`);
             }
           }
+          if (!await page.locator('a[href$="/coproxy"]:visible').count()) await page.getByRole('button', { name: 'More menu', exact: true }).click();
           await page.locator('a[href$="/coproxy"]:visible').first().click();
           await page.getByRole('heading', { name: '设置', exact: true }).waitFor();
           await page.getByRole('button', { name: '退出登录', exact: true }).click();

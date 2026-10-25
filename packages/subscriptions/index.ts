@@ -269,13 +269,16 @@ export class SubscriptionStore {
   }
 
   /** Compare-and-delete under the same lock used by configure and refresh. */
-  async remove(id: string, expectedRevision: number): Promise<void> {
+  async remove(id: string, expectedRevision: number, mayRemove?: () => Promise<boolean>): Promise<void> {
     return this.protect(async () => {
       checkId(id); checkRevision(expectedRevision);
       await this.files.exclusive(async () => {
         const current = await this.read(id);
         if (!current) fail('SOURCE_NOT_FOUND');
         if (current.revision !== expectedRevision) fail('SOURCE_CONFLICT');
+        // The application can protect its current source under the same lock
+        // used by workspace saves, closing the check/delete race.
+        if (mayRemove && !await mayRemove()) fail('SOURCE_IN_USE');
         await unlink(join(this.root, 'subscriptions', `${id}.json`));
       });
     });
