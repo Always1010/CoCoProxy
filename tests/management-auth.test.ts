@@ -43,7 +43,8 @@ test('credential creation validates exact inputs, UTF-8 byte bounds and Unicode'
     null, [], { ...login, extra: true }, { username: login.username },
     { ...login, username: '' }, { ...login, username: 'admin\n' }, { ...login, username: 'not safe' },
     { ...login, username: 'a'.repeat(65) }, { ...login, username: '管理员' },
-    { ...login, password: 'short' }, { ...login, password: 'a'.repeat(1025) },
+    { ...login, password: 'short' }, { ...login, password: 'a'.repeat(9) },
+    { ...login, password: 'a'.repeat(1025) },
     { ...login, password: '密'.repeat(342) }, { ...login, password: 'long-password\0' },
     { ...login, password: 'long-password\ud800' }, { ...login, password: 'long-password\udfff' },
   ]) await assert.rejects(createAdminCredential(value), code('AUTH_INPUT_INVALID'));
@@ -55,6 +56,8 @@ test('credential creation validates exact inputs, UTF-8 byte bounds and Unicode'
   assert.equal(await verifyAdminCredential(await createAdminCredential(unicode), unicode), true);
   const minimum = { ...login, password: '密'.repeat(4) };
   assert.equal(await verifyAdminCredential(await createAdminCredential(minimum), minimum), true);
+  const asciiMinimum = { ...login, password: 'test-pass!' };
+  assert.equal(await verifyAdminCredential(await createAdminCredential(asciiMinimum), asciiMinimum), true);
 });
 
 test('credential parser refuses extensions, accessors and noncanonical encodings', async () => {

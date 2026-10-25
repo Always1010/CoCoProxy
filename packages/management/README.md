@@ -6,7 +6,7 @@
 
 管理员凭据采用带 16 字节随机盐的 scrypt，固定 `N=16384,r=8,p=5,maxmem=64MiB`，哈希 64 字节。该参数选择 OWASP 列出的低内存档位；成本由代码固定，浏览器和凭据文件不能降低它。[OWASP 密码存储说明](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#scrypt)
 
-用户名为 1–64 位 ASCII 字母、数字及点/下划线/连字符，首位为字母或数字。密码为 12–1024 个 UTF-8 字节，拒绝 NUL 与无效 Unicode。未知用户名仍执行同样的密码派生和固定长度比较。初始化输入是私有 JSON `{ "username": "<admin-name>", "password": "<private-password>" }`；口令不进入命令行参数。
+用户名为 1–64 位 ASCII 字母、数字及点/下划线/连字符，首位为字母或数字。密码为 10–1024 个 UTF-8 字节，拒绝 NUL 与无效 Unicode。未知用户名仍执行同样的密码派生和固定长度比较。初始化输入是私有 JSON `{ "username": "<admin-name>", "password": "<private-password>" }`；口令不进入命令行参数。密码不写在源码或发行载荷中，由部署时生成的私有凭据决定；替换凭据后须重启管理服务，旧内存会话随之失效。
 
 ```sh
 node --experimental-strip-types apps/cli/main.ts admin-init --input /absolute/private/login.json --output /absolute/private/admin.json
