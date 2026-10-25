@@ -164,7 +164,7 @@ function profileDocument(value: JsonValue, providerPolicy?: JsonObject): unknown
   // Node-only input keeps the legacy digest and representation.
   if (Object.keys(value).every(key => key === 'proxies')) return { proxies, ...nodeDns };
   const deployment = new Set([
-    'port', 'socks-port', 'redir-port', 'tproxy-port', 'mixed-port',
+    'mode', 'port', 'socks-port', 'redir-port', 'tproxy-port', 'mixed-port',
     'allow-lan', 'bind-address', 'lan-allowed-ips', 'lan-disallowed-ips',
     'authentication', 'skip-auth-prefixes', 'listeners', 'tunnels', 'tun',
     'external-controller', 'external-controller-tls', 'external-controller-unix',
