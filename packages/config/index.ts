@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
-import { compactCompilerRuleSets } from './compact-rules.ts';
+import { compactCompilerRuleSets, externalNameserverPolicy, isCompilerRuleReference } from './compact-rules.ts';
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
@@ -203,11 +203,12 @@ function registerName(value: JsonValue | undefined, used: Set<string>): void {
   used.add(entry);
 }
 
-function checkRules(value: JsonValue): void {
+function checkRules(value: JsonValue, policy?: JsonObject): void {
   // Compound rules can contain these operators below their outermost level.
-  if (typeof value === 'string' && /(?:^|[,\s(])(RULE-SET|GEOIP|SRC-GEOIP|GEOSITE|IP-ASN|SRC-IP-ASN|SCRIPT)\s*,/i.test(value)) protectedField();
+  if (typeof value === 'string' && /(?:^|[,\s(])(RULE-SET|GEOIP|SRC-GEOIP|GEOSITE|IP-ASN|SRC-IP-ASN|SCRIPT)\s*,/i.test(value) &&
+      !(policy && isCompilerRuleReference(value, policy))) protectedField();
   if (Array.isArray(value)) {
-    for (const child of value) checkRules(child);
+    for (const child of value) checkRules(child, policy);
   } else if (value !== null && typeof value === 'object') {
     for (const child of Object.values(value)) checkRules(child);
   }
@@ -360,7 +361,7 @@ export function compileConfig(input: unknown): Candidate {
   if (policy.mode !== undefined && policy.mode !== 'rule') protectedField();
   if (policy.rules !== undefined) {
     for (const rule of array(policy.rules)) if (typeof rule !== 'string') invalid();
-    checkRules(policy.rules);
+    checkRules(policy.rules, policy);
   }
   if (policy['sub-rules'] !== undefined) checkRules(policy['sub-rules']);
   if (performance['find-process-mode'] === 'off' && policy['find-process-mode'] !== 'off' &&
@@ -442,8 +443,9 @@ export function deploymentDnsOptions(config: JsonObject): JsonObject {
     ...(typeof config['tcp-concurrent'] === 'boolean' ? { tcpConcurrent: config['tcp-concurrent'] } : {}),
     ...(typeof config['find-process-mode'] === 'string' && ['off', 'strict', 'always'].includes(config['find-process-mode']) ? { findProcessMode: config['find-process-mode'] } : {}),
   };
+  const nameserverPolicy = externalNameserverPolicy(config);
   return { ...(routed ? { nameservers: dns.nameserver } : {}),
-    ...(dns['nameserver-policy'] === undefined ? {} : { nameserverPolicy: dns['nameserver-policy'] }),
+    ...(nameserverPolicy === undefined ? {} : { nameserverPolicy }),
     ...(dns['proxy-server-nameserver'] === undefined ? {} : { nodeResolvers: dns['proxy-server-nameserver'] }),
     ...(dns['direct-nameserver'] === undefined ? {} : { directResolvers: dns['direct-nameserver'] }),
     ...(Object.keys(performance).length ? { performance } : {}),

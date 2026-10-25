@@ -1,5 +1,5 @@
 import { compileConfig, canonicalJson, ConfigError } from '../config/index.ts';
-import { expandCompilerRuleSets } from '../config/compact-rules.ts';
+import { expandCompilerRuleSets, upgradeCompilerRulePolicy } from '../config/compact-rules.ts';
 import type { JsonObject } from '../config/index.ts';
 import { DraftStore, DraftError } from '../drafts/index.ts';
 import { FileTransactionStore, TransactionManager, TransactionError } from '../transaction/index.ts';
@@ -44,13 +44,13 @@ export function createManagementApplication(options: { stateDirectory: string; d
     compile: policy => compile({ schemaVersion: 1, deployment, policy }),
     legacyPolicy: async () => {
       const metadata = await drafts.metadata();
-      if (metadata) return (await managedDraft(metadata.revision)).input.policy as JsonObject;
+      if (metadata) return upgradeCompilerRulePolicy((await managedDraft(metadata.revision)).input.policy as JsonObject);
       const active = (await store.status()).active;
       if (!active) return null;
       const candidate = JSON.parse(await privateRead(await store.readCandidate(active))) as JsonObject;
       const policy = automaticGateway ? automaticGatewayPolicy(candidate) : expandCompilerRuleSets(candidate);
       for (const key of protectedKeys) delete policy[key];
-      return policy;
+      return upgradeCompilerRulePolicy(policy);
     } });
   return async request => {
     try {
