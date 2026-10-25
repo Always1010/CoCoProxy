@@ -28,6 +28,8 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
     await put(join(sourceDir, 'docs/images', name), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
   }
   await put(join(sourceDir, 'examples/nginx-management.conf'), '# Synthetic HTTPS role template\n');
+  await put(join(sourceDir, 'examples/deployment-options.md'), 'Synthetic trusted performance options\n');
+  await put(join(sourceDir, 'scripts/measure-latency.mjs'), 'console.log("synthetic latency baseline");\n');
   await put(join(sourceDir, '.gitignore'), '.local/\n');
   const dependencies = { ws: '1.0.0', yaml: '1.0.0' };
   const pkg = { name: 'synthetic-coproxy', version: '0.0.0', dependencies };
@@ -81,6 +83,8 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
     assert.ok(manifest.files.some(file => file.path === `source/docs/${path}`));
   }
   assert.ok(manifest.files.some(file => file.path === 'source/examples/nginx-management.conf'));
+  assert.ok(manifest.files.some(file => file.path === 'source/examples/deployment-options.md'));
+  assert.ok(manifest.files.some(file => file.path === 'source/scripts/measure-latency.mjs'));
   assert.ok(manifest.files.every(file => !file.path.includes('.local') && !file.path.endsWith('.map') && !file.path.endsWith('nitro.json')));
   assert.ok(!bytes.toString().includes(options.sourceDir) && !bytes.toString().includes('SYNTHETIC_PRIVATE_VALUE'));
   for (const file of manifest.files) {
