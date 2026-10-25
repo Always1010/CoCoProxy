@@ -16,13 +16,40 @@ type Entry = { path: string; sha256: string; size: number; mode: string };
 type Owned = { path: string; sha256: string; mode: string; owner: 'root' | number; sensitive: boolean };
 type Receipt = { schemaVersion: 1; status: 'pending' | 'complete' | 'uninstalled'; release: string;
   manifestSha256: string; files: Owned[]; serviceUid: number; stateDirectory: string; credentialPath: string };
-export type InstallOptions = { payload: string; input: string; manifestSha256: string; operation: Operation; apply?: boolean };
+export type InstallOptions = { payload: string; input: string; manifestSha256: string; operation: Operation; apply?: boolean; reviewedConfigurationSha256?: string };
 export class InstallError extends Error {
   readonly code: string;
   constructor(code: string) { super(code); this.name = 'InstallError'; this.code = code; }
 }
 function require(value: unknown, code: string): asserts value { if (!value) throw new InstallError(code); }
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
+export type ConfigurationReview = {
+  previousManifestSha256: string;
+  manifestSha256: string;
+  inputSha256: string;
+  previousConfiguration: readonly { path: string; sha256: string }[];
+};
+
+/** Operator-reviewed CAS: hashes only, never configuration or credential contents. */
+export function configurationReviewDigest(review: ConfigurationReview): string {
+  require([review.previousManifestSha256, review.manifestSha256, review.inputSha256].every(value => HASH.test(value)) &&
+    Array.isArray(review.previousConfiguration) && review.previousConfiguration.length > 0 && review.previousConfiguration.length <= 16,
+  'INSTALL_CONFIGURATION_REVIEW_INVALID');
+  const previousConfiguration = review.previousConfiguration.map(file => ({ path: absolute(file.path), sha256: file.sha256 }))
+    .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  require(previousConfiguration.every(file => HASH.test(file.sha256)) &&
+    new Set(previousConfiguration.map(file => file.path)).size === previousConfiguration.length, 'INSTALL_CONFIGURATION_REVIEW_INVALID');
+  return digest(JSON.stringify({ schemaVersion: 1, previousManifestSha256: review.previousManifestSha256,
+    manifestSha256: review.manifestSha256, inputSha256: review.inputSha256, previousConfiguration }));
+}
+
+/** Default upgrade stays immutable; opt-in binds both old owned bytes and new input. */
+export function assertReviewedUpgradeConfiguration(review: ConfigurationReview, supplied: string | undefined, unchanged: boolean): boolean {
+  if (supplied === undefined) { require(unchanged, 'INSTALL_CONFIGURATION_CHANGE_REQUIRES_REVIEW'); return false; }
+  require(HASH.test(supplied) && supplied === configurationReviewDigest(review), 'INSTALL_CONFIGURATION_REVIEW_MISMATCH');
+  return true;
+}
+
 async function info(path: string) {
   try { return await lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
 }
@@ -175,7 +202,7 @@ async function networkClear(input: any) {
   require(!rules.some((r: any) => [n.egressPriority, n.egressPriority + 1, n.egressPriority + 2].includes(r.priority) ||
     r.priority >= 9000 && r.priority <= 9010), 'INSTALL_RULE_CONFLICT');
   const routes = await ip(['-N', '-j', '-4', 'route', 'show', 'table', 'all']);
-  require(!routes.some((r: any) => [String(n.egressTable), '2022'].includes(String(r.table)) ||
+  require(!routes.some((r: any) => [String(n.egressTable), ...(n.clientCIDR ? [String(n.egressTable + 20000)] : []), '2022'].includes(String(r.table)) ||
     (r.table === 'main' || r.table === 254 || r.table === undefined) && [n.clientIPv4, n.clientIPv4 + '/32'].includes(r.dst)), 'INSTALL_ROUTE_CONFLICT');
   const tables = JSON.parse(await run('/usr/sbin/nft', ['-j', 'list', 'tables']));
   require(!tables.nftables.some((t: any) => ['coproxy_auto_guard', 'mihomo'].includes(t.table?.name)), 'INSTALL_NFT_CONFLICT');
@@ -220,13 +247,15 @@ async function atomic(path: string, bytes: string, mode: number, uid = 0) {
 export async function deployRelease(options: InstallOptions) {
   require(platform() === 'linux' && process.getuid?.() === 0, 'INSTALL_LINUX_ROOT_REQUIRED');
   require(['install', 'upgrade', 'uninstall'].includes(options.operation), 'INSTALL_OPERATION_INVALID');
+  require(options.reviewedConfigurationSha256 === undefined || options.operation === 'upgrade', 'INSTALL_CONFIGURATION_REVIEW_UPGRADE_ONLY');
   const payload = absolute(options.payload), inputPath = absolute(options.input);
   // Input and payload are operator-owned trusted material. They never enter the receipt.
   await trusted(payload); await trusted(inputPath); await privateFile(inputPath, 0);
   const release = await verifyRelease(payload, options.manifestSha256);
   await trusted(payload + '/manifest.json');
   for (const entry of release.files) await trusted(payload + '/' + entry.path);
-  const input = JSON.parse((await regular(inputPath, 128 * 1024)).toString());
+  const inputBytes = await regular(inputPath, 128 * 1024);
+  const input = JSON.parse(inputBytes.toString());
   const plan = renderDeploymentPlan(input), target = releaseTarget(input, options.manifestSha256);
   if (input.runtime.automaticGateway) require(release.files.some(file => file.path === 'source/apps/gateway/network.py'),
     'INSTALL_PAYLOAD_NETWORK_HELPER_MISSING');
@@ -297,19 +326,25 @@ export async function deployRelease(options: InstallOptions) {
     require(!(await info(target)), 'INSTALL_TARGET_EXISTS');
     for (const file of plan.files) require(!(await info(file.path)), 'INSTALL_EXISTING_FILE_CONFLICT');
   }
+  let configurationReviewed = false;
   if (options.operation === 'upgrade') {
     require(previous!.release !== target && !(await info(target)), 'INSTALL_UPGRADE_NEW_RELEASE_REQUIRED');
-    // Configuration migrations are a separate reviewed task. Keep real secrets,
-    // subscriptions and networking byte-identical; only runtime release references change.
+    // A separate explicit review permits schema-validated configuration migration;
+    // receipt identity, owners, paths and lifecycle checks above remain mandatory.
+    let unchanged = true;
     for (const file of plan.files.filter(file => file.sensitive)) {
       if (file.path !== input.runtime.settingsPath) {
-        require(digest(file.content) === previous!.files.find(old => old.path === file.path)?.sha256, 'INSTALL_CONFIGURATION_CHANGE_REQUIRES_REVIEW');
+        unchanged &&= digest(file.content) === previous!.files.find(old => old.path === file.path)?.sha256;
       } else {
         const old = JSON.parse((await regular(file.path)).toString()), next = JSON.parse(file.content);
         for (const key of ['binaryPath', 'binarySha256', 'unitSha256']) { delete old[key]; delete next[key]; }
-        require(JSON.stringify(old) === JSON.stringify(next), 'INSTALL_CONFIGURATION_CHANGE_REQUIRES_REVIEW');
+        unchanged &&= JSON.stringify(old) === JSON.stringify(next);
       }
     }
+    configurationReviewed = assertReviewedUpgradeConfiguration({ previousManifestSha256: previous!.manifestSha256,
+      manifestSha256: options.manifestSha256, inputSha256: digest(inputBytes),
+      previousConfiguration: previous!.files.filter(file => file.sensitive).map(file => ({ path: file.path, sha256: file.sha256 })) },
+    options.reviewedConfigurationSha256, unchanged);
   }
   if (options.operation === 'uninstall') {
     require(previous!.release === target && previous!.manifestSha256 === options.manifestSha256 &&
@@ -321,7 +356,7 @@ export async function deployRelease(options: InstallOptions) {
     files: plan.files.map(file => ({ path: file.path, mode: file.mode, owner: file.owner,
       action: options.operation === 'uninstall' ? file.sensitive ? 'preserve' : 'remove' : 'write' })),
     preserved: [input.runtime.stateDirectory, input.management.credentialPath, '/var/lib/coproxy-gateway-network'],
-    services: 'remain stopped and disabled', network: 'unchanged' };
+    services: 'remain stopped and disabled', network: 'unchanged', configurationReviewed };
   if (!options.apply) return preview;
   if (!(await info(STORE))) { await mkdir(STORE, { mode: 0o700 }); await chown(STORE, 0, 0); await chmod(STORE, 0o700); }
   // Exclusive intent lock survives errors/crashes. An operator must inspect the
@@ -335,6 +370,7 @@ export async function deployRelease(options: InstallOptions) {
     require(JSON.stringify(observed) === JSON.stringify(previous), 'INSTALL_RECEIPT_CHANGED');
     if (options.operation !== 'uninstall') require(!(await info(target)), 'INSTALL_TARGET_EXISTS');
     if (previous) await checkOwned(previous.files);
+    require(digest(await regular(inputPath, 128 * 1024)) === digest(inputBytes), 'INSTALL_INPUT_CHANGED');
     await stopped(input.runtime.systemctlPath, units);
     await networkClear(input);
   } catch (error) { await unlink(lock); throw error; }

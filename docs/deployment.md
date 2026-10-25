@@ -108,7 +108,7 @@ systemctl start coproxy-management.service
 
 ## 4. 接入与终端验收
 
-通过协同路由器的管理界面或受支持的命令入口填写网关角色参数。**当前两端模型仅支持一台明确的 IPv4 终端，受管公网 IPv6 阻断；这是一项配置限制，并非测试后可直接扩大为整个 LAN。** 多终端需要双方同步实现和验收。路由器端保持自身管理和独立关闭入口可达，首次接入时核验核心、接管、DNS、来源保留、出口和回程。已验收组合的日常应用可使用有界的新鲜网关 DNS 预检；该检查只证明局部可达，完整路径状态仍须如实标记，见[协作说明](cooperating-router-requirements.md)。Coproxy 安装工具不替路由器修改配置。服务开机启用由操作者在验收后另行决定，例如 `systemctl enable coproxy-management.service`；后续维护先禁用，不能把 enable 与首次安装合并。
+通过协同路由器的管理界面或受支持的命令入口填写网关角色参数。**LAN 模式要求双方配置相同的精确接入子网，覆盖其中普通 IPv4 客户端并阻断受管公网 IPv6；兼容单终端模式仍可显式选用。** 至少验证两个客户端和新加入地址，不能从单终端通过推导整个 LAN 已验收。路由器端保持自身管理和独立关闭入口可达，首次接入时核验核心、接管、DNS、来源保留、出口和回程。已验收组合的日常应用可使用有界的新鲜网关 DNS 预检；该检查只证明局部可达，完整路径状态仍须如实标记，见[协作说明](cooperating-router-requirements.md)。Coproxy 安装工具不替路由器修改配置。服务开机启用由操作者在验收后另行决定，例如 `systemctl enable coproxy-management.service`；后续维护先禁用，不能把 enable 与首次安装合并。
 
 验收至少包含 IPv4 TCP/UDP、路由器转交的 DNS、局域网管理、本机原有出口不被接管、未支持 IPv6 在受管范围阻断、核心停止时受管外网阻断，以及核心仍停止时从路由器独立关闭后终端恢复普通直连。业务站点成功、systemd active、Mihomo `-t` 与 HTTP health 各自只覆盖局部条件。具体测量、真实角色参数和恢复笔记保持私有；正式结论只记录组件版本、双方提交及脱敏范围。
 
@@ -142,7 +142,34 @@ systemctl stop coproxy-gateway-network.service
   --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --operation upgrade --apply
 ```
 
-升级只接受当前 complete receipt、所有旧自有文件字节/权限/身份与旧 release 清单一致的新版本。发现人工修改、secret/网络/管理配置变化或未知安装一律拒绝；配置迁移须单独审阅，不混入升级。它保留管理员 credential、订阅、草稿、事务状态，更新新的 runtime release 引用和 unit；旧 release 也保留以便审阅，工具不自动回滚活跃事务或复制秘密。升级后按原启动/事务流程恢复并重做终端与故障验收。
+升级只接受当前 complete receipt、所有旧自有文件字节/权限/身份与旧 release 清单一致的新版本。默认发现人工修改、secret/网络/管理配置变化或未知安装一律拒绝；配置迁移须单独审阅并使用下述显式摘要入口。它保留管理员 credential、订阅、草稿、事务状态，更新新的 runtime release 引用和 unit；旧 release 也保留以便审阅，工具不自动回滚活跃事务或复制秘密。升级后按原启动/事务流程恢复并重做终端与故障验收。
+
+需要迁移网络范围或管理许可时，先审阅新私有输入及 `renderDeploymentPlan` 输出。显式 `--reviewed-configuration-sha256` 仅对 upgrade 生效；它绑定旧/新 manifest、新输入**原始字节**摘要和全部旧敏感受管文件的路径/摘要。旧收据、文件归属、服务身份、状态/凭据路径、受管文件路径集合、完整 schema 及停止/网络无冲突检查仍必须通过。输入重新排版、旧配置或载荷变化后原审阅摘要失效；不修改 `/etc` 或 receipt 来绕过核验。
+
+经审阅后，可以用以下只读计算取得 `CONFIG_REVIEW_SHA`（仅输出摘要，无设置内容）：
+
+```sh
+"$NODE" --experimental-strip-types --input-type=module - \
+  "$PAYLOAD/source/packages/deployment/install.ts" "$INPUT" "$MANIFEST_SHA" <<'JS'
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+const { configurationReviewDigest } = await import(pathToFileURL(process.argv[2]).href);
+const previous = JSON.parse(await readFile('/var/lib/coproxy-deployment/receipt.json', 'utf8'));
+console.log(configurationReviewDigest({ previousManifestSha256: previous.manifestSha256,
+  manifestSha256: process.argv[4], inputSha256: createHash('sha256').update(await readFile(process.argv[3])).digest('hex'),
+  previousConfiguration: previous.files.filter(file => file.sensitive).map(({ path, sha256 }) => ({ path, sha256 })) }));
+JS
+
+"$NODE" --experimental-strip-types "$DEPLOY" \
+  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" \
+  --operation upgrade --reviewed-configuration-sha256 "$CONFIG_REVIEW_SHA"
+"$NODE" --experimental-strip-types "$DEPLOY" \
+  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" \
+  --operation upgrade --reviewed-configuration-sha256 "$CONFIG_REVIEW_SHA" --apply
+```
+
+该入口只安装新定义，不启动服务或迁移活跃候选。扩大网关范围时须在旧 helper 和旧设置仍有效时先退役旧网络，升级后先启动管理，经工作区重新应用生成与新范围匹配的候选，再开启路由器交付。新候选失败后旧候选可能无法在新范围设置下回滚，应保持路由器关闭并恢复匹配的设置，再显式恢复事务。审阅摘要错误返回 `INSTALL_CONFIGURATION_REVIEW_MISMATCH`；默认缺少明确审阅时返回 `INSTALL_CONFIGURATION_CHANGE_REQUIRES_REVIEW`。
 
 卸载使用**当前已安装**摘要及原输入，在安全移除网络后运行：
 
