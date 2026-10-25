@@ -20,7 +20,8 @@ const digest = (value: unknown): value is string => typeof value === 'string' &&
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
 /** Routes only Coproxy operations; the stock upstream write router is not used. */
-export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient; sourceDecoder?: SnapshotDecoder; automaticGateway?: AutomaticGatewaySettings }): ManagementAction {
+export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient; sourceDecoder?: SnapshotDecoder; automaticGateway?: AutomaticGatewaySettings;
+  observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }> }): ManagementAction {
   // Compile before cloning so getters and non-JSON values cannot run here.
   compileConfig({ schemaVersion: 1, deployment: options.deployment, policy: { rules: ['MATCH,REJECT'] } });
   const deployment = structuredClone(options.deployment);
@@ -38,6 +39,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
     return draft;
   }
   const workspace = createWorkspaceApplication({ stateDirectory: options.stateDirectory, subscriptions, store, manager,
+    observeSelections: options.observeSelections,
     compile: policy => compile({ schemaVersion: 1, deployment, policy }),
     legacyPolicy: async () => {
       const metadata = await drafts.metadata();

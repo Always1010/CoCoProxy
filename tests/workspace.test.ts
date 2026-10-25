@@ -41,6 +41,7 @@ async function fixture(t: TestContext) {
   const payloads = new Map<string, string>();
   const events: string[] = [];
   let failActivation = false;
+  let observedChoices: Record<string, string> | null = null;
   const runtime = {
     validate: async () => { events.push('validate'); },
     activate: async () => { events.push('activate'); if (failActivation) throw new Error('EXAMPLE_ONLY_RUNTIME_DIAGNOSTIC'); },
@@ -49,6 +50,11 @@ async function fixture(t: TestContext) {
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }),
   };
   const action = createManagementApplication({ stateDirectory: state, deployment, runtime,
+    observeSelections: async () => {
+      const generation = (await new FileTransactionStore(state).status()).active;
+      if (!generation || !observedChoices) throw new Error('Synthetic core unavailable');
+      return { generation, selections: observedChoices };
+    },
     sourceDecoder: decodeSubscriptionProfile, sourceClient: { fetch: async url => {
       const text = payloads.get(url);
       if (text === undefined) throw new Error('Synthetic source missing');
@@ -69,7 +75,8 @@ async function fixture(t: TestContext) {
   const save = async (value: WorkspaceSettings, expectedRevision: number) => (await call<{ workspace: Workspace }>('/workspace', 'PUT', { settings: value, expectedRevision })).workspace;
   const apply = (workspace: Workspace, expectedActive: string | null) => call<{ active: string; workspaceRevision: number }>('/workspace/apply', 'POST', { expectedRevision: workspace.revision, expectedActive });
   const candidate = async (id: string) => JSON.parse(await readFile(await new FileTransactionStore(state).readCandidate(id), 'utf8')) as JsonObject;
-  return { state, events, call, view, save, apply, source, candidate, payloads, fail: () => { failActivation = true; } };
+  return { state, events, call, view, save, apply, source, candidate, payloads, fail: () => { failActivation = true; },
+    observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
 
 test('workspace settings enforce schema and durable compare-and-save without aliasing', async t => {
@@ -125,6 +132,26 @@ test('opening the new workspace keeps an already applied legacy config current w
   assert.equal(opened.workspace.revision, 0);
   assert.deepEqual(f.events, before);
   assert.equal(await new WorkspaceStore(f.state).read(), null);
+});
+
+test('legacy runtime cache choices are displayed and captured before managed migration', async t => {
+  const f = await fixture(t);
+  const second = { ...node, name: 'second-node' };
+  const legacy = { proxies: [node, second], 'proxy-groups': [{ name: 'Proxy', type: 'select', proxies: ['synthetic-node', 'second-node'] }], rules: ['MATCH,Proxy'] };
+  await f.source('provider', { proxies: [node, second] });
+  await f.call('/draft', 'PUT', { expectedRevision: 0, policy: legacy });
+  const staged = await f.call<{ generation: string }>('/stage', 'POST', { expectedRevision: 1 });
+  await f.call('/apply', 'POST', { generation: staged.generation, expectedActive: null });
+  f.observe({ Proxy: 'second-node' });
+  const opened = await f.view();
+  assert.equal(opened.pending, false);
+  assert.equal(opened.groups[0].selected, 'second-node');
+  assert.deepEqual(opened.workspace.subscriptionOverrides.legacy.selections, {});
+  const migrated = await f.save({ ...withoutRevision(opened.workspace), mode: 'local' }, 0);
+  assert.equal(migrated.local.selections.Proxy, 'second-node');
+  assert.equal(migrated.subscriptionOverrides.legacy.selections.Proxy, 'second-node');
+  const active = await f.apply(migrated, staged.generation);
+  assert.equal((((await f.candidate(active.active))['proxy-groups'] as JsonObject[])[0].proxies as string[])[0], 'second-node');
 });
 
 test('full subscription and local schemes preserve their own rules and selections across switches', async t => {

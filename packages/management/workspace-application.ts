@@ -2,7 +2,7 @@ import { canonicalJson, ConfigError, type Candidate, type JsonObject } from '../
 import { buildLocalPolicy, localGroupChoices, serviceCatalog } from '../routing/index.ts';
 import { FileTransactionStore, TransactionManager, TransactionError } from '../transaction/index.ts';
 import { SubscriptionStore, SubscriptionError } from '../subscriptions/index.ts';
-import { WorkspaceStore, WorkspaceError, initialWorkspace, type RoutingOverrides, type Workspace } from './workspace.ts';
+import { WorkspaceStore, WorkspaceError, initialWorkspace, parseWorkspaceSettings, type WorkspaceSettings, type RoutingOverrides, type Workspace } from './workspace.ts';
 import { ManagementError, exactRecord, readJsonBody } from './http.ts';
 
 type Plan = { workspace: Workspace; policy: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string };
@@ -69,12 +69,39 @@ export function createWorkspaceApplication(options: {
   manager: TransactionManager;
   compile: (policy: JsonObject) => Candidate;
   legacyPolicy: () => Promise<JsonObject | null>;
+  observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
   const { subscriptions, store, manager } = options;
 
   async function load(): Promise<Workspace> {
     return await preferences.read() ?? initialWorkspace(await options.legacyPolicy(), (await subscriptions.list()).filter(source => source.snapshotCurrent).map(source => source.id));
+  }
+
+  async function seedLegacyChoices(current: Workspace, settings: WorkspaceSettings, plan?: Plan): Promise<WorkspaceSettings> {
+    if (current.mode !== 'legacy' || current.revision !== 0 || !options.observeSelections) return settings;
+    // Reading the old core's selection cache is necessary only for migration;
+    // later choices belong to the versioned workspace, never a second cache.
+    try {
+      const observed = await options.observeSelections();
+      if (observed.generation !== (await store.status()).active) return settings;
+      const captured = plan ?? await build(current);
+      const choices: Record<string, string> = {};
+      for (const group of asGroups(captured.policy)) {
+        const selected = observed.selections[String(group.name)];
+        if (group.type === 'select' && Array.isArray(group.proxies) && group.proxies.includes(selected)) choices[String(group.name)] = selected;
+      }
+      settings.subscriptionOverrides.legacy ??= emptyOverrides();
+      settings.subscriptionOverrides.legacy.selections = { ...choices, ...settings.subscriptionOverrides.legacy.selections };
+      const primary = choices.Proxy ?? Object.values(choices).find(selected => asNodes(captured.policy).some(node => node.name === selected));
+      if (settings.mode === 'local' && !settings.local.selections.Proxy && primary &&
+          canonicalJson(settings.sourceIds) === canonicalJson(current.sourceIds)) {
+        for (const id of settings.sourceIds) {
+          if ((await subscriptions.snapshot(id)).proxies.some(node => node.name === primary)) { settings.local.selections.Proxy = primary; break; }
+        }
+      }
+    } catch { /* An offline core does not prevent saving a repairable draft. */ }
+    return settings;
   }
 
   async function build(workspace: Workspace, repair = false): Promise<Plan> {
@@ -159,6 +186,15 @@ export function createWorkspaceApplication(options: {
     const user = workspace.mode === 'local' ? workspace.local : workspace.subscriptionOverrides[workspace.mode === 'legacy' ? 'legacy' : workspace.subscriptionId ?? ''] ?? emptyOverrides();
     const groups = policy ? asGroups(policy).map(group => ({ name: String(group.name), type: String(group.type),
       selected: String(Array.isArray(group.proxies) ? group.proxies[0] ?? '' : ''), options: Array.isArray(group.proxies) ? group.proxies as string[] : [] })) : [];
+    if (candidate?.id === status.active && options.observeSelections) {
+      try {
+        const observed = await options.observeSelections();
+        if (observed.generation === status.active) for (const group of groups) {
+          const selected = observed.selections[group.name];
+          if (group.options.includes(selected)) group.selected = selected;
+        }
+      } catch { /* Core availability is represented separately from persisted intent. */ }
+    }
     const allRules = policy && Array.isArray(policy.rules) ? policy.rules as string[] : [];
     const invalidSelections = Object.entries(user.selections).filter(([name, selected]) => {
       const group = groups.find(group => group.name === name);
@@ -179,7 +215,8 @@ export function createWorkspaceApplication(options: {
       const body = exactRecord(await readJsonBody(request), ['expectedRevision', 'settings']);
       const current = await load();
       if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
-      return { workspace: await preferences.save(body.settings, current.revision) };
+      const settings = await seedLegacyChoices(current, parseWorkspaceSettings(body.settings));
+      return { workspace: await preferences.save(settings, current.revision) };
     }
     if (path === '/api/coproxy/workspace/apply' && request.method === 'POST') {
       const body = exactRecord(await readJsonBody(request, 512), ['expectedRevision', 'expectedActive']);
@@ -198,7 +235,7 @@ export function createWorkspaceApplication(options: {
       const group = asGroups(plan.policy).find(group => group.name === body.group);
       if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(body.name)) invalid('GROUP_SELECTION_CONFLICT');
       if (group.type !== 'select') invalid('GROUP_SELECTION_UNSUPPORTED');
-      const settings = settingsOf(current);
+      const settings = await seedLegacyChoices(current, settingsOf(current), plan);
       const edits = current.mode === 'local' ? settings.local : settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] ?? emptyOverrides();
       edits.selections[body.group] = body.name;
       if (current.mode !== 'local') settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] = edits;
