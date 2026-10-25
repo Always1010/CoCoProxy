@@ -84,12 +84,15 @@ def run(argv, data=None, absent=False):
 
 def guard(n):
     lan = str(ipaddress.ip_network(f"{n['gatewayIPv4']}/{n['prefixLength']}", strict=False))
-    i, g, r, m, c, p = (n[k] for k in ('ingressInterface', 'gatewayIPv4', 'routerIPv4',
-                                      'routerMAC', 'clientIPv4', 'dnsPort'))
+    i, g, r, m, p = (n[k] for k in ('ingressInterface', 'gatewayIPv4', 'routerIPv4', 'routerMAC', 'dnsPort'))
+    c = source(n)
+    network = ipaddress.ip_network(lan)
+    excluded = (f'  iifname "{i}" meta nfproto ipv4 ip daddr != {lan} ip saddr {{ {g}, {r}, {network.network_address}, {network.broadcast_address} }} drop\n'
+                if 'clientCIDR' in n else '')
     return f'''table inet coproxy_auto_guard {{
  chain ingress {{
   type filter hook prerouting priority -310; policy accept;
-  iifname "{i}" meta nfproto ipv4 ip daddr != {lan} ip saddr != {c} drop
+{excluded}  iifname "{i}" meta nfproto ipv4 ip daddr != {lan} ip saddr != {c} drop
   iifname "{i}" meta nfproto ipv4 ip daddr != {lan} ether saddr != {m} drop
  }}
  chain dns {{
@@ -113,8 +116,10 @@ def load_settings(path):
     require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1 and
             value['ipPath'] == IP and value['nftPath'] == NFT)
     n = value['network']
-    require(isinstance(n, dict) and set(n) == {'schemaVersion', 'ingressInterface', 'gatewayIPv4',
-            'routerIPv4', 'routerMAC', 'clientIPv4', 'prefixLength', 'dnsPort', 'egressMark',
+    require(isinstance(n, dict))
+    source_key = 'clientCIDR' if 'clientCIDR' in n else 'clientIPv4'
+    require(set(n) == {'schemaVersion', 'ingressInterface', 'gatewayIPv4',
+            'routerIPv4', 'routerMAC', source_key, 'prefixLength', 'dnsPort', 'egressMark',
             'egressTable', 'egressPriority', 'tunMtu'} and type(n['schemaVersion']) is int and n['schemaVersion'] == 1)
     for key, low, high in [('prefixLength', 1, 29), ('dnsPort', 1024, 65535),
                            ('egressMark', 1, 0xffffffff), ('egressTable', 2000, 19999),
@@ -126,12 +131,16 @@ def load_settings(path):
             n['ingressInterface'] != 'lo' and 'tun' not in n['ingressInterface'].lower())
     require(isinstance(n['routerMAC'], str) and re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}', n['routerMAC']) and
             int(n['routerMAC'][:2], 16) & 1 == 0 and n['routerMAC'] != '00:00:00:00:00:00')
-    addresses = [ipaddress.IPv4Address(n[k]) for k in ('gatewayIPv4', 'routerIPv4', 'clientIPv4')]
+    addresses = [ipaddress.IPv4Address(n[k]) for k in ('gatewayIPv4', 'routerIPv4')]
+    if source_key == 'clientIPv4':
+        addresses.append(ipaddress.IPv4Address(n[source_key]))
     lan = ipaddress.ip_network(f"{addresses[0]}/{n['prefixLength']}", strict=False)
-    require(len(set(addresses)) == 3 and not lan.overlaps(ipaddress.ip_network('198.18.0.0/30')))
+    require(len(set(addresses)) == len(addresses) and not lan.overlaps(ipaddress.ip_network('198.18.0.0/30')))
     require(all(a in lan and a not in (lan.network_address, lan.broadcast_address) and
                 int(str(a).split('.')[0]) not in (0, 127) and int(str(a).split('.')[0]) < 224 and
                 not a.is_link_local for a in addresses))
+    if source_key == 'clientCIDR':
+        require(n[source_key] == str(lan))
     require(value['guardRules'] == guard(n))
     checked_path(value['stateDirectory'], private=True, directory=True)
     checked_executable(IP)
@@ -149,13 +158,32 @@ def nft_snapshot():
             if 'metainfo' not in item]
 
 
+def source(n):
+    return n.get('clientCIDR') or n['clientIPv4']
+
+
+def return_table(n):
+    return str(n['egressTable'] + 20000) if 'clientCIDR' in n else 'main'
+
+
+def return_rule_args(n, operation):
+    return [IP, '-4', 'rule', operation, 'priority', str(n['egressPriority']+1),
+            'iif', 'coproxy-tun', 'to', source(n), 'table', return_table(n)]
+
+
 def snapshot(n):
     return {'guard': nft_snapshot(),
             'egress': [r for r in run([IP, '-N', '-j', '-4', 'route', 'show', 'table', 'all'])
                        if str(r.get('table')) == str(n['egressTable'])],
-            'return': run([IP, '-j', '-4', 'route', 'show', 'table', 'main', 'exact', n['clientIPv4'] + '/32']),
+            'return': (run([IP, '-N', '-j', '-4', 'route', 'show', 'table', return_table(n)], absent=True)
+                       if 'clientCIDR' in n else
+                       run([IP, '-j', '-4', 'route', 'show', 'table', 'main', 'exact', n['clientIPv4'] + '/32'])),
             'rule': [r for r in run([IP, '-j', '-4', 'rule', 'show']) if r.get('priority') == n['egressPriority']],
-            'capture': [r for r in run([IP, '-j', '-4', 'rule', 'show'])
+            # A named TUN input rule is detached before core start/after stop.
+            # Its name/selector/table identity is unchanged by that lifecycle.
+            'capture': [{k: v for k, v in r.items() if not (k == 'iif_detached' and
+                         'clientCIDR' in n and r.get('iif') == 'coproxy-tun')}
+                        for r in run([IP, '-j', '-4', 'rule', 'show'])
                         if r.get('priority') in (n['egressPriority']+1, n['egressPriority']+2)]}
 
 
@@ -178,8 +206,8 @@ def store(path, value):
 
 
 def route_args(n, operation, egress):
-    destination = 'default' if egress else n['clientIPv4'] + '/32'
-    return [IP, '-4', 'route', operation, 'table', str(n['egressTable']) if egress else 'main',
+    destination = 'default' if egress else (n.get('clientCIDR') or n['clientIPv4'] + '/32')
+    return [IP, '-4', 'route', operation, 'table', str(n['egressTable']) if egress else return_table(n),
             destination, 'via', n['routerIPv4'], 'dev', n['ingressInterface'], 'onlink', 'proto', '186']
 
 
@@ -190,7 +218,7 @@ def rule_args(n, operation):
 
 def capture_args(n, operation, local):
     args = [IP, '-4', 'rule', operation, 'priority', str(n['egressPriority']+(1 if local else 2)),
-            'from', n['clientIPv4']+'/32', 'iif', n['ingressInterface']]
+            'from', n.get('clientCIDR') or n['clientIPv4']+'/32', 'iif', n['ingressInterface']]
     if local:
         args += ['to', str(ipaddress.ip_network(f"{n['gatewayIPv4']}/{n['prefixLength']}", strict=False)), 'table', 'main']
     else:
@@ -227,13 +255,16 @@ def prepare(value, receipt, existing, boot, digest):
     run(route_args(n, 'add', True))
     run(rule_args(n, 'add'))
     run(route_args(n, 'add', False))
+    if 'clientCIDR' in n:
+        # TUN packets alone use the separate return table: host SSH remains on main.
+        run(return_rule_args(n, 'add'))
     # Local UID exclusion must not bypass forwarded UDP. Keep this source's
     # LAN destinations in main, then hand only its ingress traffic to TUN.
     run(capture_args(n, 'add', True))
     run(capture_args(n, 'add', False))
     resources = snapshot(n)
     require(resources['guard'] and len(resources['egress']) == 1 and len(resources['return']) == 1 and
-            len(resources['rule']) == 1 and len(resources['capture']) == 2)
+            len(resources['rule']) == 1 and len(resources['capture']) == (3 if 'clientCIDR' in n else 2))
     record.update(status='complete', resources=resources)
     store(receipt, record)
 
@@ -247,6 +278,8 @@ def remove(value, receipt, existing, boot, digest):
     store(receipt, existing)
     run(capture_args(n, 'del', False))
     run(capture_args(n, 'del', True))
+    if 'clientCIDR' in n:
+        run(return_rule_args(n, 'del'))
     run(rule_args(n, 'del'))
     run(route_args(n, 'del', True))
     run(route_args(n, 'del', False))

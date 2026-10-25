@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { AUTOMATIC_GATEWAY_CORE_SHA256, compileAutomaticGatewayConfig } from '../packages/gateway/profile.ts';
 import { renderAutomaticGatewayHostPlan } from '../packages/gateway/host-plan.ts';
 
 const network = { schemaVersion: 1, ingressInterface: 'lan0', gatewayIPv4: '192.0.2.2',
@@ -45,3 +52,45 @@ test('host plan validates deployment boundaries without invoking user accessors'
   assert.match(escaped.unit, /"\/opt\/a%% \$\$\\"b\/apps\/gateway\/network.py"/);
   assert.deepEqual(renderAutomaticGatewayHostPlan(input), renderAutomaticGatewayHostPlan(input));
 });
+
+
+test('LAN guard covers the connected subnet and rejects router, gateway and LAN control source addresses', () => {
+  const { clientIPv4: _, ...common } = network;
+  const plan = renderAutomaticGatewayHostPlan({ ...input, network: { ...common, clientCIDR: '192.0.2.0/24' } });
+  assert.match(plan.guardRules, /ip saddr != 192\.0\.2\.0\/24 drop/);
+  assert.match(plan.guardRules, /ip saddr \{ 192\.0\.2\.2, 192\.0\.2\.1, 192\.0\.2\.0, 192\.0\.2\.255 \} drop/);
+  assert.match(plan.guardRules, /ip saddr 192\.0\.2\.0\/24 ip daddr != 192\.0\.2\.0\/24 oifname != "coproxy-tun" drop/);
+});
+
+
+test('native LAN gateway sends multiple clients through reviewed TUN and retains failure protection',
+  { skip: process.platform !== 'linux' || !process.env.COPROXY_TEST_MIHOMO || process.env.COPROXY_TEST_GATEWAY_KERNEL !== '1', timeout: 70_000 }, async t => {
+    const core = process.env.COPROXY_TEST_MIHOMO!;
+    assert.equal(createHash('sha256').update(await readFile(core)).digest('hex'), AUTOMATIC_GATEWAY_CORE_SHA256);
+    const { clientIPv4: _, ...common } = network;
+    const lan = { ...common, ingressInterface: 'lan-test', dnsPort: 15353, clientCIDR: '192.0.2.0/24' };
+    const plan = renderAutomaticGatewayHostPlan({ ...input, network: lan });
+    const config = compileAutomaticGatewayConfig({ schemaVersion: 1, deployment: {
+      mixedPort: 17890, controllerPort: 19090, controllerSecret: 'synthetic-test-secret', dnsPort: 15353,
+      bootstrapResolvers: ['198.51.100.2'] }, policy: { 'log-level': 'error', rules: ['MATCH,DIRECT'] } }, lan).config;
+    const root = await mkdtemp(join(tmpdir(), 'coproxy-auto-lan-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await writeFile(join(root, 'input.json'), JSON.stringify({ core, config, network: lan, guardRules: plan.guardRules }));
+    const hostUser = await readlink('/proc/self/ns/user'), hostNet = await readlink('/proc/self/ns/net');
+    const child = spawn('sudo', ['-n', 'python3',
+      fileURLToPath(new URL('./fixtures/gateway-auto-kernel.py', import.meta.url)), '--launch', root, hostUser, hostNet],
+      { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '', diagnostics = '';
+    child.stdout!.on('data', chunk => { output += chunk; });
+    child.stderr!.on('data', chunk => { diagnostics += chunk; });
+    const timer = setTimeout(() => { try { process.kill(-child.pid!, 'SIGKILL'); } catch {} }, 65_000);
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+      assert.equal(code, 0, `isolated native gateway fixture failed: ${output.slice(0, 2048)} ${diagnostics.slice(0, 1024)}`);
+      const result = JSON.parse(output);
+      for (const key of ['multiClientTcpUdp', 'newClientAddress', 'routerOnlyDns', 'tunReturnViaRouter', 'hostRoutesPreserved', 'wrongMacRejected', 'coreStopBlocked']) assert.equal(result[key], true, key);
+    } finally {
+      clearTimeout(timer);
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
+    }
+  });

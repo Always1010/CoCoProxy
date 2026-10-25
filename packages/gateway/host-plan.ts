@@ -30,10 +30,13 @@ export function automaticGatewayGuardRules(network: AutomaticGatewaySettings): s
   const address = n.gatewayIPv4.split('.').reduce((value, octet) => value * 256 + Number(octet), 0);
   const subnet = Math.floor(address / 2 ** (32 - n.prefixLength)) * 2 ** (32 - n.prefixLength);
   const lan = [24, 16, 8, 0].map(shift => Math.floor(subnet / 2 ** shift) % 256).join('.') + `/${n.prefixLength}`;
+  const broadcast = [24, 16, 8, 0].map(shift => Math.floor((subnet + 2 ** (32 - n.prefixLength) - 1) / 2 ** shift) % 256).join('.');
+  const scope = n.clientCIDR ?? n.clientIPv4!;
+  const excluded = n.clientCIDR ? `  iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan} ip saddr { ${n.gatewayIPv4}, ${n.routerIPv4}, ${lan.split('/')[0]}, ${broadcast} } drop\n` : '';
   return `table inet coproxy_auto_guard {
  chain ingress {
   type filter hook prerouting priority -310; policy accept;
-  iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan} ip saddr != ${n.clientIPv4} drop
+${excluded}  iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan} ip saddr != ${scope} drop
   iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan} ether saddr != ${n.routerMAC} drop
  }
  chain dns {
@@ -45,7 +48,7 @@ export function automaticGatewayGuardRules(network: AutomaticGatewaySettings): s
  chain forwarding {
   type filter hook forward priority -310; policy accept;
   iifname "${n.ingressInterface}" meta nfproto ipv6 drop
-  iifname "${n.ingressInterface}" ip saddr ${n.clientIPv4} ip daddr != ${lan} oifname != "coproxy-tun" drop
+  iifname "${n.ingressInterface}" ip saddr ${scope} ip daddr != ${lan} oifname != "coproxy-tun" drop
  }
 }
 `;
