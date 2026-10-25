@@ -29,6 +29,8 @@ import ProxyNodeListItem from '~/components/ProxyNodeListItem.vue'
 import ProxyNodePreview from '~/components/ProxyNodePreview.vue'
 import ProxyNodeTableRow from '~/components/ProxyNodeTableRow.vue'
 import SubscriptionInfo from '~/components/SubscriptionInfo.vue'
+import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
+import NativeProxyMasterDetail from '~/components/NativeProxyMasterDetail.vue'
 import { useBatchLatencyTest } from '~/composables/useBatchLatencyTest'
 import {
   MOBILE_NAV_RESELECT_EVENT,
@@ -140,6 +142,7 @@ watch([activeTab, () => configStore.proxiesDisplayMode], () => {
 })
 
 const formatBytes = (bytes: number) => byteSize(bytes).toString()
+const canSelect = (group: ProxyType) => group.type === 'Selector'
 
 // Get recommended node for a proxy group
 const getRecommendedNode = (proxyGroup: ProxyType) => {
@@ -163,6 +166,7 @@ const testAllGroups = async () => {
 // than the one already selected — avoids needlessly pinning an automatic
 // (url-test/fallback) group to its current node.
 const switchToRecommended = (proxyGroup: ProxyType) => {
+  if (!canSelect(proxyGroup)) return
   const recommended = getRecommendedNode(proxyGroup)
   if (recommended && recommended !== proxyGroup.now) {
     proxiesStore.selectProxyInGroup(proxyGroup, recommended)
@@ -181,6 +185,7 @@ const autoSwitchAfterTest = (proxyGroups: ProxyType[]) => {
   // reselects. The explicit "Switch to Recommended" button still allows it.
   const groupNames = new Set(proxiesStore.proxies.map((group) => group.name))
   for (const proxyGroup of proxyGroups) {
+    if (!canSelect(proxyGroup)) continue
     const recommended = getRecommendedNode(proxyGroup)
     if (!recommended || recommended === proxyGroup.now) continue
     if (groupNames.has(recommended)) continue
@@ -318,6 +323,7 @@ const ProxyGroupTitle = defineComponent({
     )
     const hasRecommendation = computed(
       () =>
+        canSelect(props.proxyGroup) &&
         recommendedNode.value !== null &&
         recommendedNode.value !== props.proxyGroup.now,
     )
@@ -501,8 +507,9 @@ const ProxyGroupTitle = defineComponent({
             proxyNameList: props.sortedProxyNames,
             now: props.proxyGroup.now,
             testUrl: props.proxyGroup.testUrl || null,
-            onSelect: (name: string) =>
-              proxiesStore.selectProxyInGroup(props.proxyGroup, name),
+            onSelect: canSelect(props.proxyGroup)
+              ? (name: string) => proxiesStore.selectProxyInGroup(props.proxyGroup, name)
+              : undefined,
           }),
       ])
   },
@@ -565,7 +572,9 @@ const ProxyNodes = defineComponent({
 
     return () => {
       const names = props.sortedProxyNames
-      const Comp = nodeComponentFor(configStore.proxiesDisplayMode)
+      const Comp = canSelect(props.proxyGroup)
+        ? nodeComponentFor(configStore.proxiesDisplayMode)
+        : AutomaticProxyNode
       // isRecommended/groupName are card-only props. ListItem/Chip/TableRow don't
       // declare them, and Vue turns undeclared props into fallthrough DOM
       // attributes — so only pass them to the card to keep other rows' markup clean.
@@ -585,8 +594,9 @@ const ProxyNodes = defineComponent({
                 groupName: props.proxyGroup.name,
               }
             : {}),
-          onClick: () =>
-            proxiesStore.selectProxyInGroup(props.proxyGroup, proxyName),
+          ...(canSelect(props.proxyGroup) ? {
+            onClick: () => proxiesStore.selectProxyInGroup(props.proxyGroup, proxyName),
+          } : {}),
         }),
       )
 
@@ -995,7 +1005,7 @@ const ProviderProxyNodes = defineComponent({
         <span class="text-sm">{{ t('noData') }}</span>
       </div>
       <template v-else>
-        <ProxyMasterDetail
+        <NativeProxyMasterDetail
           v-if="isMasterMode"
           ref="proxyMasterDetail"
           :groups="renderProxies"
