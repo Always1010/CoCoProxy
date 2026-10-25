@@ -165,6 +165,25 @@ test('rollback fault is durable, blocks new apply and can be recovered repeatedl
   assert.deepEqual(await manager.recover(), recovered);
 });
 
+test('explicit target recovery binds the fault transaction and commits only after runtime confirmation', async t => {
+  const { manager, runtime, store } = await fixture(t);
+  const previous = candidate('prior-deployment'), target = candidate('reviewed-new-deployment');
+  await manager.stage(previous); await manager.stage(target); await manager.apply(previous.id, null);
+  runtime.confirms = false; runtime.restoreFails = true;
+  await assert.rejects(manager.apply(target.id, previous.id), code('RESTORE_FAILED'));
+  const fault = await store.status(), id = fault.transaction!.id;
+  const calls = runtime.calls.length;
+  await assert.rejects(manager.recoverTarget(id, previous.id), code('ACTIVE_CONFLICT'));
+  assert.equal(runtime.calls.length, calls);
+  await assert.rejects(manager.recoverTarget(id, target.id), code('CONFIRM_FAILED'));
+  assert.equal((await store.status()).active, null);
+  assert.equal((await store.status()).fault, 'RESTORE_FAILED');
+  runtime.confirms = true;
+  const result = await manager.recoverTarget(id, target.id);
+  assert.equal(result.active, target.id); assert.equal(result.fault, null); assert.equal(result.transaction, null);
+  assert.deepEqual(runtime.calls.slice(-3), ['validate', `activate:${target.id}`, 'confirm']);
+});
+
 test('pending interruption restores predecessor before permitting apply', async t => {
   const { store, manager, runtime } = await fixture(t);
   const target = candidate('interrupted');

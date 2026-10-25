@@ -37,6 +37,7 @@ const HELP = [
   'deployment-plan --input <私有部署JSON> --output <绝对路径>  生成管理/核心/授权文件清单，不安装',
   'runtime-apply --state-dir <绝对路径> --runtime-settings <私有JSON> --generation <SHA256> --expected-active <SHA256|none>',
   'runtime-recover --state-dir <绝对路径> --runtime-settings <私有JSON>  恢复中断事务',
+  'runtime-recover-target --state-dir <绝对路径> --runtime-settings <私有JSON> --generation <目标摘要> --expected-transaction <故障事务ID>  显式校验并恢复故障事务目标',
   'runtime-status --state-dir <绝对路径> --runtime-settings <私有JSON>  核验当前核心进程',
   'admin-init --input <私有登录JSON> --output <绝对路径>  创建私有管理员凭据，不覆盖',
   '',
@@ -72,6 +73,7 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     'deployment-plan': ['--input', '--output'],
     'runtime-apply': ['--state-dir', '--runtime-settings', '--generation', '--expected-active'],
     'runtime-recover': ['--state-dir', '--runtime-settings'],
+    'runtime-recover-target': ['--state-dir', '--runtime-settings', '--generation', '--expected-transaction'],
     'runtime-status': ['--state-dir', '--runtime-settings'],
     'admin-init': ['--input', '--output'],
   };
@@ -192,6 +194,11 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
       return { ...status, core, scope: 'core_only' };
     }
     if (command === 'runtime-recover') return { ...await manager.recover() };
+    if (command === 'runtime-recover-target') {
+      const generation = flags.get('--generation')!, transaction = flags.get('--expected-transaction')!;
+      if (!/^[a-f0-9]{64}$/.test(generation) || !/^[a-f0-9-]{36}$/.test(transaction)) throw new CliError('INVALID_GENERATION');
+      return { ...await manager.recoverTarget(transaction, generation) };
+    }
     const generation = flags.get('--generation')!;
     const expected = flags.get('--expected-active')!;
     if (!/^[a-f0-9]{64}$/.test(generation) || !(expected === 'none' || /^[a-f0-9]{64}$/.test(expected))) throw new CliError('INVALID_GENERATION');
