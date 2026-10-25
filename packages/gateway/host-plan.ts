@@ -57,7 +57,7 @@ ${excluded}  iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan
 /** Pure installation proposal. Runtime checks root ownership and every path ancestor. */
 export function renderAutomaticGatewayHostPlan(input: {
   network: unknown; sourceDirectory: string; pythonPath: string; settingsPath: string; stateDirectory: string;
-}): { unit: string; settings: AutomaticGatewayHostSettings; guardRules: string } {
+}): { unit: string; earlyUnit: string; settings: AutomaticGatewayHostSettings; guardRules: string } {
   if (!input || typeof input !== 'object' || types.isProxy(input) ||
       ![Object.prototype, null].includes(Object.getPrototypeOf(input))) invalid();
   const descriptors = Object.getOwnPropertyDescriptors(input);
@@ -77,6 +77,15 @@ export function renderAutomaticGatewayHostPlan(input: {
     .map(value => quote(value, true)).join(' ');
   const reload = [python, '-I', posix.join(source, 'apps/gateway/network.py'), 'reconcile', '--settings', settingsPath]
     .map(value => quote(value, true)).join(' ');
+  const guard = [python, '-I', posix.join(source, 'apps/gateway/network.py'), 'guard', '--settings', settingsPath]
+    .map(value => quote(value, true)).join(' ');
+  const earlyUnit = ['[Unit]', 'Description=CoCoProxy early ingress guard',
+    'DefaultDependencies=no', 'After=local-fs.target', 'Before=network-pre.target', 'Wants=network-pre.target',
+    '', '[Service]', 'Type=oneshot', 'RemainAfterExit=true', 'User=root', `ExecStart=${guard}`, 'UMask=0077',
+    'TimeoutStartSec=30', 'TimeoutStopSec=10', 'NoNewPrivileges=true',
+    'CapabilityBoundingSet=CAP_NET_ADMIN', 'ProtectSystem=strict', 'ProtectHome=true',
+    'PrivateTmp=true', `ReadWritePaths=${quote(stateDirectory)}`, '',
+    '[Install]', 'WantedBy=multi-user.target', ''].join('\n');
   const unit = ['[Unit]', 'Description=CoCoProxy automatic gateway network prerequisites',
     'After=network-online.target', 'Wants=network-online.target', '', '[Service]', 'Type=oneshot',
     'RemainAfterExit=true', 'User=root', `ExecStart=${command}`, `ExecReload=${reload}`, 'UMask=0077',
@@ -84,6 +93,6 @@ export function renderAutomaticGatewayHostPlan(input: {
     'CapabilityBoundingSet=CAP_NET_ADMIN', 'ProtectSystem=strict', 'ProtectHome=true',
     'PrivateTmp=true', `ReadWritePaths=${quote(stateDirectory)}`, '',
     '# Explicitly start this unit after authorized host preflight; stopping retains the guard.', ''].join('\n');
-  return { unit, settings: { schemaVersion: 1, network, stateDirectory, ipPath: '/usr/sbin/ip',
+  return { unit, earlyUnit, settings: { schemaVersion: 1, network, stateDirectory, ipPath: '/usr/sbin/ip',
     nftPath: '/usr/sbin/nft', guardRules }, guardRules };
 }

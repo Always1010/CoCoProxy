@@ -115,10 +115,57 @@ def driver(root):
                          + "n=json.load(open(" + repr(str(root / 'input.json')) + "))['network']; print(json.dumps(h['snapshot'](n),sort_keys=True))")
         empty_snapshot = json.loads(gateway.call('exec', args=['python3', '-c', snapshot_code]))
         f.check(empty_snapshot == {'guard': None, 'egress': [], 'return': [], 'rule': [], 'capture': []}, 'EMPTY_NETWORK_SNAPSHOT_FAILED')
-        gateway.nft(data['guardRules'])
-        for args in [network.route_args(n, 'add', True), network.rule_args(n, 'add'), network.route_args(n, 'add', False),
-                network.return_rule_args(n, 'add'), network.capture_args(n, 'add', True), network.capture_args(n, 'add', False)]:
+
+        def helper(operation, receipt=None, boot='fixture-boot', interrupt=None):
+            # The journal is serialized exactly as a durable receipt would be.
+            # Only its writer is injected; all actual ip/nft commands stay real.
+            code = ("import json,importlib.util; s=importlib.util.spec_from_file_location('gateway',"
+                    + repr(str(Path(network.__file__))) + "); h=importlib.util.module_from_spec(s); s.loader.exec_module(h); "
+                    + "n=json.load(open(" + repr(str(root / 'input.json')) + "))['network']; "
+                    + "existing=json.loads(" + repr(json.dumps(receipt)) + "); records=[]; "
+                    + "interrupt=json.loads(" + repr(json.dumps(interrupt)) + ")\n"
+                    + "def journal(path,record):\n records.append(json.loads(json.dumps(record)))\n"
+                    + " if interrupt and all(record.get(k)==v for k,v in interrupt.items()): raise RuntimeError('SIMULATED_POWER_LOSS')\n"
+                    + "h.store=journal\ntry:\n ")
+            call = ("h.establish_guard({'network':n,'guardRules':h.guard(n)},None,existing,"
+                    if operation == 'guard' else "h.prepare({'network':n,'guardRules':h.guard(n)},None,existing,")
+            code += call + repr(boot) + ",'fixture-input'" + (")" if operation == 'guard' else ",0)")
+            code += ("\nexcept RuntimeError:\n rejected=True\nelse:\n rejected=False\n"
+                     + "print(json.dumps({'rejected':rejected,'record':records[-1] if records else existing,'resources':h.snapshot(n)}))")
+            return json.loads(gateway.call('exec', args=['python3', '-c', code]))
+
+        # Even non-waiting reconcile must install a durable guard before LAN
+        # address readiness can fail. The guard-only journal can be resumed.
+        gateway.ip('addr', 'del', '192.0.2.2/24', 'dev', 'lan-test')
+        guarded = helper('prepare')
+        f.check(guarded['rejected'] and guarded['resources']['guard'] and
+                all(not guarded['resources'][key] for key in ['egress', 'return', 'rule', 'capture']) and
+                guarded['record'].get('stage') == 'guarded', 'LAN_NOT_READY_WITHOUT_EARLY_GUARD')
+        same_boot_guard = helper('guard', guarded['record'])
+        f.check(not same_boot_guard['rejected'] and same_boot_guard['resources'] == guarded['resources'], 'GUARD_ONLY_REENTRY_FAILED')
+        gateway.ip('addr', 'add', '192.0.2.2/24', 'dev', 'lan-test')
+        gateway.ip('route', 'replace', 'default', 'via', '192.0.2.1')
+        interrupted = helper('prepare', guarded['record'], interrupt={'stage': 'resources'})
+        f.check(interrupted['rejected'] and interrupted['record']['operation'] == 'prepare' and
+                interrupted['record']['stage'] == 'resources', 'INITIAL_PREPARE_INTERRUPT_NOT_RECORDED')
+        gateway.nft('delete table inet cocoproxy_auto_guard')  # Simulated new boot kernel reset.
+        first_recovered = helper('prepare', interrupted['record'], 'fixture-next-boot')
+        f.check(not first_recovered['rejected'] and first_recovered['record']['status'] == 'complete', 'INITIAL_PREPARE_BOOT_RECOVERY_FAILED')
+        # A repair intent retains the full previous expected resource receipt.
+        gateway.call('exec', args=network.route_args(n, 'del', True))
+        repair_interrupted = helper('prepare', first_recovered['record'], 'fixture-next-boot', {'operation': 'repair', 'status': 'incomplete'})
+        f.check(repair_interrupted['rejected'] and repair_interrupted['record']['resources'] == first_recovered['record']['resources'],
+                'REPAIR_LOST_EXPECTED_RESOURCES')
+        for args in [network.capture_args(n, 'del', False), network.capture_args(n, 'del', True),
+                     network.return_rule_args(n, 'del'), network.rule_args(n, 'del'), network.route_args(n, 'del', False)]:
             gateway.call('exec', args=args)
+        gateway.nft('delete table inet cocoproxy_auto_guard')
+        # An interrupted remove has opposite intent and must never auto-enable.
+        removing = dict(repair_interrupted['record'], operation='remove')
+        rejected_remove = helper('guard', removing, 'fixture-third-boot')
+        f.check(rejected_remove['rejected'] and rejected_remove['resources'] == empty_snapshot, 'REMOVE_INTENT_REVIVED')
+        repair_recovered = helper('prepare', repair_interrupted['record'], 'fixture-third-boot')
+        f.check(not repair_recovered['rejected'] and repair_recovered['record']['status'] == 'complete', 'REPAIR_BOOT_RECOVERY_FAILED')
         snapshot_before = gateway.call('exec', args=['python3', '-c', snapshot_code])
         main_before = gateway.ip('-j', '-4', 'route', 'show', 'table', 'main', 'dev', 'lan-test')
         origin.call('origin')
@@ -200,7 +247,8 @@ def driver(root):
         f.check(origin.call('stats') == before, 'STOPPED_CORE_TOUCHED_ORIGIN')
         return {'multiClientTcpUdp': True, 'newClientAddress': True, 'routerOnlyDns': True,
                 'tunReturnViaRouter': True, 'hostRoutesPreserved': True, 'wrongMacRejected': True, 'coreStopBlocked': True,
-                'addressAndResourceRecovery': True, 'unknownResourceRejected': True}
+                'addressAndResourceRecovery': True, 'unknownResourceRejected': True, 'earlyGuardBeforeLan': True,
+                'initialPrepareBootRecovery': True, 'repairBootRecovery': True, 'interruptedRemoveRejected': True}
     finally:
         for role in reversed(list(roles.values())):
             role.close()

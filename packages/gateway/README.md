@@ -20,15 +20,17 @@
 
 ## 小型独立网络单元
 
-`renderAutomaticGatewayHostPlan` 生成 `cocoproxy-gateway-network.service` 与 root 设置；`apps/gateway/network.py` 使用系统 Python 标准库执行固定 `ip`／`nft` 参数，不提供 HTTP 监听或通用命令接口。核心 unit 通过 Requires/After/BindsTo 依赖网络 unit，管理 unit 不获得网络 capability。核心自动资源使用上游表 2022、规则 9000 起及重定向 mark；本组件管理不同名称的 `cocoproxy_auto_guard`、一张显式部署的出口表、客户端回程，以及两条同时限定来源范围和入口接口的规则：LAN 目的地址先查主表，其余交给上游 TUN 表。这两条规则先于 UID 排除，避免被转交的 UDP 绕过 TUN；本机应用不匹配该入口。兼容单终端保留主表 `/32` 回程；LAN 模式使用 `egressTable + 20000` 的独立回程表和 `iif cocoproxy-tun to clientCIDR` 规则，回程下一跳仍是路由器。该表范围为 22000–39999，部署前必须预留；prepare 会拒绝已有资源。LAN 模式不替换主表的已连接路由，不把主机自身的 SSH/管理应答送回路由器。
+`renderAutomaticGatewayHostPlan` 生成 `cocoproxy-gateway-network.service`、独立的 `earlyUnit`（固定安装名 `cocoproxy-gateway-guard.service`）与 root 设置；`apps/gateway/network.py` 使用系统 Python 标准库执行固定 `ip`／`nft` 参数，不提供 HTTP 监听或通用命令接口。早期 guard unit 使用 `DefaultDependencies=no`，在 `local-fs.target` 后、`network-pre.target` 前执行固定 `guard` 操作，只建立或核验独立保护，不等待 LAN、不添加路由、不改变 sysctl；显式启用持久运行时才 enable 该 unit。核心 unit 通过 Requires/After/BindsTo 依赖网络 unit，管理 unit 不获得网络 capability。核心自动资源使用上游表 2022、规则 9000 起及重定向 mark；本组件管理不同名称的 `cocoproxy_auto_guard`、一张显式部署的出口表、客户端回程，以及两条同时限定来源范围和入口接口的规则：LAN 目的地址先查主表，其余交给上游 TUN 表。这两条规则先于 UID 排除，避免被转交的 UDP 绕过 TUN；本机应用不匹配该入口。兼容单终端保留主表 `/32` 回程；LAN 模式使用 `egressTable + 20000` 的独立回程表和 `iif cocoproxy-tun to clientCIDR` 规则，回程下一跳仍是路由器。该表范围为 22000–39999，部署前必须预留；首次 prepare 拒绝未知已有资源。LAN 模式不替换主表的已连接路由，不把主机自身的 SSH/管理应答送回路由器。
 
-root 源码、设置及其祖先不可由普通用户写入；自有源码／设置／状态路径拒绝链接。系统可执行路径可经过受 root 保护的发行版链接，逐段检查链接和目标。网络回执目录独立于管理状态，要求 root:0700。单一 flock 串行执行，回执绑定 boot、设置摘要、完整 guard AST/handle 和实际路由／规则。完整回执授权同 boot 或跨 boot 重建缺失的已知资源：仍存在的每个资源必须匹配回执，未知或改变的资源一律拒绝覆盖。同 boot 仍存在的 guard 连同 handle 完整比较；跨 boot 或重建后允许 handle 变化并保存新实际回执。路由临时 linkdown 标记及 TUN 命名入口规则的 iif_detached 予以规范化，其余表达式、选择器、接口名和表保持严格比较。修复前持久写 incomplete，先恢复 guard 再恢复路由和规则，完成后保存实际资源。部分执行留下不完整回执，prepare/reconcile/remove 都拒绝自动猜测归属，须操作者核查处理。
+root 源码、设置及其祖先不可由普通用户写入；自有源码／设置／状态路径拒绝链接。系统可执行路径可经过受 root 保护的发行版链接，逐段检查链接和目标。网络回执目录独立于管理状态，要求 root:0700。单一 flock 串行执行，回执绑定 boot、设置摘要、完整 guard AST/handle 和实际路由／规则。完整回执授权同 boot 或跨 boot 重建缺失的已知资源：仍存在的每个资源必须匹配回执，未知或改变的资源一律拒绝覆盖。同 boot 仍存在的 guard 连同 handle 完整比较；跨 boot 或重建后允许 handle 变化并保存新实际回执。路由临时 linkdown 标记及 TUN 命名入口规则的 iif_detached 予以规范化，其余表达式、选择器、接口名和表保持严格比较。
 
-`prepare` 等待实际指定入口的 UP、LOWER_UP、网关 IPv4 和精确前缀，最多 35 秒，不把其他接口或 Wi-Fi 就绪当作 LAN 已就绪；已有路由器邻居记录的 MAC 必须匹配设置。固定 `ExecReload` 执行 `reconcile`，立即核验同一条件并修复已登记的缺失资源，不停止核心或移除现有 guard。持久运行的管理协调器只获该网络 unit 的 start/reload 权限，在首次 prepare 因网络晚到失败时重新 start，之后 reload 核验。接口按实际 L3 接口名绑定，不按同桥物理口绑定；更换接口名、LAN 地址前缀或路由器身份需要重新审阅配置。
+修复前持久写 `incomplete, operation:repair`，保留上一完整 expected resources；中断后仍用该完整授权核验当前资源子集，先恢复 guard，再等待 LAN 并补路由规则。首次建立则在任何变更前持久写 `operation:prepare, stage:guard-pending`，guard 安装后立即保存完整 handle 的 `stage:guarded` 回执，再等待 LAN。guard-only 阶段在自有路由规则与上游资源均为空、已有 guard 匹配时可同 boot 或跨 boot 重入。首次路由准备阶段中断后，跨 boot 且自有和上游资源均为空时可安全重新建立；同 boot 留下不能证明归属的部分资源继续保守拒绝。旧版没有明确操作类型的不完整回执、配置摘要不符、未知资源及明确 `operation:remove` 的中断不会自动恢复成启用。所有自动恢复都不删除未知资源或已有 guard。
+
+`prepare/reconcile` 都先复用上述 guard 建立/核验，再检查 IPv4 转发和实际 LAN；首次启动前由早期 guard unit 覆盖普通网络服务启动顺序。`prepare` 等待实际指定入口的 UP、LOWER_UP、网关 IPv4 和精确前缀，最多 35 秒，不把其他接口或 Wi-Fi 就绪当作 LAN 已就绪；已有路由器邻居记录的 MAC 必须匹配设置。固定 `ExecReload` 执行 `reconcile`，立即核验同一条件并修复已登记的缺失资源，不停止核心或移除现有 guard。持久运行的管理协调器只获网络 unit 的 start/reload 权限，在首次 prepare 因网络晚到失败时重新 start，之后 reload 核验，不获早期 guard unit 的服务控制权限。接口按实际 L3 接口名绑定，不按同桥物理口绑定；更换接口名、LAN 地址前缀或路由器身份需要重新审阅配置。
 
 prepare 要求已有 `ip_forward=1`，不修改 sysctl、默认路由、系统 DNS 或其他网络资源。它先装独立 guard，再添加标记出口、回程和两条终端接管规则；回执核验及移除覆盖这些规则。guard 限定交付入口、受管 IPv4 范围和路由器 MAC，DNS 仅接受路由器或本机请求，阻止受管公网流量原样转发，丢弃经此入口转发的 IPv6。接入路由器仍须阻断受管终端未交付的公网 IPv6；此 guard 不能控制从未到达网关的流量。
 
-停止核心或网络 unit 保留 guard。用户关闭代理由接入路由器撤销交付并恢复其 DNS，不能把核心停止等同于用户关闭。完整退役须先关闭路由器交付并停止核心，再由 root 显式执行 `python3 -I /installed/source/apps/gateway/network.py remove --settings /private/root/gateway-network.json`；remove 要求 TUN 已消失、回执完整、当前资源完全匹配，最后才移除 guard，不清理上游或其他操作者的资源。
+停止核心、网络或早期 guard unit 均保留 guard。用户关闭代理由接入路由器撤销交付并恢复其 DNS，不能把核心停止等同于用户关闭。完整退役须先关闭路由器交付，持久 pause 后停止并确认核心退出，停止/禁用早期 guard unit，再由 root 显式执行 `python3 -I /installed/source/apps/gateway/network.py remove --settings /private/root/gateway-network.json`；remove 要求 TUN 已消失、回执完整、当前资源完全匹配，最后才移除 guard，不清理上游或其他操作者的资源。暂停标记本身不表示进程已经停止，须完成 systemd stop 确认。
 
 ## 部署计划
 
@@ -38,7 +40,7 @@ prepare 要求已有 `ip_forward=1`，不修改 sysctl、默认路由、系统 D
 npm run cli -- deployment-plan --input /absolute/private/deployment.json --output /absolute/private/plan.json
 ```
 
-原生计划包含三个 unit、服务 UID 的运行和管理设置、root 网络设置及既有精确 polkit 规则，共七个文件；另列出独立 root 回执目录。生成计划不会安装、启动、enable 或修改网络。实际部署须审阅 capability、接口／地址、mark／表／优先级冲突、转发前提和恢复路径，单独执行获准的安装步骤。只生成 `runtime-plan` 不会产生完整网络前置单元。
+原生计划包含四个 unit、服务 UID 的运行和管理设置、root 网络设置及既有精确 polkit 规则，共八个文件；另列出独立 root 回执目录。生成计划不会安装、启动、enable 或修改网络。实际部署须审阅 capability、接口／地址、mark／表／优先级冲突、转发前提和恢复路径，单独执行获准的安装步骤。持久运行须显式 enable 早期 guard、管理及网页入口，核心由管理恢复；旧七文件部署 receipt 的升级兼容由正式部署入口校验。只生成 `runtime-plan` 不会产生完整网络前置单元。
 
 网页工作区可导入订阅、保存和应用方案；候选捕获在应用流程内部执行，部署范围不能由浏览器修改。兼容草稿摘要只包含基础策略，原生候选额外包含可信网络设置，以最终候选 generation 为准。状态区分核心和待验收网关，不把单元 active 或配置成功表示为真实终端联网通过。
 
