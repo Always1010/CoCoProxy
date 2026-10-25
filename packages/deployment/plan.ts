@@ -240,6 +240,7 @@ function render(input: unknown): DeploymentPlan {
     { path: settingsPath, mode: '0600', owner: serviceUid, sensitive: true, content: settingsContent },
     { path: policyPath, mode: '0644', owner: 'root', sensitive: false, content: policy },
     ...(networkPlan ? [
+      { path: '/etc/systemd/system/cocoproxy-gateway-guard.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.earlyUnit },
       { path: '/etc/systemd/system/cocoproxy-gateway-network.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.unit },
       { path: networkSettingsPath, mode: '0600' as const, owner: 'root' as const, sensitive: true, content: JSON.stringify(networkPlan.settings, null, 2) + '\n' },
     ] : []),

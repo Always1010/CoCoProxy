@@ -64,12 +64,18 @@ test('installed systemd parser accepts both generated unit definitions', {
   }
 });
 
-test('native deployment adds one root oneshot without granting management network privileges', () => {
+test('native deployment adds early protection and network prerequisites without management network capabilities', () => {
   const plan = renderDeploymentPlan(automaticInput());
-  assert.equal(plan.files.length, 7);
+  assert.equal(plan.files.length, 8);
   const core = plan.files.find(file => file.path.endsWith('/cocoproxy-mihomo.service'))!;
   const manager = plan.files.find(file => file.path.endsWith('/cocoproxy-management.service'))!;
   const network = plan.files.find(file => file.path.endsWith('/cocoproxy-gateway-network.service'))!;
+  const early = plan.files.find(file => file.path.endsWith('/cocoproxy-gateway-guard.service'))!;
+  assert.equal(early.owner, 'root');
+  assert.match(early.content, /^DefaultDependencies=no$/m);
+  assert.match(early.content, /^Before=network-pre.target$/m);
+  assert.match(early.content, /^After=local-fs.target$/m);
+  assert.match(early.content, /"guard" "--settings"/);
   assert.match(core.content, /^Requires=cocoproxy-gateway-network.service$/m);
   assert.match(core.content, /^BindsTo=cocoproxy-gateway-network.service$/m);
   assert.match(core.content, /^AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW$/m);

@@ -29,6 +29,17 @@ export function assertMaintenanceLifecycle(value: unknown): void {
     typeof (value as any).paused === 'boolean', 'INSTALL_LIFECYCLE_INVALID');
   require(!(value as any).enabled || (value as any).paused, 'INSTALL_LIFECYCLE_MUST_BE_PAUSED');
 }
+
+/** The only additive upgrade is the fixed root-owned early gateway guard. */
+export function compatibleOwnedFiles(previous: readonly Owned[], current: readonly Owned[], upgrade: boolean): boolean {
+  if (previous.some(old => !current.some(file => file.path === old.path && file.mode === old.mode &&
+      file.owner === old.owner && file.sensitive === old.sensitive))) return false;
+  const added = current.filter(file => !previous.some(old => old.path === file.path));
+  return added.length === 0 && previous.length === current.length || upgrade && previous.length === 7 && current.length === 8 &&
+    added.length === 1 && added[0].path === '/etc/systemd/system/cocoproxy-gateway-guard.service' &&
+    added[0].owner === 'root' && added[0].mode === '0644' && added[0].sensitive === false &&
+    previous.some(file => file.path === '/etc/systemd/system/cocoproxy-gateway-network.service');
+}
 function require(value: unknown, code: string): asserts value { if (!value) throw new InstallError(code); }
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 export type ConfigurationReview = {
@@ -297,7 +308,7 @@ export async function deployRelease(options: InstallOptions) {
     accounts.filter(a => Number(a[2]) === input.runtime.serviceUid).length === 1 &&
     accounts.some(a => a[0] === input.management.serviceUser && Number(a[2]) === input.runtime.serviceUid &&
       ['/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false'].includes(a[6])), 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
-  const units = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service'];
+  const units = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service'];
   const lifecyclePath = posix.join(input.runtime.stateDirectory, 'lifecycle.json');
   if (await info(lifecyclePath)) {
     await privateFile(lifecyclePath, input.runtime.serviceUid);
@@ -317,9 +328,11 @@ export async function deployRelease(options: InstallOptions) {
     require(previous?.schemaVersion === 1 && previous.status === 'complete' && HASH.test(previous.manifestSha256) &&
       posix.basename(previous.release) === previous.manifestSha256 && previous.serviceUid === input.runtime.serviceUid &&
       previous.stateDirectory === input.runtime.stateDirectory && previous.credentialPath === input.management.credentialPath &&
-      previous.files.length === currentFiles.length && previous.files.every(old => currentFiles.some(file => file.path === old.path &&
-        file.mode === old.mode && file.owner === old.owner && file.sensitive === old.sensitive)), 'INSTALL_RECEIPT_MISMATCH_OR_INCOMPLETE');
+      compatibleOwnedFiles(previous.files, currentFiles, options.operation === 'upgrade'), 'INSTALL_RECEIPT_MISMATCH_OR_INCOMPLETE');
     await checkOwned(previous.files);
+    for (const file of currentFiles.filter(file => !previous!.files.some(old => old.path === file.path))) {
+      require(!(await info(file.path)), 'INSTALL_EXISTING_FILE_CONFLICT');
+    }
     await trusted(previous.release);
     await trusted(previous.release + '/manifest.json');
     const oldRelease = await verifyRelease(previous.release, previous.manifestSha256);

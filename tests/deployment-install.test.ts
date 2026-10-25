@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { link, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, configurationReviewDigest, deployRelease, releaseTarget, verifyRelease } from '../packages/deployment/install.ts';
+import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, compatibleOwnedFiles, configurationReviewDigest, deployRelease, releaseTarget, verifyRelease } from '../packages/deployment/install.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
@@ -17,6 +17,19 @@ test('maintenance refuses enabled automatic recovery until it has been explicitl
   for (const value of [null, {}, { schemaVersion: 1, enabled: false }, { schemaVersion: 1, enabled: 'false', paused: true }]) {
     assert.throws(() => assertMaintenanceLifecycle(value), code('INSTALL_LIFECYCLE_INVALID'));
   }
+});
+
+test('upgrade adds only the early guard to a verified previous seven-file gateway receipt', async () => {
+  const input = JSON.parse(await readFile(new URL('../examples/automatic-gateway-deployment.json', import.meta.url), 'utf8'));
+  const current = renderDeploymentPlan(input).files.map(({ content, ...file }) => ({ ...file, sha256: digest(content) }));
+  const previous = current.filter(file => !file.path.endsWith('/cocoproxy-gateway-guard.service'));
+  assert.equal(previous.length, 7);
+  assert.equal(compatibleOwnedFiles(previous, current, true), true);
+  assert.equal(compatibleOwnedFiles(previous, current, false), false);
+  assert.equal(compatibleOwnedFiles(current, previous, true), false);
+  const foreign = current.map(file => file.path.endsWith('/cocoproxy-gateway-guard.service') ? { ...file, path: '/etc/systemd/system/foreign.service' } : file);
+  assert.equal(compatibleOwnedFiles(previous, foreign, true), false);
+  assert.equal(compatibleOwnedFiles(previous.slice(1), current, true), false);
 });
 async function fixture(t: any) {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-install-'));
