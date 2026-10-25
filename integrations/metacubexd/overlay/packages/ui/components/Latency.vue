@@ -59,14 +59,14 @@ const latencyClass = computed(() =>
 const latencyText = computed(() => {
   if (failureReason.value)
     return latencyFeedback.shortLatencyFailure(failureReason.value)
-  return latency.value ? `${latency.value} ms` : '未测试'
+  return latency.value ? `代理 ${latency.value} ms` : '代理未测'
 })
 
 const feedbackTitle = computed(() =>
   failureReason.value
     ? latencyFeedback.describeLatencyFailure(failureReason.value)
     : props.interactive
-      ? '点击测节点延迟'
+      ? '测试代理延迟：通过此节点访问测试网址'
       : undefined,
 )
 

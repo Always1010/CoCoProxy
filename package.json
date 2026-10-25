@@ -19,7 +19,7 @@
     "test:cli": "node --experimental-strip-types --test tests/cli.test.ts",
     "test:runtime": "node --experimental-strip-types --test tests/runtime-evidence.test.ts tests/runtime-native-observer.test.ts tests/runtime-plan.test.ts tests/runtime-systemd.test.ts",
     "test:management": "node --experimental-strip-types --test tests/management-auth.test.ts tests/management.test.ts tests/management-startup.test.ts tests/controller.test.ts",
-    "test:workspace": "node --experimental-strip-types --test tests/workspace.test.ts tests/routing.test.ts",
+    "test:workspace": "node --experimental-strip-types --test tests/workspace.test.ts tests/routing.test.ts tests/tcp-delay.test.ts",
     "test:deployment": "node --experimental-strip-types --test tests/deployment-plan.test.ts tests/deployment-install.test.ts",
     "test:release-stage": "node --experimental-strip-types --test tests/release-stage.test.ts",
     "test:network-plan": "node --experimental-strip-types --test tests/network-plan.test.ts",

@@ -29,6 +29,7 @@ export interface WorkspaceView {
   sources: WorkspaceSource[]
   groups: { name: string; type: string; selected: string; activeSelected?: string | null; options: string[] }[]
   nodes: string[]
+  tcpNodes?: { name: string; fingerprint: string; applicable: boolean }[]
   catalog?: { id: string; name: string; default: boolean }[]
   rules: { value: string; source: 'subscription' | 'template' | 'user' | 'legacy'; editable: boolean }[]
   pending: boolean

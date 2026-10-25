@@ -146,7 +146,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           assert.equal(await page.locator('#coproxy-policy').count(), 0);
           const prefix = automatic ? 'automatic' : 'explicit';
           const screenshot = async (name: string) => {
-            if (artifacts) await page.screenshot({ path: join(artifacts, `${prefix}-${name}.png`), fullPage: true });
+            if (artifacts) await page.screenshot({ path: join(artifacts, `${prefix}-${name}.png`), fullPage: true, animations: 'disabled' });
           };
           const navigate = async (name: string) => {
             await page.locator(`a[href$="/${name}"]:visible`).first().click();
@@ -230,19 +230,12 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           assert.equal((await workspace()).workspace.subscriptionId, 'browser-provider');
           assert.equal(await currentSubscription.getAttribute('aria-checked'), 'true');
           await navigate('proxies');
-          await page.getByLabel('Browser Provider 策略', { exact: true }).waitFor();
-          assert.equal(await page.getByLabel('Browser Provider 策略', { exact: true }).inputValue(), 'browser-node-a');
-          await screenshot('subscription-groups-desktop');
-          await page.getByRole('tab', { name: '节点', exact: true }).click();
           await page.getByText('核心不可用', { exact: true }).waitFor();
-          await page.getByRole('tab', { name: '策略组', exact: true }).click();
+          assert.equal(await page.getByRole('tab', { name: '策略组', exact: true }).count(), 0);
+          assert.equal(await page.getByRole('tab', { name: '节点', exact: true }).count(), 0);
+          await screenshot('subscription-nodes-offline');
           await savedChange(() => page.getByLabel('配置方案', { exact: true }).selectOption('local'));
-          await page.getByLabel('国内直连 策略', { exact: true }).waitFor();
-          await page.getByLabel('OpenAI 策略', { exact: true }).waitFor();
-          assert.equal(await page.getByLabel('国内直连 策略', { exact: true }).inputValue(), 'DIRECT');
-          await savedChange(() => page.getByLabel('国内直连 策略', { exact: true }).selectOption('REJECT'));
-          assert.equal((await workspace()).workspace.local.selections.Domestic, 'REJECT');
-          await screenshot('local-groups-desktop');
+          assert.equal((await workspace()).groups.find((group: { name: string }) => group.name === 'Domestic').selected, 'DIRECT');
           await navigate('rules');
           await page.getByRole('tab', { name: /自定义规则/ }).click();
           await page.getByLabel('规则类型', { exact: true }).selectOption('DOMAIN');
@@ -270,13 +263,13 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           assert.equal(status.active, null); assert.match(status.desired, /^[a-f0-9]{64}$/);
           assert.equal(status.gateway.ready, false);
           // A controlled core receipt exercises the successful browser path:
-          // a single dropdown action must save, activate, verify, and refresh.
+          // a single node pick must save, activate, verify, and refresh.
           let effectiveRevision = -1;
-          let effectiveGroups: { name: string; selected: string; options: string[] }[] = [];
+          let effectiveGroups: { name: string; selected: string; options: string[] }[] = (await workspace()).groups;
           let rejectNextActivation = false;
           let interruptNextActivation = false;
           let activations = 0;
-          const observedActive = 'c'.repeat(64);
+          let observedActive = 'c'.repeat(64);
           await context.route('**/api/coproxy/workspace/apply', async (route: any) => {
             activations++;
             const current = await workspace();
@@ -289,6 +282,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
             }
             effectiveRevision = current.workspace.revision;
             effectiveGroups = current.groups;
+            observedActive = activations.toString(16).padStart(64, '0');
             if (interruptNextActivation) {
               interruptNextActivation = false;
               await route.abort('connectionreset');
@@ -307,29 +301,35 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           });
           await context.route('**/api/clash/proxies', (route: any) => {
             const proxies: Record<string, unknown> = Object.fromEntries(effectiveGroups.map(group => [group.name, {
-              name: group.name, type: 'Selector', now: group.selected, all: group.options, history: [], udp: true,
+              name: group.name, type: 'Selector', now: group.selected,
+              all: [...group.options, ...Array.from({ length: 60 }, (_, i) => `synthetic-scroll-${i}`)], history: [], udp: true,
             }]));
-            for (const name of new Set(effectiveGroups.flatMap(group => group.options))) if (!proxies[name])
+            for (const name of new Set([...effectiveGroups.flatMap(group => group.options), ...Array.from({ length: 60 }, (_, i) => `synthetic-scroll-${i}`)])) if (!proxies[name])
               proxies[name] = { name, type: name === 'DIRECT' ? 'Direct' : name === 'REJECT' ? 'Reject' : 'Socks5', history: [], udp: true };
             proxies.GLOBAL = { name: 'GLOBAL', type: 'Selector', now: 'DIRECT', all: Object.keys(proxies), history: [], udp: true };
             return route.fulfill({ headers: { 'x-coproxy-generation': observedActive }, json: { proxies } });
           });
           await context.route('**/api/clash/providers/proxies', (route: any) => route.fulfill({ json: { providers: {} } }));
           await navigate('proxies');
-          await savedChange(() => page.getByLabel('国内直连 策略', { exact: true }).selectOption('DIRECT'));
-          await page.getByRole('status').filter({ hasText: '已切换：Domestic → DIRECT' }).waitFor();
+          await page.getByRole('button', { name: '策略组 Domestic', exact: true }).click();
+          const nodeList = page.getByTestId('master-detail-scroll-container');
+          await nodeList.evaluate((element: HTMLElement) => { element.scrollTop = 180; });
+          await savedChange(() => page.getByRole('button', { name: 'REJECT', exact: true }).dispatchEvent('click'));
+          await page.getByRole('status').filter({ hasText: '已切换：Domestic → REJECT' }).waitFor();
           assert.equal(activations, 1);
-          await page.getByText('当前生效：DIRECT', { exact: true }).first().waitFor();
+          assert.equal(await page.locator('[data-active-group]').getAttribute('data-active-group'), 'Domestic');
+          assert.equal(await nodeList.evaluate((element: HTMLElement) => element.scrollTop), 180);
+          assert.equal(await page.getByRole('button', { name: 'REJECT', exact: true }).getAttribute('aria-pressed'), 'true');
           rejectNextActivation = true;
-          await savedChange(() => page.getByLabel('国内直连 策略', { exact: true }).selectOption('REJECT'));
+          await savedChange(() => page.getByRole('button', { name: 'DIRECT', exact: true }).dispatchEvent('click'));
           await page.getByRole('alert').filter({ hasText: '核心激活失败' }).waitFor();
-          await page.getByText('当前生效：DIRECT', { exact: true }).first().waitFor();
+          assert.equal(await page.getByRole('button', { name: 'REJECT', exact: true }).getAttribute('aria-pressed'), 'true');
           assert.equal(await page.getByRole('status').filter({ hasText: '已切换' }).count(), 0);
           assert.equal(activations, 2);
           interruptNextActivation = true;
-          await savedChange(() => page.getByLabel('国内直连 策略', { exact: true }).selectOption('REJECT'));
+          await savedChange(() => page.getByRole('button', { name: 'DIRECT', exact: true }).dispatchEvent('click'));
           await page.getByRole('alert').filter({ hasText: '操作结果未知' }).waitFor();
-          await page.getByText('当前生效：REJECT', { exact: true }).first().waitFor();
+          await page.waitForFunction(() => document.querySelector('[role="button"][aria-label="DIRECT"]')?.getAttribute('aria-pressed') === 'true');
           assert.equal(await page.getByRole('status').filter({ hasText: /已切换|已生效/ }).count(), 0);
           assert.equal(activations, 3);
           // Reproduce the original latency failure, then a permitted result and
@@ -340,27 +340,50 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
               json: { error: { code: probeState === 'timeout' ? 'CONTROLLER_PROBE_TIMEOUT' : 'CONTROLLER_PROBE_DENIED' } } });
             const groupName = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)!);
             const group = effectiveGroups.find(item => item.name === groupName)!;
-            return route.fulfill({ json: Object.fromEntries(group.options.map(name => [name, name === 'REJECT' ? 0 : 88])) });
+            return route.fulfill({ json: Object.fromEntries([...group.options, ...Array.from({ length: 60 }, (_, i) => `synthetic-scroll-${i}`)].map(name => [name, name === 'REJECT' ? 0 : 88])) });
           });
-          await page.getByRole('tab', { name: '节点', exact: true }).click();
-          const testLatency = page.getByRole('button').filter({ hasText: /^测延迟$/ }).first();
+          const testLatency = page.getByRole('button', { name: '测试当前组代理延迟', exact: true });
           await testLatency.waitFor();
           assert.equal(await page.getByText('GLOBAL', { exact: true }).count(), 0);
           const revisionBeforeProbes = (await workspace()).workspace.revision;
           await testLatency.click();
           await page.getByText('未启用', { exact: true }).first().waitFor();
-          await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '测延迟')?.disabled);
+          await testLatency.waitFor({ state: 'visible' });
+          await page.waitForFunction(() => !(document.querySelector('[aria-label="测试当前组代理延迟"]') as HTMLButtonElement)?.disabled);
           probeState = 'success';
           await testLatency.click();
-          await page.getByText('88 ms', { exact: true }).first().waitFor();
-          await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '测延迟')?.disabled);
+          await page.getByText('代理 88 ms', { exact: true }).first().waitFor();
+          await page.waitForFunction(() => !(document.querySelector('[aria-label="测试当前组代理延迟"]') as HTMLButtonElement)?.disabled);
           probeState = 'timeout';
           await testLatency.click();
           await page.getByText('超时', { exact: true }).first().waitFor();
-          await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '测延迟')?.disabled);
+          await page.waitForFunction(() => !(document.querySelector('[aria-label="测试当前组代理延迟"]') as HTMLButtonElement)?.disabled);
           assert.equal((await workspace()).workspace.revision, revisionBeforeProbes);
           assert.equal(activations, 3);
-          await page.getByRole('tab', { name: '策略组', exact: true }).click();
+          probeState = 'success';
+          await testLatency.click();
+          await page.getByText('代理 88 ms', { exact: true }).first().waitFor();
+          await page.locator('[data-sonner-toast]').first().waitFor({ state: 'hidden' });
+          await context.route('**/api/coproxy/workspace/tcp-delay', (route: any) => {
+            const body = route.request().postDataJSON();
+            return route.fulfill({ json: { name: body.name, fingerprint: body.fingerprint, status: 'success', delay: 12, checkedAt: new Date().toISOString() } });
+          });
+          await page.getByRole('button', { name: '测试当前组可见节点 TCP 延迟', exact: true }).click();
+          await page.getByText('TCP 12 ms', { exact: true }).first().waitFor();
+          assert.equal((await workspace()).workspace.revision, revisionBeforeProbes);
+          assert.equal(activations, 3);
+          await page.getByRole('button', { name: '管理策略组', exact: true }).click();
+          await page.getByLabel('自定义策略组名称', { exact: true }).fill('Browser Custom');
+          await savedChange(() => page.getByRole('button', { name: '添加自定义策略组', exact: true }).click());
+          await page.getByRole('button', { name: '策略组 Browser Custom', exact: true }).click();
+          await page.getByRole('button', { name: '管理策略组', exact: true }).click();
+          await savedChange(() => page.getByRole('button', { name: '移除 Browser Custom', exact: true }).click());
+          assert.equal(await page.getByRole('button', { name: '策略组 Browser Custom', exact: true }).count(), 0);
+          await page.getByRole('button', { name: '策略组 Domestic', exact: true }).click();
+          await savedChange(() => page.getByLabel('配置方案', { exact: true }).selectOption('subscription'));
+          await page.getByRole('button', { name: '策略组 Browser Provider', exact: true }).click();
+          await savedChange(() => page.getByLabel('配置方案', { exact: true }).selectOption('local'));
+          await page.waitForFunction(() => document.querySelector('[data-active-group]')?.getAttribute('data-active-group') === 'Domestic');
           for (const viewport of [
             { name: 'tablet-portrait', width: 768, height: 1024 },
             { name: 'tablet-landscape', width: 1024, height: 768 },
@@ -382,8 +405,17 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
                 }
               }
               if (route === 'proxies') {
-                await page.getByLabel('国内直连 策略', { exact: true }).waitFor();
-                assert.match(await page.locator('summary[aria-label="添加策略组"]').innerText(), /添加策略组/);
+                await page.getByRole('button', { name: '策略组 Domestic', exact: true }).waitFor();
+                await page.getByRole('button', { name: '管理策略组', exact: true }).waitFor();
+                assert.equal(await page.getByRole('tab', { name: '策略组', exact: true }).count(), 0);
+                if (viewport.name === 'mobile') {
+                  const nav = page.locator('nav');
+                  await nav.locator('a[href$="/subscriptions"]:visible').waitFor();
+                  assert.equal(await nav.locator('a[href$="/connections"]:visible').count(), 0);
+                  await page.getByRole('button', { name: 'More menu', exact: true }).click();
+                  await page.locator('a[href$="/connections"]:visible').waitFor();
+                  await page.getByRole('button', { name: 'More menu', exact: true }).click();
+                }
               }
               if (route === 'rules') {
                 await page.getByRole('tab', { name: /自定义规则/ }).click();

@@ -3,13 +3,13 @@ import type { ProxyProvider, ProxyNodeWithProvider } from '~/types'
 import type { MobileNavReselectDetail } from '~/constants'
 import { IconActivity, IconArrowUp, IconBrandSpeedtest, IconReload, IconSearch, IconSettings, IconX } from '@tabler/icons-vue'
 import { MOBILE_NAV_RESELECT_EVENT, ROUTES } from '~/constants'
-import { filterProxiesByAvailability, filterProxiesByName, sortProxiesByOrderingType } from '~/utils'
+import { filterProxiesByAvailability, filterProxiesByName, formatTimeFromNow, sortProxiesByOrderingType } from '~/utils'
 import { useProxyRefresh } from '~/composables/useProxyRefresh'
 import { useBatchLatencyTest } from '~/composables/useBatchLatencyTest'
 import NativeProxyMasterDetail from '~/components/NativeProxyMasterDetail.vue'
 import ConnectivityBoard from '~/components/ConnectivityBoard.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const proxiesStore = useProxiesStore()
 const configStore = useConfigStore()
 const recommendationStore = useNodeRecommendationStore()
@@ -22,6 +22,7 @@ const connectivityModal = ref<{ open: () => void }>()
 const proxyMasterDetail = ref<{ scrollToTop: (behavior?: ScrollBehavior) => void }>()
 const scrollEl = ref<HTMLElement | null>(null)
 const showScrollToTop = ref(false)
+const initialRead = ref(true)
 
 const renderProxies = computed(() => proxiesStore.proxies.filter(proxy =>
   !proxy.hidden && (proxy.name !== 'GLOBAL' || !!workspace.view.value?.groups.some(group => group.name === 'GLOBAL')),
@@ -61,7 +62,9 @@ function onReselect(event: Event) {
   if ((event as CustomEvent<MobileNavReselectDetail>).detail?.path === ROUTES.Proxies) scrollToTop()
 }
 onMounted(() => {
-  void proxyRefresh.refresh()
+  // Do not reconcile a scheme's remembered group against the previous
+  // scheme's cached core data while the first fresh read is still pending.
+  void proxyRefresh.refresh().finally(() => { initialRead.value = false })
   window.addEventListener(MOBILE_NAV_RESELECT_EVENT, onReselect)
 })
 onUnmounted(() => window.removeEventListener(MOBILE_NAV_RESELECT_EVENT, onReselect))
@@ -95,14 +98,16 @@ watch(activeTab, () => { showScrollToTop.value = false })
 
     <div ref="scrollEl" data-testid="proxies-scroll-container" class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto" @scroll.passive="onScroll">
       <template v-if="activeTab === 'proxies'">
-        <div v-if="!proxiesStore.proxiesLoaded && !renderProxies.length" class="flex flex-col gap-3 p-1"><div v-for="i in 4" :key="i" class="h-20 animate-pulse rounded-xl bg-base-content/5" /></div>
-        <NativeProxyMasterDetail v-else-if="renderProxies.length" ref="proxyMasterDetail" :groups="renderProxies" :sorted-names-by-group="sortedNamesByGroup" @scroll="onScroll" />
+        <div v-if="initialRead || (!proxiesStore.proxiesLoaded && !renderProxies.length)" class="flex flex-col gap-3 p-1"><div v-for="i in 4" :key="i" class="h-20 animate-pulse rounded-xl bg-base-content/5" /></div>
+        <NativeProxyMasterDetail v-else-if="renderProxies.length" ref="proxyMasterDetail" :groups="renderProxies" :sorted-names-by-group="sortedNamesByGroup" :scroll-container="scrollEl" @scroll="onScroll" />
         <div v-else class="py-12 text-center text-sm text-base-content/50">暂无策略组 <NuxtLink to="/subscriptions" class="link link-primary">选择订阅</NuxtLink></div>
       </template>
       <div v-else class="flex flex-col gap-3">
         <section v-for="provider in proxiesStore.proxyProviders" :key="provider.name" class="rounded-xl border border-base-content/10 p-3">
-          <div class="mb-2 flex items-center gap-2"><h2 class="min-w-0 flex-1 truncate font-semibold">{{ provider.name }}</h2><button class="btn btn-ghost btn-sm" :aria-label="`更新 ${provider.name}`" title="更新代理提供者" :disabled="proxiesStore.updatingMap[provider.name]" @click="proxiesStore.updateProviderByProviderName(provider.name)"><IconReload :size="16" /></button></div>
-          <div class="flex flex-col gap-2"><ProxyNodeListItem v-for="name in providerNames(provider)" :key="name" :proxy-name="name" :test-url="provider.testUrl || null" :timeout="null" :provider-name="provider.name" /></div>
+          <div class="mb-2 flex flex-wrap items-center gap-2"><h2 class="min-w-0 flex-1 truncate font-semibold">{{ provider.name }}</h2><span class="text-xs text-base-content/60">{{ provider.proxies.length }} · {{ provider.vehicleType }}</span><button class="btn btn-ghost btn-sm" :aria-label="`更新 ${provider.name}`" title="更新代理提供者" :disabled="proxiesStore.updatingMap[provider.name]" @click="proxiesStore.updateProviderByProviderName(provider.name)"><IconReload :size="16" /></button><button class="btn btn-ghost btn-sm" title="测试此代理提供者的代理延迟" :aria-label="`测试 ${provider.name} 代理延迟`" :disabled="proxiesStore.proxyProviderLatencyTestingMap[provider.name]" @click="proxiesStore.proxyProviderLatencyTest(provider.name)"><IconBrandSpeedtest :size="16" /></button></div>
+          <SubscriptionInfo :subscription-info="provider.subscriptionInfo" />
+          <div class="my-2 text-xs text-base-content/50">{{ t('updated') }} {{ formatTimeFromNow(provider.updatedAt, locale) }}</div>
+          <div class="flex flex-col gap-2"><ProxyNodeListItem v-for="name in providerNames(provider)" :key="name" :proxy-name="name" :test-url="provider.testUrl || null" :timeout="provider.timeout ?? null" :provider-name="provider.name" /></div>
         </section>
         <div v-if="!proxiesStore.proxyProviders.length" class="py-12 text-center text-sm text-base-content/50">{{ t('noData') }}</div>
       </div>
