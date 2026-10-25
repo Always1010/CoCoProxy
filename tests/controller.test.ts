@@ -72,6 +72,17 @@ test('HTTP reads redact nested credentials and actual secrets while isolating up
   assert.deepEqual([...result.headers.keys()].sort(), ['cache-control', 'content-type', 'x-coproxy-generation']);
 });
 
+test('a complete domestic rules inventory fits its bounded route while other reads retain the smaller limit', async t => {
+  const rules = Array.from({ length: 12_000 }, (_, index) => ({ index, type: 'DomainSuffix', payload: `synthetic-${index}.example`, proxy: 'Domestic',
+    extra: { disabled: false, hitCount: 0, missCount: 0, hitAt: '', missAt: '', note: 'synthetic'.repeat(5) } }));
+  const f = await fixture(t, (_request, response) => response.end(JSON.stringify({ rules })));
+  const proxy = createControllerProxy(f.options);
+  const result = await proxy.fetch(request('/rules'));
+  assert.equal(result.status, 200);
+  assert.equal((await result.json()).rules.length, rules.length);
+  assert.equal((await proxy.fetch(request('/version'))).status, 502);
+});
+
 test('HTTP route and query allowlists reject core reconfiguration, token auth, and encoded traversal before any upstream call', async t => {
   const f = await fixture(t);
   const proxy = createControllerProxy(f.options);
