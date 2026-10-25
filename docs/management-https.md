@@ -19,6 +19,8 @@ HTTPS 样本额外要求服务组存在：`getent group coproxy` 应成功，且
 
 后端继续绑定回环；反代覆盖 Host/协议头并移除客户端自带的 Forwarded/IP 转发头。后端检查完整 origin、请求 Origin 和会话，HTTPS 会话使用 Secure、HttpOnly、SameSite=Strict 的 `__Host-` Cookie。核心 secret 留在服务端，WebSocket 经过同一认证入口。
 
+浏览器只输入地址和端口时可能先使用 HTTP。样本把 nginx 在 HTTPS 端口收到普通 HTTP 的错误 497 转为到**固定配置 authority**的 308 跳转，避免显示 400；该目标也须随网页 authority 一起替换，不能改成客户端可控的 Host。验证时分别检查普通 HTTP 的固定 Location 和真实 HTTPS 登录，不把跳转当作 TLS 验证。
+
 ## 证书与安装
 
 优先使用操作者已有的匹配证书。也可在目标机的私有部署目录生成本地自签名证书，以下名称必须替换：
