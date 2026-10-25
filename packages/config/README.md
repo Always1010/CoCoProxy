@@ -6,6 +6,8 @@
 
 输入结构见 `examples/explicit-proxy.json`。`schemaVersion` 仅支持 `1`；`deployment` 的三个端口必须是 1–65535 的不同整数，控制凭据不能为空，bootstrap DNS 必须是 IP 字面量。示例使用文档专用地址，必须替换后才能实际连接。
 
+部署可显式提供 `nameservers: ["https://192.0.2.54/dns-query"]`，以 HTTPS DNS 解析网站域名，并让解析连接遵守当前分流规则。该列表仅接受不带身份、查询参数或 fragment 的 HTTPS 端点；节点域名与 DIRECT 出口仍使用独立的 `bootstrapResolvers`，避免依赖代理才能解析代理节点的循环。服务可达不等于解析正确，应同时验证解析结果与终端路径。省略 `nameservers` 时保留既有解析行为及候选摘要，升级需显式迁移部署配置后应用新代次。
+
 `policy` 保留没有触及安全边界的未知 JSON 字段。`sources` 只接受 `{id, proxies}` 的已取得节点快照，与 `policy.proxies` 合并。来源 ID、节点名和策略组名不得各自重复；节点与策略组也不得同名或使用内置策略保留名。来源快照获取失败时，由上层决定是否继续使用先前快照；编译器没有下载、缓存、自动回退和网络访问能力，缺失快照直接失败。
 
 候选的 `config` 是可作为 YAML 输入的 JSON。编译器固定 loopback 显式代理和控制器监听，禁用 LAN、TUN 与 IPv6，使用 `redir-host` 真实地址 DNS；DNS 上游仅来自部署参数。输入和输出没有共享可变对象。`id` 与 `sha256` 相同，均为 `canonicalJson(config)` UTF-8 字节的 SHA-256；对象键排序，数组顺序保留，配置内容相同则标识稳定。候选本身可包含凭据，调用方必须保护其存储与日志；错误只返回固定消息和 `code`，不回显输入内容。

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { types } from 'node:util';
-import { canonicalJson, type Candidate, type JsonObject, type JsonValue } from '../config/index.ts';
+import { canonicalJson, deploymentDnsOptions, type Candidate, type JsonObject, type JsonValue } from '../config/index.ts';
 import { parseRuntimeSettings } from '../runtime/settings.ts';
 import type { RuntimeSettings } from '../runtime/types.ts';
 import { inspectPrivateDirectory, privateRead } from '../storage/private-files.ts';
@@ -88,7 +88,7 @@ export function validateGatewayCandidate(input: unknown, expected: NetworkPlanIn
     const preview = compileGatewayPreview({ schemaVersion: 1, network: metadata,
       base: { schemaVersion: 1, deployment: { mixedPort: config['mixed-port'],
         controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,
-        dnsPort: metadata.dnsPort, bootstrapResolvers: dns['default-nameserver'] }, policy } });
+        dnsPort: metadata.dnsPort, bootstrapResolvers: dns['default-nameserver'], ...deploymentDnsOptions(config) }, policy } });
     // A self-consistent content hash is insufficient: all compiler-owned bytes
     // and every deployment/derived plan field must match the trusted expectation.
     if (preview.candidate.id !== envelope.id || preview.candidate.sha256 !== envelope.sha256 ||

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, lstat, open, realpath } from 'node:fs/promises';
 import { posix } from 'node:path';
-import { compileConfig } from '../config/index.ts';
+import { compileConfig, deploymentDnsOptions } from '../config/index.ts';
 import type { Candidate, JsonObject } from '../config/index.ts';
 import { inspectPrivateDirectory, privateRead } from '../storage/private-files.ts';
 import { FileTransactionStore } from '../transaction/index.ts';
@@ -125,7 +125,7 @@ export async function loadRuntimeCandidate(input: RuntimeSettings, generation: s
     for (const key of ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns']) delete policy[key];
     const compiled = compileConfig({ schemaVersion: 1, deployment: {
       mixedPort: config['mixed-port'], controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,
-      dnsPort: Number(dns.listen.slice(10)), bootstrapResolvers: dns['default-nameserver'],
+      dnsPort: Number(dns.listen.slice(10)), bootstrapResolvers: dns['default-nameserver'], ...deploymentDnsOptions(config),
     }, policy });
     if (compiled.id !== generation) fail('CANDIDATE_UNTRUSTED');
     return { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret },

@@ -57,6 +57,13 @@ test('gateway validator recompiles complete nonempty policy, flattened source pr
   assert.equal(result.networkPlan.deployment.marks.egress, 0x200);
 });
 
+test('gateway preview preserves deployment-owned encrypted DNS through validation', () => {
+  const value = source();
+  (value.base.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];
+  const preview = compileGatewayPreview(value);
+  assert.deepEqual(validateGatewayCandidate(preview.candidate, preview.networkPlan.deployment).candidate, preview.candidate);
+});
+
 test('hash-valid changes to every compiler-owned surface cannot authorize themselves', () => {
   const changes: Array<(config: JsonObject) => void> = [
     config => { config['allow-lan'] = true; },

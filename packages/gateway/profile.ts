@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { types } from 'node:util';
-import { canonicalJson, compileConfig, type Candidate, type JsonObject } from '../config/index.ts';
+import { canonicalJson, compileConfig, deploymentDnsOptions, type Candidate, type JsonObject } from '../config/index.ts';
 
 /** Legacy ARM64 pin retained for existing fixtures and deployment inputs. */
 export const AUTOMATIC_GATEWAY_CORE_SHA256 = '8c73570d9a5f388bc2f58eee0b347ccfab84fb3cf1a0f8f2cf5eac7005fbcdc0';
@@ -183,7 +183,7 @@ export function recompileAutomaticGatewayConfig(config: JsonObject, input: unkno
     if (typeof controller !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(controller) || typeof config.secret !== 'string') fail();
     return compileAutomaticGatewayConfig({ schemaVersion: 1, deployment: {
       mixedPort: config['mixed-port'], controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,
-      dnsPort: settings.dnsPort, bootstrapResolvers: dns['default-nameserver'],
+      dnsPort: settings.dnsPort, bootstrapResolvers: dns['default-nameserver'], ...deploymentDnsOptions(config),
     }, policy: automaticGatewayPolicy(config) }, settings);
   } catch { return fail(); }
 }
