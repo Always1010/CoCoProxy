@@ -1,36 +1,75 @@
-# 订阅来源与配置快照
+# 订阅与快照
 
-`SubscriptionStore(root, client?, decoder?)` 将来源定义和已接受的节点快照存入绝对路径的私有状态目录。它只登记、下载、校验和保存编译输入，不生成候选，不验证或应用运行时配置。所有写入与 `FileTransactionStore` 共用根目录锁；下载和解码在锁外执行，提交时重新检查来源 revision。只读和登记操作不需要 client；没有 client 时 refresh 返回 `SOURCE_CLIENT_REQUIRED`，不发起请求或递增 revision。
+`SubscriptionStore(root, client?, decoder?)` 在私有绝对目录保存来源和已接受的编译输入，不生成候选或应用配置。写入与配置事务共用根锁；下载／解码在锁外，提交复核来源 revision。无 client 时 refresh 返回 `SOURCE_CLIENT_REQUIRED`，不联网或推进版本。
 
-默认 HTTPS 下载器、来源许可策略和实际 TLS 验证范围见 [HTTP 客户端](http.md)。
+## 输入格式
 
-`SnapshotClient.fetch(url, previous?)` 返回 `{status: 'modified', text, etag?, usage?}` 或 `{status: 'not-modified', usage?}`；`previous` 仅含可选 ETag。生产客户端必须保证下载的超时、响应大小和重定向边界。来源 URL 最多 8192 字符，接受 HTTPS 或 HTTP 语法，不允许 userinfo 或 fragment，允许查询参数；接受保存不等于取得下载许可。默认只获取部署许可的 HTTPS 来源；HTTP 必须另在私有部署的 `allowedHttpOrigins` 中明确列出精确 origin。保存和发出的 ETag 最多 512 字符且必须是可打印 ASCII；响应中的非法 ETag 被丢弃，合法节点正文仍可接受，下次刷新改为完整下载。URL、ETag、原始响应和节点凭据只属于私有输入，调用方不得记录它们。
+| decoder | 接受的内容 |
+| --- | --- |
+| 默认 JSON.parse | 严格 `{proxies: [...]}`，其他根字段拒绝 |
+| `decodeNodeSnapshot` | JSON 或单份 Clash YAML 1.2，只提取 proxies |
+| `decodeSubscriptionProfile` | 管理服务使用；保留内联节点、策略组、rules、sub-rules 和允许的策略数据，可接受仅有规则／组的配置 |
 
-默认 decoder 是 `JSON.parse`，也可以显式注入同步 decoder。解码结果必须严格为 `{proxies: JsonObject[]}`。完整订阅里的规则、策略组、provider、脚本、部署及未知顶层字段均返回 `SNAPSHOT_UNSUPPORTED`；节点再通过 `compileConfig` 的离线安全边界，拒绝远程 provider、文件读取、脚本或出口覆盖等字段。校验使用合成部署参数与 `MATCH,REJECT` 策略，不启动网络核心。它不是完整的 Mihomo 协议 schema 校验；真正应用前仍须验证目标核心配置。
+完整 decoder 剥离监听、controller、DNS、TUN、地理数据下载等部署根字段，通过 `unsupportedFields` 仅披露字段名。保留内容须通过[编译器安全边界](../config/README.md)，拒绝脚本、文件读取、出口覆盖等；不是完整 Mihomo schema 校验，实际应用前仍执行核心 `-t`。
 
-`yaml.ts` 提供两种显式 decoder，使用锁定的 yaml 2.9.0 接受 JSON 或单份 Clash YAML 1.2。`decodeNodeSnapshot` 保留兼容行为：只提取 proxies，其他根字段作为数据解析后丢弃。`decodeSubscriptionProfile` 保留完整内联 `proxies`、`proxy-groups`、`rules`、`sub-rules` 及编译器允许的其他策略数据；允许仅有规则或策略组的配置。部署根字段（包括监听、控制器、DNS、TUN、地理数据下载设置等）明确剥离，并通过 `unsupportedFields` 仅披露字段名。保留策略整体通过 `compileConfig` 的安全边界；脚本、文件读取、出口覆盖等仍拒绝。同步 decoder 遇到 provider 返回 `SNAPSHOT_UNSUPPORTED`；显式启用它的 `SubscriptionStore` 会改用下述异步展开助手。纯内联节点保留旧摘要和表示。
+拒绝 URI/base64、重复键、多文档、自定义标签和循环。有限普通锚点复制为独立 JSON；输入 ≤1 MiB、深度48、值预算100,000、别名50、展开字节4 MiB。Store 仅显式使用完整 decoder 时接受完整策略，其他 decoder 保持严格节点结构。纯内联节点沿用旧表示和摘要。
 
-两个 decoder 均拒绝 URI/base64、重复键、多文档、自定义标签和循环引用；允许有限的普通锚点并复制为独立 JSON。输入限 1 MiB、深度 48、语法与展开值最多 100,000、别名最多 50、展开字节最多 4 MiB。保存快照不等于协议可用；应用前仍须由目标核心验证。`SubscriptionStore` 只在显式传入 `decodeSubscriptionProfile` 时接受完整策略，默认 JSON decoder 和其他注入 decoder 继续严格要求节点结构。测试命令为 `npm run test:subscription-yaml`。
+## Provider 展开
 
-`resolveSubscriptionProfile(text, fetch)` 将 `http` 或 `inline` 的 `proxy-providers` 和 `rule-providers` 展开成离线策略，返回 `{value, materializedProviders}`。Store 只把既有 `SnapshotClient.fetch` 传入；每个下载仍经过同一精确 origin、地址、重定向、大小和超时许可。HTTP provider 的 `path` 仅作为上游缓存提示被移除，不读取或写入该路径；`type: file`、仅有路径、嵌套 provider、自定义请求头和下载代理均明确拒绝。最多 16 个 provider，原始父配置与所有下载合计最多 4 MiB；单个下载仍限 1 MiB，展开后的 JSON 及规则也有独立的 4 MiB、数量和深度限制。provider 请求不带 ETag，缺少本地缓存的 304 明确拒绝；任何失败均保留上一次已接受快照和 ETag，不接受部分结果。
+同步 decoder 遇到 provider 拒绝；完整模式 Store 使用 `resolveSubscriptionProfile(text, fetch)` 在刷新时展开成离线策略，返回 `{value,materializedProviders}`。
 
-节点 provider 的远端正文必须为 `{proxies: [...]}`，内联正文使用 `payload`；节点统一通过原有编译器安全校验。策略组 `use` 按 provider 顺序转换为 `proxies`，保留原有显式成员并去重，支持 `include-all`、`include-all-proxies`、`include-all-providers`、包含／排除过滤和 `exclude-type`。provider 的节点 `override` 可应用安全节点字段与名称前后缀；覆盖后的节点仍受同一安全边界约束。过滤表达式使用受限正则子集：最多 256 字符，允许普通字符、字符类、锚点、交替和每个分支至多一个 `.*`，不允许分组、反向引用、其他量词或嵌套重复；超出范围明确拒绝，避免不受控回溯。只有提供自动成员或 `use` 的组才展开过滤。provider 的定期刷新和独立健康检查由这次静态展开替代；组本身的检查设置保留，之后须显式刷新来源才能更新 provider 节点。
+| 类型 | 支持与转换 |
+| --- | --- |
+| proxy-providers | http 或 inline，远端正文 `{proxies:[...]}`，内联 payload；组 use 转为 proxies，按顺序保留并去重 |
+| 自动成员 | include-all、include-all-proxies、include-all-providers，包含／排除过滤、exclude-type；仅对使用自动成员或 use 的组展开 |
+| 节点 override | 安全节点字段及名称前后缀，覆盖后仍校验 |
+| rule-providers | domain、ipcidr、classical；YAML payload、text 逐行或 inline |
+| RULE-SET | 在 rules/sub-rules 的原位置展开，保留顺序、目标与 IP no-resolve |
 
-规则 provider 支持 `domain`、`ipcidr`、`classical`，可用 YAML `{payload: [...]}`、`format: text` 的逐行正文，或内联 `payload`。逐个展开 `rules` 和 `sub-rules` 中的 `RULE-SET,name,target[,no-resolve]`，保持引用位置、provider 内容顺序、策略目标及 IP 规则的 `no-resolve`。域名支持精确名称与 `+.` 后缀形式；CIDR 支持 IPv4/IPv6；classical 支持普通单条件匹配器及 IP 规则的 `no-resolve`。MRS、域名通配表达式、classical 复合匹配、嵌套 RULE-SET、未知 provider 引用、GEOIP/GEOSITE/IP-ASN 和脚本规则均明确拒绝，不能靠丢弃不支持项接受配置。
+域名允许精确与 `+.` 后缀，CIDR 支持两种地址族，classical 支持单条件规则及 IP no-resolve。MRS、域名通配表达式、classical 复合、嵌套 RULE-SET、未知引用、GEOIP/GEOSITE/IP-ASN 和脚本规则拒绝。
 
-公开 API：
+HTTP path 仅作被移除的缓存提示，不读写文件。拒绝 file、仅 path、嵌套 provider、自定义请求头和下载代理。每次下载经过相同来源许可，最多16个 provider，父配置与所有下载合计4 MiB，单个默认1 MiB，展开结果另有4 MiB和结构预算。
 
-- `list()`：只读、按 ID 排序的 metadata 清单；缺目录时返回空数组，不暴露 URL。逐项校验已存记录，拒绝不明文件和超限目录，仅跳过原子写入器的已知临时文件；它不是跨来源原子快照，后续修改仍须按各自 revision 检查。
-- `configure({id, url?, name?}, expectedRevision)`：输入必须为仅含这些可枚举数据属性的普通对象，不接受访问器或继承属性；在任何异步操作前复制、校验并冻结内部定义，调用者随后修改原对象不会改变操作目标。新增时 expectedRevision 为 `0` 且 URL 必填；更新时省略或传入空 URL 保留原 URL，适用于只修改名称。名称必须非空、最多 128 字符且无控制字符。配置成功 revision 加一。ID 必须匹配 `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`，最多 100 个来源。同一 URL 可继续使用已接受快照和 ETag；URL 字符串变化立即清除 ETag、用量信息，并将旧快照标记为不属于当前定义。
-- `remove(id, expectedRevision)`：在共享锁内校验 revision 后删除来源记录，返回 `void`；不存在时返回 `SOURCE_NOT_FOUND`，过期 revision 返回 `SOURCE_CONFLICT`。不删除已经生成的候选。迟到刷新无法恢复已删来源，删除后以同一 ID、URL 和 revision 重新创建也不会被旧下载覆盖。
-- `refresh(id, expectedRevision)`：只在读取和提交时 revision 都匹配时接受下载。成功、304 和已提交的下载／解码／校验失败都会使 revision 加一；失败保存固定 lastError 后抛出 `SubscriptionError`。并发旧回包返回 `SOURCE_CONFLICT`，不会覆盖新定义、快照或失败记录。锁被其他写入占用时继承存储层的 `STORE_LOCKED` 行为。
-- `status(id)`：返回 metadata 或 `null`。metadata 含 `id`、`revision`、`snapshotDigest`、`snapshotRevision`、`snapshotCurrent`、`lastAttempt`、`lastError`、来源 `host`（仅 hostname），以及可选 `name`；成功取得快照后增加 `kind: 'nodes' | 'profile'`、`nodeCount`。可选 `usage` 仅包含有效的 `upload`、`download`、`total`、`expire` 非负安全整数，字节用量与到期 Unix 秒来自上游可选计费头。可选 `unsupportedFields` 仅含已剥离部署根字段名。公开信息没有完整 URL、查询参数、ETag、节点或上游错误文本。
-- `snapshot(id, expectedRevision?)`：返回私有编译输入 `{id, proxies, policy?, unsupportedFields?, sha256, sourceRevision}`；完整订阅的 `policy` 包括自身 proxies，调用方组装编译输入时不能重复添加这些节点。可选 expectedRevision 在同一次只读操作得到的来源记录上检查，必须匹配当前来源 revision，而不是快照的 sourceRevision，否则返回 `SOURCE_CONFLICT`。不存在的来源返回 `SOURCE_NOT_FOUND`；尚未成功取得当前定义快照时返回 `SOURCE_PENDING`。返回对象的修改不会改变已保存快照。
+过滤表达式最多256字符，仅允许普通字符、字符类、锚点、交替及每分支至多一个 `.*`；不支持分组、反向引用和其他量词。定期刷新／provider 健康检查由本次静态展开替代，组自身检查设置保留，节点变化需显式刷新来源。
 
-刷新失败保留上次成功快照和 ETag。URL 未变时，调用方可继续使用该快照；URL 变化后，旧字节仍物理保留，但 `snapshotCurrent` 为 false，`snapshot()` 拒绝输出它。304 仅在当前定义已有快照且请求带有已接受 ETag 时有效，不能使新来源或更换 URL 后的旧快照成为当前数据。304 更新 attempt 和来源 revision，不改变原快照的 sourceRevision。
+Provider 请求不带 ETag，无缓存的304拒绝。含 provider 的后续刷新重新获取父文档和全部 provider，不发送父 ETag；任何失败保留上次完整快照，不能接受部分结果。
 
-含 provider 的快照在后续刷新时不发送父文档 ETag，而是重新获取父文档及全部 provider，避免父文档 304 掩盖独立 provider 的内容变化。父文档也必须返回正文；没有条件请求的 304 不能接受。
+## 下载许可
 
-每个来源保存为私有 `subscriptions/<id>.json` 原子记录，文件最多 4 MiB，快照还受配置编译器的深度、数量和安全约束。SHA-256 覆盖 `canonicalJson({proxies, policy?, unsupportedFields?, materializedProviders?})` 的 UTF-8 字节，可选字段缺失时不参与序列化，因此旧节点摘要不变。`materializedProviders: true` 仅记录已经静态展开 provider 以及需要完整重新下载的内部状态，不存 provider URL 或路径。版本仍为 1，既有记录可直接读取；新增的名称、用量、策略与防竞态代际字段都是可选字段。所有状态和快照读取都检查摘要与结构，损坏时拒绝，不能用刷新悄悄覆盖。摘要用于完整性检查，不构成对私有存储写入者的认证。POSIX 目录和文件分别要求当前用户拥有的 0700／0600 权限，拒绝符号链接；Windows 需要调用方提供受保护的父目录 ACL。只读 API 不创建目录。
+`HttpsSnapshotClient(options)` 只下载文本。默认精确 `allowedOrigins` 许可 HTTPS，HTTP 需另外的 `allowedHttpOrigins`；仅 HTTP 源可使前者为空。origin 包括协议、主机、端口，不支持通配、userinfo 或 fragment，URL 查询凭据保持私有。网页不能修改部署许可。
 
-刷新错误码为 `SOURCE_FETCH_FAILED`、`SNAPSHOT_DECODE_FAILED`、`SNAPSHOT_UNSUPPORTED`、`SNAPSHOT_INVALID`、`SNAPSHOT_LIMIT`、`SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT`。定义及存储错误包括 `INVALID_SOURCE_INPUT`、`INVALID_SOURCE_ID`、`INVALID_SOURCE_URL`、`INVALID_SOURCE_NAME`、`INVALID_SOURCE_REVISION`、`SOURCE_CONFLICT`、`SOURCE_LIMIT`、`SOURCE_PENDING`、`SOURCE_NOT_FOUND`、`SOURCE_CORRUPT`，以及底层固定存储错误。所有错误只含固定 code，不透传源异常。
+| 边界 | 行为 |
+| --- | --- |
+| 重定向 | 仅原 origin，逐跳检查地址，不降级；默认3次，可设0–5 |
+| DNS 与 TLS | 解析后检查地址并直连该 IP，保留原 Host/SNI 和证书身份校验；不二次解析或跨请求池复用；可给私有 CA，不可关闭校验 |
+| 地址 | 默认拒绝私网、回环、链路本地及特殊地址；显式 allowPrivateAddresses 可许可内网，未指定／组播等无效地址始终拒绝 |
+| 期限与正文 | 默认总15秒，覆盖 DNS 至正文与重定向；默认1 MiB、最高4 MiB，UTF-8、identity 编码，不隐式解压 |
+| ETag | ≤512可打印 ASCII；非法响应标签丢弃，重定向不转发旧资源标签 |
+| 用量 | subscription-userinfo ≤512字符，无重复字段；upload/download/total 为字节、expire 为 Unix 秒，均为非负安全整数，非法头整体忽略 |
+
+DNS 超时后晚到结果不连接，但系统 DNS 查询不能取消。200/304 可更新用量，无新头保留旧值。策略文件仅接受 allowedOrigins、allowedHttpOrigins、allowPrivateAddresses、timeoutMs、maxBytes、maxRedirects、ca，见[合成样本](../../examples/subscription-policy.json)。
+
+## Store API
+
+| 方法 | 契约 |
+| --- | --- |
+| `list()` | 按ID排序 metadata，无目录返回空；不含 URL，不是跨来源原子快照 |
+| `configure({id,url?,name?},expectedRevision)` | 新增从0开始且 URL必填；更新省略／空 URL保留原值。名称非空、≤128字符。成功 revision+1 |
+| `remove(id,expectedRevision)` | 锁内校验后删除，不删除已有候选；迟到刷新不能恢复已删来源或覆盖同ID重建记录 |
+| `refresh(id,expectedRevision)` | 读取与提交均核对 revision；成功、304和已提交的下载／解码／校验失败均 revision+1 |
+| `status(id)` | metadata 或 null |
+| `snapshot(id,expectedRevision?)` | 私有 `{id,proxies,policy?,unsupportedFields?,sha256,sourceRevision}`；可选版本匹配当前来源 revision |
+
+来源ID匹配 `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`，最多100来源；URL≤8192字符。configure 在异步前复制并冻结输入，拒绝访问器与继承属性。来源URL改变清除 ETag/usage，旧快照变为非当前；地址未变的刷新失败仍可使用旧快照。304只接受当前已有快照且发出条件请求的情况，不修改快照 sourceRevision。
+
+metadata 包含 revision、snapshotDigest、snapshotRevision、snapshotCurrent、lastAttempt、lastError、host，可选 name、kind、nodeCount、usage、unsupportedFields；无完整URL、ETag、节点凭据和上游错误。完整 policy 自含 proxies，组装时不要再重复加入节点。
+
+## 存储与错误
+
+每来源一个私有 `subscriptions/<id>.json`，≤4 MiB；SHA-256 覆盖规范 `{proxies,policy?,unsupportedFields?,materializedProviders?}`，缺失可选字段不参与，旧节点摘要保持不变。materializedProviders 仅记已展开状态，不保存 provider URL/path。记录版本为1，新增字段可选。
+
+读取校验结构和摘要，损坏拒绝且不通过刷新覆盖。摘要是完整性检查，不认证私有存储写入者。POSIX目录／文件为当前身份0700/0600，无符号链接；Windows需私有祖先ACL。只读不初始化，锁争用为 STORE_LOCKED。
+
+主要错误：SOURCE_CONFLICT、SOURCE_PENDING、SOURCE_NOT_FOUND、SOURCE_CORRUPT、SOURCE_LIMIT、SOURCE_FETCH_FAILED、SNAPSHOT_DECODE_FAILED、SNAPSHOT_UNSUPPORTED、SNAPSHOT_INVALID、SNAPSHOT_LIMIT、SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT；输入错误见实现。异常只暴露固定 code。
+
+运行 `test:subscriptions` 和 `test:subscription-yaml` 检查存储、TLS、解码与展开；TLS子项使用已有 OpenSSL 和临时合成证书，不证明真实平台或节点连通。
