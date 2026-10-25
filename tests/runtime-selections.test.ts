@@ -37,7 +37,7 @@ async function fixture(t: test.TestContext) {
   for (const value of candidates.values()) await store.stage(value);
   let selected: RuntimeSelection | null = null, physical: RuntimeProcessIdentity | undefined;
   const unit = unitState(), choices = new Map<string, string>(), events: string[] = [];
-  const faults = { group: '', restartAfterWrite: false, lateWrite: false };
+  const faults = { group: '', restartAfterWrite: false, lateWrite: false, untrustedGeneration: '' };
   const inspect = async (_settings: RuntimeSettings, generation: string, _unit?: RuntimeUnitState): Promise<CoreInspection> => {
     const value = candidates.get(generation)!;
     const desired = manualSelections(value.config)!;
@@ -51,8 +51,11 @@ async function fixture(t: test.TestContext) {
     platform: 'linux', verifySystemctl: async () => settings.systemctlPath, assertUnit: async () => {},
     binary: async () => settings.binaryPath, validate: async () => {}, inspect,
     observe: async (...args) => { const { process: _process, ...result } = await inspect(...args); return result; },
-    load: async (_settings, generation) => ({ candidate: candidates.get(generation)!, path: store.candidatePath(generation),
-      home: '/synthetic/state/core-home', controller: { port: 19090, secret: 'synthetic-hot-selection-secret' } }),
+    load: async (_settings, generation) => {
+      if (generation === faults.untrustedGeneration) throw new Error('synthetic deployment migration');
+      return { candidate: candidates.get(generation)!, path: store.candidatePath(generation),
+        home: '/synthetic/state/core-home', controller: { port: 19090, secret: 'synthetic-hot-selection-secret' } };
+    },
     readSelection: async () => structuredClone(selected),
     writeSelection: async (_settings, selection) => {
       selected = structuredClone(selection);
@@ -112,6 +115,13 @@ test('non-selection changes restart normally, and a failed partial update restor
   assert.equal((await partial.store.readState()).active, partial.first.id);
   assert.equal(partial.selected()?.generation, partial.first.id); assert.equal(partial.selected()?.hot, undefined);
   assert.ok([...partial.choices.values()].every(choice => choice === 'DIRECT'));
+});
+
+test('an old candidate invalidated by reviewed deployment migration cannot block a verified full activation', async t => {
+  const f = await fixture(t); f.faults.untrustedGeneration = f.first.id;
+  const status = await f.manager.apply(f.second.id, f.first.id);
+  assert.equal(status.active, f.second.id); assert.equal(f.selected()?.generation, f.second.id);
+  assert.deepEqual(f.events, ['stop', 'start']); assert.equal(f.selected()?.hot, undefined);
 });
 
 test('a crash before commit is durably recovered and a concurrent restart cannot reuse the old process receipt', async t => {

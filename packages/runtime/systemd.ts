@@ -118,9 +118,17 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
   }
 
   private async hotSelect(target: Awaited<ReturnType<typeof loadRuntimeCandidate>>, generation: string): Promise<boolean> {
-    const selected = await this.deps.readSelection(this.settings);
-    if (!selected) return false;
-    const previous = await this.deps.load(this.settings, selected.generation);
+    let selected: RuntimeSelection | null;
+    let previous: Awaited<ReturnType<typeof loadRuntimeCandidate>>;
+    try {
+      selected = await this.deps.readSelection(this.settings);
+      if (!selected) return false;
+      previous = await this.deps.load(this.settings, selected.generation);
+    } catch {
+      // Reviewed deployment migrations may deliberately invalidate the old
+      // candidate. Eligibility failure must not block a verified cold start.
+      return false;
+    }
     const changes = selectionChanges(previous.candidate.config, target.candidate.config);
     if (changes === null) return false;
     const unit = await this.unit();
@@ -128,7 +136,11 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
     if (!before.ready || !before.process) return false;
     // The physical process may span many committed selections. Keep one fixed
     // base candidate rather than trusting an unbounded receipt ancestry.
-    const base = await this.deps.load(this.settings, before.process.baseGeneration);
+    let base = previous;
+    if (before.process.baseGeneration !== selected.generation) {
+      try { base = await this.deps.load(this.settings, before.process.baseGeneration); }
+      catch { return false; }
+    }
     if (selectionChanges(base.candidate.config, target.candidate.config) === null) return false;
     const deadline = performance.now() + 3000;
     for (let offset = 0; offset < changes.length; offset += 4) {
