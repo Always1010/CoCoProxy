@@ -12,6 +12,8 @@ DNS 结果先按地址策略检查，再直接连接已检查的 IP，使用原 
 
 默认总期限为 15 秒，覆盖 DNS、连接、正文和所有重定向；响应上限 1 MiB，可显式限制到不超过 4 MiB。只接受 UTF-8 未压缩正文，请求声明 identity 编码；不执行隐式解压。ETag 仅接受不超过 512 字符的可打印 ASCII，重定向后不把上一个资源的条件标签传给新资源。DNS 超时会停止等待，晚到结果不发起请求，但不能取消系统已经启动的底层 DNS 查询。
 
+可选 `subscription-userinfo` 响应头被解析为 `usage` 数字对象，允许 `upload`、`download`、`total`（字节）及 `expire`（Unix 秒）。仅接受最多 512 字符、无重复字段且全部为非负安全整数的头；格式错误时忽略整个计费头，继续处理合法正文。200 与 304 均可更新计费数据；没有提供时保留上一次数据。原始头不进入公共 metadata。
+
 命令行通过显式 JSON 策略文件接入，允许字段仅为 allowedOrigins、allowedHttpOrigins、allowPrivateAddresses、timeoutMs、maxBytes、maxRedirects、ca；不暴露测试用 resolver 注入。示例见 examples/subscription-policy.json。策略文件和真实来源定义放在私有区域；不把查询令牌写进命令行参数。
 
 测试使用回环 HTTPS 服务及运行时生成的一次性证书，依赖开发主机已有 openssl，不在测试中安装工具，不将私钥入库。测试覆盖真实握手、错误主机名、不受信证书、DNS 连接固定、跨源和循环重定向、大小/编码/UTF-8/总期限，以及 CLI 到私有节点快照再到候选配置的完整路径。它们不证明真实订阅平台、YAML 解析或代理核心可用。

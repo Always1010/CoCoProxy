@@ -98,7 +98,7 @@ function plainJson(input: unknown): JsonValue {
  * Upstream policy, deployment, scripts and remote providers are never imported.
  * Node field safety and names are subsequently validated by SubscriptionStore.
  */
-export function decodeNodeSnapshot(text: string): unknown {
+function decodeDocument(text: string): JsonValue {
   try {
     if (typeof text !== 'string') fail('SNAPSHOT_DECODE_FAILED');
     if (Buffer.byteLength(text, 'utf8') > MAX_INPUT_BYTES) fail('SNAPSHOT_LIMIT');
@@ -113,7 +113,16 @@ export function decodeNodeSnapshot(text: string): unknown {
       ([handle, prefix]) => handle !== '!!' || prefix !== 'tag:yaml.org,2002:',
     )) fail('SNAPSHOT_UNSUPPORTED');
     checkTree(document.contents);
-    const value = plainJson(document.toJS({ mapAsMap: false, maxAliasCount: MAX_ALIASES }));
+    return plainJson(document.toJS({ mapAsMap: false, maxAliasCount: MAX_ALIASES }));
+  } catch (error) {
+    if (error instanceof SnapshotDecodeError) throw error;
+    throw new SnapshotDecodeError('SNAPSHOT_DECODE_FAILED');
+  }
+}
+
+export function decodeNodeSnapshot(text: string): unknown {
+  try {
+    const value = decodeDocument(text);
     if (value === null || typeof value !== 'object' || Array.isArray(value) || !Object.hasOwn(value, 'proxies')) fail('SNAPSHOT_UNSUPPORTED');
     if (!Array.isArray(value.proxies) || value.proxies.some(node => node === null || typeof node !== 'object' || Array.isArray(node))) fail('SNAPSHOT_INVALID');
     return { proxies: value.proxies };
@@ -121,4 +130,41 @@ export function decodeNodeSnapshot(text: string): unknown {
     if (error instanceof SnapshotDecodeError) throw error;
     throw new SnapshotDecodeError('SNAPSHOT_DECODE_FAILED');
   }
+}
+
+/**
+ * Full inline Mihomo policy. The store validates every retained field through
+ * compileConfig; it never permits upstream deployment settings to take effect.
+ * External providers cannot be made offline safely here and fail explicitly.
+ */
+export function decodeSubscriptionProfile(text: string): unknown {
+  const value = decodeDocument(text);
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('SNAPSHOT_UNSUPPORTED');
+  if (Object.hasOwn(value, 'proxy-providers') || Object.hasOwn(value, 'rule-providers')) fail('SNAPSHOT_UNSUPPORTED');
+  if (!['proxies', 'proxy-groups', 'rules', 'sub-rules'].some(key => Object.hasOwn(value, key))) fail('SNAPSHOT_UNSUPPORTED');
+  const proxies = value.proxies ?? [];
+  if (!Array.isArray(proxies) || proxies.some(node => node === null || typeof node !== 'object' || Array.isArray(node))) fail('SNAPSHOT_INVALID');
+  // Node-only input keeps the legacy digest and representation.
+  if (Object.keys(value).every(key => key === 'proxies')) return { proxies };
+  const deployment = new Set([
+    'port', 'socks-port', 'redir-port', 'tproxy-port', 'mixed-port',
+    'allow-lan', 'bind-address', 'lan-allowed-ips', 'lan-disallowed-ips',
+    'authentication', 'skip-auth-prefixes', 'listeners', 'tunnels', 'tun',
+    'external-controller', 'external-controller-tls', 'external-controller-unix',
+    'external-controller-pipe', 'external-controller-cors', 'secret',
+    'external-controller-routing-mark', 'external-doh-server',
+    'external-ui', 'external-ui-url', 'external-ui-name', 'tls',
+    'iptables', 'tuic-server', 'ss-config', 'vmess-config', 'ntp', 'clash-for-android',
+    'dns', 'hosts', 'sniffer', 'ipv6', 'profile',
+    'x-coproxy-network', 'x-coproxy-gateway',
+    'geodata-mode', 'geodata-loader', 'geosite-matcher', 'geo-auto-update',
+    'geo-update-interval', 'geox-url',
+  ]);
+  const policy: JsonObject = { proxies };
+  const unsupportedFields: string[] = [];
+  for (const [key, entry] of Object.entries(value)) {
+    if (deployment.has(key)) unsupportedFields.push(key);
+    else policy[key] = entry;
+  }
+  return { proxies, policy, ...(unsupportedFields.length ? { unsupportedFields: unsupportedFields.sort() } : {}) };
 }

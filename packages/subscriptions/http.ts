@@ -4,7 +4,7 @@ import { request as requestHttp } from 'node:http';
 import { BlockList, isIP } from 'node:net';
 import { checkServerIdentity } from 'node:tls';
 import type { IncomingHttpHeaders } from 'node:http';
-import type { SnapshotClient } from './index.ts';
+import type { SnapshotClient, SubscriptionUsage } from './index.ts';
 
 export class SnapshotHttpError extends Error {
   readonly code: string;
@@ -82,6 +82,21 @@ function bounded<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 
 type Reply = { status: number; headers: IncomingHttpHeaders; text?: string };
 
+/** Ignore malformed optional accounting instead of exposing upstream headers. */
+function subscriptionUsage(header: string | string[] | undefined): SubscriptionUsage | undefined {
+  if (typeof header !== 'string' || header.length > 512) return undefined;
+  const result: SubscriptionUsage = {};
+  for (const part of header.split(';')) {
+    const match = /^\s*(upload|download|total|expire)\s*=\s*(\d+)\s*$/.exec(part);
+    if (!match) return undefined;
+    const key = match[1] as keyof SubscriptionUsage;
+    const value = Number(match[2]);
+    if (!Number.isSafeInteger(value) || Object.hasOwn(result, key)) return undefined;
+    result[key] = value;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
 /** Restricted transport; HTTP requires its own exact deployment allowlist. */
 export class HttpsSnapshotClient implements SnapshotClient {
   private readonly origins: Set<string>;
@@ -158,12 +173,14 @@ export class HttpsSnapshotClient implements SnapshotClient {
         }
         if (reply.status === 304) {
           if (!etag) fail('SOURCE_UNEXPECTED_NOT_MODIFIED');
-          return { status: 'not-modified' };
+          const usage = subscriptionUsage(reply.headers['subscription-userinfo']);
+          return { status: 'not-modified', ...(usage ? { usage } : {}) };
         }
         if (reply.status !== 200 || reply.text === undefined) fail('SOURCE_HTTP_REJECTED');
         const value = reply.headers.etag;
         const nextEtag = typeof value === 'string' && value.length <= 512 && !/[^\x20-\x7e]/.test(value) ? value : undefined;
-        return { status: 'modified', text: reply.text, ...(nextEtag ? { etag: nextEtag } : {}) };
+        const usage = subscriptionUsage(reply.headers['subscription-userinfo']);
+        return { status: 'modified', text: reply.text, ...(nextEtag ? { etag: nextEtag } : {}), ...(usage ? { usage } : {}) };
       }
       fail('SOURCE_REDIRECT_DENIED');
     } catch (error) {

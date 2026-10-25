@@ -1,14 +1,17 @@
-import { createHash } from 'node:crypto';
-import { opendir, readdir } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { opendir, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonicalJson, compileConfig } from '../config/index.ts';
 import type { JsonObject } from '../config/index.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { PrivateFileError, privateDirectory, inspectPrivateDirectory, privateRead, atomicWrite } from '../storage/private-files.ts';
+import { decodeSubscriptionProfile, SnapshotDecodeError } from './yaml.ts';
+
+export type SubscriptionUsage = { upload?: number; download?: number; total?: number; expire?: number };
 
 export type SnapshotResponse =
-  | { status: 'modified'; text: string; etag?: string }
-  | { status: 'not-modified' };
+  | { status: 'modified'; text: string; etag?: string; usage?: SubscriptionUsage }
+  | { status: 'not-modified'; usage?: SubscriptionUsage };
 export interface SnapshotClient {
   fetch(url: string, previous?: { etag?: string }): Promise<SnapshotResponse>;
 }
@@ -23,8 +26,14 @@ export type SourceMetadata = {
   snapshotCurrent: boolean;
   lastAttempt: string | null;
   lastError: SnapshotFailure | null;
+  name?: string;
+  host?: string;
+  kind?: 'nodes' | 'profile';
+  nodeCount?: number;
+  usage?: SubscriptionUsage;
+  unsupportedFields?: string[];
 };
-export type SourceSnapshot = { id: string; proxies: JsonObject[]; sha256: string; sourceRevision: number };
+export type SourceSnapshot = { id: string; proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[]; sha256: string; sourceRevision: number };
 
 /** Public errors deliberately omit URLs, upstream diagnostics and node fields. */
 export class SubscriptionError extends Error {
@@ -32,7 +41,7 @@ export class SubscriptionError extends Error {
   constructor(code: string) { super(code); this.name = 'SubscriptionError'; this.code = code; }
 }
 
-type StoredSnapshot = { proxies: JsonObject[]; sha256: string; sourceRevision: number; definitionRevision: number };
+type StoredSnapshot = { proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[]; sha256: string; sourceRevision: number; definitionRevision: number };
 type SourceRecord = {
   version: 1;
   id: string;
@@ -43,9 +52,13 @@ type SourceRecord = {
   etag: string | null;
   lastAttempt: string | null;
   lastError: SnapshotFailure | null;
+  name?: string;
+  generation?: string;
+  usage?: SubscriptionUsage;
 };
-type RefreshResult = { status: 'modified'; proxies: JsonObject[]; sha256: string; etag: string | null } |
-  { status: 'not-modified' } | { status: 'failed'; code: SnapshotFailure };
+type SnapshotData = { proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[] };
+type RefreshResult = ({ status: 'modified'; sha256: string; etag: string | null; usage?: SubscriptionUsage } & SnapshotData) |
+  { status: 'not-modified'; usage?: SubscriptionUsage } | { status: 'failed'; code: SnapshotFailure };
 const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_SOURCES = 100;
 const digestPattern = /^[a-f0-9]{64}$/;
@@ -58,7 +71,8 @@ const failureCodes = new Set<SnapshotFailure>([
 const fail: (code: string) => never = code => { throw new TransactionError(code); };
 const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 1;
-const hash = (proxies: JsonObject[]): string => createHash('sha256').update(canonicalJson({ proxies }), 'utf8').digest('hex');
+const hash = (data: SnapshotData): string => createHash('sha256').update(canonicalJson({ proxies: data.proxies,
+  ...(data.policy ? { policy: data.policy } : {}), ...(data.unsupportedFields ? { unsupportedFields: data.unsupportedFields } : {}) }), 'utf8').digest('hex');
 const timestamp = (value: unknown): value is string | null => value === null ||
   (typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)));
 
@@ -78,16 +92,29 @@ function checkUrl(value: unknown): asserts value is string {
       !/^https?:\/\//i.test(value) || value.slice(value.indexOf('//') + 2).split(/[/?]/, 1)[0].includes('@')) fail('INVALID_SOURCE_URL');
 }
 
-function sourceDefinition(input: unknown): Readonly<{ id: string; url: string }> {
+function checkName(value: unknown): asserts value is string {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 128 || /[\u0000-\u001f\u007f]/.test(value)) fail('INVALID_SOURCE_NAME');
+}
+
+function validUsage(value: unknown): value is SubscriptionUsage {
+  return !!value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length > 0 && Object.entries(value).every(([key, entry]) =>
+      ['upload', 'download', 'total', 'expire'].includes(key) && Number.isSafeInteger(entry) && entry >= 0);
+}
+
+function sourceDefinition(input: unknown): Readonly<{ id: string; url?: string; name?: string }> {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)) fail('INVALID_SOURCE_INPUT');
   const descriptors = Object.getOwnPropertyDescriptors(input);
-  if (Reflect.ownKeys(descriptors).length !== 2 || Reflect.ownKeys(descriptors).some(key => key !== 'id' && key !== 'url')) fail('INVALID_SOURCE_INPUT');
+  if (Reflect.ownKeys(descriptors).some(key => key !== 'id' && key !== 'url' && key !== 'name')) fail('INVALID_SOURCE_INPUT');
   const id = descriptors.id;
   const url = descriptors.url;
-  if (!id?.enumerable || !('value' in id) || !url?.enumerable || !('value' in url)) fail('INVALID_SOURCE_INPUT');
-  checkId(id.value); checkUrl(url.value);
-  return Object.freeze({ id: id.value, url: url.value });
+  const name = descriptors.name;
+  if (!id?.enumerable || !('value' in id) || [url, name].some(entry => entry && (!entry.enumerable || !('value' in entry)))) fail('INVALID_SOURCE_INPUT');
+  checkId(id.value);
+  if (url?.value !== undefined && url.value !== '') checkUrl(url.value);
+  if (name) checkName(name.value);
+  return Object.freeze({ id: id.value, ...(url?.value ? { url: url.value } : {}), ...(name ? { name: name.value } : {}) });
 }
 
 function metadata(record: SourceRecord): SourceMetadata {
@@ -97,33 +124,46 @@ function metadata(record: SourceRecord): SourceMetadata {
     snapshotRevision: record.snapshot?.sourceRevision ?? null,
     snapshotCurrent: record.snapshot !== null && record.snapshot.definitionRevision === record.definitionRevision,
     lastAttempt: record.lastAttempt, lastError: record.lastError,
+    host: new URL(record.url).hostname,
+    ...(record.name ? { name: record.name } : {}),
+    ...(record.snapshot ? { kind: record.snapshot.policy ? 'profile' as const : 'nodes' as const, nodeCount: record.snapshot.proxies.length } : {}),
+    ...(record.usage ? { usage: { ...record.usage } } : {}),
+    ...(record.snapshot?.unsupportedFields ? { unsupportedFields: [...record.snapshot.unsupportedFields] } : {}),
   };
 }
 
-/** Strict node snapshots only; full subscriptions and providers are unsupported. */
-function validateSnapshot(value: unknown): JsonObject[] {
+/** Validate node snapshots or an explicitly selected full inline policy. */
+function validateSnapshot(value: unknown, allowProfile = false): SnapshotData {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) fail('SNAPSHOT_INVALID');
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Reflect.ownKeys(descriptors).some(key => key !== 'proxies')) fail('SNAPSHOT_UNSUPPORTED');
+  if (Reflect.ownKeys(descriptors).some(key => key !== 'proxies' && !(allowProfile && ['policy', 'unsupportedFields'].includes(key as string)))) fail('SNAPSHOT_UNSUPPORTED');
   const entry = descriptors.proxies;
   if (!entry || !entry.enumerable || !('value' in entry) || !Array.isArray(entry.value)) fail('SNAPSHOT_INVALID');
   try {
-    // Only the copied proxies are retained. This candidate is neither staged nor applied.
+    // This offline safety candidate is neither staged nor applied.
+    const profile = descriptors.policy;
+    const unsupported = descriptors.unsupportedFields;
+    if (profile && (!profile.enumerable || !('value' in profile) || !profile.value || typeof profile.value !== 'object' || Array.isArray(profile.value))) fail('SNAPSHOT_INVALID');
+    if (unsupported && (!unsupported.enumerable || !('value' in unsupported) || !Array.isArray(unsupported.value) ||
+        unsupported.value.some((key: unknown) => typeof key !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(key)))) fail('SNAPSHOT_INVALID');
+    if (profile && canonicalJson(profile.value.proxies) !== canonicalJson(entry.value)) fail('SNAPSHOT_INVALID');
     const candidate = compileConfig({
       schemaVersion: 1,
       deployment: { mixedPort: 18080, controllerPort: 18081, dnsPort: 18053,
         controllerSecret: 'offline-subscription-validation', bootstrapResolvers: ['192.0.2.53'] },
-      policy: { rules: ['MATCH,REJECT'] },
-      sources: [{ id: 'subscription', proxies: entry.value }],
+      policy: profile?.value ?? { rules: ['MATCH,REJECT'] },
+      ...(profile ? {} : { sources: [{ id: 'subscription', proxies: entry.value }] }),
     });
-    return candidate.config.proxies as JsonObject[];
+    return { proxies: candidate.config.proxies as JsonObject[],
+      ...(profile ? { policy: JSON.parse(canonicalJson(profile.value)) as JsonObject } : {}),
+      ...(unsupported ? { unsupportedFields: [...unsupported.value] as string[] } : {}) };
   } catch { fail('SNAPSHOT_INVALID'); }
 }
 
-function exactKeys(value: object, keys: string[]): boolean {
+function exactKeys(value: object, keys: string[], optional: string[] = []): boolean {
   const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every(key => keys.includes(key));
+  return keys.every(key => actual.includes(key)) && actual.every(key => keys.includes(key) || optional.includes(key));
 }
 
 /** One private atomic record per source; mutations share the runtime store lock. */
@@ -163,20 +203,24 @@ export class SubscriptionStore {
       fail('SOURCE_CORRUPT');
     }
     try {
-      if (!record || !exactKeys(record, ['version', 'id', 'url', 'revision', 'definitionRevision', 'snapshot', 'etag', 'lastAttempt', 'lastError']) ||
+      if (!record || !exactKeys(record, ['version', 'id', 'url', 'revision', 'definitionRevision', 'snapshot', 'etag', 'lastAttempt', 'lastError'], ['name', 'generation', 'usage']) ||
           record.version !== 1 || record.id !== id || !revision(record.revision) || !revision(record.definitionRevision) ||
           record.definitionRevision > record.revision || !timestamp(record.lastAttempt) ||
           !(record.lastError === null || failureCodes.has(record.lastError)) ||
           !(record.etag === null || validEtag(record.etag))) fail('SOURCE_CORRUPT');
       checkUrl(record.url);
+      if (record.name !== undefined) checkName(record.name);
+      if (record.generation !== undefined && (typeof record.generation !== 'string' || !/^[a-f0-9-]{36}$/.test(record.generation))) fail('SOURCE_CORRUPT');
+      if (record.usage !== undefined && !validUsage(record.usage)) fail('SOURCE_CORRUPT');
       if (record.snapshot !== null) {
         const snapshot = record.snapshot;
-        if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision']) ||
+        if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision'], ['policy', 'unsupportedFields']) ||
             !Array.isArray(snapshot.proxies) || !digestPattern.test(snapshot.sha256) ||
             !revision(snapshot.sourceRevision) || snapshot.sourceRevision > record.revision ||
             !revision(snapshot.definitionRevision) || snapshot.definitionRevision > snapshot.sourceRevision ||
-            snapshot.definitionRevision > record.definitionRevision || hash(snapshot.proxies) !== snapshot.sha256) fail('SOURCE_CORRUPT');
-        validateSnapshot({ proxies: snapshot.proxies });
+            snapshot.definitionRevision > record.definitionRevision || hash(snapshot) !== snapshot.sha256) fail('SOURCE_CORRUPT');
+        validateSnapshot({ proxies: snapshot.proxies, ...(snapshot.policy ? { policy: snapshot.policy } : {}),
+          ...(snapshot.unsupportedFields ? { unsupportedFields: snapshot.unsupportedFields } : {}) }, true);
       }
       if (record.etag !== null && !metadata(record).snapshotCurrent) fail('SOURCE_CORRUPT');
       return record;
@@ -190,7 +234,7 @@ export class SubscriptionStore {
     await atomicWrite(join(this.root, 'subscriptions'), `${record.id}.json`, contents);
   }
 
-  async configure(input: { id: string; url: string }, expectedRevision: number): Promise<SourceMetadata> {
+  async configure(input: { id: string; url?: string; name?: string }, expectedRevision: number): Promise<SourceMetadata> {
     return this.protect(async () => {
       // Capture validated primitives before the first asynchronous boundary.
       const definition = sourceDefinition(input);
@@ -203,9 +247,14 @@ export class SubscriptionStore {
           const entries = await readdir(join(this.root, 'subscriptions'));
           if (entries.length >= MAX_SOURCES) fail('SOURCE_LIMIT');
         }
-        const changed = previous?.url !== definition.url;
+        const url = definition.url ?? previous?.url;
+        checkUrl(url);
+        const changed = previous?.url !== url;
         const record: SourceRecord = {
-          version: 1, id: definition.id, url: definition.url, revision: expectedRevision + 1,
+          version: 1, id: definition.id, url, revision: expectedRevision + 1,
+          generation: previous?.generation ?? randomUUID(),
+          ...(definition.name ?? previous?.name ? { name: definition.name ?? previous?.name } : {}),
+          ...(!changed && previous?.usage ? { usage: previous.usage } : {}),
           definitionRevision: changed ? expectedRevision + 1 : previous!.definitionRevision,
           snapshot: previous?.snapshot ?? null, etag: changed ? null : previous!.etag,
           lastAttempt: changed ? null : previous!.lastAttempt, lastError: changed ? null : previous!.lastError,
@@ -213,6 +262,19 @@ export class SubscriptionStore {
         if (Buffer.byteLength(JSON.stringify(record), 'utf8') > MAX_BYTES - 256) fail('SNAPSHOT_LIMIT');
         await this.write(record);
         return metadata(record);
+      });
+    });
+  }
+
+  /** Compare-and-delete under the same lock used by configure and refresh. */
+  async remove(id: string, expectedRevision: number): Promise<void> {
+    return this.protect(async () => {
+      checkId(id); checkRevision(expectedRevision);
+      await this.files.exclusive(async () => {
+        const current = await this.read(id);
+        if (!current) fail('SOURCE_NOT_FOUND');
+        if (current.revision !== expectedRevision) fail('SOURCE_CONFLICT');
+        await unlink(join(this.root, 'subscriptions', `${id}.json`));
       });
     });
   }
@@ -256,7 +318,10 @@ export class SubscriptionStore {
       if (!record) fail('SOURCE_NOT_FOUND');
       if (expectedRevision !== undefined && record.revision !== expectedRevision) fail('SOURCE_CONFLICT');
       if (!record.snapshot || !metadata(record).snapshotCurrent) fail('SOURCE_PENDING');
-      return { id, proxies: record.snapshot.proxies, sha256: record.snapshot.sha256, sourceRevision: record.snapshot.sourceRevision };
+      return { id, proxies: record.snapshot.proxies,
+        ...(record.snapshot.policy ? { policy: record.snapshot.policy } : {}),
+        ...(record.snapshot.unsupportedFields ? { unsupportedFields: record.snapshot.unsupportedFields } : {}),
+        sha256: record.snapshot.sha256, sourceRevision: record.snapshot.sourceRevision };
     });
   }
 
@@ -269,7 +334,7 @@ export class SubscriptionStore {
       if (!record.snapshot || !metadata(record).snapshotCurrent || record.etag === null) {
         return { status: 'failed', code: 'SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT' };
       }
-      return { status: 'not-modified' };
+      return { status: 'not-modified', ...(validUsage(response.usage) ? { usage: { ...response.usage } } : {}) };
     }
     if (response.status !== 'modified' || typeof response.text !== 'string') {
       return { status: 'failed', code: 'SOURCE_FETCH_FAILED' };
@@ -277,11 +342,12 @@ export class SubscriptionStore {
     if (Buffer.byteLength(response.text, 'utf8') > MAX_BYTES) return { status: 'failed', code: 'SNAPSHOT_LIMIT' };
     let decoded: unknown;
     try { decoded = this.decoder(response.text); }
-    catch { return { status: 'failed', code: 'SNAPSHOT_DECODE_FAILED' }; }
+    catch (error) { return { status: 'failed', code: error instanceof SnapshotDecodeError ? error.code : 'SNAPSHOT_DECODE_FAILED' }; }
     try {
-      const proxies = validateSnapshot(decoded);
+      const data = validateSnapshot(decoded, this.decoder === decodeSubscriptionProfile);
       // An unusable cache validator must not discard an otherwise valid body.
-      return { status: 'modified', proxies, sha256: hash(proxies), etag: validEtag(response.etag) ? response.etag : null };
+      return { status: 'modified', ...data, sha256: hash(data), etag: validEtag(response.etag) ? response.etag : null,
+        ...(validUsage(response.usage) ? { usage: { ...response.usage } } : {}) };
     } catch (error) {
       return { status: 'failed', code: error instanceof TransactionError && error.code === 'SNAPSHOT_UNSUPPORTED' ? 'SNAPSHOT_UNSUPPORTED' : 'SNAPSHOT_INVALID' };
     }
@@ -298,14 +364,17 @@ export class SubscriptionStore {
       const result = await this.download(captured);
       const committed = await this.files.exclusive(async () => {
         const current = await this.read(id);
-        if (!current || current.revision !== captured.revision) fail('SOURCE_CONFLICT');
+        if (!current || current.revision !== captured.revision || current.generation !== captured.generation) fail('SOURCE_CONFLICT');
         current.revision++;
         current.lastAttempt = new Date().toISOString();
         current.lastError = result.status === 'failed' ? result.code : null;
+        if (result.status !== 'failed' && result.usage) current.usage = result.usage;
         if (result.status === 'modified') {
           const updated: SourceRecord = {
             ...current,
             snapshot: { proxies: result.proxies, sha256: result.sha256, sourceRevision: current.revision,
+              ...(result.policy ? { policy: result.policy } : {}),
+              ...(result.unsupportedFields ? { unsupportedFields: result.unsupportedFields } : {}),
               definitionRevision: current.definitionRevision },
             etag: result.etag,
           };

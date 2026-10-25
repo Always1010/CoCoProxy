@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SubscriptionStore, SubscriptionError } from '../packages/subscriptions/index.ts';
 import type { SnapshotClient, SnapshotResponse, SnapshotDecoder } from '../packages/subscriptions/index.ts';
+import { decodeSubscriptionProfile } from '../packages/subscriptions/yaml.ts';
 
 const privateValue = 'synthetic-private-value';
 const sourceUrl = `https://subscription.example/snapshot?token=${privateValue}`;
@@ -41,7 +42,7 @@ async function fixture(t: test.TestContext, decoder?: SnapshotDecoder) {
 test('source registration and immutable snapshots expose only safe status metadata', async t => {
   const { root, client, store } = await fixture(t);
   const configured = await store.configure({ id: 'primary', url: sourceUrl }, 0);
-  assert.deepEqual(configured, { id: 'primary', revision: 1, snapshotDigest: null,
+  assert.deepEqual(configured, { id: 'primary', host: 'subscription.example', revision: 1, snapshotDigest: null,
     snapshotRevision: null, snapshotCurrent: false, lastAttempt: null, lastError: null });
   await assert.rejects(store.snapshot('primary'), code('SOURCE_PENDING'));
   const refreshed = await store.refresh('primary', 1);
@@ -269,4 +270,94 @@ test('injected decoders still pass the strict offline safety boundary and respon
   await assert.rejects(store.refresh('primary', 3), code('SNAPSHOT_LIMIT'));
   assert.equal((await store.status('primary'))!.snapshotDigest, accepted.snapshotDigest);
   assert.equal((await store.status('primary'))!.revision, 4);
+});
+
+test('complete inline policy survives storage and rename with accounting and deployment disclosure', async t => {
+  const { root, client, store } = await fixture(t, decodeSubscriptionProfile);
+  await store.configure({ id: 'primary', url: sourceUrl, name: 'Primary' }, 0);
+  const policy = { ...JSON.parse(text), 'proxy-groups': [{ name: 'Choose', type: 'select', proxies: ['example-node', 'DIRECT'] }],
+    rules: ['DOMAIN,example.test,Choose', 'SUB-RULE,(NETWORK,TCP),nested', 'MATCH,REJECT'],
+    'sub-rules': { nested: ['DOMAIN-SUFFIX,example.test,Choose', 'MATCH,DIRECT'] }, 'log-level': 'warning' };
+  const usage = { upload: 100, download: 200, total: 10_000, expire: 2_000_000_000 };
+  client.response = { status: 'modified', text: JSON.stringify({ ...policy, 'mixed-port': 9999,
+    'external-controller': '0.0.0.0:9090', secret: privateValue, dns: { listen: '0.0.0.0:53' } }), etag: '"profile"', usage };
+  const accepted = await store.refresh('primary', 1);
+  assert.equal(accepted.kind, 'profile');
+  assert.equal(accepted.nodeCount, 1);
+  assert.deepEqual(accepted.usage, usage);
+  assert.deepEqual(accepted.unsupportedFields, ['dns', 'external-controller', 'mixed-port', 'secret']);
+  assert.ok(!JSON.stringify(accepted).includes(privateValue));
+  assert.deepEqual((await store.snapshot('primary')).policy, policy);
+  const renamed = await store.configure({ id: 'primary', name: 'Renamed', url: '' }, 2);
+  assert.equal(renamed.name, 'Renamed');
+  assert.equal(renamed.snapshotCurrent, true);
+  assert.equal(renamed.snapshotDigest, accepted.snapshotDigest);
+  assert.deepEqual((await new SubscriptionStore(root).snapshot('primary')).policy, policy);
+  client.response = { status: 'not-modified' };
+  await store.refresh('primary', 3);
+  assert.equal(client.calls.at(-1)!.url, sourceUrl);
+  assert.deepEqual((await store.status('primary'))!.usage, usage);
+  const path = join(root, 'subscriptions', 'primary.json');
+  const corrupt = JSON.parse(await readFile(path, 'utf8'));
+  corrupt.snapshot.policy.rules.reverse();
+  await writeFile(path, JSON.stringify(corrupt));
+  await assert.rejects(store.status('primary'), code('SOURCE_CORRUPT'));
+});
+
+test('profile scripts, file and egress fields and external providers fail without replacing accepted policy', async t => {
+  const { client, store } = await fixture(t, decodeSubscriptionProfile);
+  await store.configure({ id: 'primary', url: sourceUrl }, 0);
+  await store.refresh('primary', 1);
+  const accepted = await store.snapshot('primary');
+  let revision = 2;
+  for (const extra of [
+    { script: { code: privateValue } },
+    { 'proxy-groups': [{ name: 'unsafe', type: 'select', use: ['remote'] }] },
+    { 'sub-rules': { nested: ['GEOIP,CN,DIRECT'] } },
+    { proxies: [{ name: 'unsafe', type: 'ss', 'interface-name': privateValue }] },
+    { proxies: [{ name: 'unsafe', type: 'ss', 'ca-file': privateValue }] },
+  ]) {
+    client.response = { status: 'modified', text: JSON.stringify({ ...JSON.parse(text), ...extra }) };
+    await assert.rejects(store.refresh('primary', revision++), code('SNAPSHOT_INVALID'));
+    assert.deepEqual(await store.snapshot('primary'), accepted);
+  }
+  for (const field of ['proxy-providers', 'rule-providers']) {
+    client.response = { status: 'modified', text: JSON.stringify({ ...JSON.parse(text), [field]: { remote: { type: 'http', url: sourceUrl } } }) };
+    await assert.rejects(store.refresh('primary', revision++), code('SNAPSHOT_UNSUPPORTED'));
+  }
+});
+
+test('CAS deletion cannot be undone by an in-flight refresh, including delete and recreate at the same revision', async t => {
+  const { root } = await fixture(t);
+  let complete!: (value: SnapshotResponse) => void;
+  let entered!: () => void;
+  const entry = new Promise<void>(resolve => { entered = resolve; });
+  const store = new SubscriptionStore(root, { fetch: async () => new Promise<SnapshotResponse>(resolve => { complete = resolve; entered(); }) });
+  await store.configure({ id: 'primary', url: sourceUrl }, 0);
+  await assert.rejects(store.remove('primary', 0), code('SOURCE_CONFLICT'));
+  const pending = store.refresh('primary', 1);
+  await entry;
+  await store.remove('primary', 1);
+  assert.equal(await store.status('primary'), null);
+  assert.deepEqual(await store.list(), []);
+  await store.configure({ id: 'primary', url: sourceUrl }, 0);
+  const rejected = assert.rejects(pending, code('SOURCE_CONFLICT'));
+  complete({ status: 'modified', text });
+  await rejected;
+  assert.equal((await store.status('primary'))!.snapshotDigest, null);
+  await store.remove('primary', 1);
+  await assert.rejects(store.remove('primary', 1), code('SOURCE_NOT_FOUND'));
+});
+
+test('pre-profile version-one records remain readable and retain their original snapshot digest', async t => {
+  const { root, store } = await fixture(t);
+  await store.configure({ id: 'primary', url: sourceUrl }, 0);
+  const accepted = await store.refresh('primary', 1);
+  const path = join(root, 'subscriptions', 'primary.json');
+  const legacy = JSON.parse(await readFile(path, 'utf8'));
+  delete legacy.generation;
+  await writeFile(path, JSON.stringify(legacy));
+  assert.equal((await store.status('primary'))!.snapshotDigest, accepted.snapshotDigest);
+  await store.configure({ id: 'primary', name: 'Legacy renamed' }, 2);
+  assert.equal((await store.snapshot('primary')).sha256, accepted.snapshotDigest);
 });
