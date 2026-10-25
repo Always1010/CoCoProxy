@@ -104,7 +104,7 @@ export function parseAutomaticGatewaySettings(input: unknown): AutomaticGatewayS
     if ([2023, 2024].includes(egressMark) || egressTable === 2022) fail();
     return { schemaVersion: 1, ingressInterface: iface, gatewayIPv4, routerIPv4, routerMAC: value.routerMAC.toLowerCase(),
       clientIPv4, prefixLength, dnsPort: integer(value.dnsPort, 1024, 65535), egressMark, egressTable,
-      egressPriority: integer(value.egressPriority, 1000, 8999), tunMtu: integer(value.tunMtu, 1280, 9000) };
+      egressPriority: integer(value.egressPriority, 1000, 8997), tunMtu: integer(value.tunMtu, 1280, 9000) };
   } catch { return fail(); }
 }
 
@@ -128,6 +128,9 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
       tun: { enable: true, device: 'coproxy-tun', stack: 'mips', mtu: settings.tunMtu,
         'auto-route': true, 'auto-redirect': true, 'auto-detect-interface': false, 'strict-route': true,
         'include-interface': [settings.ingressInterface], 'route-exclude-address': [connected],
+        // Forwarded clients belong to the gateway; local applications retain
+        // the host's own routes, including management and system updates.
+        'exclude-uid-range': ['0:4294967294'],
         'iproute2-table-index': 2022, 'iproute2-rule-index': 9000,
         'auto-redirect-input-mark': 2023, 'auto-redirect-output-mark': 2024,
         'dns-mode': 'disabled', 'dns-hijack': [], gso: false, 'disable-icmp-forwarding': true },

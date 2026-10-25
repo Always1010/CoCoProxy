@@ -39,6 +39,7 @@ test('native profile binds policy and all normalized deployment inputs to a cano
   assert.deepEqual(config.tun, { enable: true, device: 'coproxy-tun', stack: 'mips', mtu: 1500,
     'auto-route': true, 'auto-redirect': true, 'auto-detect-interface': false, 'strict-route': true,
     'include-interface': ['lan-test'], 'route-exclude-address': ['192.0.2.0/24'],
+    'exclude-uid-range': ['0:4294967294'],
     'iproute2-table-index': 2022, 'iproute2-rule-index': 9000, 'auto-redirect-input-mark': 2023,
     'auto-redirect-output-mark': 2024, 'dns-mode': 'disabled', 'dns-hijack': [], gso: false, 'disable-icmp-forwarding': true });
   assert.deepEqual(config.dns, { enable: true, listen: '192.0.2.2:15353', 'enhanced-mode': 'redir-host', ipv6: false,
@@ -65,7 +66,7 @@ test('network settings reject malformed, overlapping, reserved and non-host valu
     { dnsPort: 53 }, { dnsPort: 65536 }, { tunMtu: 1279 }, { tunMtu: 9001 }, { tunMtu: 1500.5 },
     { egressMark: 0 }, { egressMark: 0x100000000 }, { egressMark: 2023 }, { egressMark: 2024 },
     { egressTable: 1999 }, { egressTable: 20000 }, { egressTable: 2022 },
-    { egressPriority: 999 }, { egressPriority: 9000 },
+    { egressPriority: 999 }, { egressPriority: 8998 }, { egressPriority: 9000 },
   ]) invalid(() => parseAutomaticGatewaySettings({ ...settings(), ...change }));
   for (const key of Object.keys(settings())) {
     const missing: Record<string, unknown> = { ...settings() }; delete missing[key];
