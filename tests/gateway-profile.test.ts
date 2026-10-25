@@ -92,6 +92,30 @@ test('performance and selective sniffing survive trusted gateway recompilation',
   }
 });
 
+test('trusted TUN tuning validates bounded values and preserves settings across recompilation', () => {
+  const original = compileAutomaticGatewayConfig(base(), settings());
+  assert.equal((original.config.tun as JsonObject).stack, 'mips');
+  assert.equal((original.config.tun as JsonObject).gso, false);
+  assert.equal((original.config['x-coproxy-gateway'] as JsonObject).tunStack, undefined);
+  for (const tunStack of ['mips', 'system', 'mixed', 'gvisor']) {
+    for (const tunGso of [false, true]) {
+      const tuned = { ...settings(), tunStack, tunGso, tunMtu: 1400 };
+      const candidate = compileAutomaticGatewayConfig(base(), tuned);
+      assert.equal((candidate.config.tun as JsonObject).stack, tunStack);
+      assert.equal((candidate.config.tun as JsonObject).gso, tunGso);
+      assert.equal((candidate.config.tun as JsonObject).mtu, 1400);
+      assert.deepEqual(candidate.config['x-coproxy-gateway'], tuned);
+      assert.deepEqual(recompileAutomaticGatewayConfig(candidate.config, tuned), candidate);
+      const changed = structuredClone(candidate.config); (changed.tun as JsonObject).stack = 'untrusted';
+      assert.equal(recompileAutomaticGatewayConfig(changed, tuned).id, candidate.id);
+    }
+  }
+  for (const change of [{ tunStack: 'auto' }, { tunStack: 'SYSTEM' }, { tunStack: null },
+    { tunGso: 'true' }, { tunGso: 1 }, { tunMtu: 1279 }, { tunMtu: 9001 }]) {
+    invalid(() => parseAutomaticGatewaySettings({ ...settings(), ...change }));
+  }
+});
+
 test('network settings reject malformed, overlapping, reserved and non-host values', () => {
   for (const change of [
     { schemaVersion: 2 }, { generation: 'a'.repeat(64) }, { command: '/synthetic' },

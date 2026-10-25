@@ -9,7 +9,7 @@ Coproxy 是部署在 Linux 外接设备上的局域网代理方案，使用 Miho
 | 需要做什么 | 阅读入口 |
 | --- | --- |
 | 判断设备和路由器是否适用 | [设备条件与路由器协作](docs/cooperating-router-requirements.md) |
-| 安装、升级或卸载 | [部署与维护](docs/deployment.md)，[HTTPS 配置](docs/management-https.md) |
+| 安装、升级或卸载 | [部署与维护](docs/deployment.md)，[HTTPS 配置](docs/management-https.md)，[可信部署与性能选项](examples/deployment-options.md) |
 | 管理订阅、方案、节点和规则 | [使用说明](docs/usage.md) |
 | 理解组件、流量和配置应用 | [软件架构](docs/architecture.md) |
 | 开发、构建与验证 | [开发说明](docs/development.md)，[管理界面构建](integrations/metacubexd/README.md) |
