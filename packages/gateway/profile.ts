@@ -138,6 +138,16 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
       Number(String(compiled.config['external-controller']).split(':')[1]) < 1024) fail();
     const resolvers = dns['default-nameserver'];
     if (!Array.isArray(resolvers) || resolvers.some(address => ipv4(address) === settings.gatewayIPv4 || automaticGatewayManagesIPv4(settings, address as string))) fail();
+    // Node/direct resolution must remain independent of intercepted LAN clients.
+    for (const key of ['proxy-server-nameserver', 'direct-nameserver']) {
+      const servers = dns[key];
+      if (!Array.isArray(servers)) continue;
+      for (const server of servers) {
+        if (typeof server !== 'string') fail();
+        const host = server.startsWith('https://') ? new URL(server).hostname.replace(/^\[|\]$/g, '') : server;
+        if (isIP(host) && (ipv4(host) === settings.gatewayIPv4 || automaticGatewayManagesIPv4(settings, host))) fail();
+      }
+    }
     const size = 2 ** (32 - settings.prefixLength), network = Math.floor(ipv4Number(settings.gatewayIPv4) / size) * size;
     const connected = [24, 16, 8, 0].map(shift => Math.floor(network / 2 ** shift) % 256).join('.') + `/${settings.prefixLength}`;
     const config: JsonObject = {
