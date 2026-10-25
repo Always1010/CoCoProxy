@@ -15,7 +15,7 @@ Coproxy 的部署单位是两个角色：接入路由器保留终端接入、网
 | 其他架构、Windows、macOS、无 systemd Linux | 当前入口拒绝 | 不是支持承诺；不能把开发机上的离线测试当成目标安装验证 |
 | 接入路由器 | 通过[协作语义](router-cooperation.md)适配角色能力 | 不提供任意型号或任意固件的安装承诺；支持组合须记录双方版本和实际验收范围 |
 
-新安装入口已通过 Linux root/mount/network namespace 隔离验证：只读预检、七文件权限/摘要、人工改动拒绝升级及卸载、第二载荷升级、私有状态/管理员凭据保留、卸载保留 release 与收据状态均符合预期；命名空间与宿主网络前后不变。该验证使用受控的 systemctl 替身，只核对查询和 daemon-reload 调用，复制既有审核 ARM64 核心字节而不执行核心，不能代替真实 systemd/polkit 启动或终端链路验收。离线清单、路径和链接风险由 `tests/deployment-install.test.ts` 覆盖，严格 TypeScript 检查已通过。
+安装入口已通过 Linux root/mount/network namespace 隔离验证：只读预检、七文件权限/摘要、人工改动拒绝升级及卸载、第二载荷升级、私有状态/管理员凭据保留、卸载保留 release 与收据状态均符合预期；命名空间与宿主网络前后不变。该验证使用受控的 systemctl 替身，只核对查询和 daemon-reload 调用，复制既有审核 ARM64 核心字节而不执行核心。另已在 ARM64 Linux/systemd 实机使用 `4a28461` 的安装入口完成七文件安装及完整收据，保留原有管理员和业务状态；实际启动管理、HTTPS 反代和核心后，登录、就绪及代理 HTTPS 请求通过。实机升级／卸载、系统重启和 x86 运行仍须独立验收。离线清单、路径和链接风险由 `tests/deployment-install.test.ts` 覆盖，严格 TypeScript 检查已通过。
 
 目标主机需预置 Node.js ≥22.18、systemd、支持 JavaScript `.rules` 的 polkit、唯一的非 root 专用服务账号、root 控制的系统可执行文件及安装父目录。专用账号须使用 `nologin` 或 `false` shell；账号名和固定 UID 来自私有输入，不能复用交互登录账号。工具通过现有 `getent` 验证身份，不创建账户或修改组。应另行审阅该账号既有 sudo/polkit 权限和规则顺序，确保没有更早规则授予任意单元、manage-unit-files 或 root shell；安装工具不能证明所有既有授权都安全。
 
@@ -115,7 +115,7 @@ systemctl start coproxy-management.service
 
 ## 4. 接入与终端验收
 
-按接入路由器项目的显式配置入口填写网关角色参数，先限定一台测试终端。路由器端保持自身管理和独立关闭入口可达，在核验核心、接管、DNS、来源保留、出口和回程的新鲜观察后才启用交付。Coproxy 安装工具不替路由器修改配置。服务开机启用由操作者在验收后另行决定，例如 `systemctl enable coproxy-management.service`；后续维护先禁用，不能把 enable 与首次安装合并。
+按接入路由器项目的显式配置入口填写网关角色参数。**当前两端模型仅支持一台明确的 IPv4 终端，受管公网 IPv6 阻断；这是一项配置限制，并非测试后可直接扩大为整个 LAN。** 多终端需要双方同步实现和验收。路由器端保持自身管理和独立关闭入口可达，在核验核心、接管、DNS、来源保留、出口和回程的新鲜观察后才启用交付。AlwayRoute 日常应用可使用有界的新鲜网关 DNS 预检，完整路径状态仍须如实标记，见[协作说明](router-cooperation.md)。Coproxy 安装工具不替路由器修改配置。服务开机启用由操作者在验收后另行决定，例如 `systemctl enable coproxy-management.service`；后续维护先禁用，不能把 enable 与首次安装合并。
 
 验收至少包含 IPv4 TCP/UDP、路由器转交的 DNS、局域网管理、本机原有出口不被接管、未支持 IPv6 在受管范围阻断、核心停止时受管外网阻断，以及核心仍停止时从路由器独立关闭后终端恢复普通直连。业务站点成功、systemd active、Mihomo `-t` 与 HTTP health 各自只覆盖局部条件。具体测量、真实角色参数和恢复笔记保持私有；正式结论只记录组件版本、双方提交及脱敏范围。
 
