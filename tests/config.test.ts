@@ -130,7 +130,7 @@ test('trusted performance options are explicit and cannot silently disable proce
   fails(value, 'INVALID_INPUT');
   deployment.performance = { tcpConcurrent: true, findProcessMode: 'strict' };
   assert.equal(compileConfig(value).config['find-process-mode'], 'strict');
-  for (const performance of [{ tcpConcurrent: 'true' }, { findProcessMode: 'auto' }, { extra: true }] as JsonObject[]) {
+  for (const performance of [{ tcpConcurrent: 'true' }, { findProcessMode: 'auto' }, { findProcessMode: ['off'] }, { extra: true }] as JsonObject[]) {
     deployment.performance = performance; fails(value, 'INVALID_INPUT');
   }
 });
