@@ -20,8 +20,11 @@ export async function runCore(settingsPath: string): Promise<void> {
     // A fault cannot reboot into its last failed selection. Explicit recover
     // first persists `restoring` and may launch only that transaction's previous
     // generation; otherwise a fault would also prevent its own recovery.
-    if (state.fault !== null && !(state.pending?.phase === 'restoring' && generation !== null &&
-        state.pending.previous === generation)) throw new RuntimeError('RUNTIME_RECOVERY_REQUIRED');
+    if (state.fault !== null && !(generation !== null &&
+        ((state.pending?.phase === 'restoring' && state.pending.previous === generation) ||
+         (state.pending?.phase === 'recovering-target' && state.pending.target === generation && state.desired === generation)))) {
+      throw new RuntimeError('RUNTIME_RECOVERY_REQUIRED');
+    }
     if (generation === null) throw new RuntimeError('RUNTIME_SELECTION_MISSING');
     const binary = await verifyBinary(settings);
     const { path, home } = await loadRuntimeCandidate(settings, generation);

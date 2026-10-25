@@ -172,6 +172,13 @@ test('explicit target recovery binds the fault transaction and commits only afte
   runtime.confirms = false; runtime.restoreFails = true;
   await assert.rejects(manager.apply(target.id, previous.id), code('RESTORE_FAILED'));
   const fault = await store.status(), id = fault.transaction!.id;
+  const activate = runtime.activate.bind(runtime);
+  runtime.activate = async (path, generation) => {
+    const inFlight = await store.readState();
+    assert.equal(inFlight.pending?.phase, 'recovering-target');
+    assert.equal(inFlight.active, null); assert.equal(inFlight.fault, 'RESTORE_FAILED');
+    await activate(path, generation);
+  };
   const calls = runtime.calls.length;
   await assert.rejects(manager.recoverTarget(id, previous.id), code('ACTIVE_CONFLICT'));
   assert.equal(runtime.calls.length, calls);

@@ -12,7 +12,7 @@ export interface RuntimeAdapter {
   restore(previousPath: string | null, previousGeneration: string | null): Promise<void>;
 }
 
-export type TransactionPhase = 'validating' | 'activating' | 'confirming' | 'restoring' | 'fault' | 'committed';
+export type TransactionPhase = 'validating' | 'activating' | 'confirming' | 'restoring' | 'recovering-target' | 'fault' | 'committed';
 export type PublicStatus = {
   desired: string | null;
   active: string | null;
@@ -43,7 +43,7 @@ type State = {
 };
 type LockOwner = { pid: number; token: string; bootId: string | null; startTime: string | null };
 const digestPattern = /^[a-f0-9]{64}$/;
-const phases = new Set(['validating', 'activating', 'confirming', 'restoring', 'fault', 'committed']);
+const phases = new Set(['validating', 'activating', 'confirming', 'restoring', 'recovering-target', 'fault', 'committed']);
 const emptyState = (): State => ({ version: 1, desired: null, active: null, pending: null, fault: null, checkedAt: null });
 const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 const validId = (value: unknown): value is string => typeof value === 'string' && digestPattern.test(value);
@@ -171,9 +171,10 @@ export class FileTransactionStore {
           !optionalId(pending.previous) || !validId(pending.target) || !phases.has(pending.phase) ||
           value.desired !== pending.target ||
           (pending.phase === 'committed' ? value.active !== pending.target : value.active !== pending.previous &&
-            !((pending.phase === 'fault' || pending.phase === 'restoring') && value.active === null && value.fault === 'RESTORE_FAILED'))) fail('STATE_CORRUPT');
+            !((pending.phase === 'fault' || pending.phase === 'restoring' || pending.phase === 'recovering-target') && value.active === null && value.fault === 'RESTORE_FAILED'))) fail('STATE_CORRUPT');
     }
-    if (value.fault !== null && value.pending?.phase !== 'fault' && value.pending?.phase !== 'restoring') fail('STATE_CORRUPT');
+    if (value.fault !== null && value.pending?.phase !== 'fault' && value.pending?.phase !== 'restoring' && value.pending?.phase !== 'recovering-target') fail('STATE_CORRUPT');
+    if (value.pending?.phase === 'recovering-target' && (value.active !== null || value.fault !== 'RESTORE_FAILED')) fail('STATE_CORRUPT');
     return value;
   }
 
@@ -312,15 +313,19 @@ export class TransactionManager {
       const state = await this.store.readState();
       if (!state.pending || state.pending.id !== expectedTransaction || state.pending.target !== generation ||
           state.desired !== generation) fail('ACTIVE_CONFLICT');
-      if (state.pending.phase !== 'fault' || state.fault !== 'RESTORE_FAILED' || state.active !== null) fail('RECOVERY_REQUIRED');
+      if (!['fault', 'recovering-target'].includes(state.pending.phase) || state.fault !== 'RESTORE_FAILED' || state.active !== null) fail('RECOVERY_REQUIRED');
       const path = await this.store.readCandidate(generation);
       const stopUnconfirmed = async () => {
         try { await this.runtime.restore(null, null); } catch { /* The durable fault remains authoritative. */ }
+        state.pending!.phase = 'fault';
+        await this.store.writeState(state);
       };
       // Retain the durable fault throughout the attempt. An interruption or
       // failure must remain recoverable and must never commit an unready core.
       try { await this.runtime.validate(path); } catch { await stopUnconfirmed(); fail('VALIDATION_FAILED'); }
       await this.store.readCandidate(generation);
+      state.pending.phase = 'recovering-target';
+      await this.store.writeState(state);
       try { await this.runtime.activate(path, generation); } catch { await stopUnconfirmed(); fail('ACTIVATION_FAILED'); }
       let confirmed = false;
       try { confirmed = await this.runtime.confirm(generation) === true; } catch { /* Preserve the fault. */ }
