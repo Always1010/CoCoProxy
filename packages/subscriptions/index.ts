@@ -5,7 +5,7 @@ import { canonicalJson, compileConfig } from '../config/index.ts';
 import type { JsonObject } from '../config/index.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { PrivateFileError, privateDirectory, inspectPrivateDirectory, privateRead, atomicWrite } from '../storage/private-files.ts';
-import { decodeSubscriptionProfile, resolveSubscriptionProfile, SnapshotDecodeError } from './yaml.ts';
+import { decodeNodeSnapshot, decodeSubscriptionProfile, resolveSubscriptionProfile, SnapshotDecodeError } from './yaml.ts';
 import { validateNodeDnsPolicy } from './node-dns.ts';
 
 export type SubscriptionUsage = { upload?: number; download?: number; total?: number; expire?: number };
@@ -337,7 +337,7 @@ export class SubscriptionStore {
     });
   }
 
-  private async download(record: SourceRecord): Promise<RefreshResult> {
+  private async download(record: SourceRecord, nodesOnly = false): Promise<RefreshResult> {
     let response: SnapshotResponse;
     // A cached parent document cannot prove that its remote providers are current.
     const conditional = record.etag !== null && !record.snapshot?.materializedProviders;
@@ -357,7 +357,8 @@ export class SubscriptionStore {
     let decoded: unknown;
     let materializedProviders = false;
     try {
-      if (this.decoder === decodeSubscriptionProfile) {
+      if (nodesOnly) decoded = decodeNodeSnapshot(response.text);
+      else if (this.decoder === decodeSubscriptionProfile) {
         const resolved = await resolveSubscriptionProfile(response.text, async url => {
           try { return await this.client!.fetch(url); }
           catch { throw new TransactionError('SOURCE_FETCH_FAILED'); }
@@ -379,7 +380,7 @@ export class SubscriptionStore {
     }
   }
 
-  async refresh(id: string, expectedRevision: number): Promise<SourceMetadata> {
+  async refresh(id: string, expectedRevision: number, options: { nodesOnly?: boolean } = {}): Promise<SourceMetadata> {
     return this.protect(async () => {
       checkId(id); checkRevision(expectedRevision);
       if (!this.client) fail('SOURCE_CLIENT_REQUIRED');
@@ -387,7 +388,7 @@ export class SubscriptionStore {
       if (!captured) fail('SOURCE_NOT_FOUND');
       if (captured.revision !== expectedRevision) fail('SOURCE_CONFLICT');
       // Download and decoding never occupy the shared transaction lock.
-      const result = await this.download(captured);
+      const result = await this.download(captured, options.nodesOnly === true);
       const committed = await this.files.exclusive(async () => {
         const current = await this.read(id);
         if (!current || current.revision !== captured.revision || current.generation !== captured.generation) fail('SOURCE_CONFLICT');

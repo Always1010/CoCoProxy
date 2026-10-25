@@ -143,6 +143,24 @@ test('conflicting node DNS from multiple sources blocks application without leak
   assert.equal(f.events.length, 0);
 });
 
+test('refresh keeps a local node source as nodes while recovering dedicated DNS from a full upstream file', async t => {
+  const f = await fixture(t);
+  await f.source('provider', { proxies: [{ ...node, server: 'entry.example' }] });
+  const saved = await f.save(settings({ sourceIds: ['provider'] }), 0);
+  const initial = await f.apply(saved, null);
+  const url = [...f.payloads.keys()][0];
+  f.payloads.set(url, JSON.stringify({ proxies: [{ ...node, server: 'entry.example' }], mode: 'Rule',
+    rules: ['GEOIP,CN,DIRECT', 'MATCH,REJECT'], dns: { 'nameserver-policy': { 'entry.example': 'https://resolver.example/EXAMPLE_ONLY_PRIVATE' } } }));
+  const view = await f.view();
+  const sources = await f.call<{ sources: { id: string; revision: number }[] }>('/sources');
+  const refreshed = await f.call<{ kind: string }>('/sources/provider/refresh', 'POST', { expectedRevision: sources.sources[0].revision });
+  assert.equal(refreshed.kind, 'nodes');
+  const active = await f.apply(view.workspace, initial.active);
+  const candidate = await f.candidate(active.active);
+  assert.deepEqual((candidate.dns as JsonObject)['proxy-server-nameserver-policy'], { 'entry.example': ['https://resolver.example/EXAMPLE_ONLY_PRIVATE'] });
+  assert.ok((candidate.rules as string[]).includes('RULE-SET,cocoproxy-domestic-domain-v2,Domestic'));
+});
+
 test('workspace TCP tests bind to the active node and revision without applying configuration', async t => {
   const server = createServer(socket => socket.resume());
   server.listen(0, '127.0.0.1');

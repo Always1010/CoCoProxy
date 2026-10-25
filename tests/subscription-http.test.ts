@@ -42,7 +42,8 @@ async function fixture(run: (origin: string, options: HttpsClientOptions, hits: 
           'subscription-userinfo': 'upload=100; download=200; total=10000; expire=2000000000' });
         res.end(JSON.stringify({ proxies: [{ name: 'Fetched', type: 'socks5', server: '192.0.2.10', port: 1080, password: sensitive }] }));
       }
-      else { res.writeHead(200, { etag: '"v1"', 'content-type': 'application/json' }); res.end(JSON.stringify({ host: req.headers.host, proxies: [] })); }
+      else { res.writeHead(200, { etag: '"v1"', 'content-type': 'application/json' });
+        res.end(JSON.stringify({ host: req.headers.host, userAgent: req.headers['user-agent'], proxies: [] })); }
     });
     await new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(0, '127.0.0.1', resolve); });
     const address = server.address();
@@ -76,6 +77,7 @@ test('HTTPS pins approved DNS, preserves Host and validates a trusted certificat
     assert.equal(result.status, 'modified');
     if (result.status !== 'modified') return;
     assert.equal(JSON.parse(result.text).host, new URL(origin).host);
+    assert.equal(JSON.parse(result.text).userAgent, 'clash.meta CoCoProxy/0.1');
     assert.equal(result.etag, '"v1"');
     assert.equal(resolutions, 1);
     assert.deepEqual(await client.fetch(origin + '/snapshot', { etag: result.etag }), { status: 'not-modified' });
@@ -112,8 +114,10 @@ test('default origin/address policy rejects local targets before connecting', as
 
 test('HTTP subscriptions require an exact explicit origin and retain address, redirect and size restrictions', async t => {
   let hits = 0;
+  const userAgents: unknown[] = [];
   const server = createHttpServer((req, res) => {
     hits++;
+    userAgents.push(req.headers['user-agent']);
     if (req.url === '/redirect') res.writeHead(302, { location: '/nodes' }).end();
     else if (req.url === '/cross') res.writeHead(302, { location: 'http://unapproved.example/nodes' }).end();
     else if (req.url === '/large') res.end('x'.repeat(512));
@@ -138,6 +142,7 @@ test('HTTP subscriptions require an exact explicit origin and retain address, re
   await assert.rejects(client.fetch(origin + '/cross'), code('SOURCE_REDIRECT_DENIED'));
   await assert.rejects(client.fetch(origin + '/large'), code('SOURCE_BODY_LIMIT'));
   assert.equal(hits, 5);
+  assert.deepEqual(userAgents, Array(5).fill('clash.meta CoCoProxy/0.1'));
   assert.throws(() => new HttpsSnapshotClient({ allowedOrigins: [origin] }), code('SOURCE_URL_DENIED'));
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-http-source-'));
   t.after(() => rm(root, { recursive: true, force: true }));

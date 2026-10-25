@@ -10,7 +10,9 @@
 | `decodeNodeSnapshot` | JSON 或单份 Clash YAML 1.2，提取 proxies 及匹配节点的安全 DNS 策略 |
 | `decodeSubscriptionProfile` | 管理服务使用；保留内联节点、策略组、rules、sub-rules 和允许的策略数据，可接受仅有规则／组的配置 |
 
-完整 decoder 剥离监听、controller、DNS、TUN、地理数据下载等部署根字段，通过 `unsupportedFields` 仅披露字段名。保留内容须通过[编译器安全边界](../config/README.md)，拒绝脚本、文件读取、出口覆盖等；不是完整 Mihomo schema 校验，实际应用前仍执行核心 `-t`。
+完整 decoder 剥离运行模式、监听、controller、DNS、TUN、地理数据下载等部署根字段，通过 `unsupportedFields` 仅披露字段名。上游 `mode`（包括常见的 `Rule`）不会覆盖方案控制的规则模式；编译结果固定为 `rule`。保留内容须通过[编译器安全边界](../config/README.md)，拒绝脚本、文件读取、出口覆盖等；不是完整 Mihomo schema 校验，实际应用前仍执行核心 `-t`。
+
+管理服务刷新当前本地方案已使用的 `kind:nodes` 来源时，继续使用节点 decoder，只更新节点和专用 DNS，不将旧节点来源自动升级为订阅分流方案。Store 的受信调用者可通过 `refresh(id, revision, {nodesOnly:true})` 明确选择此行为；完整来源仍使用完整 decoder，既有 GEOIP 等外部地理数据规则的拒绝边界不变。
 
 DNS 仅额外保留实际导入节点服务器域名使用的解析器，存入私有 `nodeDnsPolicy`。从 `dns.nameserver-policy` 和 `dns.proxy-server-nameserver-policy` 提取精确域名或至少含两级标签的 `+.` 后缀，并投影为精确节点主机键；专用 proxy-server 策略优先，同类策略中精确匹配优先，其次选择最长后缀。未知匹配语法、不匹配节点的条目忽略；任何匹配节点的非法解析器都会拒绝本次快照，即使另有优先级更高的有效条目。不会导入监听、fake-ip、hosts 或其他 DNS 和路由副作用。
 
@@ -43,6 +45,8 @@ Provider 请求不带 ETag，无缓存的304拒绝。含 provider 的后续刷�
 ## 下载许可
 
 `HttpsSnapshotClient(options)` 只下载文本。默认精确 `allowedOrigins` 许可 HTTPS，HTTP 需另外的 `allowedHttpOrigins`；仅 HTTP 源可使前者为空。origin 包括协议、主机、端口，不支持通配、userinfo 或 fragment，URL 查询凭据保持私有。网页不能修改部署许可。
+
+HTTP 与 HTTPS 请求均发送 `User-Agent: clash.meta CoCoProxy/0.1`，标明支持 Mihomo 订阅格式及实际下载客户端身份，不宣称特定核心版本。部分订阅服务按客户端格式标识返回不同内容；该标识用于获取含节点专用 DNS 等 Mihomo 配置的正文，后续仍经过相同的安全提取和校验。
 
 | 边界 | 行为 |
 | --- | --- |

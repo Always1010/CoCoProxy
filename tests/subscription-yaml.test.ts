@@ -126,8 +126,18 @@ test('profile decoder preserves complete inline policy and discloses deployment 
     proxies: ['Example'], url: 'https://probe.example/check', interval: 300 }],
     rules: ['DOMAIN,example.test,Automatic', 'MATCH,DIRECT'],
     'sub-rules': { local: ['DOMAIN-SUFFIX,example.test,DIRECT'] }, 'log-level': 'info' };
-  const result = decodeSubscriptionProfile(JSON.stringify({ ...policy, tun: { enable: true }, 'mixed-port': 9999 }));
-  assert.deepEqual(result, { proxies: [node], policy, unsupportedFields: ['mixed-port', 'tun'] });
+  const result = decodeSubscriptionProfile(JSON.stringify({ ...policy, mode: 'Rule', tun: { enable: true }, 'mixed-port': 9999 }));
+  assert.deepEqual(result, { proxies: [node], policy, unsupportedFields: ['mixed-port', 'mode', 'tun'] });
+  for (const mode of ['Rule', 'global', 'direct']) {
+    const decoded = decodeSubscriptionProfile(JSON.stringify({ ...policy, mode })) as { policy: object; unsupportedFields: string[] };
+    assert.deepEqual(decoded.unsupportedFields, ['mode']);
+    assert.equal(Object.hasOwn(decoded.policy, 'mode'), false);
+    const candidate = compileConfig({ schemaVersion: 1, deployment: {
+      mixedPort: 18080, controllerPort: 18081, dnsPort: 18053,
+      controllerSecret: 'synthetic-secret', bootstrapResolvers: ['192.0.2.53'],
+    }, policy: decoded.policy });
+    assert.equal(candidate.config.mode, 'rule');
+  }
   assert.deepEqual(decodeSubscriptionProfile('rules: ["MATCH,DIRECT"]'), { proxies: [], policy: { proxies: [], rules: ['MATCH,DIRECT'] } });
   assert.deepEqual(decodeSubscriptionProfile(JSON.stringify({ proxies: [node] })), { proxies: [node] });
   for (const key of ['proxy-providers', 'rule-providers']) {

@@ -137,7 +137,12 @@ export function createManagementApplication(options: { stateDirectory: string; d
         if (request.method === 'POST' && source[2]) {
           const body = exactRecord(await readJsonBody(request, 128), ['expectedRevision']);
           if (!revision(body.expectedRevision)) throw new ManagementError('INVALID_REVISION');
-          return { ...await subscriptions.refresh(source[1], body.expectedRevision) };
+          const current = await new WorkspaceStore(options.stateDirectory).read();
+          const metadata = await subscriptions.status(source[1]);
+          // Refreshing a node-only source used by the local template must not
+          // silently promote it into a subscription routing scheme.
+          const nodesOnly = current?.mode === 'local' && current.sourceIds.includes(source[1]) && metadata?.kind === 'nodes';
+          return { ...await subscriptions.refresh(source[1], body.expectedRevision, { nodesOnly }) };
         }
       }
       throw new ManagementError('NOT_FOUND', 404);
