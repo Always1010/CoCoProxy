@@ -8,7 +8,7 @@ import { inspectPrivateDirectory, privateRead } from '../storage/private-files.t
 import { FileTransactionStore } from '../transaction/index.ts';
 import { RuntimeError } from './types.ts';
 import { parseAutomaticGatewaySettings, recompileAutomaticGatewayConfig, AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM } from '../gateway/profile.ts';
-import type { RuntimeSettings } from './types.ts';
+import type { RuntimeSettings, RuntimeSelection } from './types.ts';
 
 const digest = /^[a-f0-9]{64}$/;
 const settingKeys = ['schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256', 'systemctlPath', 'unitPath', 'unitSha256', 'serviceUid'];
@@ -134,7 +134,7 @@ export async function loadRuntimeCandidate(input: RuntimeSettings, generation: s
 }
 
 /** Read-only selection lookup; it never creates a missing state directory. */
-export async function readSelection(input: RuntimeSettings): Promise<string | null> {
+export async function readRuntimeSelection(input: RuntimeSettings): Promise<RuntimeSelection | null> {
   const settings = parseRuntimeSettings(input);
   let bytes: string;
   try {
@@ -145,8 +145,19 @@ export async function readSelection(input: RuntimeSettings): Promise<string | nu
     return fail('SELECTION_UNTRUSTED');
   }
   try {
-    const value = plainRecord(JSON.parse(bytes), ['schemaVersion', 'generation']);
+    const value = plainRecord(JSON.parse(bytes), ['schemaVersion', 'generation'], ['hot']);
     if (value.schemaVersion !== 1 || typeof value.generation !== 'string' || !digest.test(value.generation)) fail('SELECTION_UNTRUSTED');
-    return value.generation;
+    if (value.hot !== undefined) {
+      const hot = plainRecord(value.hot, ['pid', 'bootId', 'startTime', 'baseGeneration']);
+      if (typeof hot.pid !== 'number' || !Number.isSafeInteger(hot.pid) || hot.pid <= 1 ||
+          typeof hot.bootId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(hot.bootId) ||
+          typeof hot.startTime !== 'string' || !/^[1-9]\d{0,31}$/.test(hot.startTime) ||
+          typeof hot.baseGeneration !== 'string' || !digest.test(hot.baseGeneration)) fail('SELECTION_UNTRUSTED');
+    }
+    return value as unknown as RuntimeSelection;
   } catch { return fail('SELECTION_UNTRUSTED'); }
+}
+
+export async function readSelection(input: RuntimeSettings): Promise<string | null> {
+  return (await readRuntimeSelection(input))?.generation ?? null;
 }

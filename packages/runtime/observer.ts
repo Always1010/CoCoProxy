@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, readlink, realpath } from 'node:fs/promises';
 import { request } from 'node:http';
-import { loadRuntimeCandidate, parseRuntimeSettings, verifyBinary } from './settings.ts';
+import { loadRuntimeCandidate, parseRuntimeSettings, readRuntimeSelection, verifyBinary } from './settings.ts';
+import { manualSelections, selectionChanges, verifyControllerSelections } from './selections.ts';
 import { RuntimeError } from './types.ts';
-import type { CoreObservation, RuntimeSettings, RuntimeUnitState } from './types.ts';
+import type { CoreInspection, CoreObservation, RuntimeSettings, RuntimeUnitState } from './types.ts';
 
 const fail: (code: string) => never = code => { throw new RuntimeError(code); };
 
@@ -64,6 +65,9 @@ export interface CoreObserverFixtureReader {
   binary: typeof verifyBinary;
   candidate: typeof loadRuntimeCandidate;
   version: typeof probeVersion;
+  selection?: typeof readRuntimeSelection;
+  selections?: typeof verifyControllerSelections;
+  platform?: NodeJS.Platform;
 }
 const permissionDenied = (error: unknown): boolean => ['EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException)?.code ?? '');
 class RestrictedProcAccess extends Error {}
@@ -162,15 +166,16 @@ async function probeVersion(port: number, secret: string): Promise<void> {
 }
 
 const liveReader: CoreObserverFixtureReader = { read: boundedRead, realpath, entries: path => readdir(path), link: readlink,
-  unit: assertManagedUnit, binary: verifyBinary, candidate: loadRuntimeCandidate, version: probeVersion };
+  unit: assertManagedUnit, binary: verifyBinary, candidate: loadRuntimeCandidate, version: probeVersion,
+  selection: readRuntimeSelection, selections: verifyControllerSelections };
 
 async function observe(input: RuntimeSettings, generation: string, unit: RuntimeUnitState,
-  reader: CoreObserverFixtureReader): Promise<CoreObservation> {
+  reader: CoreObserverFixtureReader, inspect = false): Promise<CoreInspection> {
   const settings = parseRuntimeSettings(input);
   if (typeof generation !== 'string' || !/^[a-f0-9]{64}$/.test(generation)) fail('INVALID_RUNTIME_GENERATION');
   const result = (reason: string | null): CoreObservation => ({ ready: reason === null, generation,
     checkedAt: new Date().toISOString(), reason });
-  if (process.platform !== 'linux') return result('UNSUPPORTED_PLATFORM');
+  if ((reader.platform ?? process.platform) !== 'linux') return result('UNSUPPORTED_PLATFORM');
   if (!unit || unit.activeState !== 'active' || unit.subState !== 'running' ||
       !Number.isSafeInteger(unit.mainPid) || unit.mainPid <= 1 || unit.jobPending !== false) return result('CORE_INACTIVE');
   const native = settings.automaticGateway !== undefined;
@@ -184,10 +189,32 @@ async function observe(input: RuntimeSettings, generation: string, unit: Runtime
   let binary: string;
   try { binary = await reader.binary(settings); }
   catch { return result('BINARY_UNTRUSTED'); }
-  const suffix = ['-d', target.home, '-f', target.path];
+  let receipt: Awaited<ReturnType<typeof readRuntimeSelection>>;
+  try { receipt = reader.selection ? await reader.selection(settings) : null; }
+  catch { return result('SELECTION_UNTRUSTED'); }
+  const hot = receipt?.generation === generation ? receipt.hot : undefined;
+  let bootId: string | undefined;
+  if (hot || inspect) {
+    try {
+      bootId = (await reader.read('/proc/sys/kernel/random/boot_id', 128)).toString('utf8').trim();
+      if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(bootId)) return result('PROCESS_UNVERIFIED');
+    } catch { return result('PROCESS_UNVERIFIED'); }
+  }
+  let baseGeneration = generation;
+  let suffix = ['-d', target.home, '-f', target.path];
   let before: Identity;
   try { before = await identity(unit.mainPid, binary, settings.serviceUid, suffix, native, reader); }
-  catch { return result('PROCESS_UNVERIFIED'); }
+  catch {
+    if (!hot || hot.pid !== unit.mainPid || hot.bootId !== bootId) return result('PROCESS_UNVERIFIED');
+    try {
+      const base = await reader.candidate(settings, hot.baseGeneration);
+      if (selectionChanges(base.candidate.config, target.candidate.config) === null) return result('SELECTION_UNTRUSTED');
+      suffix = ['-d', base.home, '-f', base.path];
+      before = await identity(unit.mainPid, binary, settings.serviceUid, suffix, native, reader);
+      if (before.startTime !== hot.startTime) return result('PROCESS_UNVERIFIED');
+      baseGeneration = hot.baseGeneration;
+    } catch { return result('PROCESS_UNVERIFIED'); }
+  }
   let restricted = before.executable === null;
   const controllerAcceptable = async (process: Identity): Promise<boolean> => {
     try { return await ownsController(unit.mainPid, target.controller.port, reader); }
@@ -200,17 +227,26 @@ async function observe(input: RuntimeSettings, generation: string, unit: Runtime
   catch { return result('CONTROLLER_NOT_OWNED'); }
   try { await reader.version(target.controller.port, target.controller.secret); }
   catch { return result('CONTROLLER_UNREADY'); }
+  if (hot) {
+    try {
+      const selections = manualSelections(target.candidate.config);
+      if (selections === null || !reader.selections) return result('SELECTION_UNTRUSTED');
+      await reader.selections(target.controller.port, target.controller.secret, selections);
+    } catch { return result('CONTROLLER_SELECTION_MISMATCH'); }
+  }
   try {
     const after = await identity(unit.mainPid, binary, settings.serviceUid, suffix, native, reader);
     if (after.startTime !== before.startTime || after.executable !== before.executable ||
         after.nativeCapabilities !== before.nativeCapabilities || await reader.realpath(settings.binaryPath) !== binary ||
-        !await controllerAcceptable(after)) return result('PROCESS_CHANGED');
+        !await controllerAcceptable(after) || (bootId !== undefined &&
+          (await reader.read('/proc/sys/kernel/random/boot_id', 128)).toString('utf8').trim() !== bootId)) return result('PROCESS_CHANGED');
     if (native) {
       await reader.unit(settings, unit);
       if (restricted && await reader.binary(settings) !== binary) return result('PROCESS_CHANGED');
     }
   } catch { return result('PROCESS_CHANGED'); }
-  return { ...result(null), evidence: restricted ? 'native-unit-and-controller' : 'proc-exe-and-fd' };
+  return { ...result(null), evidence: restricted ? 'native-unit-and-controller' : 'proc-exe-and-fd',
+    ...(inspect ? { process: { pid: unit.mainPid, bootId: bootId!, startTime: before.startTime, baseGeneration } } : {}) };
 }
 
 /** Core readiness only. Native restricted evidence never proves /proc exe or FD ownership. */
@@ -218,8 +254,18 @@ export async function observeCore(input: RuntimeSettings, generation: string, un
   return observe(input, generation, unit, liveReader);
 }
 
+/** Private activation evidence: same checks as public readiness, plus a boot-bound identity. */
+export async function inspectCore(input: RuntimeSettings, generation: string, unit: RuntimeUnitState): Promise<CoreInspection> {
+  return observe(input, generation, unit, liveReader, true);
+}
+
 /** Synthetic readers are code-only and cannot be supplied through deployment JSON. */
 export async function observeCoreFixture(input: RuntimeSettings, generation: string, unit: RuntimeUnitState,
   reader: CoreObserverFixtureReader): Promise<CoreObservation & { scope: 'fixture' }> {
   return { ...await observe(input, generation, unit, reader), scope: 'fixture' };
+}
+
+export async function inspectCoreFixture(input: RuntimeSettings, generation: string, unit: RuntimeUnitState,
+  reader: CoreObserverFixtureReader): Promise<CoreInspection & { scope: 'fixture' }> {
+  return { ...await observe(input, generation, unit, reader, true), scope: 'fixture' };
 }

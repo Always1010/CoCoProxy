@@ -1,14 +1,15 @@
 import { lstat, realpath, unlink } from 'node:fs/promises';
-import { posix } from 'node:path';
+import { basename, posix } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { validateWithMihomo } from '../mihomo/validator.ts';
 import { atomicWrite, inspectPrivateDirectory, syncDirectory } from '../storage/private-files.ts';
 import type { RuntimeAdapter } from '../transaction/index.ts';
 import { runRuntimeCommand } from './command.ts';
-import { assertManagedUnit, observeCore } from './observer.ts';
-import { loadRuntimeCandidate, parseRuntimeSettings, readSelection, verifyBinary } from './settings.ts';
+import { assertManagedUnit, inspectCore, observeCore } from './observer.ts';
+import { loadRuntimeCandidate, parseRuntimeSettings, readRuntimeSelection, verifyBinary } from './settings.ts';
+import { selectionChanges, setControllerSelection } from './selections.ts';
 import { RuntimeError } from './types.ts';
-import type { CoreObservation, RuntimeSettings, RuntimeUnitState } from './types.ts';
+import type { CoreObservation, RuntimeSettings, RuntimeSelection, RuntimeUnitState } from './types.ts';
 
 const unitName = 'coproxy-mihomo.service';
 const properties = ['LoadState', 'ActiveState', 'SubState', 'MainPID', 'Job', 'FragmentPath', 'DropInPaths', 'NeedDaemonReload', 'User'];
@@ -39,6 +40,17 @@ export interface RuntimeDependencies {
   validate: typeof validateWithMihomo;
   observe: typeof observeCore;
   verifySystemctl: (settings: RuntimeSettings) => Promise<string>;
+  inspect: typeof inspectCore;
+  load: typeof loadRuntimeCandidate;
+  readSelection: typeof readRuntimeSelection;
+  writeSelection: (settings: RuntimeSettings, selection: RuntimeSelection) => Promise<void>;
+  setSelection: typeof setControllerSelection;
+  platform: NodeJS.Platform;
+}
+
+async function writeSelection(settings: RuntimeSettings, selection: RuntimeSelection): Promise<void> {
+  await inspectPrivateDirectory(settings.stateDirectory);
+  await atomicWrite(settings.stateDirectory, 'selection.json', JSON.stringify(selection));
 }
 
 async function verifySystemctl(settings: RuntimeSettings): Promise<string> {
@@ -57,11 +69,13 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
   constructor(settings: RuntimeSettings, dependencies: Partial<RuntimeDependencies> = {}) {
     this.settings = Object.freeze(parseRuntimeSettings(settings));
     this.deps = { command: runRuntimeCommand, assertUnit: assertManagedUnit, binary: verifyBinary,
-      validate: validateWithMihomo, observe: observeCore, verifySystemctl, ...dependencies };
+      validate: validateWithMihomo, observe: observeCore, verifySystemctl, inspect: inspectCore,
+      load: loadRuntimeCandidate, readSelection: readRuntimeSelection, writeSelection,
+      setSelection: setControllerSelection, platform: process.platform, ...dependencies };
   }
 
   private async command(action: string, extra: string[] = []): Promise<string> {
-    if (process.platform !== 'linux') throw new RuntimeError('RUNTIME_PLATFORM_UNSUPPORTED');
+    if (this.deps.platform !== 'linux') throw new RuntimeError('RUNTIME_PLATFORM_UNSUPPORTED');
     const binary = await this.deps.verifySystemctl(this.settings);
     return this.deps.command(binary, ['--no-ask-password', '--no-pager', action, ...extra, unitName]);
   }
@@ -73,8 +87,8 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
   }
 
   private async candidate(path: string, generation?: string) {
-    const id = generation ?? posix.basename(path, '.json');
-    const loaded = await loadRuntimeCandidate(this.settings, id);
+    const id = generation ?? basename(path, '.json');
+    const loaded = await this.deps.load(this.settings, id);
     if (loaded.path !== path) throw new RuntimeError('CANDIDATE_UNTRUSTED');
     return loaded;
   }
@@ -100,13 +114,45 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
   }
 
   private async select(generation: string): Promise<void> {
-    await inspectPrivateDirectory(this.settings.stateDirectory);
-    await atomicWrite(this.settings.stateDirectory, 'selection.json', JSON.stringify({ schemaVersion: 1, generation }));
+    await this.deps.writeSelection(this.settings, { schemaVersion: 1, generation });
+  }
+
+  private async hotSelect(target: Awaited<ReturnType<typeof loadRuntimeCandidate>>, generation: string): Promise<boolean> {
+    const selected = await this.deps.readSelection(this.settings);
+    if (!selected) return false;
+    const previous = await this.deps.load(this.settings, selected.generation);
+    const changes = selectionChanges(previous.candidate.config, target.candidate.config);
+    if (changes === null) return false;
+    const unit = await this.unit();
+    const before = await this.deps.inspect(this.settings, selected.generation, unit);
+    if (!before.ready || !before.process) return false;
+    // The physical process may span many committed selections. Keep one fixed
+    // base candidate rather than trusting an unbounded receipt ancestry.
+    const base = await this.deps.load(this.settings, before.process.baseGeneration);
+    if (selectionChanges(base.candidate.config, target.candidate.config) === null) return false;
+    const deadline = performance.now() + 3000;
+    for (let offset = 0; offset < changes.length; offset += 4) {
+      if (performance.now() >= deadline) throw new RuntimeError('RUNTIME_HOT_SELECTION_TIMEOUT');
+      // Settle every request before rollback: a late PUT must never overwrite
+      // choices in the restored predecessor's newly started controller.
+      const results = await Promise.allSettled(changes.slice(offset, offset + 4).map(change =>
+        this.deps.setSelection(target.controller.port, target.controller.secret, change.group, change.name)));
+      if (results.some(result => result.status === 'rejected')) throw new RuntimeError('CONTROLLER_SELECTION_FAILED');
+    }
+    await this.deps.writeSelection(this.settings, { schemaVersion: 1, generation, hot: before.process });
+    const after = await this.deps.inspect(this.settings, generation, await this.unit());
+    if (!after.ready || !after.process || after.process.pid !== before.process.pid ||
+        after.process.bootId !== before.process.bootId || after.process.startTime !== before.process.startTime ||
+        after.process.baseGeneration !== before.process.baseGeneration) {
+      throw new RuntimeError('RUNTIME_HOT_SELECTION_UNVERIFIED');
+    }
+    return true;
   }
 
   async activate(path: string, generation: string): Promise<void> {
-    await this.candidate(path, generation);
+    const target = await this.candidate(path, generation);
     await this.deps.binary(this.settings);
+    if (await this.hotSelect(target, generation)) return;
     await this.stopAndConfirm();
     await this.select(generation);
     try { await this.command('start'); }
@@ -118,7 +164,7 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
 
   async observe(generation: string): Promise<CoreObservation> {
     const unit = await this.unit();
-    if (await readSelection(this.settings) !== generation) return { ready: false, generation,
+    if ((await this.deps.readSelection(this.settings))?.generation !== generation) return { ready: false, generation,
       checkedAt: new Date().toISOString(), reason: 'SELECTION_MISMATCH' };
     return this.deps.observe(this.settings, generation, unit);
   }

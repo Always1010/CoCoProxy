@@ -38,3 +38,22 @@ export interface CoreObservation {
   /** Native fallback does not prove /proc executable or controller FD ownership. */
   evidence?: 'proc-exe-and-fd' | 'native-unit-and-controller';
 }
+
+/** Private process binding; never included in the public readiness response. */
+export interface RuntimeProcessIdentity {
+  pid: number;
+  bootId: string;
+  startTime: string;
+  baseGeneration: string;
+}
+
+export interface RuntimeSelection {
+  schemaVersion: 1;
+  generation: string;
+  /** One physical process only, with no chain of historical generations. */
+  hot?: RuntimeProcessIdentity;
+}
+
+export interface CoreInspection extends CoreObservation {
+  process?: RuntimeProcessIdentity;
+}
