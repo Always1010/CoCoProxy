@@ -5,6 +5,7 @@ import { SubscriptionStore, SubscriptionError } from '../subscriptions/index.ts'
 import { WorkspaceStore, WorkspaceError, initialWorkspace, parseWorkspaceSettings, type WorkspaceSettings, type RoutingOverrides, type Workspace } from './workspace.ts';
 import { ManagementError, exactRecord, readJsonBody } from './http.ts';
 import { describeTcpNode, probeTcpEndpoint, tcpEndpoint } from './tcp-delay.ts';
+import { memoizePolicyCompiler } from './shared-work.ts';
 
 type Plan = { workspace: Workspace; policy: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string };
 const asGroups = (policy: JsonObject): JsonObject[] => Array.isArray(policy['proxy-groups']) ? policy['proxy-groups'].filter((value): value is JsonObject => !!value && typeof value === 'object' && !Array.isArray(value)) : [];
@@ -74,6 +75,8 @@ export function createWorkspaceApplication(options: {
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
   const { subscriptions, store, manager } = options;
+  const compile = memoizePolicyCompiler(options.compile);
+  const building = new Map<string, Promise<Plan>>();
   let tcpProbes = 0;
 
   async function load(): Promise<Workspace> {
@@ -106,7 +109,16 @@ export function createWorkspaceApplication(options: {
     return settings;
   }
 
-  async function build(workspace: Workspace, repair = false): Promise<Plan> {
+  function build(workspace: Workspace, repair = false): Promise<Plan> {
+    const key = canonicalJson({ workspace: workspace as unknown as JsonObject, repair });
+    const existing = building.get(key);
+    if (existing) return existing;
+    const pending = buildPlan(workspace, repair).finally(() => { building.delete(key); });
+    building.set(key, pending);
+    return pending;
+  }
+
+  async function buildPlan(workspace: Workspace, repair: boolean): Promise<Plan> {
     const captures: Plan['captures'] = [];
     async function snapshot(id: string) {
       const metadata = await subscriptions.status(id);
@@ -153,7 +165,7 @@ export function createWorkspaceApplication(options: {
   async function apply(workspace: Workspace, expectedActive: unknown) {
     if (!(expectedActive === null || (typeof expectedActive === 'string' && /^[a-f0-9]{64}$/.test(expectedActive)))) invalid();
     const plan = await build(workspace);
-    const candidate = options.compile(plan.policy);
+    const candidate = compile(plan.policy);
     // Bind the UI's exact settings and snapshots before staging; never recapture
     // an unrelated editor's latest settings as though the caller approved them.
     await store.stage(candidate);
@@ -177,7 +189,7 @@ export function createWorkspaceApplication(options: {
     const status = await store.status();
     const sources = await subscriptions.list();
     let plan: Plan | undefined, candidate: Candidate | undefined, error: string | undefined;
-    try { plan = await build(workspace); candidate = options.compile(plan.policy); }
+    try { plan = await build(workspace); candidate = compile(plan.policy); }
     catch (cause) {
       error = cause instanceof WorkspaceError || cause instanceof SubscriptionError || cause instanceof ConfigError ? cause.code : 'WORKSPACE_UNAVAILABLE';
       // Invalid selections/rules remain blocked for application, but retain
@@ -226,7 +238,7 @@ export function createWorkspaceApplication(options: {
         if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
         if (!body.expectedActive || (await store.status()).active !== body.expectedActive) invalid('ACTIVE_CONFLICT');
         const plan = await build(current);
-        if (options.compile(plan.policy).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
+        if (compile(plan.policy).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
         const node = asNodes(plan.policy).find(node => node.name === body.name);
         if (!node || describeTcpNode(node).fingerprint !== body.fingerprint) invalid('TCP_NODE_CONFLICT');
         const endpoint = tcpEndpoint(node);
@@ -257,7 +269,7 @@ export function createWorkspaceApplication(options: {
       if (typeof body.group !== 'string' || typeof body.name !== 'string') invalid();
       if ((await store.status()).active !== body.expectedActive) invalid('ACTIVE_CONFLICT');
       const plan = await build(current);
-      if (options.compile(plan.policy).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
+      if (compile(plan.policy).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
       const group = asGroups(plan.policy).find(group => group.name === body.group);
       if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(body.name)) invalid('GROUP_SELECTION_CONFLICT');
       if (group.type !== 'select') invalid('GROUP_SELECTION_UNSUPPORTED');
@@ -266,7 +278,7 @@ export function createWorkspaceApplication(options: {
       edits.selections[body.group] = body.name;
       if (current.mode !== 'local') settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] = edits;
       const next = { ...settings, revision: current.revision + 1 };
-      options.compile((await build(next)).policy);
+      compile((await build(next)).policy);
       const saved = await preferences.save(settings, current.revision);
       return apply(saved, body.expectedActive);
     }

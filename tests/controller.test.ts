@@ -50,6 +50,42 @@ function client() {
   return { frames, closes, send: (text: string) => { frames.push(text); }, close: (code: number, reason: string) => { closes.push({ code, reason }); } };
 }
 
+test('concurrent reads share only the unfinished runtime verification and recheck each generation', async t => {
+  const f = await fixture(t);
+  const target = f.options.target;
+  let calls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const proxy = createControllerProxy({ ...f.options, target: async () => { calls++; await gate; return target(); } });
+  const first = proxy.fetch(request('/version'));
+  const second = proxy.fetch(request('/proxies'));
+  await until(() => calls === 1);
+  release();
+  assert.deepEqual((await Promise.all([first, second])).map(response => response.status), [200, 200]);
+  assert.equal(calls, 1);
+  f.changeGeneration();
+  assert.equal((await proxy.fetch(request('/version'))).headers.get('x-coproxy-generation'), 'generation-2');
+  assert.equal(calls, 2);
+});
+
+test('probe admission is bounded across clients and cancellation releases capacity', async t => {
+  const f = await fixture(t, (req, response) => {
+    if (req.url === '/version') response.end('{}');
+    // Delay responses until their requesting clients abort.
+  });
+  const proxy = createControllerProxy({ ...f.options, allowedProbeOrigins: ['https://probe.example'] });
+  const abort = new AbortController();
+  const url = origin + '/proxies/node/delay?url=https%3A%2F%2Fprobe.example%2Fping&timeout=1000';
+  const pending = Array.from({ length: 16 }, () => proxy.fetch(new Request(url, { signal: abort.signal })));
+  await until(() => f.calls.length === 16);
+  assert.equal((await proxy.fetch(new Request(url))).status, 429);
+  assert.equal((await proxy.fetch(request('/version'))).status, 200);
+  abort.abort();
+  await Promise.all(pending);
+  const cancelled = new AbortController(); cancelled.abort();
+  assert.notEqual((await proxy.fetch(new Request(url, { signal: cancelled.signal }))).status, 429);
+});
+
 test('HTTP reads redact nested credentials and actual secrets while isolating upstream and downstream headers', async t => {
   const f = await fixture(t, (_req, res) => {
     res.setHeader('set-cookie', 'upstream=private'); res.setHeader('location', '/private');
