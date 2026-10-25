@@ -8,9 +8,15 @@
 
 默认 decoder 是 `JSON.parse`，也可以显式注入同步 decoder。解码结果必须严格为 `{proxies: JsonObject[]}`。完整订阅里的规则、策略组、provider、脚本、部署及未知顶层字段均返回 `SNAPSHOT_UNSUPPORTED`；节点再通过 `compileConfig` 的离线安全边界，拒绝远程 provider、文件读取、脚本或出口覆盖等字段。校验使用合成部署参数与 `MATCH,REJECT` 策略，不启动网络核心。它不是完整的 Mihomo 协议 schema 校验；真正应用前仍须验证目标核心配置。
 
-`yaml.ts` 提供两种显式 decoder，使用锁定的 yaml 2.9.0 接受 JSON 或单份 Clash YAML 1.2。`decodeNodeSnapshot` 保留兼容行为：只提取 proxies，其他根字段作为数据解析后丢弃。`decodeSubscriptionProfile` 保留完整内联 `proxies`、`proxy-groups`、`rules`、`sub-rules` 及编译器允许的其他策略数据；允许仅有规则或策略组的配置。部署根字段（包括监听、控制器、DNS、TUN、地理数据下载设置等）明确剥离，并通过 `unsupportedFields` 仅披露字段名。保留策略整体通过 `compileConfig` 的安全边界；脚本、文件读取、出口覆盖、远程数据规则等仍拒绝。`proxy-providers`、`rule-providers` 明确返回 `SNAPSHOT_UNSUPPORTED`，不会静默丢弃，也不会自动发起额外下载。纯内联节点保留旧摘要和表示。
+`yaml.ts` 提供两种显式 decoder，使用锁定的 yaml 2.9.0 接受 JSON 或单份 Clash YAML 1.2。`decodeNodeSnapshot` 保留兼容行为：只提取 proxies，其他根字段作为数据解析后丢弃。`decodeSubscriptionProfile` 保留完整内联 `proxies`、`proxy-groups`、`rules`、`sub-rules` 及编译器允许的其他策略数据；允许仅有规则或策略组的配置。部署根字段（包括监听、控制器、DNS、TUN、地理数据下载设置等）明确剥离，并通过 `unsupportedFields` 仅披露字段名。保留策略整体通过 `compileConfig` 的安全边界；脚本、文件读取、出口覆盖等仍拒绝。同步 decoder 遇到 provider 返回 `SNAPSHOT_UNSUPPORTED`；显式启用它的 `SubscriptionStore` 会改用下述异步展开助手。纯内联节点保留旧摘要和表示。
 
 两个 decoder 均拒绝 URI/base64、重复键、多文档、自定义标签和循环引用；允许有限的普通锚点并复制为独立 JSON。输入限 1 MiB、深度 48、语法与展开值最多 100,000、别名最多 50、展开字节最多 4 MiB。保存快照不等于协议可用；应用前仍须由目标核心验证。`SubscriptionStore` 只在显式传入 `decodeSubscriptionProfile` 时接受完整策略，默认 JSON decoder 和其他注入 decoder 继续严格要求节点结构。测试命令为 `npm run test:subscription-yaml`。
+
+`resolveSubscriptionProfile(text, fetch)` 将 `http` 或 `inline` 的 `proxy-providers` 和 `rule-providers` 展开成离线策略，返回 `{value, materializedProviders}`。Store 只把既有 `SnapshotClient.fetch` 传入；每个下载仍经过同一精确 origin、地址、重定向、大小和超时许可。HTTP provider 的 `path` 仅作为上游缓存提示被移除，不读取或写入该路径；`type: file`、仅有路径、嵌套 provider、自定义请求头和下载代理均明确拒绝。最多 16 个 provider，原始父配置与所有下载合计最多 4 MiB；单个下载仍限 1 MiB，展开后的 JSON 及规则也有独立的 4 MiB、数量和深度限制。provider 请求不带 ETag，缺少本地缓存的 304 明确拒绝；任何失败均保留上一次已接受快照和 ETag，不接受部分结果。
+
+节点 provider 的远端正文必须为 `{proxies: [...]}`，内联正文使用 `payload`；节点统一通过原有编译器安全校验。策略组 `use` 按 provider 顺序转换为 `proxies`，保留原有显式成员并去重，支持 `include-all`、`include-all-proxies`、`include-all-providers`、包含／排除过滤和 `exclude-type`。provider 的节点 `override` 可应用安全节点字段与名称前后缀；覆盖后的节点仍受同一安全边界约束。过滤表达式使用受限正则子集：最多 256 字符，允许普通字符、字符类、锚点、交替和每个分支至多一个 `.*`，不允许分组、反向引用、其他量词或嵌套重复；超出范围明确拒绝，避免不受控回溯。只有提供自动成员或 `use` 的组才展开过滤。provider 的定期刷新和独立健康检查由这次静态展开替代；组本身的检查设置保留，之后须显式刷新来源才能更新 provider 节点。
+
+规则 provider 支持 `domain`、`ipcidr`、`classical`，可用 YAML `{payload: [...]}`、`format: text` 的逐行正文，或内联 `payload`。逐个展开 `rules` 和 `sub-rules` 中的 `RULE-SET,name,target[,no-resolve]`，保持引用位置、provider 内容顺序、策略目标及 IP 规则的 `no-resolve`。域名支持精确名称与 `+.` 后缀形式；CIDR 支持 IPv4/IPv6；classical 支持普通单条件匹配器及 IP 规则的 `no-resolve`。MRS、域名通配表达式、classical 复合匹配、嵌套 RULE-SET、未知 provider 引用、GEOIP/GEOSITE/IP-ASN 和脚本规则均明确拒绝，不能靠丢弃不支持项接受配置。
 
 公开 API：
 
@@ -23,6 +29,8 @@
 
 刷新失败保留上次成功快照和 ETag。URL 未变时，调用方可继续使用该快照；URL 变化后，旧字节仍物理保留，但 `snapshotCurrent` 为 false，`snapshot()` 拒绝输出它。304 仅在当前定义已有快照且请求带有已接受 ETag 时有效，不能使新来源或更换 URL 后的旧快照成为当前数据。304 更新 attempt 和来源 revision，不改变原快照的 sourceRevision。
 
-每个来源保存为私有 `subscriptions/<id>.json` 原子记录，文件最多 4 MiB，快照还受配置编译器的深度、数量和安全约束。SHA-256 覆盖 `canonicalJson({proxies, policy?, unsupportedFields?})` 的 UTF-8 字节，两个可选字段缺失时不参与序列化，因此旧节点摘要不变。版本仍为 1，既有记录可直接读取；新增的名称、用量、策略与防竞态代际字段都是可选字段。所有状态和快照读取都检查摘要与结构，损坏时拒绝，不能用刷新悄悄覆盖。摘要用于完整性检查，不构成对私有存储写入者的认证。POSIX 目录和文件分别要求当前用户拥有的 0700／0600 权限，拒绝符号链接；Windows 需要调用方提供受保护的父目录 ACL。只读 API 不创建目录。
+含 provider 的快照在后续刷新时不发送父文档 ETag，而是重新获取父文档及全部 provider，避免父文档 304 掩盖独立 provider 的内容变化。父文档也必须返回正文；没有条件请求的 304 不能接受。
+
+每个来源保存为私有 `subscriptions/<id>.json` 原子记录，文件最多 4 MiB，快照还受配置编译器的深度、数量和安全约束。SHA-256 覆盖 `canonicalJson({proxies, policy?, unsupportedFields?, materializedProviders?})` 的 UTF-8 字节，可选字段缺失时不参与序列化，因此旧节点摘要不变。`materializedProviders: true` 仅记录已经静态展开 provider 以及需要完整重新下载的内部状态，不存 provider URL 或路径。版本仍为 1，既有记录可直接读取；新增的名称、用量、策略与防竞态代际字段都是可选字段。所有状态和快照读取都检查摘要与结构，损坏时拒绝，不能用刷新悄悄覆盖。摘要用于完整性检查，不构成对私有存储写入者的认证。POSIX 目录和文件分别要求当前用户拥有的 0700／0600 权限，拒绝符号链接；Windows 需要调用方提供受保护的父目录 ACL。只读 API 不创建目录。
 
 刷新错误码为 `SOURCE_FETCH_FAILED`、`SNAPSHOT_DECODE_FAILED`、`SNAPSHOT_UNSUPPORTED`、`SNAPSHOT_INVALID`、`SNAPSHOT_LIMIT`、`SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT`。定义及存储错误包括 `INVALID_SOURCE_INPUT`、`INVALID_SOURCE_ID`、`INVALID_SOURCE_URL`、`INVALID_SOURCE_NAME`、`INVALID_SOURCE_REVISION`、`SOURCE_CONFLICT`、`SOURCE_LIMIT`、`SOURCE_PENDING`、`SOURCE_NOT_FOUND`、`SOURCE_CORRUPT`，以及底层固定存储错误。所有错误只含固定 code，不透传源异常。

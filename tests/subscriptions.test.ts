@@ -361,3 +361,102 @@ test('pre-profile version-one records remain readable and retain their original 
   await store.configure({ id: 'primary', name: 'Legacy renamed' }, 2);
   assert.equal((await store.snapshot('primary')).sha256, accepted.snapshotDigest);
 });
+
+test('restricted provider downloads materialize group membership and rule order into one offline profile', async t => {
+  const { root } = await fixture(t);
+  const proxy = (name: string) => ({ name, type: 'socks5', server: '192.0.2.1', port: 1080 });
+  const profile = {
+    proxies: [proxy('base')],
+    'proxy-providers': { remote: { type: 'http', url: 'https://provider.example/nodes', path: './cache/nodes.yaml' },
+      embedded: { type: 'inline', payload: [proxy('HK-two')], override: { udp: true } } },
+    'proxy-groups': [
+      { name: 'Choose', type: 'select', proxies: ['DIRECT'], use: ['remote', 'embedded'], filter: '^HK' },
+      { name: 'All', type: 'select', 'include-all': true, 'exclude-filter': '^US', 'exclude-type': 'ss|http' },
+    ],
+    'rule-providers': {
+      domains: { type: 'http', behavior: 'domain', url: 'https://provider.example/domains' },
+      cidrs: { type: 'http', behavior: 'ipcidr', format: 'text', url: 'https://provider.example/cidrs' },
+      classical: { type: 'inline', behavior: 'classical', payload: ['DOMAIN-SUFFIX,internal.test', 'IP-CIDR,192.0.2.0/24,no-resolve'] },
+    },
+    rules: ['DOMAIN,first.test,DIRECT', 'RULE-SET,domains,Choose', 'RULE-SET,cidrs,REJECT,no-resolve',
+      'RULE-SET,classical,All', 'MATCH,DIRECT'],
+    'sub-rules': { nested: ['RULE-SET,classical,Choose', 'MATCH,REJECT'] },
+  };
+  const replies = new Map<string, string>([
+    [sourceUrl, JSON.stringify(profile)],
+    ['https://provider.example/nodes', JSON.stringify({ proxies: [proxy('HK-one'), proxy('US-one')] })],
+    ['https://provider.example/domains', 'payload:\n  - +.example.test\n  - exact.test\n'],
+    ['https://provider.example/cidrs', '# synthetic networks\n192.0.2.0/24\n2001:db8::/32\n'],
+  ]);
+  const calls: { url: string; previous?: { etag?: string } }[] = [];
+  const client: SnapshotClient = { fetch: async (url, previous) => {
+    calls.push({ url, previous });
+    const body = replies.get(url);
+    if (body === undefined) throw new Error('unapproved ' + privateValue);
+    return { status: 'modified', text: body, etag: '"provider-version"' };
+  } };
+  const store = new SubscriptionStore(root, client, decodeSubscriptionProfile);
+  await store.configure({ id: 'primary', url: sourceUrl }, 0);
+  await store.refresh('primary', 1);
+  const snapshot = await store.snapshot('primary');
+  assert.deepEqual(snapshot.proxies.map(node => node.name), ['base', 'HK-one', 'US-one', 'HK-two']);
+  assert.deepEqual(snapshot.policy!['proxy-groups'], [
+    { name: 'Choose', type: 'select', proxies: ['DIRECT', 'HK-one', 'HK-two'] },
+    { name: 'All', type: 'select', proxies: ['base', 'HK-one', 'HK-two'] },
+  ]);
+  assert.deepEqual(snapshot.policy!.rules, ['DOMAIN,first.test,DIRECT', 'DOMAIN-SUFFIX,example.test,Choose',
+    'DOMAIN,exact.test,Choose', 'IP-CIDR,192.0.2.0/24,REJECT,no-resolve', 'IP-CIDR6,2001:db8::/32,REJECT,no-resolve',
+    'DOMAIN-SUFFIX,internal.test,All', 'IP-CIDR,192.0.2.0/24,All,no-resolve', 'MATCH,DIRECT']);
+  assert.deepEqual(snapshot.policy!['sub-rules'], { nested: ['DOMAIN-SUFFIX,internal.test,Choose',
+    'IP-CIDR,192.0.2.0/24,Choose,no-resolve', 'MATCH,REJECT'] });
+  assert.equal(snapshot.policy!['proxy-providers'], undefined);
+  assert.equal(snapshot.policy!['rule-providers'], undefined);
+  assert.equal(snapshot.proxies.at(-1)!.udp, true);
+  assert.deepEqual(await new SubscriptionStore(root).snapshot('primary'), snapshot);
+  assert.deepEqual(calls.map(call => call.url), [sourceUrl, 'https://provider.example/nodes', 'https://provider.example/domains', 'https://provider.example/cidrs']);
+  // Refresh cannot trust the parent's ETag while provider content can change.
+  await store.refresh('primary', 2);
+  assert.equal(calls[4].previous, undefined);
+  assert.ok(calls.every(call => call.previous === undefined));
+});
+
+test('provider fetch policy, unavailable cache and unsupported forms retain the accepted snapshot', async t => {
+  const { root } = await fixture(t);
+  let document = text;
+  let provider: SnapshotResponse | Error = new Error('denied ' + privateValue);
+  let fetches = 0;
+  const store = new SubscriptionStore(root, { fetch: async url => {
+    if (url === sourceUrl) return { status: 'modified', text: document };
+    fetches++;
+    if (provider instanceof Error) throw provider;
+    return provider;
+  } }, decodeSubscriptionProfile);
+  await store.configure({ id: 'primary', url: sourceUrl }, 0);
+  await store.refresh('primary', 1);
+  const accepted = await store.snapshot('primary');
+  const remote = { type: 'http', url: 'https://unapproved.example/nodes' };
+  document = JSON.stringify({ 'proxy-providers': { remote }, 'proxy-groups': [{ name: 'Choose', type: 'select', use: ['remote'] }] });
+  await assert.rejects(store.refresh('primary', 2), code('SOURCE_FETCH_FAILED'));
+  assert.deepEqual(await store.snapshot('primary'), accepted);
+  provider = { status: 'not-modified' };
+  await assert.rejects(store.refresh('primary', 3), code('SNAPSHOT_UNSUPPORTED'));
+  assert.deepEqual(await store.snapshot('primary'), accepted);
+  let revision = 4;
+  for (const profile of [
+    { 'proxy-providers': { remote: { type: 'file', path: './private.yaml' } } },
+    { 'rule-providers': { remote: { type: 'http', behavior: 'domain', format: 'mrs', url: remote.url } } },
+    { 'rule-providers': { remote: { type: 'inline', behavior: 'classical', payload: ['RULE-SET,unknown'] } }, rules: ['RULE-SET,remote,DIRECT'] },
+    { 'proxy-providers': {}, 'proxy-groups': [{ name: 'Choose', type: 'select', use: ['unknown'] }] },
+    { 'proxy-providers': { remote: { type: 'inline', payload: [], filter: '(nested+)+' } } },
+    { 'rule-providers': {}, rules: ['GEOIP,CN,DIRECT'] },
+  ]) {
+    document = JSON.stringify(profile);
+    await assert.rejects(store.refresh('primary', revision++), code('SNAPSHOT_UNSUPPORTED'));
+    assert.deepEqual(await store.snapshot('primary'), accepted);
+  }
+  document = JSON.stringify({ 'proxy-providers': { remote: { type: 'inline',
+    payload: [{ name: 'unsafe', type: 'ss', 'interface-name': privateValue }] } } });
+  await assert.rejects(store.refresh('primary', revision++), code('SNAPSHOT_INVALID'));
+  assert.deepEqual(await store.snapshot('primary'), accepted);
+  assert.equal(fetches, 2);
+});

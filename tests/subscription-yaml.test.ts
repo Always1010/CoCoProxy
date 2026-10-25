@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeNodeSnapshot, decodeSubscriptionProfile, SnapshotDecodeError } from '../packages/subscriptions/yaml.ts';
+import { decodeNodeSnapshot, decodeSubscriptionProfile, resolveSubscriptionProfile, SnapshotDecodeError } from '../packages/subscriptions/yaml.ts';
 import { compileConfig } from '../packages/config/index.ts';
 
 const node = { name: 'Example', type: 'ss', server: '192.0.2.10', port: 443, cipher: 'aes-128-gcm', password: 'synthetic-password' };
@@ -134,4 +134,24 @@ test('profile decoder preserves complete inline policy and discloses deployment 
     assert.throws(() => decodeSubscriptionProfile(JSON.stringify({ proxies: [node], [key]: {} })), { code: 'SNAPSHOT_UNSUPPORTED' });
   }
   assert.throws(() => decodeSubscriptionProfile('proxies: []\nproxies: []'), { code: 'SNAPSHOT_DECODE_FAILED' });
+});
+
+test('provider count, total download bytes and expanded rule bytes are bounded', async () => {
+  let calls = 0;
+  const providers = Object.fromEntries(Array.from({ length: 17 }, (_, index) => ['source' + index,
+    { type: 'http', url: 'https://provider.example/' + index }]));
+  await assert.rejects(resolveSubscriptionProfile(JSON.stringify({ 'proxy-providers': providers }), async () => {
+    calls++; return { status: 'modified', text: 'proxies: []' };
+  }), { code: 'SNAPSHOT_LIMIT' });
+  assert.equal(calls, 0);
+  delete providers.source16;
+  const largeBody = 'proxies: []\n#' + 'x'.repeat(1024 * 1024 - 15);
+  await assert.rejects(resolveSubscriptionProfile(JSON.stringify({ 'proxy-providers': providers }), async () => {
+    calls++; return { status: 'modified', text: largeBody };
+  }), { code: 'SNAPSHOT_LIMIT' });
+  assert.equal(calls, 4);
+  await assert.rejects(resolveSubscriptionProfile(JSON.stringify({
+    'rule-providers': { domains: { type: 'inline', behavior: 'domain', payload: ['a'.repeat(100_000) + '.test'] } },
+    rules: Array(50).fill('RULE-SET,domains,DIRECT'),
+  }), async () => { throw new Error('inline providers must not download'); }), { code: 'SNAPSHOT_LIMIT' });
 });

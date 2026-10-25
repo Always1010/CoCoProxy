@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { isAlias, isMap, isScalar, isSeq, parseDocument } from 'yaml';
 import type { JsonObject, JsonValue } from '../config/index.ts';
 
@@ -138,7 +139,10 @@ export function decodeNodeSnapshot(text: string): unknown {
  * External providers cannot be made offline safely here and fail explicitly.
  */
 export function decodeSubscriptionProfile(text: string): unknown {
-  const value = decodeDocument(text);
+  return profileDocument(decodeDocument(text));
+}
+
+function profileDocument(value: JsonValue): unknown {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('SNAPSHOT_UNSUPPORTED');
   if (Object.hasOwn(value, 'proxy-providers') || Object.hasOwn(value, 'rule-providers')) fail('SNAPSHOT_UNSUPPORTED');
   if (!['proxies', 'proxy-groups', 'rules', 'sub-rules'].some(key => Object.hasOwn(value, key))) fail('SNAPSHOT_UNSUPPORTED');
@@ -167,4 +171,208 @@ export function decodeSubscriptionProfile(text: string): unknown {
     else policy[key] = entry;
   }
   return { proxies, policy, ...(unsupportedFields.length ? { unsupportedFields: unsupportedFields.sort() } : {}) };
+}
+
+type ProviderFetcher = (url: string) => Promise<{ status: string; text?: string }>;
+const object = (value: JsonValue | undefined): JsonObject => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('SNAPSHOT_INVALID');
+  return value;
+};
+const strings = (value: JsonValue | undefined): string[] => {
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) fail('SNAPSHOT_INVALID');
+  return value as string[];
+};
+
+/** Filters intentionally accept a bounded, non-nesting regular-expression subset. */
+function filterPattern(value: JsonValue | undefined): RegExp | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (typeof value !== 'string' || value.length > 256 || /[(){}+?\\]/.test(value) ||
+      value.split('|').some(part => (part.match(/\.\*/g)?.length ?? 0) > 1 || part.replace(/\.\*/g, '').includes('*'))) fail('SNAPSHOT_UNSUPPORTED');
+  try { return new RegExp(value); } catch { fail('SNAPSHOT_INVALID'); }
+}
+
+function filtered(nodes: JsonObject[], settings: JsonObject): JsonObject[] {
+  const include = filterPattern(settings.filter);
+  const exclude = filterPattern(settings['exclude-filter']);
+  const excluded = settings['exclude-type'];
+  const excludedTypes = excluded === undefined ? [] : typeof excluded === 'string' && /^[A-Za-z0-9_|-]{1,256}$/.test(excluded)
+    ? excluded.split('|') : strings(excluded);
+  return nodes.filter(node => typeof node.name === 'string' && (!include || include.test(node.name)) &&
+    (!exclude || !exclude.test(node.name)) && !excludedTypes.includes(String(node.type)));
+}
+
+function providerUrl(value: JsonValue | undefined): string {
+  if (typeof value !== 'string' || value.length > 8192 || /[\s\u0000-\u001f\u007f\\#]/.test(value)) fail('SNAPSHOT_UNSUPPORTED');
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !/^https?:\/\//i.test(value)) fail('SNAPSHOT_UNSUPPORTED');
+  } catch { fail('SNAPSHOT_UNSUPPORTED'); }
+  return value;
+}
+
+/** Materialize bounded providers through the caller's existing restricted transport. */
+export async function resolveSubscriptionProfile(text: string, fetch: ProviderFetcher): Promise<{ value: unknown; materializedProviders: boolean }> {
+  const root = object(decodeDocument(text));
+  const proxyDefinitions = root['proxy-providers'] === undefined ? {} : object(root['proxy-providers']);
+  const ruleDefinitions = root['rule-providers'] === undefined ? {} : object(root['rule-providers']);
+  const count = Object.keys(proxyDefinitions).length + Object.keys(ruleDefinitions).length;
+  if (count > 16) fail('SNAPSHOT_LIMIT');
+  if (!Object.hasOwn(root, 'proxy-providers') && !Object.hasOwn(root, 'rule-providers')) return { value: profileDocument(root), materializedProviders: false };
+  let bytes = Buffer.byteLength(text, 'utf8');
+  const download = async (definition: JsonObject): Promise<string> => {
+    if (definition.type !== 'http' || definition.payload !== undefined || definition.header !== undefined || definition.proxy !== undefined) fail('SNAPSHOT_UNSUPPORTED');
+    const response = await fetch(providerUrl(definition.url));
+    // No provider ETag is sent and no provider cache exists.
+    if (response.status !== 'modified' || typeof response.text !== 'string') fail('SNAPSHOT_UNSUPPORTED');
+    const size = Buffer.byteLength(response.text, 'utf8');
+    bytes += size;
+    if (size > MAX_INPUT_BYTES || bytes > MAX_JSON_BYTES) fail('SNAPSHOT_LIMIT');
+    return response.text;
+  };
+  const checkDefinition = (definition: JsonObject, allowed: string[]) => {
+    if (Object.keys(definition).some(key => !allowed.includes(key))) fail('SNAPSHOT_UNSUPPORTED');
+    if (definition.type !== 'inline' && definition.type !== 'http') fail('SNAPSHOT_UNSUPPORTED');
+    if (definition.type === 'inline' && (definition.url !== undefined || definition.path !== undefined)) fail('SNAPSHOT_UNSUPPORTED');
+    if (definition.interval !== undefined && (typeof definition.interval !== 'number' || !Number.isSafeInteger(definition.interval) || definition.interval < 1)) fail('SNAPSHOT_INVALID');
+    if (definition.path !== undefined && typeof definition.path !== 'string') fail('SNAPSHOT_INVALID');
+  };
+  const inline = root.proxies === undefined ? [] : root.proxies;
+  if (!Array.isArray(inline)) fail('SNAPSHOT_INVALID');
+  const nodes = inline.map(object);
+  const providerNodes = new Map<string, JsonObject[]>();
+  for (const [name, entry] of Object.entries(proxyDefinitions)) {
+    const definition = object(entry);
+    checkDefinition(definition, ['type', 'url', 'path', 'interval', 'payload', 'filter', 'exclude-filter', 'exclude-type', 'override', 'health-check']);
+    // Provider health checks are replaced by the importing group's normal check.
+    if (definition['health-check'] !== undefined) {
+      const health = object(definition['health-check']);
+      if (Object.keys(health).some(key => !['enable', 'url', 'interval', 'timeout', 'lazy', 'expected-status'].includes(key))) fail('SNAPSHOT_UNSUPPORTED');
+      for (const [key, value] of Object.entries(health)) {
+        if (['enable', 'lazy'].includes(key) ? typeof value !== 'boolean' : ['interval', 'timeout'].includes(key)
+          ? typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 : typeof value !== 'string') fail('SNAPSHOT_INVALID');
+      }
+    }
+    let payload: JsonValue | undefined = definition.payload;
+    if (definition.type !== 'inline') {
+      const document = object(decodeDocument(await download(definition)));
+      if (Object.keys(document).some(key => key !== 'proxies')) fail('SNAPSHOT_UNSUPPORTED');
+      payload = document.proxies;
+    }
+    if (!Array.isArray(payload)) fail('SNAPSHOT_INVALID');
+    const overrides = definition.override === undefined ? {} : object(definition.override);
+    if (overrides.name !== undefined) fail('SNAPSHOT_UNSUPPORTED');
+    const prefix = overrides['additional-prefix'] ?? '';
+    const suffix = overrides['additional-suffix'] ?? '';
+    if (typeof prefix !== 'string' || typeof suffix !== 'string') fail('SNAPSHOT_INVALID');
+    const nodeOverrides = { ...overrides };
+    delete nodeOverrides['additional-prefix']; delete nodeOverrides['additional-suffix'];
+    const imported = filtered(payload.map(value => {
+      const node = object(value);
+      if (typeof node.name !== 'string') fail('SNAPSHOT_INVALID');
+      return { ...node, ...nodeOverrides, name: prefix + node.name + suffix };
+    }), definition);
+    nodes.push(...imported);
+    if (nodes.length > 5_000) fail('SNAPSHOT_LIMIT');
+    providerNodes.set(name, imported);
+  }
+  root.proxies = nodes;
+  if (root['proxy-groups'] !== undefined) {
+    if (!Array.isArray(root['proxy-groups'])) fail('SNAPSHOT_INVALID');
+    for (const entry of root['proxy-groups']) {
+      const group = object(entry);
+      const uses = group.use === undefined ? [] : strings(group.use);
+      for (const flag of ['include-all', 'include-all-proxies', 'include-all-providers']) {
+        if (group[flag] !== undefined && typeof group[flag] !== 'boolean') fail('SNAPSHOT_INVALID');
+      }
+      const selected: JsonObject[] = [];
+      if (group['include-all'] === true || group['include-all-proxies'] === true) selected.push(...inline.map(object));
+      if (group['include-all'] === true || group['include-all-providers'] === true) selected.push(...[...providerNodes.values()].flat());
+      for (const name of uses) {
+        const provider = providerNodes.get(name);
+        if (!provider) fail('SNAPSHOT_UNSUPPORTED');
+        selected.push(...provider);
+      }
+      const existing = group.proxies === undefined ? [] : strings(group.proxies);
+      // Filters on an explicitly enumerated group have core-specific semantics.
+      if (!uses.length && !['include-all', 'include-all-proxies', 'include-all-providers'].some(key => group[key] === true) &&
+          ['filter', 'exclude-filter', 'exclude-type'].some(key => group[key] !== undefined)) fail('SNAPSHOT_UNSUPPORTED');
+      group.proxies = [...new Set([...existing, ...filtered(selected, group).map(node => node.name as string)])];
+      for (const key of ['use', 'include-all', 'include-all-proxies', 'include-all-providers', 'filter', 'exclude-filter', 'exclude-type']) delete group[key];
+    }
+  }
+  const rulePayloads = new Map<string, { behavior: string; payload: string[] }>();
+  for (const [name, entry] of Object.entries(ruleDefinitions)) {
+    const definition = object(entry);
+    checkDefinition(definition, ['type', 'url', 'path', 'interval', 'payload', 'behavior', 'format']);
+    if (!['domain', 'ipcidr', 'classical'].includes(String(definition.behavior))) fail('SNAPSHOT_UNSUPPORTED');
+    if (definition.format !== undefined && definition.format !== 'yaml' && definition.format !== 'text') fail('SNAPSHOT_UNSUPPORTED');
+    let payload: string[];
+    if (definition.type === 'inline') payload = strings(definition.payload);
+    else {
+      const content = await download(definition);
+      if (definition.format === 'text') payload = content.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+      else {
+        const document = object(decodeDocument(content));
+        if (Object.keys(document).some(key => key !== 'payload')) fail('SNAPSHOT_UNSUPPORTED');
+        payload = strings(document.payload);
+      }
+    }
+    if (payload.length > 50_000) fail('SNAPSHOT_LIMIT');
+    rulePayloads.set(name, { behavior: definition.behavior as string, payload });
+  }
+  let expanded = 0;
+  let expandedBytes = 0;
+  const chargeRule = (rule: string): string => {
+    expandedBytes += Buffer.byteLength(rule, 'utf8');
+    if (++expanded > 100_000 || expandedBytes > MAX_JSON_BYTES) fail('SNAPSHOT_LIMIT');
+    return rule;
+  };
+  const expand = (rules: JsonValue | undefined): string[] => strings(rules).flatMap(rule => {
+    if (!/^RULE-SET\s*,/i.test(rule)) {
+      if (/(?:^|[,\s(])(RULE-SET|GEOIP|SRC-GEOIP|GEOSITE|IP-ASN|SRC-IP-ASN|SCRIPT)\s*,/i.test(rule)) fail('SNAPSHOT_UNSUPPORTED');
+      return [chargeRule(rule)];
+    }
+    const parts = rule.split(',').map(part => part.trim());
+    if (parts.length < 3 || parts.length > 4 || !parts[1] || !parts[2] || (parts.length === 4 && parts[3] !== 'no-resolve')) fail('SNAPSHOT_UNSUPPORTED');
+    const provider = rulePayloads.get(parts[1]);
+    if (!provider) fail('SNAPSHOT_UNSUPPORTED');
+    return provider.payload.map(entry => chargeRule(providerRule(provider.behavior, entry, parts[2], parts[3] === 'no-resolve')));
+  });
+  if (root.rules !== undefined) root.rules = expand(root.rules);
+  if (root['sub-rules'] !== undefined) {
+    const subRules = object(root['sub-rules']);
+    for (const key of Object.keys(subRules)) subRules[key] = expand(subRules[key]);
+  }
+  delete root['proxy-providers']; delete root['rule-providers'];
+  // Recheck aggregate expanded JSON values and bytes after Cartesian expansion.
+  const result = plainJson(root);
+  return { value: profileDocument(result), materializedProviders: true };
+}
+
+function providerRule(behavior: string, raw: string, target: string, noResolve: boolean): string {
+  const entry = raw.trim();
+  if (!entry || /[\r\n\u0000]/.test(entry)) fail('SNAPSHOT_INVALID');
+  if (behavior === 'domain') {
+    if (!/^(?:\+\.|\*\.)?[A-Za-z0-9_\u0080-\uffff-]+(?:\.[A-Za-z0-9_\u0080-\uffff-]+)*$/.test(entry)) fail('SNAPSHOT_UNSUPPORTED');
+    if (entry.startsWith('*.')) fail('SNAPSHOT_UNSUPPORTED');
+    return `${entry.startsWith('+.') ? 'DOMAIN-SUFFIX' : 'DOMAIN'},${entry.replace(/^\+\./, '')},${target}`;
+  }
+  if (behavior === 'ipcidr') {
+    const [address, prefix, extra] = entry.split('/');
+    const family = isIP(address);
+    if (!family || extra !== undefined || prefix === undefined || !/^\d+$/.test(prefix) || Number(prefix) > (family === 4 ? 32 : 128)) fail('SNAPSHOT_INVALID');
+    return `${family === 4 ? 'IP-CIDR' : 'IP-CIDR6'},${entry},${target}${noResolve ? ',no-resolve' : ''}`;
+  }
+  // Classical providers contain matcher expressions without an outbound target.
+  // Reject composite/nested/provider/geo expressions rather than guess syntax.
+  const parts = entry.split(',').map(part => part.trim());
+  const type = parts[0].toUpperCase();
+  const supported = new Set(['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'IP-CIDR', 'IP-CIDR6',
+    'SRC-IP-CIDR', 'SRC-IP-CIDR6', 'IP-SUFFIX', 'SRC-IP-SUFFIX', 'SRC-PORT', 'DST-PORT', 'IN-PORT',
+    'PROCESS-NAME', 'PROCESS-PATH', 'PROCESS-NAME-REGEX', 'PROCESS-PATH-REGEX', 'NETWORK', 'DSCP', 'UID', 'IN-TYPE', 'IN-USER', 'IN-NAME']);
+  if (!supported.has(type) || parts.length < 2 || parts.length > 3 || !parts[1] ||
+      (parts.length === 3 && parts[2] !== 'no-resolve')) fail('SNAPSHOT_UNSUPPORTED');
+  const resolves = ['IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX'].includes(type);
+  if (parts.length === 3 && !resolves) fail('SNAPSHOT_UNSUPPORTED');
+  return `${parts[0]},${parts[1]},${target}${resolves && (noResolve || parts[2] === 'no-resolve') ? ',no-resolve' : ''}`;
 }
