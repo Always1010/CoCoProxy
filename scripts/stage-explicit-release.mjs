@@ -208,6 +208,7 @@ export async function stageExplicitRelease(options) {
       if (!allowed(entry.path)) continue;
       const selected = /^(apps|packages)\//u.test(entry.path) || /^(package(?:-lock)?\.json|LICENSE(?:\.[A-Za-z0-9-]+)?|NOTICE(?:\.[A-Za-z0-9-]+)?)$/u.test(entry.path)
         || ['docs/deployment.md', 'docs/management-https.md', 'docs/release-staging.md', 'docs/router-cooperation.md',
+          'docs/cooperating-router-requirements.md',
           'examples/deployment-plan.json', 'examples/automatic-gateway-deployment.json',
           'examples/nginx-management.conf', 'examples/coproxy-web.service'].includes(entry.path);
       if (selected) {
