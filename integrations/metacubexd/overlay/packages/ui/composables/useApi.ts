@@ -371,12 +371,19 @@ export function proxyProviderHealthCheckAPI(providerName: string) {
   )
 }
 
-export function selectProxyInGroupAPI(groupName: string, proxyName: string) {
-  const request = useRequest()
-
-  return request.put(`proxies/${encodeURIComponent(groupName)}`, {
-    json: { name: proxyName },
-  })
+export async function selectProxyInGroupAPI(groupName: string, proxyName: string) {
+  const workspace = useWorkspace()
+  await workspace.load()
+  const current = workspace.workspace.value
+  if (!current) throw new Error('请重新读取代理配置。')
+  try {
+    await useCoproxy().request('/api/coproxy/workspace/select', {
+      method: 'POST', body: { expectedRevision: current.revision, expectedActive: workspace.view.value?.active,
+        group: groupName, name: proxyName },
+    })
+  } finally {
+    await workspace.load()
+  }
 }
 
 export function unfixProxyInGroupAPI(groupName: string) {

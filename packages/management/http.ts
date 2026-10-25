@@ -109,7 +109,8 @@ export function createManagementGateway(options: { origin: string; credential: A
       // Only the controller allowlist interprets its encoded names and queries.
       const controller = url.pathname.startsWith('/api/clash/');
       if ((!controller && (url.search || url.pathname.includes('%'))) || request.headers.has('authorization')) throw new ManagementError('INVALID_REQUEST');
-      if (!(controller ? ['GET', 'PUT', 'DELETE'] : ['GET', 'POST', 'PUT']).includes(request.method)) throw new ManagementError('METHOD_NOT_ALLOWED', 405);
+      const sourceDelete = request.method === 'DELETE' && /^\/api\/coproxy\/sources\/[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(url.pathname);
+      if (!sourceDelete && !(controller ? ['GET', 'PUT', 'DELETE'] : ['GET', 'POST', 'PUT']).includes(request.method)) throw new ManagementError('METHOD_NOT_ALLOWED', 405);
       if (request.headers.get('sec-fetch-site') === 'cross-site') throw new ManagementError('ORIGIN_DENIED', 403);
       const suppliedOrigin = request.headers.get('origin');
       if ((suppliedOrigin !== null && suppliedOrigin !== origin) ||

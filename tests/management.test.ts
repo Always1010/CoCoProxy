@@ -234,6 +234,12 @@ test('browser source updates expose metadata and capture exact snapshots without
   assert.deepEqual(f.events, []);
   await writeFile(join(f.state, 'subscriptions', '.write-00000000-0000-4000-8000-000000000001'), '', { mode: 0o600 });
   assert.equal((await new SubscriptionStore(f.state).list()).length, 1);
+  assert.equal((await f.handler(request('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 2 }, cookie,
+    { origin: 'https://other.example' }))).status, 403);
+  assert.equal((await call('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 1 })).status, 409);
+  assert.equal((await call('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 2 })).status, 200);
+  assert.equal(await new SubscriptionStore(f.state).status('primary'), null);
+  assert.equal((await call('/api/coproxy/status', 'DELETE', {})).status, 405);
   await writeFile(join(f.state, 'subscriptions', 'unexpected.txt'), '', { mode: 0o600 });
   await assert.rejects(new SubscriptionStore(f.state).list(), { code: 'SOURCE_CORRUPT' });
 });
