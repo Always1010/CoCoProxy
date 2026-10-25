@@ -4,6 +4,7 @@ import { FileTransactionStore, TransactionManager, TransactionError } from '../t
 import { SubscriptionStore, SubscriptionError } from '../subscriptions/index.ts';
 import { WorkspaceStore, WorkspaceError, initialWorkspace, parseWorkspaceSettings, type WorkspaceSettings, type RoutingOverrides, type Workspace } from './workspace.ts';
 import { ManagementError, exactRecord, readJsonBody } from './http.ts';
+import { describeTcpNode, probeTcpEndpoint, tcpEndpoint } from './tcp-delay.ts';
 
 type Plan = { workspace: Workspace; policy: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string };
 const asGroups = (policy: JsonObject): JsonObject[] => Array.isArray(policy['proxy-groups']) ? policy['proxy-groups'].filter((value): value is JsonObject => !!value && typeof value === 'object' && !Array.isArray(value)) : [];
@@ -73,6 +74,7 @@ export function createWorkspaceApplication(options: {
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
   const { subscriptions, store, manager } = options;
+  let tcpProbes = 0;
 
   async function load(): Promise<Workspace> {
     return await preferences.read() ?? initialWorkspace(await options.legacyPolicy(), (await subscriptions.list()).filter(source => source.snapshotCurrent).map(source => source.id));
@@ -204,6 +206,7 @@ export function createWorkspaceApplication(options: {
     }).map(([name]) => name);
     return { workspace, sources, active: status.active, pending: !candidate || candidate.id !== status.active,
       groups, nodes: policy ? asNodes(policy).map(proxy => String(proxy.name)) : [],
+      tcpNodes: policy ? asNodes(policy).map(describeTcpNode) : [],
       catalog: serviceCatalog.map(({ id, name, default: enabled }) => ({ id, name, default: enabled })),
       rules: allRules.slice(0, 2000).map((value, index) => ({ value, source: !error && workspace.runMode === 'rule' && index < user.rules.length ? 'user' :
         workspace.mode === 'local' ? 'template' : workspace.mode === 'subscription' ? 'subscription' : 'legacy', editable: !error && index < user.rules.length && workspace.runMode === 'rule' })),
@@ -213,6 +216,25 @@ export function createWorkspaceApplication(options: {
   return async (request: Request): Promise<unknown> => {
     const path = new URL(request.url).pathname;
     if (path === '/api/coproxy/workspace' && request.method === 'GET') return view();
+    if (path === '/api/coproxy/workspace/tcp-delay' && request.method === 'POST') {
+      const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'expectedActive', 'name', 'fingerprint']);
+      if (typeof body.name !== 'string' || typeof body.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(body.fingerprint)) invalid();
+      if (tcpProbes >= 8) throw new ManagementError('TCP_PROBE_BUSY', 429);
+      tcpProbes++;
+      try {
+        const current = await load();
+        if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
+        if (!body.expectedActive || (await store.status()).active !== body.expectedActive) invalid('ACTIVE_CONFLICT');
+        const plan = await build(current);
+        if (options.compile(plan.policy).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
+        const node = asNodes(plan.policy).find(node => node.name === body.name);
+        if (!node || describeTcpNode(node).fingerprint !== body.fingerprint) invalid('TCP_NODE_CONFLICT');
+        const endpoint = tcpEndpoint(node);
+        const result = endpoint ? await probeTcpEndpoint(endpoint, request.signal) : { status: 'not-applicable', delay: null };
+        if ((await load()).revision !== current.revision || (await store.status()).active !== body.expectedActive) invalid('WORKSPACE_CONFLICT');
+        return { name: body.name, fingerprint: body.fingerprint, ...result, checkedAt: new Date().toISOString() };
+      } finally { tcpProbes--; }
+    }
     if (path === '/api/coproxy/workspace' && request.method === 'PUT') {
       const body = exactRecord(await readJsonBody(request), ['expectedRevision', 'settings']);
       const current = await load();

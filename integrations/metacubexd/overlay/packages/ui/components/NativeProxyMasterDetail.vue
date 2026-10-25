@@ -3,8 +3,10 @@ import type { Proxy as ProxyType } from '~/types'
 import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
 import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
+import { useTcpDelay } from '~/composables/useTcpDelay'
 import {
   IconBolt,
+  IconBrandSpeedtest,
   IconChevronRight,
   IconRouter,
   IconTarget,
@@ -24,6 +26,7 @@ import {
 interface Props {
   groups: ProxyType[]
   sortedNamesByGroup: Record<string, string[]>
+  scrollContainer?: HTMLElement | null
 }
 
 const props = defineProps<Props>()
@@ -39,6 +42,8 @@ const groupNames = computed(() => props.groups.map((g) => g.name))
 // A configuration generation changes on every persisted node selection. Keep
 // browsing state under the scheme identity instead, including across navigation.
 const { workspace } = useWorkspace()
+const { view, busy } = useWorkspace()
+const { metadata: tcpMetadata, run: runTcp, cancel: cancelTcp, isRunning: tcpRunning, completed: tcpCompleted, total: tcpTotal } = useTcpDelay()
 const scope = `${workspace.value?.mode ?? 'initial'}:${workspace.value?.mode === 'subscription' ? workspace.value.subscriptionId ?? '' : ''}`
 const { activeName, scrollTop } = useProxyWorkbench(scope, groupNames)
 
@@ -104,6 +109,8 @@ const selectedVisible = computed(
     !!activeGroup.value?.now &&
     displayNodes.value.includes(activeGroup.value.now),
 )
+const hasTcpNodes = computed(() => displayNodes.value.some(name => tcpMetadata(name)?.applicable))
+function testAllTcp() { return runTcp(view.value?.tcpNodes?.map(node => node.name) ?? []) }
 
 function toggleInSet(set: Ref<Set<string>>, key: string) {
   const next = new Set(set.value)
@@ -151,6 +158,20 @@ function onScroll(event: Event) {
   emit('scroll', event)
 }
 
+async function selectNode(name: string) {
+  const group = activeGroup.value
+  if (!group || busy.value || group.now === name) return
+  const top = nodeListEl.value?.scrollTop ?? 0
+  const outerTop = props.scrollContainer?.scrollTop ?? 0
+  try { await proxiesStore.selectProxyInGroup(group, name) }
+  catch { /* useWorkspace owns the visible error and verifies core selection. */ }
+  await nextTick()
+  if (activeName.value === group.name) {
+    nodeListEl.value?.scrollTo({ top, behavior: 'auto' })
+    props.scrollContainer?.scrollTo({ top: outerTop, behavior: 'auto' })
+  }
+}
+
 defineExpose({ scrollToTop })
 
 // On group switch: reset local filters and reveal the selected node.
@@ -174,7 +195,7 @@ function aliveCount(group: ProxyType) {
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-col gap-3 sm:h-full sm:flex-row">
+  <div class="flex min-h-0 flex-col gap-3 sm:h-full sm:flex-row" :data-active-group="activeName">
     <!-- Group navigation: horizontal strip on mobile, left rail on >=sm -->
     <div
       class="flex shrink-0 gap-1 overflow-x-auto pb-1 sm:w-48 sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0"
@@ -184,6 +205,8 @@ function aliveCount(group: ProxyType) {
         v-for="group in groups"
         :key="group.name"
         type="button"
+        :aria-label="`策略组 ${group.name}`"
+        :aria-pressed="group.name === activeName"
         class="flex w-36 shrink-0 flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-all duration-200 sm:w-auto sm:shrink"
         :class="
           group.name === activeName
@@ -213,8 +236,8 @@ function aliveCount(group: ProxyType) {
         data-testid="master-detail-header"
         class="flex shrink-0 flex-col gap-2 rounded-t-xl border-b border-base-content/8 bg-base-200/95 px-3 pt-3 pb-2"
       >
-        <div class="flex min-w-0 items-center gap-2">
-          <div class="flex min-w-0 flex-1 items-center gap-2">
+        <div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
+          <div class="flex min-w-0 flex-1 basis-full items-center gap-2 sm:basis-auto">
             <span class="truncate text-lg font-semibold text-base-content">{{
               activeGroup.name
             }}</span>
@@ -233,6 +256,13 @@ function aliveCount(group: ProxyType) {
           <span class="shrink-0 text-xs text-base-content/45">
             {{ displayNodes.length }}/{{ activeNodes.length }}
           </span>
+          <span v-if="tcpRunning" role="status" class="shrink-0 text-xs text-primary">{{ tcpCompleted }}/{{ tcpTotal }}</span>
+          <button type="button" class="btn btn-ghost btn-sm" :disabled="!tcpRunning && (busy || !hasTcpNodes)" :title="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟（从网关建连）'" :aria-label="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟'" @click="tcpRunning ? cancelTcp() : runTcp(displayNodes)"><IconX v-if="tcpRunning" :size="18" /><IconBolt v-else :size="18" /></button>
+          <details class="dropdown dropdown-end shrink-0">
+            <summary class="btn btn-ghost btn-xs" title="更多 TCP 测试操作" aria-label="更多 TCP 测试操作"><IconChevronRight :size="14" class="rotate-90" /></summary>
+            <ul class="dropdown-content z-30 menu mt-1 w-52 rounded-box border border-base-content/10 bg-base-200 shadow-lg"><li><button :disabled="tcpRunning || busy" @click="testAllTcp">测试全部节点 TCP 延迟</button></li></ul>
+          </details>
+          <button type="button" class="btn btn-ghost btn-sm" title="测试当前组代理延迟（访问测试网址）" aria-label="测试当前组代理延迟" :disabled="proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name]" @click="proxiesStore.proxyGroupLatencyTest(activeGroup.name)"><IconBrandSpeedtest :size="18" /></button>
           <button
             type="button"
             class="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-base-content/10 bg-base-100/60 px-2 text-xs text-base-content/70 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
@@ -383,7 +413,7 @@ function aliveCount(group: ProxyType) {
             :timeout="activeGroup.timeout ?? null"
             :is-selected="activeGroup.now === name"
             :data-selected="activeGroup.now === name ? 'true' : undefined"
-            @click="proxiesStore.selectProxyInGroup(activeGroup, name)"
+            @click="selectNode(name)"
           />
           <AutomaticProxyNode
             v-else

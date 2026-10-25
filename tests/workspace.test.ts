@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { createServer } from 'node:net';
+import { once } from 'node:events';
 import type { TestContext } from 'node:test';
 import type { JsonObject } from '../packages/config/index.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
@@ -25,7 +27,8 @@ function settings(changes: Partial<WorkspaceSettings> = {}): WorkspaceSettings {
 function withoutRevision({ revision: _revision, ...value }: Workspace): WorkspaceSettings { return value; }
 type View = { workspace: Workspace; active: string | null; pending: boolean; error?: string;
   groups: { name: string; type: string; selected: string; activeSelected: string | null; options: string[] }[];
-  nodes: string[]; rules: { value: string; source: string; editable: boolean }[]; ruleCount: number; invalidSelections: string[] };
+  nodes: string[]; tcpNodes: { name: string; fingerprint: string; applicable: boolean }[];
+  rules: { value: string; source: string; editable: boolean }[]; ruleCount: number; invalidSelections: string[] };
 
 async function directory(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'coproxy-workspace-test-'));
@@ -78,6 +81,34 @@ async function fixture(t: TestContext) {
   return { state, events, call, view, save, apply, source, candidate, payloads, fail: () => { failActivation = true; },
     observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
+
+test('workspace TCP tests bind to the active node and revision without applying configuration', async t => {
+  const server = createServer(socket => socket.resume());
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const f = await fixture(t);
+  const port = (server.address() as { port: number }).port;
+  await f.source('tcp-source', { proxies: [{ name: 'tcp-test-node', type: 'socks5', server: '127.0.0.1', port }] });
+  const current = await f.view();
+  const saved = await f.save(settings({ sourceIds: ['tcp-source'] }), current.workspace.revision);
+  await f.apply(saved, current.active);
+  const view = await f.view();
+  const metadata = view.tcpNodes[0];
+  const body = { expectedRevision: view.workspace.revision, expectedActive: view.active, name: metadata.name, fingerprint: metadata.fingerprint };
+  const before = f.events.length;
+  const result = await f.call<{ status: string; delay: number; fingerprint: string }>('/workspace/tcp-delay', 'POST', body);
+  assert.equal(result.status, 'success');
+  assert.ok(result.delay >= 0);
+  assert.equal(result.fingerprint, metadata.fingerprint);
+  assert.equal(f.events.length, before);
+  assert.equal((await f.view()).workspace.revision, view.workspace.revision);
+  assert.deepEqual(Object.keys(metadata).sort(), ['applicable', 'fingerprint', 'name']);
+  await assert.rejects(f.call('/workspace/tcp-delay', 'POST', { ...body, name: 'foreign-node' }), { code: 'TCP_NODE_CONFLICT' });
+  await assert.rejects(f.call('/workspace/tcp-delay', 'POST', { ...body, fingerprint: '0'.repeat(64) }), { code: 'TCP_NODE_CONFLICT' });
+  await assert.rejects(f.call('/workspace/tcp-delay', 'POST', { ...body, expectedRevision: -1 }), { code: 'WORKSPACE_CONFLICT' });
+  await assert.rejects(f.call('/workspace/tcp-delay', 'POST', { ...body, host: '192.0.2.20' }), { code: 'INVALID_REQUEST' });
+});
 
 test('workspace settings enforce schema and durable compare-and-save without aliasing', async t => {
   const store = new WorkspaceStore(join(await directory(t), 'state'));

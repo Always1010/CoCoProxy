@@ -52,6 +52,8 @@ const messages: Record<string, string> = {
   DRAFT_CONFLICT: '配置已被其他操作修改，请刷新后重试。',
   SOURCE_CONFLICT: '来源版本已变化，请重新读取来源后再操作。',
   WORKSPACE_CONFLICT: '配置已被其他操作修改，请刷新后重试。',
+  TCP_NODE_CONFLICT: '节点配置已变化，请刷新后重新测试。',
+  TCP_PROBE_BUSY: 'TCP 测试任务较多，请稍后重试。',
   WORKSPACE_PENDING: '请先应用待生效的配置，再切换节点。',
   WORKSPACE_INVALID: '配置内容无效，请检查策略组和规则。',
   WORKSPACE_CORRUPT: '配置无法读取，请检查服务存储。',
@@ -126,12 +128,14 @@ export function useCoproxy() {
     useState('coproxy-latency-feedback').value = {}
     useState('coproxy-proxy-read-error').value = ''
     useState('coproxy-proxy-workbenches').value = {}
+    useState('coproxy-tcp-delay-results').value = {}
   }
 
   async function request<T>(path: string, options: {
     method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
     body?: unknown
     redirectUnauthorized?: boolean
+    signal?: AbortSignal
   } = {}): Promise<T> {
     let response: Response
     try {
@@ -139,6 +143,7 @@ export function useCoproxy() {
         method: options.method ?? 'GET',
         credentials: 'same-origin',
         cache: 'no-store',
+        signal: options.signal,
         headers: options.body === undefined ? undefined : { 'content-type': 'application/json' },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
       })

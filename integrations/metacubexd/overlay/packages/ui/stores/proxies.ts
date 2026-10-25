@@ -400,7 +400,13 @@ export const useProxiesStore = defineStore('proxies', () => {
 
   // Select proxy in group
   const selectProxyInGroup = async (proxy: Proxy, proxyName: string) => {
-    await selectProxyInGroupAPI(proxy.name, proxyName)
+    try { await selectProxyInGroupAPI(proxy.name, proxyName) }
+    catch (error) {
+      // An interrupted apply may have succeeded. Read back without retrying a
+      // write, preserving the original error in the workspace banner.
+      try { await fetchProxies() } catch { /* Keep the existing read model. */ }
+      throw error
+    }
     await fetchProxies()
     await closeConnectionsThroughGroup(proxy.name)
   }
