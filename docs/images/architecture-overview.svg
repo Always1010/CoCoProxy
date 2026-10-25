@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" fill="#182b43" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="970" viewBox="0 0 1440 970" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" fill="#182b43" role="img" aria-labelledby="title desc">
   <title id="title">Coproxy 当前软件架构</title>
   <desc id="desc">箭头仅表示请求、配置或业务数据从发起方传到接收方，响应省略。管理面使用经适配的 MetaCubeXD UI 和 Nitro Server，连接 Coproxy 自有模块；数据面由 Mihomo 处理。启动、监管、权限检查和 Linux 运行底座在独立的系统运行图中展示。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#486079"/></marker>
     <marker id="greenArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#16745b"/></marker>
   </defs>
-  <rect width="1440" height="900" fill="#ffffff"/>
+  <rect width="1440" height="970" fill="#ffffff"/>
   <text x="48" y="53" font-size="31" font-weight="700">Coproxy · 软件组成与运行关系</text>
   <text x="48" y="87" font-size="17" fill="#53677d">一个代理内核，两条业务入口；管理配置与终端数据分开流动</text>
   <rect x="970" y="34" width="15" height="15" rx="3" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/><text x="994" y="48" font-size="15" fill="#53677d">开源应用</text>
@@ -58,7 +58,7 @@
   <text x="980" y="455" font-size="17">显式 HTTP / SOCKS · 受限 DNS</text>
   <text x="980" y="487" font-size="17">原生网关：TUN / 自动路由 / 重定向</text>
   <text x="980" y="548" font-size="17">loopback controller · HTTP / WS</text>
-  <text x="980" y="593" font-size="15" fill="#53677d">业务出站 → 代理节点 / 允许的直连目标</text>
+  <text x="980" y="593" font-size="15" fill="#53677d">出站策略：代理 / 允许的直连</text>
   <path d="M864 446 H956" fill="none" stroke="#16745b" stroke-width="2" marker-end="url(#greenArrow)"/>
   <text x="877" y="409" font-size="15" fill="#53677d">配置应用</text>
   <text x="877" y="431" font-size="15" fill="#53677d">经 systemd</text>
@@ -66,15 +66,29 @@
   <rect x="657" y="556" width="205" height="27" fill="#f7fcf9"/>
   <text x="667" y="575" font-size="15" fill="#53677d">认证 HTTP / WS 状态与控制</text>
 
-  <text x="72" y="730" font-size="19" font-weight="700">本图关注管理请求与业务数据如何传递。</text>
-  <text x="72" y="762" font-size="17" fill="#53677d">服务如何启动、网络如何准备、权限如何检查，见下一张「系统运行图」。</text>
-  <rect x="956" y="693" width="436" height="105" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
-  <text x="980" y="726" font-size="20" font-weight="700">终端 → 接入路由器 → 网关入口</text>
-  <text x="980" y="755" font-size="17">业务流量与受管公网 DNS 交给核心</text>
-  <text x="980" y="782" font-size="15" fill="#53677d">路由器负责交付与用户关闭后的恢复</text>
-  <path d="M1174 693 V640" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="1188" y="674" font-size="15" fill="#53677d">业务流量 / DNS 请求</text>
+  <text x="48" y="687" font-size="19" font-weight="700">原生网关：终端流量如何进入 Coproxy</text>
+  <rect x="48" y="725" width="260" height="100" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="72" y="759" font-size="20" font-weight="700">受管终端</text>
+  <text x="72" y="787" font-size="16">发起业务访问与 DNS 查询</text>
+  <text x="72" y="813" font-size="15" fill="#53677d">当前为单终端 IPv4</text>
+  <rect x="456" y="725" width="330" height="100" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="480" y="759" font-size="20" font-weight="700">接入路由器</text>
+  <text x="480" y="787" font-size="16">选择并交付受管终端流量</text>
+  <text x="480" y="813" font-size="15" fill="#53677d">关闭时撤销交付并恢复直连</text>
+  <rect x="956" y="725" width="436" height="100" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
+  <text x="980" y="759" font-size="20" font-weight="700">Coproxy 网关主机入口</text>
+  <text x="980" y="787" font-size="16">Linux 网络入口与独立 guard</text>
+  <text x="980" y="813" font-size="15" fill="#53677d">受管业务流量和公网 DNS 分别交给 Mihomo</text>
+  <path d="M308 775 H456" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="334" y="757" font-size="15" fill="#53677d">发出请求</text>
+  <path d="M786 775 H956" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="804" y="753" font-size="15" fill="#53677d">交付受管流量</text>
+  <text x="804" y="804" font-size="15" fill="#53677d">转交公网 DNS</text>
+  <path d="M1174 725 V640" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="1188" y="682" font-size="15" fill="#53677d">业务流量 / DNS 请求</text>
 
-  <text x="48" y="843" font-size="15" fill="#53677d">读图：箭头只表示请求 / 配置 / 业务数据的传递方向；响应省略。系统运行关系单独成图。</text>
-  <text x="48" y="871" font-size="15" fill="#53677d">边界：自动网关当前为单终端 IPv4；sing-box 仅用于测试，旧 network 不在启动链路，AlwayRoute 为可选路由器侧实现。</text>
+  <text x="48" y="859" font-size="15" fill="#53677d">网关入口与上方 Mihomo 位于同一台 Coproxy 主机；入口后的业务转发和 DNS 解析由核心处理。</text>
+  <text x="48" y="887" font-size="15" fill="#53677d">服务启动、网络准备及权限检查见独立「系统运行图」。本图响应省略，所有传递关系均使用框外连线。</text>
+  <text x="48" y="915" font-size="15" fill="#53677d">读图：箭头只表示请求 / 配置 / 业务数据从谁传给谁；框内只描述该对象的身份和职责。</text>
+  <text x="48" y="943" font-size="15" fill="#53677d">边界：自动网关当前为单终端 IPv4；sing-box 仅用于测试，旧 network 不在启动链路，AlwayRoute 为可选路由器侧实现。</text>
 </svg>
