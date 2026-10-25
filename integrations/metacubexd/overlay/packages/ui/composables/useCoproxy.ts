@@ -49,29 +49,43 @@ const messages: Record<string, string> = {
   LOGIN_RATE_LIMIT: '登录尝试过于频繁，请稍后重试。',
   SESSION_LIMIT: '会话数量已达上限，请稍后重试。',
   ORIGIN_DENIED: '当前访问地址未获允许。',
-  DRAFT_CONFLICT: '草稿已被其他操作修改。编辑内容已保留，请检查后重新加载。',
+  DRAFT_CONFLICT: '配置已被其他操作修改，请刷新后重试。',
   SOURCE_CONFLICT: '来源版本已变化，请重新读取来源后再操作。',
-  ACTIVE_CONFLICT: '运行代次已变化。候选未被替换，请重新读取状态后再决定是否应用。',
-  DEPLOYMENT_MISMATCH: '草稿或候选与当前部署不匹配。',
-  RECOVERY_REQUIRED: '存在未完成事务，请先读取状态并执行恢复。',
+  WORKSPACE_CONFLICT: '配置已被其他操作修改，请刷新后重试。',
+  WORKSPACE_INVALID: '配置内容无效，请检查策略组和规则。',
+  WORKSPACE_CORRUPT: '配置无法读取，请检查服务存储。',
+  WORKSPACE_UNAVAILABLE: '配置暂时无法读取，请稍后刷新。',
+  GROUP_REFERENCE_INVALID: '策略组引用无效，请检查组间关联。',
+  GROUP_SELECTION_CONFLICT: '策略选项已变化，请刷新后重新选择。',
+  GROUP_SELECTION_UNSUPPORTED: '此策略组自动选择节点。',
+  PROFILE_REQUIRED: '请先选择一个订阅配置。',
+  PROFILE_RULES_REQUIRED: '此订阅没有规则，请使用本地规则模板。',
+  PROFILE_NO_PROXY: '订阅配置没有可用的代理策略组。',
+  INVALID_WORKSPACE: '配置内容无效，请检查选项后重试。',
+  SOURCE_IN_USE: '订阅正在使用，请先取消选择或切换配置。',
+  SOURCE_NOT_FOUND: '订阅已被删除，请刷新后重试。',
+  SOURCE_PROFILE_REQUIRED: '此订阅仅包含节点，请选择完整订阅配置。',
+  ACTIVE_CONFLICT: '运行配置已变化，请刷新后重试。',
+  DEPLOYMENT_MISMATCH: '配置与当前部署不匹配。',
+  RECOVERY_REQUIRED: '配置切换未完成，请到设置中恢复。',
   STORE_LOCKED: '另一项操作正在执行，请稍后重新读取状态。',
-  INVALID_INPUT: '策略结构或字段值无效。',
+  INVALID_INPUT: '配置内容无效，请检查后重试。',
   INVALID_JSON: '请输入有效的 JSON 对象。',
   PROTECTED_FIELD: '策略包含不允许编辑的部署、远程来源、脚本或文件字段。',
   NAME_CONFLICT: '节点、策略组或来源名称重复。',
   LIMIT_EXCEEDED: '策略超过大小、深度或数量限制。',
   BODY_LIMIT: '请求内容过大。',
-  SOURCE_PENDING: '选中的来源尚无当前版本快照，请先刷新。',
+  SOURCE_PENDING: '选中的订阅需要更新，请先刷新订阅。',
   INVALID_SOURCE_ID: '来源标识须以字母开头，仅含字母、数字、下划线或连字符，最长 64 位。',
   INVALID_SOURCE_URL: '请输入有效的 HTTP 或 HTTPS 订阅地址。',
   AUTOMATIC_GATEWAY_CONFIG_INVALID: '网关部署与当前配置不匹配，请核对部署设置。',
   SOURCE_CLIENT_REQUIRED: '部署尚未配置订阅获取许可。',
-  SOURCE_FETCH_FAILED: '获取订阅失败，已有快照已保留。',
+  SOURCE_FETCH_FAILED: '更新订阅失败，已保留原有内容。',
   SNAPSHOT_DECODE_FAILED: '订阅内容无法解析。',
   SNAPSHOT_UNSUPPORTED: '订阅包含不支持的字段。',
   SNAPSHOT_INVALID: '订阅节点无效。',
   SNAPSHOT_LIMIT: '订阅超过大小或数量限制。',
-  VALIDATION_FAILED: '核心配置校验失败，候选未应用。',
+  VALIDATION_FAILED: '配置校验失败，请检查选项后重试。',
   ACTIVATION_FAILED: '核心激活失败，请读取当前状态。',
   CONFIRM_FAILED: '核心就绪确认失败，请读取当前状态。',
   RESTORE_FAILED: '恢复失败，请检查当前状态与部署。',
@@ -102,10 +116,12 @@ export function useCoproxy() {
     session.value = null
     generation.value = null
     capture.value = null
+    useState('coproxy-workspace').value = null
+    useState('coproxy-workspace-error').value = ''
   }
 
   async function request<T>(path: string, options: {
-    method?: 'GET' | 'POST' | 'PUT'
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
     body?: unknown
     redirectUnauthorized?: boolean
   } = {}): Promise<T> {

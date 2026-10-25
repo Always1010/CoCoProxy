@@ -1,20 +1,21 @@
 <script setup lang="ts">
 import {
   IconChartAreaLine, IconChevronsLeft, IconChevronsRight, IconFileStack,
-  IconGlobe, IconHome, IconMenu2, IconNetwork, IconRuler, IconServerCog,
+  IconGlobe, IconHome, IconMenu2, IconNetwork, IconRuler, IconServerCog, IconSettings,
 } from '@tabler/icons-vue'
 
 const route = useRoute()
 const { t } = useI18n()
 const configStore = useConfigStore()
 const navItems = computed(() => [
-  { href: '/coproxy', name: '策略与订阅', icon: IconServerCog },
   { href: '/overview', name: t('overview'), icon: IconHome },
   { href: '/proxies', name: t('proxies'), icon: IconGlobe },
   { href: '/rules', name: t('rules'), icon: IconRuler },
+  { href: '/subscriptions', name: '订阅', icon: IconServerCog },
   { href: '/connections', name: t('connections'), icon: IconNetwork },
   { href: '/traffic', name: t('dataUsage'), icon: IconChartAreaLine },
   { href: '/logs', name: t('logs'), icon: IconFileStack },
+  { href: '/coproxy', name: '设置', icon: IconSettings },
 ])
 const isActive = (href: string) => route.path === href
 
