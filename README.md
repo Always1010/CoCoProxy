@@ -12,8 +12,10 @@ Coproxy 是可独立部署在符合条件的 Linux 外接设备上的代理产�
 
 ## 项目文档
 
-- [项目目标与技术方案](docs/project-plan.md)：范围、开源选型、架构、实施阶段与验收要求。
-- [软件架构](docs/architecture.md)：模块归属、配置事务和网关协作边界。
+先看[软件架构与总览图](docs/architecture.md)：从开源组件、运行进程和模块对应关系，理解终端流量与配置应用如何经过系统。
+
+- [软件架构](docs/architecture.md)：Mihomo 与 MetaCubeXD 的分工、整体结构图、流量图、配置应用时序图及源码导航。
+- [项目目标与技术方案](docs/project-plan.md)：产品范围、早期候选选型、实施阶段与验收要求；当前实现以软件架构为准。
 - [原生网关](packages/gateway/README.md)：上游自动接管、最小外部集成及首轮部署样本。
 - [首批开发与验证](docs/development.md)：已实现范围、CLI、针对性检查和后续关卡。
 - [配置模块](packages/config/README.md)与[事务模块](packages/transaction/README.md)：内部 API、保护边界和恢复约束。
