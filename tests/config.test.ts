@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { canonicalJson, compileConfig, ConfigError, deploymentDnsOptions } from '../packages/config/index.ts';
-import type { JsonObject } from '../packages/config/index.ts';
+import type { JsonObject, JsonValue } from '../packages/config/index.ts';
 
 function input(): JsonObject {
   return {
@@ -103,8 +103,10 @@ test('deployment separates routed HTTPS DNS from independent node and direct res
 
 test('deployment can recover domain rules without DNS mapping while excluding local destinations', () => {
   const value = input();
+  assert.equal(compileConfig(value).id, '1becc2e498827b72410f3995dc21418f8b02ceabdd9a38dc3f0e9328ba954458');
   assert.equal(compileConfig(value).config.sniffer, undefined);
   (value.deployment as JsonObject).sniffing = true;
+  assert.equal(compileConfig(value).id, 'e9a823a62aa7ea40627826fd0f6f18de4df76aba3ed5fcd1af238b9b9b3f3c85');
   const sniffer = compileConfig(value).config.sniffer as JsonObject;
   assert.equal(sniffer.enable, true);
   assert.equal(sniffer['parse-pure-ip'], true);
@@ -113,6 +115,44 @@ test('deployment can recover domain rules without DNS mapping while excluding lo
   assert.ok((sniffer['skip-dst-address'] as string[]).includes('192.168.0.0/16'));
   (value.deployment as JsonObject).sniffing = 'true';
   fails(value, 'INVALID_INPUT');
+});
+
+test('trusted performance options are explicit and cannot silently disable process rules', () => {
+  const value = input(), deployment = value.deployment as JsonObject, policy = value.policy as JsonObject;
+  assert.equal(compileConfig(value).config['tcp-concurrent'], undefined);
+  policy['tcp-concurrent'] = false;
+  policy['find-process-mode'] = 'strict';
+  deployment.performance = { tcpConcurrent: true, findProcessMode: 'off' };
+  const config = compileConfig(value).config;
+  assert.equal(config['tcp-concurrent'], true);
+  assert.equal(config['find-process-mode'], 'off');
+  policy.rules = ['AND,((PROCESS-NAME,example),(NETWORK,TCP)),DIRECT', 'MATCH,REJECT'];
+  fails(value, 'INVALID_INPUT');
+  deployment.performance = { tcpConcurrent: true, findProcessMode: 'strict' };
+  assert.equal(compileConfig(value).config['find-process-mode'], 'strict');
+  for (const performance of [{ tcpConcurrent: 'true' }, { findProcessMode: 'auto' }, { extra: true }] as JsonObject[]) {
+    deployment.performance = performance; fails(value, 'INVALID_INPUT');
+  }
+});
+
+test('missing-only sniffing excludes bounded domains and ports and reconstructs exact compiler output', () => {
+  const value = input(), deployment = value.deployment as JsonObject;
+  deployment.sniffing = { mode: 'missing-only', skipDomains: ['+.example.com'], skipPorts: [443, '8440-8450'] };
+  const candidate = compileConfig(value), sniffer = candidate.config.sniffer as JsonObject;
+  assert.equal(sniffer['force-dns-mapping'], false);
+  assert.deepEqual(sniffer['skip-domain'], ['+.example.com']);
+  assert.deepEqual(sniffer.sniff, { HTTP: { ports: [80, '8080-8439', '8451-8880'] } });
+  assert.equal(compileConfig({ ...value, deployment: { ...deployment, ...deploymentDnsOptions(candidate.config) } }).id, candidate.id);
+  deployment.sniffing = 'force';
+  assert.equal((compileConfig(value).config.sniffer as JsonObject)['force-dns-mapping'], true);
+  for (const sniffing of [false, 'off', { mode: 'off' }]) {
+    deployment.sniffing = sniffing; assert.equal(compileConfig(value).config.sniffer, undefined);
+  }
+  for (const sniffing of ['always', { mode: 'missing-only', skipDomains: ['rule-set:remote'] },
+    { mode: 'missing-only', skipPorts: [0] }, { mode: 'force', skipPorts: ['443-80'] },
+    { mode: 'force', skipPorts: ['1-65535'] }, { mode: 'off', skipPorts: [443] }] as JsonValue[]) {
+    deployment.sniffing = sniffing; fails(value, 'INVALID_INPUT');
+  }
 });
 
 test('bounded deployment DNS policies preserve bootstrap and round trip independent resolvers', () => {
