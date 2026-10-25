@@ -71,6 +71,6 @@ onMounted(() => run(load))
         </div>
       </div>
     </div>
-    <NativeProxies v-else :key="view?.active ?? 'initial'" class="min-h-0 flex-1" />
+    <NativeProxies v-else :key="`${workspace?.mode ?? 'initial'}:${workspace?.subscriptionId ?? ''}`" class="min-h-0 flex-1" />
   </div>
 </template>

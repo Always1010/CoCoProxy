@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Proxy as ProxyType } from '~/types'
 import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
+import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
 import {
   IconBolt,
   IconChevronRight,
@@ -17,7 +18,6 @@ import {
   getCapabilityFacets,
   getRegionFacets,
   getTypeFacets,
-  resolveActiveGroup,
 } from '~/utils'
 
 interface Props {
@@ -35,11 +35,11 @@ const { t } = useI18n()
 
 const groupNames = computed(() => props.groups.map((g) => g.name))
 
-const activeName = ref<string | null>(null)
-// Keep active valid as the group list changes (e.g. on refetch).
-watchEffect(() => {
-  activeName.value = resolveActiveGroup(groupNames.value, activeName.value)
-})
+// A configuration generation changes on every persisted node selection. Keep
+// browsing state under the scheme identity instead, including across navigation.
+const { workspace } = useWorkspace()
+const scope = `${workspace.value?.mode ?? 'initial'}:${workspace.value?.mode === 'subscription' ? workspace.value.subscriptionId ?? '' : ''}`
+const { activeName, scrollTop } = useProxyWorkbench(scope, groupNames)
 
 const activeGroup = computed(
   () => props.groups.find((g) => g.name === activeName.value) ?? null,
@@ -145,6 +145,11 @@ function scrollToTop(behavior: ScrollBehavior = 'smooth') {
   nodeListEl.value?.scrollTo({ top: 0, behavior })
 }
 
+function onScroll(event: Event) {
+  scrollTop.value = (event.currentTarget as HTMLElement).scrollTop
+  emit('scroll', event)
+}
+
 defineExpose({ scrollToTop })
 
 // On group switch: reset local filters and reveal the selected node.
@@ -156,7 +161,11 @@ watch(activeName, () => {
 // First paint (master mode just opened): activeName resolves synchronously in
 // the watchEffect above, before the watch() is wired — so it never fires for the
 // initial group. Reveal the selected node once the list is mounted.
-onMounted(() => nextTick(() => scrollSelectedIntoView('auto')))
+onMounted(() => nextTick(() => {
+  const top = scrollTop.value
+  if (top > 0) nodeListEl.value?.scrollTo({ top, behavior: 'auto' })
+  else scrollSelectedIntoView('auto')
+}))
 
 function aliveCount(group: ProxyType) {
   return proxiesStore.aliveNodeNames(group.all ?? []).length
@@ -362,7 +371,7 @@ function aliveCount(group: ProxyType) {
         ref="nodeListEl"
         data-testid="master-detail-scroll-container"
         class="flex flex-col gap-2 px-3 pt-2 pb-3 sm:min-h-0 sm:flex-1 sm:overflow-y-auto"
-        @scroll.passive="emit('scroll', $event)"
+        @scroll.passive="onScroll"
       >
         <template v-for="name in displayNodes" :key="name">
           <ProxyNodeListItem
