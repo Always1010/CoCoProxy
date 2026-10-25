@@ -67,11 +67,14 @@ export function compactCompilerRuleSets(config: JsonObject): JsonObject {
   const direct = domestic && Array.isArray(domestic.proxies) && domestic.proxies[0] === 'DIRECT';
   const existing = dns['nameserver-policy'] as JsonObject | undefined;
   const localResolvers = dns['direct-nameserver'] ?? dns['default-nameserver'];
+  // These queries resolve DIRECT destinations. Without an explicit DNS dialer,
+  // respect-rules can send a private bootstrap address through Other/Proxy.
+  const localDnsResolvers = (localResolvers as string[]).map(server => `${server}#DIRECT`);
   return { ...config, rules, 'rule-providers': structuredClone(providers),
     ...(direct ? { dns: { ...dns, 'respect-rules': true,
       'proxy-server-nameserver': dns['proxy-server-nameserver'] ?? dns['default-nameserver'],
       'direct-nameserver': localResolvers, 'nameserver-policy': {
-      '+.cn': localResolvers, ...existing, [ownedDnsKey]: localResolvers,
+      '+.cn': localDnsResolvers, ...existing, [ownedDnsKey]: localDnsResolvers,
     } } } : {}) };
 }
 
@@ -104,6 +107,11 @@ export function externalNameserverPolicy(config: JsonObject): JsonObject | undef
   const original = dns['nameserver-policy'] as JsonObject | undefined;
   if (!original) return undefined;
   const result = { ...original };
-  if (config[marker] === DOMESTIC_POLICY_VERSION) delete result[ownedDnsKey];
+  if (config[marker] === DOMESTIC_POLICY_VERSION) {
+    delete result[ownedDnsKey];
+    const localResolvers = dns['direct-nameserver'] ?? dns['default-nameserver'];
+    const generated = (localResolvers as string[]).map(server => `${server}#DIRECT`);
+    if (canonicalJson(result['+.cn'] ?? null) === canonicalJson(generated)) delete result['+.cn'];
+  }
   return Object.keys(result).length ? result : undefined;
 }

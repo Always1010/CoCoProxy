@@ -6,7 +6,7 @@
 
 `serviceCatalog` 定义内置业务分类的服务 id、显示名、说明、默认标记及精确／后缀匹配字段，随 CoCoProxy 一同提供。默认创建十个组；`selections` 出现可选服务的 id 时启用该组，出现其他合法名称时创建自定义组，供手工规则引用。`localGroupChoices(proxies, groupId)` 返回 UI 可选目标。Proxy 初始选择第一个节点，无节点时选择 REJECT；其他业务及 Other 跟随 Proxy，Domestic 初始 DIRECT。显式 DIRECT／REJECT 可用于每个组，亦接受旧模型的 direct／block 别名。引用只允许业务或自定义组跟随 Proxy；拒绝其他组间引用、未知目标、组与节点名称冲突及重复节点，避免选择器选项形成循环。
 
-手工规则先于业务规则。YouTube 的精确主机先于 Google 后缀；明确业务先于 Proxy 境外聚合，再依次匹配国内顶级域、完整国内域名、国内目的 IPv4，最终 MATCH 到 Other。Domestic 选择 DIRECT 时，编译器将国内域名集合及 `.cn` 交给部署的直连解析器（未单独配置时使用引导解析器），避免国内 CDN 使用境外解析结果；显式域名 DNS 策略保留。Domestic 选择代理时不添加这条国内 DNS 策略。IP 规则不自动添加 `no-resolve`，让 Mihomo 对域名目标解析后匹配地址；IPv6 接管不在当前范围内。
+手工规则先于业务规则。YouTube 的精确主机先于 Google 后缀；明确业务先于 Proxy 境外聚合，再依次匹配国内顶级域、完整国内域名、国内目的 IPv4，最终 MATCH 到 Other。Domestic 选择 DIRECT 时，编译器将国内域名集合及 `.cn` 交给部署的直连解析器（未单独配置时使用引导解析器），并为这些编译器自有的查询指定 `#DIRECT` 出口，避免 DNS 遵循路由规则时把私有解析器送往代理；显式域名 DNS 策略保留。Domestic 选择代理时不添加这条国内 DNS 策略。IP 规则不自动添加 `no-resolve`，让 Mihomo 对域名目标解析后匹配地址；IPv6 接管不在当前范围内。
 
 手工规则支持 DOMAIN、DOMAIN-SUFFIX、DOMAIN-KEYWORD、DOMAIN-REGEX、IP-CIDR、IP-CIDR6、SRC-IP-CIDR、SRC-IP-CIDR6、DST-PORT、SRC-PORT、NETWORK；IP 类型可显式带 no-resolve。规则保留顺序和匹配语义，目标必须是已启用组、节点、DIRECT 或 REJECT。嵌套逻辑规则、规则集下载、含逗号的表达式和提前 MATCH 不属于此模板输入；最终完整语法仍须经 Mihomo 配置检查。
 
