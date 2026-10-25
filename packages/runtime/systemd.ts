@@ -62,7 +62,7 @@ async function verifySystemctl(settings: RuntimeSettings): Promise<string> {
   } catch { throw new RuntimeError('SYSTEMCTL_UNTRUSTED'); }
 }
 
-/** Sole lifecycle owner is the installed systemd unit. This class has no watchdog. */
+/** The installed systemd unit alone owns the core process and crash restarts. */
 export class SystemdMihomoRuntime implements RuntimeAdapter {
   readonly settings: RuntimeSettings;
   private readonly deps: RuntimeDependencies;
@@ -189,6 +189,24 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
       await delay(100);
     } while (performance.now() < deadline);
     return false;
+  }
+
+  /** Called only under the shared transaction lock, for the committed active. */
+  async reconcile(path: string, generation: string): Promise<boolean> {
+    await this.candidate(path, generation);
+    const unit = await this.unit();
+    // Let systemd finish its own start/stop/restart job before another request.
+    if (unit.jobPending || ['activating', 'deactivating', 'reloading'].includes(unit.activeState)) return false;
+    if (this.settings.automaticGateway) {
+      const binary = await this.deps.verifySystemctl(this.settings);
+      // Reload reruns the fixed root prerequisite check without BindsTo stops.
+      // A failed first boot prepare leaves the oneshot inactive; start it first.
+      await this.deps.command(binary, ['--no-ask-password', '--no-pager', 'start', 'cocoproxy-gateway-network.service']);
+      await this.deps.command(binary, ['--no-ask-password', '--no-pager', 'reload', 'cocoproxy-gateway-network.service']);
+    }
+    if ((await this.observe(generation)).ready) return true;
+    await this.restore(path, generation);
+    return true;
   }
 
   async restore(previousPath: string | null, previousGeneration: string | null): Promise<void> {

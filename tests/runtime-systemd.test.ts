@@ -10,6 +10,7 @@ import { parseUnitState, SystemdMihomoRuntime } from '../packages/runtime/system
 import { readSelection } from '../packages/runtime/settings.ts';
 import { RuntimeError } from '../packages/runtime/types.ts';
 import type { RuntimeSettings, RuntimeUnitState } from '../packages/runtime/types.ts';
+import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
 
 const linux = process.platform === 'linux';
 const secret = 'SYNTHETIC_SYSTEMD_TEST_PRIVATE_VALUE';
@@ -108,6 +109,7 @@ async function fixture(t: test.TestContext) {
     observe: async (supplied, generation, observedUnit) => {
       assert.equal(supplied.stateDirectory, settings.stateDirectory);
       assert.equal(await readSelection(settings), generation);
+      if (observedUnit.mainPid === 0) return { ready: false, generation, checkedAt: new Date().toISOString(), reason: 'CORE_STOPPED' };
       assert.equal(observedUnit.mainPid, 22001);
       assert.equal(observedUnit.jobPending, false);
       const state = await store.readState();
@@ -199,6 +201,47 @@ test('an untrusted unit is rejected during validation before any service change'
   assert.equal(status.active, null);
   assert.equal(status.transaction, null);
   assert.equal(status.fault, null);
+});
+
+test('persistent reconciliation retains a healthy process, defers systemd jobs and restores only active', { skip: !linux }, async t => {
+  const f = await fixture(t);
+  await f.manager.apply(f.first.id, null);
+  f.events.length = 0;
+  assert.equal(await f.runtime.reconcile(f.store.candidatePath(f.first.id), f.first.id), true);
+  assert.deepEqual(f.events.filter(event => event.action !== 'show'), []);
+  f.unit.jobPending = true;
+  assert.equal(await f.runtime.reconcile(f.store.candidatePath(f.first.id), f.first.id), false);
+  f.unit.jobPending = false;
+  Object.assign(f.unit, { activeState: 'inactive', subState: 'dead', mainPid: 0 });
+  assert.equal(await f.runtime.reconcile(f.store.candidatePath(f.first.id), f.first.id), true);
+  assert.deepEqual(f.events.filter(event => event.action !== 'show').map(event => event.action), ['stop', 'start']);
+  assert.equal((await f.store.status()).active, f.first.id);
+});
+
+test('gateway reconciliation uses only fixed start/reload permissions and never restarts a core after network rejection', { skip: !linux }, async t => {
+  const f = await fixture(t);
+  const commands: string[][] = [];
+  const settings: RuntimeSettings = { ...f.settings, binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256,
+    automaticGateway: { schemaVersion: 1, ingressInterface: 'lan0', gatewayIPv4: '192.0.2.2', routerIPv4: '192.0.2.1',
+      routerMAC: '02:00:00:00:00:01', clientCIDR: '192.0.2.0/24', prefixLength: 24, dnsPort: 15353,
+      egressMark: 3030, egressTable: 3030, egressPriority: 8000, tunMtu: 1500 } };
+  const runtime = new SystemdMihomoRuntime(settings, {
+    platform: 'linux', verifySystemctl: async () => settings.systemctlPath,
+    assertUnit: async () => {},
+    load: async () => ({ candidate: f.first, path: f.store.candidatePath(f.first.id), home: '/synthetic/home', controller: { port: 19090, secret } }),
+    command: async (_binary, args) => {
+      commands.push(args);
+      if (args[2] === 'show') return show(f.unit);
+      if (args[2] === 'reload') throw new RuntimeError('RUNTIME_COMMAND_FAILED');
+      assert.deepEqual(args, ['--no-ask-password', '--no-pager', 'start', 'cocoproxy-gateway-network.service']);
+      return '';
+    },
+  });
+  await assert.rejects(runtime.reconcile(f.store.candidatePath(f.first.id), f.first.id), runtimeCode('RUNTIME_COMMAND_FAILED'));
+  assert.deepEqual(commands.filter(args => args[2] !== 'show'), [
+    ['--no-ask-password', '--no-pager', 'start', 'cocoproxy-gateway-network.service'],
+    ['--no-ask-password', '--no-pager', 'reload', 'cocoproxy-gateway-network.service'],
+  ]);
 });
 
 test('systemd show parser rejects partial, duplicate, injected and malformed state', () => {

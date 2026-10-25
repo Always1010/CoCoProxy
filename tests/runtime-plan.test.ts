@@ -143,7 +143,7 @@ function candidate(): Candidate {
 }
 
 async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash' | 'tun' | 'fault' | 'recovering' |
-  'recovering-target' | 'wrong-target' | 'applying' | 'confirming' | 'abandoned-restore' | 'abandoned-confirm' | 'wrong-active' = 'good') {
+  'recovering-target' | 'wrong-target' | 'applying' | 'confirming' | 'abandoned-restore' | 'abandoned-confirm' | 'wrong-active' | 'paused' | 'lifecycle-corrupt' = 'good') {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-launcher-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const stateDirectory = join(root, 'state');
@@ -183,12 +183,16 @@ async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash'
     active: variant === 'wrong-active' ? 'c'.repeat(64) : target.id,
     pending: null, fault: null, checkedAt: null }), { mode: 0o600 });
   const selectionPath = join(stateDirectory, 'selection.json');
+  const lifecyclePath = join(stateDirectory, 'lifecycle.json');
+  if (variant === 'paused' || variant === 'lifecycle-corrupt') await writeFile(lifecyclePath,
+    JSON.stringify({ schemaVersion: 1, enabled: true, paused: variant === 'paused' ? true : 'invalid' }), { mode: 0o600 });
   if (variant !== 'missing') await writeFile(selectionPath, JSON.stringify({ schemaVersion: 1, generation: target.id }), { mode: 0o600 });
   await writeFile(settingsPath, JSON.stringify(settings), { mode: 0o600 });
   if (process.geteuid!() === 0) {
     // Only disposable fixture files change ownership; the child proves non-root execution.
     const paths = [root, stateDirectory, join(stateDirectory, 'candidates'), staged.path, binaryPath, settingsPath];
     if (variant !== 'missing') paths.push(selectionPath);
+    if (variant === 'paused' || variant === 'lifecycle-corrupt') paths.push(lifecyclePath);
     paths.push(statePath);
     for (const path of paths) await chown(path, uid, uid);
   }
@@ -240,7 +244,7 @@ test('launcher exec replaces its child PID and passes only pinned core arguments
 });
 
 test('launcher refuses missing selection, hash mismatch, enabled TUN and persistent fault before exec', { skip: !linuxExec }, async t => {
-  for (const [variant, code] of [['missing', 'RUNTIME_SELECTION_MISSING'], ['hash', 'BINARY_UNTRUSTED'], ['tun', 'CANDIDATE_UNTRUSTED'], ['fault', 'RUNTIME_RECOVERY_REQUIRED'], ['wrong-target', 'RUNTIME_RECOVERY_REQUIRED'], ['recovering', 'RUNTIME_RECOVERY_REQUIRED'], ['recovering-target', 'RUNTIME_RECOVERY_REQUIRED'], ['abandoned-restore', 'RUNTIME_RECOVERY_REQUIRED'], ['abandoned-confirm', 'RUNTIME_RECOVERY_REQUIRED'], ['wrong-active', 'RUNTIME_RECOVERY_REQUIRED']] as const) {
+  for (const [variant, code] of [['missing', 'RUNTIME_SELECTION_MISSING'], ['hash', 'BINARY_UNTRUSTED'], ['tun', 'CANDIDATE_UNTRUSTED'], ['fault', 'RUNTIME_RECOVERY_REQUIRED'], ['wrong-target', 'RUNTIME_RECOVERY_REQUIRED'], ['recovering', 'RUNTIME_RECOVERY_REQUIRED'], ['recovering-target', 'RUNTIME_RECOVERY_REQUIRED'], ['abandoned-restore', 'RUNTIME_RECOVERY_REQUIRED'], ['abandoned-confirm', 'RUNTIME_RECOVERY_REQUIRED'], ['wrong-active', 'RUNTIME_RECOVERY_REQUIRED'], ['paused', 'RUNTIME_LIFECYCLE_PAUSED'], ['lifecycle-corrupt', 'RUNTIME_LIFECYCLE_INVALID']] as const) {
     const f = await fixture(t, variant);
     const result = await launch(f);
     assert.equal(result.exit, 1);

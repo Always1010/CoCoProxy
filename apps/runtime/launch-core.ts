@@ -5,6 +5,7 @@ import { RuntimeError } from '../../packages/runtime/types.ts';
 import { privateDirectory } from '../../packages/storage/private-files.ts';
 import { FileTransactionStore } from '../../packages/transaction/index.ts';
 import { assertRuntimeLaunch } from '../../packages/runtime/launch-authorization.ts';
+import { readRuntimeLifecycle } from '../../packages/runtime/lifecycle.ts';
 
 /** Replaces the service process, preserving systemd's MainPID and cgroup. */
 export async function runCore(settingsPath: string): Promise<void> {
@@ -17,6 +18,7 @@ export async function runCore(settingsPath: string): Promise<void> {
       throw new RuntimeError('RUNTIME_IDENTITY_INVALID');
     }
     const store = new FileTransactionStore(settings.stateDirectory);
+    if ((await readRuntimeLifecycle(settings.stateDirectory)).paused) throw new RuntimeError('RUNTIME_LIFECYCLE_PAUSED');
     const generation = await readSelection(settings);
     if (generation === null) throw new RuntimeError('RUNTIME_SELECTION_MISSING');
     await assertRuntimeLaunch(store, generation);
@@ -25,6 +27,7 @@ export async function runCore(settingsPath: string): Promise<void> {
     await privateDirectory(home);
     if (await readSelection(settings) !== generation) throw new RuntimeError('RUNTIME_RECOVERY_REQUIRED');
     await assertRuntimeLaunch(store, generation);
+    if ((await readRuntimeLifecycle(settings.stateDirectory)).paused) throw new RuntimeError('RUNTIME_LIFECYCLE_PAUSED');
     // The controller cannot inherit proxy settings, loader injections or core
     // feature switches from an operator's shell or the launcher environment.
     const environment = { PATH: '/usr/bin:/bin', LANG: 'C', HOME: home };

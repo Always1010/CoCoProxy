@@ -8,7 +8,7 @@ import { loadAdminCredential } from './auth.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { decodeSubscriptionProfile } from '../subscriptions/yaml.ts';
 import { createControllerProxy, DEFAULT_LATENCY_PROBE_ORIGIN } from './controller.ts';
-import { recoverManagementStartup } from './startup.ts';
+import { createManagementLifecycle, recoverManagementStartup } from './startup.ts';
 import { createManagementApplication } from './application.ts';
 import { createManagementGateway, exactRecord, managementOrigin, ManagementError } from './http.ts';
 
@@ -97,6 +97,9 @@ export async function loadManagementGateway(path: string) {
       } });
     const gateway = createManagementGateway({ origin: settings.origin, credential }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
-    return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime) };
+    const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,
+      () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'));
+    return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
+      startLifecycle: lifecycle.start, closeLifecycle: lifecycle.close };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }

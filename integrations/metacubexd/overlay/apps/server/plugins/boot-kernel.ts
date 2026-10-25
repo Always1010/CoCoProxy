@@ -28,11 +28,12 @@ export default defineNitroPlugin(async (app) => {
     },
   })
   try {
-    const recovered = await (await getCoCoProxy()).recoverStartup()
+    const gateway = await getCoCoProxy()
+    app.hooks.hook('close', () => gateway.closeLifecycle())
+    const recovered = await gateway.startLifecycle()
     if (!recovered.recovered) console.error('COCOPROXY_STARTUP_RECOVERY_INCOMPLETE')
   } catch {
-    // Serve the management shell and fixed unavailable errors; no second core
-    // supervisor or periodic automatic retry is started after failed recovery.
+    // Keep management reachable with fixed errors when private state is invalid.
     console.error('COCOPROXY_STARTUP_RECOVERY_UNAVAILABLE')
   }
 })
