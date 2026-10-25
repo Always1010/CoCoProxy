@@ -1,11 +1,11 @@
 import { canonicalJson, ConfigError, type Candidate, type JsonObject } from '../config/index.ts';
-import { buildLocalPolicy, serviceCatalog } from '../routing/index.ts';
-import { FileTransactionStore, TransactionManager } from '../transaction/index.ts';
+import { buildLocalPolicy, localGroupChoices, serviceCatalog } from '../routing/index.ts';
+import { FileTransactionStore, TransactionManager, TransactionError } from '../transaction/index.ts';
 import { SubscriptionStore, SubscriptionError } from '../subscriptions/index.ts';
 import { WorkspaceStore, WorkspaceError, initialWorkspace, type RoutingOverrides, type Workspace } from './workspace.ts';
 import { ManagementError, exactRecord, readJsonBody } from './http.ts';
 
-type Plan = { workspace: Workspace; policy: JsonObject; captures: { id: string; revision: number; digest: string }[] };
+type Plan = { workspace: Workspace; policy: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string };
 const asGroups = (policy: JsonObject): JsonObject[] => Array.isArray(policy['proxy-groups']) ? policy['proxy-groups'].filter((value): value is JsonObject => !!value && typeof value === 'object' && !Array.isArray(value)) : [];
 const asNodes = (policy: JsonObject): JsonObject[] => Array.isArray(policy.proxies) ? policy.proxies as JsonObject[] : [];
 function invalid(code = 'WORKSPACE_INVALID'): never { throw new WorkspaceError(code); }
@@ -33,22 +33,25 @@ function checkReferences(policy: JsonObject): void {
   for (const name of groupNames) visit(name);
 }
 
-function overridePolicy(input: JsonObject, edits: RoutingOverrides, runMode: Workspace['runMode'], managed = true): JsonObject {
+function overridePolicy(input: JsonObject, edits: RoutingOverrides, runMode: Workspace['runMode'], managed = true, repair = false): JsonObject {
   const policy = structuredClone(input);
   if (managed) policy.profile = { 'store-selected': false };
   const groups = asGroups(policy);
   for (const [name, selected] of Object.entries(edits.selections)) {
     const group = groups.find(group => group.name === name);
-    if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(selected)) invalid('GROUP_SELECTION_CONFLICT');
+    if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(selected)) {
+      if (repair) continue;
+      invalid('GROUP_SELECTION_CONFLICT');
+    }
     // Automatic groups retain their algorithm. A manual choice uses Mihomo's
     // supported selector semantics only; it must not silently change a url-test.
-    if (group.type !== 'select') invalid('GROUP_SELECTION_UNSUPPORTED');
+    if (group.type !== 'select') { if (repair) continue; invalid('GROUP_SELECTION_UNSUPPORTED'); }
     group.proxies = [selected, ...group.proxies.filter(value => value !== selected)];
   }
   policy['proxy-groups'] = groups;
   policy.mode = 'rule';
   const original = Array.isArray(policy.rules) ? policy.rules : [];
-  policy.rules = [...edits.rules, ...original];
+  policy.rules = [...(repair ? [] : edits.rules), ...original];
   if (runMode === 'direct') policy.rules = ['MATCH,DIRECT'];
   if (runMode === 'global') {
     const target = groups.find(group => group.type === 'select')?.name ?? groups[0]?.name ?? asNodes(policy)[0]?.name;
@@ -74,7 +77,7 @@ export function createWorkspaceApplication(options: {
     return await preferences.read() ?? initialWorkspace(await options.legacyPolicy(), (await subscriptions.list()).filter(source => source.snapshotCurrent).map(source => source.id));
   }
 
-  async function build(workspace: Workspace): Promise<Plan> {
+  async function build(workspace: Workspace, repair = false): Promise<Plan> {
     const captures: Plan['captures'] = [];
     async function snapshot(id: string) {
       const metadata = await subscriptions.status(id);
@@ -83,14 +86,15 @@ export function createWorkspaceApplication(options: {
       captures.push({ id, revision: metadata.revision, digest: result.sha256 });
       return result;
     }
-    let policy: JsonObject;
+    let policy: JsonObject, legacy: string | undefined;
     if (workspace.mode === 'subscription') {
       if (!workspace.subscriptionId) invalid('PROFILE_REQUIRED');
       const source = await snapshot(workspace.subscriptionId);
       if (!source.policy || !Array.isArray(source.policy.rules) || !source.policy.rules.length) invalid('PROFILE_RULES_REQUIRED');
-      policy = overridePolicy(source.policy, workspace.subscriptionOverrides[workspace.subscriptionId] ?? emptyOverrides(), workspace.runMode);
+      policy = overridePolicy(source.policy, workspace.subscriptionOverrides[workspace.subscriptionId] ?? emptyOverrides(), workspace.runMode, true, repair);
     } else {
       const base = workspace.mode === 'legacy' ? await options.legacyPolicy() : null;
+      if (base) legacy = canonicalJson(base);
       const proxies = base ? [...asNodes(base)] : [];
       const names = new Map(proxies.map(proxy => [String(proxy.name), canonicalJson(proxy)]));
       for (const id of workspace.sourceIds) {
@@ -103,14 +107,18 @@ export function createWorkspaceApplication(options: {
         }
       }
       if (workspace.mode === 'local') {
-        policy = { ...buildLocalPolicy({ proxies, selections: workspace.local.selections, rules: workspace.local.rules, mode: workspace.runMode }),
+        const selections = { ...workspace.local.selections };
+        if (repair) for (const [id, selected] of Object.entries(selections)) {
+          if (!localGroupChoices(proxies, id).includes(selected)) selections[id] = id === 'Proxy' ? String(proxies[0]?.name ?? 'REJECT') : id === 'Domestic' ? 'DIRECT' : 'Proxy';
+        }
+        policy = { ...buildLocalPolicy({ proxies, selections, rules: repair ? [] : workspace.local.rules, mode: workspace.runMode }),
           profile: { 'store-selected': false } };
       } else {
         if (!base) invalid('PROFILE_REQUIRED');
-        policy = overridePolicy({ ...base, proxies }, workspace.subscriptionOverrides.legacy ?? emptyOverrides(), workspace.runMode, workspace.revision > 0);
+        policy = overridePolicy({ ...base, proxies }, workspace.subscriptionOverrides.legacy ?? emptyOverrides(), workspace.runMode, workspace.revision > 0, repair);
       }
     }
-    return { workspace, policy, captures };
+    return { workspace, policy, captures, ...(legacy ? { legacy } : {}) };
   }
 
   async function apply(workspace: Workspace, expectedActive: unknown) {
@@ -119,13 +127,19 @@ export function createWorkspaceApplication(options: {
     const candidate = options.compile(plan.policy);
     // Bind the UI's exact settings and snapshots before staging; never recapture
     // an unrelated editor's latest settings as though the caller approved them.
-    if ((await load()).revision !== workspace.revision) invalid('WORKSPACE_CONFLICT');
-    for (const capture of plan.captures) {
-      const snapshot = await subscriptions.snapshot(capture.id, capture.revision);
-      if (snapshot.sha256 !== capture.digest) invalid('SOURCE_CONFLICT');
-    }
     await store.stage(candidate);
-    const result = await manager.apply(candidate.id, expectedActive as string | null);
+    const result = await manager.apply(candidate.id, expectedActive as string | null, async () => {
+      try {
+        if ((await load()).revision !== workspace.revision) invalid('WORKSPACE_CONFLICT');
+        if (plan.legacy !== undefined && canonicalJson(await options.legacyPolicy()) !== plan.legacy) invalid('DRAFT_CONFLICT');
+        for (const capture of plan.captures) {
+          const snapshot = await subscriptions.snapshot(capture.id, capture.revision);
+          if (snapshot.sha256 !== capture.digest) invalid('SOURCE_CONFLICT');
+        }
+      } catch (cause) {
+        throw new TransactionError(cause instanceof WorkspaceError || cause instanceof SubscriptionError ? cause.code : 'WORKSPACE_UNAVAILABLE');
+      }
+    });
     return { ...result, active: candidate.id, workspaceRevision: workspace.revision };
   }
 
@@ -137,18 +151,25 @@ export function createWorkspaceApplication(options: {
     try { plan = await build(workspace); candidate = options.compile(plan.policy); }
     catch (cause) {
       error = cause instanceof WorkspaceError || cause instanceof SubscriptionError || cause instanceof ConfigError ? cause.code : 'WORKSPACE_UNAVAILABLE';
+      // Invalid selections/rules remain blocked for application, but retain
+      // usable base options so users can repair them through the normal UI.
+      try { plan = await build(workspace, true); } catch { /* missing/broken sources remain explicit errors */ }
     }
     const policy = plan?.policy;
     const user = workspace.mode === 'local' ? workspace.local : workspace.subscriptionOverrides[workspace.mode === 'legacy' ? 'legacy' : workspace.subscriptionId ?? ''] ?? emptyOverrides();
     const groups = policy ? asGroups(policy).map(group => ({ name: String(group.name), type: String(group.type),
       selected: String(Array.isArray(group.proxies) ? group.proxies[0] ?? '' : ''), options: Array.isArray(group.proxies) ? group.proxies as string[] : [] })) : [];
     const allRules = policy && Array.isArray(policy.rules) ? policy.rules as string[] : [];
+    const invalidSelections = Object.entries(user.selections).filter(([name, selected]) => {
+      const group = groups.find(group => group.name === name);
+      return !group || group.type !== 'select' || !group.options.includes(selected);
+    }).map(([name]) => name);
     return { workspace, sources, active: status.active, pending: !candidate || candidate.id !== status.active,
       groups, nodes: policy ? asNodes(policy).map(proxy => String(proxy.name)) : [],
       catalog: serviceCatalog.map(({ id, name, default: enabled }) => ({ id, name, default: enabled })),
-      rules: allRules.slice(0, 2000).map((value, index) => ({ value, source: workspace.runMode === 'rule' && index < user.rules.length ? 'user' :
-        workspace.mode === 'local' ? 'template' : workspace.mode === 'subscription' ? 'subscription' : 'legacy', editable: index < user.rules.length && workspace.runMode === 'rule' })),
-      ruleCount: allRules.length, ...(error ? { error } : {}) };
+      rules: allRules.slice(0, 2000).map((value, index) => ({ value, source: !error && workspace.runMode === 'rule' && index < user.rules.length ? 'user' :
+        workspace.mode === 'local' ? 'template' : workspace.mode === 'subscription' ? 'subscription' : 'legacy', editable: !error && index < user.rules.length && workspace.runMode === 'rule' })),
+      ruleCount: allRules.length, invalidSelections, ...(error ? { error } : {}) };
   }
 
   return async (request: Request): Promise<unknown> => {

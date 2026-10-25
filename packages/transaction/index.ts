@@ -245,7 +245,7 @@ export class TransactionManager {
     await this.store.writeState(state);
   }
 
-  async apply(id: string, expectedActive: string | null): Promise<PublicStatus> {
+  async apply(id: string, expectedActive: string | null, precondition?: () => Promise<void>): Promise<PublicStatus> {
     return this.store.exclusive(async () => {
       if (!validId(id)) fail('INVALID_CANDIDATE_ID');
       if (!optionalId(expectedActive)) fail('INVALID_EXPECTED_ACTIVE');
@@ -253,6 +253,9 @@ export class TransactionManager {
       if (state.pending) fail('RECOVERY_REQUIRED');
       if (state.active !== expectedActive) fail('ACTIVE_CONFLICT');
       const path = await this.store.readCandidate(id);
+      // Application-specific revisions must be checked under this same lock,
+      // before any persisted intent or runtime operation is started.
+      await precondition?.();
       state.desired = id;
       state.pending = { id: randomUUID(), previous: state.active, target: id, phase: 'validating' };
       await this.store.writeState(state);

@@ -25,7 +25,7 @@ function settings(changes: Partial<WorkspaceSettings> = {}): WorkspaceSettings {
 function withoutRevision({ revision: _revision, ...value }: Workspace): WorkspaceSettings { return value; }
 type View = { workspace: Workspace; active: string | null; pending: boolean; error?: string;
   groups: { name: string; type: string; selected: string; options: string[] }[];
-  nodes: string[]; rules: { value: string; source: string; editable: boolean }[]; ruleCount: number };
+  nodes: string[]; rules: { value: string; source: string; editable: boolean }[]; ruleCount: number; invalidSelections: string[] };
 
 async function directory(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'coproxy-workspace-test-'));
@@ -192,6 +192,30 @@ test('failed selection apply restores the active generation while keeping review
   assert.equal((await new FileTransactionStore(f.state).status()).transaction, null);
 });
 
+test('workspace and source changes between capture and transaction entry reject stale activation', async t => {
+  const f = await fixture(t);
+  const metadata = await f.source('provider', profile);
+  const saved = await f.save(settings({ mode: 'subscription', subscriptionId: 'provider' }), 0);
+  const stage = FileTransactionStore.prototype.stage;
+  let mutation: (() => Promise<unknown>) | null = () => f.save(settings(), saved.revision);
+  FileTransactionStore.prototype.stage = async function(candidate) {
+    const result = await stage.call(this, candidate);
+    if (this.root === f.state && mutation) { const mutate = mutation; mutation = null; await mutate(); }
+    return result;
+  };
+  try {
+    await assert.rejects(f.apply(saved, null), { code: 'WORKSPACE_CONFLICT', status: 409 });
+    const current = (await f.view()).workspace;
+    const reset = await f.save(settings({ mode: 'subscription', subscriptionId: 'provider' }), current.revision);
+    mutation = () => f.call('/sources/provider', 'DELETE', { expectedRevision: metadata.revision });
+    await assert.rejects(f.apply(reset, null), { code: 'SOURCE_NOT_FOUND', status: 404 });
+    assert.deepEqual(f.events, []);
+    const status = await new FileTransactionStore(f.state).status();
+    assert.equal(status.active, null);
+    assert.equal(status.transaction, null);
+  } finally { FileTransactionStore.prototype.stage = stage; }
+});
+
 test('missing sources and node-only subscriptions fail explicitly without replacing the active config', async t => {
   const f = await fixture(t);
   const saved = await f.save(settings(), 0);
@@ -239,7 +263,10 @@ test('refresh detects stale selection overrides and source deletion leaves the a
   f.payloads.set('https://subscription.example/provider?token=EXAMPLE_ONLY_TOKEN', JSON.stringify({ proxies: [node],
     'proxy-groups': [{ name: 'Provider', type: 'select', proxies: ['DIRECT', 'REJECT'] }], rules: ['MATCH,Provider'] }));
   const refreshed = await f.call<{ revision: number }>('/sources/provider/refresh', 'POST', { expectedRevision: metadata.revision });
-  assert.equal((await f.view()).error, 'GROUP_SELECTION_CONFLICT');
+  const repair = await f.view();
+  assert.equal(repair.error, 'GROUP_SELECTION_CONFLICT');
+  assert.deepEqual(repair.groups.find(group => group.name === 'Provider')!.options, ['DIRECT', 'REJECT']);
+  assert.deepEqual(repair.invalidSelections, ['Provider']);
   await assert.rejects(f.apply(saved, active.active), { code: 'GROUP_SELECTION_CONFLICT', status: 409 });
   await f.call('/sources/provider', 'DELETE', { expectedRevision: refreshed.revision });
   const view = await f.view();
