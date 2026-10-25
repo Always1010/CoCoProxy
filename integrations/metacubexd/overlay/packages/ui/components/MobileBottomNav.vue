@@ -26,7 +26,7 @@ const primaryItems = computed(() => [
   { href: '/overview', name: t('overview'), icon: IconHome },
   { href: '/proxies', name: t('proxies'), icon: IconGlobe },
   { href: '/rules', name: t('rules'), icon: IconRuler },
-  { href: '/connections', name: t('connections'), icon: IconNetwork },
+  { href: '/subscriptions', name: '订阅', icon: IconServerCog },
 ])
 
 const leftPrimaryItems = computed(() => primaryItems.value.slice(0, 2))
@@ -34,7 +34,7 @@ const rightPrimaryItems = computed(() => primaryItems.value.slice(2, 4))
 
 // Secondary items in the FAB popup
 const secondaryItems = computed(() => [
-  { href: '/subscriptions', name: '订阅', icon: IconServerCog },
+  { href: '/connections', name: t('connections'), icon: IconNetwork },
   { href: '/traffic', name: t('dataUsage'), icon: IconChartAreaLine },
   { href: '/logs', name: t('logs'), icon: IconFileStack },
   { href: '/coproxy', name: '设置', icon: IconSettings },
@@ -229,7 +229,7 @@ onMounted(() => {
           </span>
         </div>
 
-        <!-- Right 2 items: Rules, Connections -->
+        <!-- Right 2 items: Rules, Subscriptions -->
         <NuxtLink
           v-for="nav in rightPrimaryItems"
           :key="nav.href"
