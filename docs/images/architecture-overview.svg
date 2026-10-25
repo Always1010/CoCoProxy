@@ -31,9 +31,9 @@
   <text x="72" y="342" font-size="20" font-weight="700">Coproxy 控制模块 · 运行于管理进程内</text>
   <text x="72" y="368" font-size="15" fill="#53677d">management：独立认证、会话、管理 API 与启动恢复</text>
   <rect x="72" y="393" width="220" height="105" rx="10" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
-  <text x="89" y="425" font-size="20" font-weight="700">草稿与订阅</text>
-  <text x="89" y="454" font-size="17">drafts / subscriptions</text>
-  <text x="89" y="481" font-size="15" fill="#53677d">策略、修订号、节点快照</text>
+  <text x="89" y="425" font-size="20" font-weight="700">工作区与订阅</text>
+  <text x="89" y="454" font-size="14">workspace / subscriptions</text>
+  <text x="89" y="481" font-size="15" fill="#53677d">方案、修订号、配置快照</text>
   <rect x="334" y="393" width="220" height="105" rx="10" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
   <text x="351" y="425" font-size="20" font-weight="700">配置编译</text>
   <text x="351" y="454" font-size="17">config / gateway</text>
@@ -46,7 +46,7 @@
   <rect x="72" y="534" width="482" height="76" rx="10" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
   <text x="89" y="565" font-size="20" font-weight="700">受限 controller 代理 · management</text>
   <text x="89" y="593" font-size="15" fill="#53677d">/api/clash/* · 会话鉴权、代次检查、服务端持有密钥</text>
-  <text x="72" y="628" font-size="15" fill="#53677d">共同底层：私有文件存储 · 草稿 / 快照 / 候选 / 事务 / selection</text>
+  <text x="72" y="628" font-size="15" fill="#53677d">共同底层：私有文件存储 · 工作区 / 草稿 / 快照 / 候选 / 事务 / selection</text>
   <path d="M1074 248 V278 H456 V306" fill="none" stroke="#16745b" stroke-width="2" marker-end="url(#greenArrow)"/>
   <rect x="579" y="264" width="320" height="27" fill="#ffffff"/>
   <text x="590" y="284" font-size="15" fill="#53677d">管理请求由 Server 挂载到自有模块</text>
