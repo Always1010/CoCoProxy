@@ -127,7 +127,7 @@ test('offline template compacts only pinned blocks and round-trips without accep
   assert.equal(recompileAutomaticGatewayConfig(gateway.config, network).id, gateway.id);
   assert.throws(() => compileConfig({ schemaVersion: 1, deployment, policy: { ...value, 'rule-providers': sets } }), ConfigError);
   const tampered = structuredClone(result.config);
-  ((tampered['rule-providers'] as JsonObject)['coproxy-domestic-domain-v1'] as JsonObject).payload = ['+.attacker.invalid'];
+  ((tampered['rule-providers'] as JsonObject)['cocoproxy-domestic-domain-v1'] as JsonObject).payload = ['+.attacker.invalid'];
   assert.throws(() => expandCompilerRuleSets(tampered), ConfigError);
   const changed = structuredClone(value);
   (changed.rules as string[]).splice(150, 1);

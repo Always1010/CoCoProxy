@@ -8,7 +8,7 @@ import { renderDeploymentPlan, type DeploymentPlan } from './plan.ts';
 
 // This is deliberately an offline file installer. Service lifecycle, router
 // activation and the existing root network helper remain separate operations.
-const STORE = '/var/lib/coproxy-deployment';
+const STORE = '/var/lib/cocoproxy-deployment';
 const RECEIPT = STORE + '/receipt.json';
 const HASH = /^[a-f0-9]{64}$/;
 type Operation = 'install' | 'upgrade' | 'uninstall';
@@ -194,7 +194,7 @@ async function networkClear(input: any) {
   require((await readFile('/proc/sys/net/ipv4/ip_forward', 'utf8')).trim() === '1', 'INSTALL_IPV4_FORWARDING_REQUIRED');
   const ip = (args: string[]) => run('/usr/sbin/ip', args).then(JSON.parse);
   const links = await ip(['-j', 'link', 'show']);
-  require(!links.some((l: any) => l.ifname === 'coproxy-tun'), 'INSTALL_TUN_CONFLICT');
+  require(!links.some((l: any) => l.ifname === 'cocoproxy-tun'), 'INSTALL_TUN_CONFLICT');
   const addresses = await ip(['-j', '-4', 'address', 'show', 'dev', n.ingressInterface]);
   require(addresses.length === 1 && addresses[0].flags.includes('UP') && addresses[0].addr_info.some((a: any) =>
     a.local === n.gatewayIPv4 && a.prefixlen === n.prefixLength), 'INSTALL_INGRESS_ADDRESS_REQUIRED');
@@ -205,8 +205,8 @@ async function networkClear(input: any) {
   require(!routes.some((r: any) => [String(n.egressTable), ...(n.clientCIDR ? [String(n.egressTable + 20000)] : []), '2022'].includes(String(r.table)) ||
     (r.table === 'main' || r.table === 254 || r.table === undefined) && [n.clientIPv4, n.clientIPv4 + '/32'].includes(r.dst)), 'INSTALL_ROUTE_CONFLICT');
   const tables = JSON.parse(await run('/usr/sbin/nft', ['-j', 'list', 'tables']));
-  require(!tables.nftables.some((t: any) => ['coproxy_auto_guard', 'mihomo'].includes(t.table?.name)), 'INSTALL_NFT_CONFLICT');
-  const receiptPath = '/var/lib/coproxy-gateway-network/network-receipt.json';
+  require(!tables.nftables.some((t: any) => ['cocoproxy_auto_guard', 'mihomo'].includes(t.table?.name)), 'INSTALL_NFT_CONFLICT');
+  const receiptPath = '/var/lib/cocoproxy-gateway-network/network-receipt.json';
   if (await info(receiptPath)) {
     await trusted(receiptPath); await privateFile(receiptPath, 0);
     const previous = JSON.parse((await regular(receiptPath)).toString());
@@ -237,7 +237,7 @@ async function writeExclusive(path: string, bytes: Buffer | string, mode: number
   try { await handle.writeFile(bytes); await handle.chown(uid, 0); await handle.chmod(mode); await handle.sync(); } finally { await handle.close(); }
 }
 async function atomic(path: string, bytes: string, mode: number, uid = 0) {
-  const temporary = posix.dirname(path) + '/.coproxy-install-' + randomUUID();
+  const temporary = posix.dirname(path) + '/.cocoproxy-install-' + randomUUID();
   await writeExclusive(temporary, bytes, mode, uid);
   await rename(temporary, path);
   const directory = await open(posix.dirname(path), constants.O_RDONLY | constants.O_DIRECTORY);
@@ -289,7 +289,7 @@ export async function deployRelease(options: InstallOptions) {
     accounts.filter(a => Number(a[2]) === input.runtime.serviceUid).length === 1 &&
     accounts.some(a => a[0] === input.management.serviceUser && Number(a[2]) === input.runtime.serviceUid &&
       ['/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false'].includes(a[6])), 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
-  const units = ['coproxy-mihomo.service', 'coproxy-management.service', 'coproxy-gateway-network.service'];
+  const units = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service'];
   await stopped(input.runtime.systemctlPath, units);
   await trusted(posix.dirname(target)); await trusted(STORE, true);
   if (await info(STORE)) require(((await lstat(STORE)).mode & 0o7777) === 0o700, 'INSTALL_RECEIPT_DIRECTORY_PRIVATE_REQUIRED');
@@ -355,7 +355,7 @@ export async function deployRelease(options: InstallOptions) {
   const preview = { operation: options.operation, apply: Boolean(options.apply), release: target,
     files: plan.files.map(file => ({ path: file.path, mode: file.mode, owner: file.owner,
       action: options.operation === 'uninstall' ? file.sensitive ? 'preserve' : 'remove' : 'write' })),
-    preserved: [input.runtime.stateDirectory, input.management.credentialPath, '/var/lib/coproxy-gateway-network'],
+    preserved: [input.runtime.stateDirectory, input.management.credentialPath, '/var/lib/cocoproxy-gateway-network'],
     services: 'remain stopped and disabled', network: 'unchanged', configurationReviewed };
   if (!options.apply) return preview;
   if (!(await info(STORE))) { await mkdir(STORE, { mode: 0o700 }); await chown(STORE, 0, 0); await chmod(STORE, 0o700); }

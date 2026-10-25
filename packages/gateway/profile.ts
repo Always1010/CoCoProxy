@@ -162,8 +162,8 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
       ...compiled.config,
       'interface-name': settings.ingressInterface,
       'routing-mark': settings.egressMark,
-      'x-coproxy-gateway': { ...settings },
-      tun: { enable: true, device: 'coproxy-tun', stack: settings.tunStack ?? 'mips', mtu: settings.tunMtu,
+      'x-cocoproxy-gateway': { ...settings },
+      tun: { enable: true, device: 'cocoproxy-tun', stack: settings.tunStack ?? 'mips', mtu: settings.tunMtu,
         'auto-route': true, 'auto-redirect': true, 'auto-detect-interface': false, 'strict-route': true,
         'include-interface': [settings.ingressInterface], 'route-exclude-address': [connected],
         // Forwarded clients belong to the gateway; local applications retain
@@ -181,7 +181,7 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
 }
 
 const overlayKeys = ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer',
-  'interface-name', 'routing-mark', 'x-coproxy-gateway'];
+  'interface-name', 'routing-mark', 'x-cocoproxy-gateway'];
 
 /** Extraction for trusted recompile, not proof that an arbitrary stored config is valid. */
 export function automaticGatewayPolicy(config: JsonObject): JsonObject {

@@ -76,4 +76,4 @@ node scripts/network-benchmark.mjs --help
 - 多站点可帮助发现单站限速或拥挤，不能消除所有远端因素。即使多个站点都跑不高，也不能直接断言就是设备极限；无线接入、共享上游、服务端和当前分流路径仍可能限制结果。代理路径单列，不混入直连带宽结论。
 - 结果含真实接口、默认路由、连接地址及目标，全部留在被忽略的本地目录，不公开、不提交。不采集网站正文、原始 curl 错误、订阅和凭据。
 
-针对性本机合成验证：`node --test tests/network-benchmark.test.mjs tests/benchmark-observer.test.mjs`。远端 Python 纯函数及生命周期用既有 Python 配合 `COPROXY_TEST_PYTHON` 显式启用；不安装运行时，不运行互联网满载测试。
+针对性本机合成验证：`node --test tests/network-benchmark.test.mjs tests/benchmark-observer.test.mjs`。远端 Python 纯函数及生命周期用既有 Python 配合 `COCOPROXY_TEST_PYTHON` 显式启用；不安装运行时，不运行互联网满载测试。

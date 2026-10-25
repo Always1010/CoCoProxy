@@ -24,7 +24,7 @@ function input(label = 'first'): JsonObject {
 }
 
 async function fixture(t: test.TestContext) {
-  const directory = await mkdtemp(join(tmpdir(), 'coproxy-drafts-'));
+  const directory = await mkdtemp(join(tmpdir(), 'cocoproxy-drafts-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const root = join(directory, 'store');
   return { root, store: new DraftStore(root), transactions: new FileTransactionStore(root) };

@@ -31,7 +31,7 @@ node tooling/node_modules/pnpm/bin/pnpm.cjs --dir "$UPSTREAM" --filter '@metacub
 node scripts/apply-metacubexd-overlay.mjs --directory "$UPSTREAM"
 CI=true NUXT_TELEMETRY_DISABLED=1 node tooling/node_modules/pnpm/bin/pnpm.cjs --dir "$UPSTREAM" --filter @metacubexd/ui generate
 node scripts/typecheck-metacubexd-ui.mjs --directory "$UPSTREAM"
-CI=true COPROXY_SOURCE_DIR="$PWD" node tooling/node_modules/pnpm/bin/pnpm.cjs --dir "$UPSTREAM" --filter @metacubexd/server build
+CI=true COCOPROXY_SOURCE_DIR="$PWD" node tooling/node_modules/pnpm/bin/pnpm.cjs --dir "$UPSTREAM" --filter @metacubexd/server build
 ```
 
 安装限定 Server/UI 依赖，使用固定 pnpm 10.34.1，不执行依赖生命周期脚本。构建前后核对上游锁文件不变；不安装 Desktop/Electron 或浏览器资产。UI 类型检查脚本显式使用锁定 TypeScript 5.9.3，以避开上游 vue-tsc 3.3.10 默认调用 TypeScript 7 的启动问题。
@@ -43,7 +43,7 @@ Overlay 工具逐项核对原上游 blob 或相同已应用 overlay，整批预�
 审阅私有设置后可启动回环服务：
 
 ```sh
-COPROXY_MANAGEMENT_CONFIG=/absolute/private/management.json NITRO_HOST=127.0.0.1 NITRO_PORT=18080 node "$UPSTREAM/apps/server/.output/server/index.mjs"
+COCOPROXY_MANAGEMENT_CONFIG=/absolute/private/management.json NITRO_HOST=127.0.0.1 NITRO_PORT=18080 node "$UPSTREAM/apps/server/.output/server/index.mjs"
 ```
 
 此 HTTP origin 仅限精确 loopback；远程入口使用匹配 origin 的 HTTPS 反代。启动管理服务不自动应用新配置，核心应用依赖单独安装的 unit 和授权。

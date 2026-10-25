@@ -1,11 +1,11 @@
-import { loadManagementGateway } from '@coproxy/packages/management/service.ts'
+import { loadManagementGateway } from '@cocoproxy/packages/management/service.ts'
 
 let gateway: ReturnType<typeof loadManagementGateway> | undefined
 
 /** Deployment config is private; no core or scheduler is started on import. */
-export function getCoproxy() {
+export function getCoCoProxy() {
   if (!gateway) {
-    const path = process.env.COPROXY_MANAGEMENT_CONFIG
+    const path = process.env.COCOPROXY_MANAGEMENT_CONFIG
     if (!path) return Promise.reject(new Error('MANAGEMENT_UNAVAILABLE'))
     gateway = loadManagementGateway(path).catch(() => {
       gateway = undefined

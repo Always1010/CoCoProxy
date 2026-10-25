@@ -1,8 +1,8 @@
 import { defineNitroPlugin } from 'nitropack/runtime'
-import { ManagementError } from '@coproxy/packages/management/http.ts'
-import { getCoproxy } from '../lib/coproxy'
+import { ManagementError } from '@cocoproxy/packages/management/http.ts'
+import { getCoCoProxy } from '../lib/cocoproxy'
 
-// systemd and the explicit Coproxy transaction own the core lifecycle.
+// systemd and the explicit CoCoProxy transaction own the core lifecycle.
 export default defineNitroPlugin(async (app) => {
   // h3 caches this adapter options object. Nitro passes it to crossws/node.
   Object.assign(app.h3App.websocket, {
@@ -16,7 +16,7 @@ export default defineNitroPlugin(async (app) => {
           if (!new URL(request.url).pathname.startsWith('/api/clash/')) {
             return new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } })
           }
-          const gateway = await getCoproxy()
+          const gateway = await getCoCoProxy()
           gateway.authorize(request, true)
         } catch (error) {
           return new Response(null, {
@@ -28,11 +28,11 @@ export default defineNitroPlugin(async (app) => {
     },
   })
   try {
-    const recovered = await (await getCoproxy()).recoverStartup()
-    if (!recovered.recovered) console.error('COPROXY_STARTUP_RECOVERY_INCOMPLETE')
+    const recovered = await (await getCoCoProxy()).recoverStartup()
+    if (!recovered.recovered) console.error('COCOPROXY_STARTUP_RECOVERY_INCOMPLETE')
   } catch {
     // Serve the management shell and fixed unavailable errors; no second core
     // supervisor or periodic automatic retry is started after failed recovery.
-    console.error('COPROXY_STARTUP_RECOVERY_UNAVAILABLE')
+    console.error('COCOPROXY_STARTUP_RECOVERY_UNAVAILABLE')
   }
 })

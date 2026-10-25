@@ -13,10 +13,10 @@ import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
 import { decodeSubscriptionProfile } from '../packages/subscriptions/yaml.ts';
 
-const entry = process.env.COPROXY_TEST_SERVER;
-const playwrightModule = process.env.COPROXY_TEST_PLAYWRIGHT;
-const browserBinary = process.env.COPROXY_TEST_BROWSER;
-const artifacts = process.env.COPROXY_TEST_ARTIFACTS;
+const entry = process.env.COCOPROXY_TEST_SERVER;
+const playwrightModule = process.env.COCOPROXY_TEST_PLAYWRIGHT;
+const browserBinary = process.env.COCOPROXY_TEST_BROWSER;
+const artifacts = process.env.COCOPROXY_TEST_ARTIFACTS;
 const username = 'synthetic-admin';
 const password = 'synthetic-browser-test-password';
 const secret = 'synthetic-controller-secret-not-for-browser';
@@ -44,7 +44,7 @@ function rejectedSocket(url: string, expectedStatus: number, headers: Record<str
 for (const automatic of [false, true]) test(`built management server gates ${automatic ? 'automatic' : 'explicit'} HTTP/WS and preserves candidate receipts`,
   { skip: !entry || process.platform !== 'linux', timeout: 120_000 }, async t => {
     assert.ok(isAbsolute(entry!));
-    const root = await mkdtemp(join(tmpdir(), 'coproxy-server-live-'));
+    const root = await mkdtemp(join(tmpdir(), 'cocoproxy-server-live-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const origin = `http://127.0.0.1:${await freePort()}`;
     const credentialPath = join(root, 'admin.json');
@@ -54,7 +54,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
     await writeFile(credentialPath, JSON.stringify(await createAdminCredential({ username, password })), { mode: 0o600 });
     await writeFile(runtimeSettingsPath, JSON.stringify({ schemaVersion: 1, stateDirectory: join(root, 'state'),
       binaryPath: '/synthetic/not-installed', binarySha256: automatic ? AUTOMATIC_GATEWAY_CORE_SHA256 : 'a'.repeat(64), systemctlPath: '/synthetic/not-systemctl',
-      unitPath: '/synthetic/coproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345,
+      unitPath: '/synthetic/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345,
       ...(automatic ? { automaticGateway: { schemaVersion: 1, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2',
         routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24,
         dnsPort: 15353, egressMark: 65536, egressTable: 2024, egressPriority: 8000, tunMtu: 1500 } } : {}) }), { mode: 0o600 });
@@ -77,7 +77,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
       await sources.refresh(alternative.id, alternative.revision);
     }
     const child = spawn(process.execPath, [entry!], { env: { ...process.env, NITRO_HOST: '127.0.0.1', NITRO_PORT: new URL(origin).port,
-      COPROXY_MANAGEMENT_CONFIG: settingsPath, CONTROL_TOKEN: secret, GITHUB_TOKEN: secret }, cwd: '/', stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      COCOPROXY_MANAGEMENT_CONFIG: settingsPath, CONTROL_TOKEN: secret, GITHUB_TOKEN: secret }, cwd: '/', stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let outputBytes = 0;
     for (const stream of [child.stdout!, child.stderr!]) stream.on('data', chunk => {
       outputBytes += chunk.length; if (outputBytes > 256 * 1024) child.kill('SIGTERM');
@@ -89,7 +89,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
       try { await exit; } finally { clearTimeout(timer); }
     });
     for (let i = 0; ; i++) {
-      try { if ((await fetch(origin + '/api/coproxy/health')).ok) break; } catch {}
+      try { if ((await fetch(origin + '/api/cocoproxy/health')).ok) break; } catch {}
       if (i >= 100 || child.exitCode !== null) throw new Error('SERVER_START_FAILED');
       await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -97,7 +97,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
       fetch(origin + path, { method, headers: { ...(method === 'GET' ? {} : { origin, 'content-type': 'application/json' }),
         ...(cookie ? { cookie } : {}), ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const ws = origin.replace('http:', 'ws:');
-    const shell = await call('/coproxy');
+    const shell = await call('/cocoproxy');
     assert.equal(shell.status, 200); assert.match(shell.headers.get('content-type')!, /text\/html/);
     assert.equal((await call('/api/session')).status, 401);
     assert.equal((await call('/api/control/kernel/start', 'POST', {})).status, 404);
@@ -114,16 +114,16 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
     await rejectedSocket(ws + '/api/clash/traffic', 403, { cookie });
     assert.equal((await call('/api/clash/version', 'GET', undefined, cookie)).status, 503);
     assert.equal((await call('/api/clash/version?token=x', 'GET', undefined, cookie)).status, 400);
-    assert.equal((await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy }, cookie, { origin: 'https://other.example' })).status, 403);
-    assert.equal((await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy }, cookie)).status, 200);
-    const receipt = await (await call('/api/coproxy/stage', 'POST', { expectedRevision: 1 }, cookie)).json();
+    assert.equal((await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy }, cookie, { origin: 'https://other.example' })).status, 403);
+    assert.equal((await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy }, cookie)).status, 200);
+    const receipt = await (await call('/api/cocoproxy/stage', 'POST', { expectedRevision: 1 }, cookie)).json();
     assert.match(receipt.generation, /^[a-f0-9]{64}$/);
     const captured = JSON.parse(await readFile(join(root, 'state/candidates', receipt.generation + '.json'), 'utf8'));
     assert.equal(captured.tun.enable, automatic);
-    const status = await (await call('/api/coproxy/status', 'GET', undefined, cookie)).json();
+    const status = await (await call('/api/cocoproxy/status', 'GET', undefined, cookie)).json();
     assert.equal(status.gateway.ready, false);
     if (automatic) assert.equal(status.gateway.profile, 'mihomo-automatic');
-    assert.ok(!(await (await call('/api/coproxy/draft', 'GET', undefined, cookie)).text()).includes(secret));
+    assert.ok(!(await (await call('/api/cocoproxy/draft', 'GET', undefined, cookie)).text()).includes(secret));
 
     await t.test('browser subscription and local schemes, service groups, rule editing, responsive layout and logout',
       { skip: !playwrightModule || !browserBinary, timeout: 90_000 }, async () => {
@@ -138,12 +138,12 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           page = await context.newPage();
           page.setDefaultTimeout(10_000);
           page.on('pageerror', (error: Error) => errors.push(error.message));
-          await page.goto(origin + '/#/coproxy');
-          await page.locator('#coproxy-username').fill(username);
-          await page.locator('#coproxy-password').fill(password);
+          await page.goto(origin + '/#/cocoproxy');
+          await page.locator('#cocoproxy-username').fill(username);
+          await page.locator('#cocoproxy-password').fill(password);
           await page.getByRole('button', { name: '登录', exact: true }).click();
           await page.waitForURL(/#\/overview$/);
-          assert.equal(await page.locator('#coproxy-policy').count(), 0);
+          assert.equal(await page.locator('#cocoproxy-policy').count(), 0);
           const prefix = automatic ? 'automatic' : 'explicit';
           const screenshot = async (name: string) => {
             if (artifacts) await page.screenshot({ path: join(artifacts, `${prefix}-${name}.png`), fullPage: true, animations: 'disabled' });
@@ -154,7 +154,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           };
           const savedChange = async (action: () => Promise<unknown>) => {
             const [response] = await Promise.all([
-              page.waitForResponse((response: any) => new URL(response.url()).pathname === '/api/coproxy/workspace' && response.request().method() === 'PUT'),
+              page.waitForResponse((response: any) => new URL(response.url()).pathname === '/api/cocoproxy/workspace' && response.request().method() === 'PUT'),
               action(),
             ]);
             assert.equal(response.status(), 200, await response.text());
@@ -164,7 +164,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
             });
           };
           const workspace = async () => {
-            const response = await context.request.get(origin + '/api/coproxy/workspace');
+            const response = await context.request.get(origin + '/api/cocoproxy/workspace');
             assert.equal(response.status(), 200);
             return response.json();
           };
@@ -174,17 +174,17 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           const beforeImport = await workspace();
           let emptyImportView = true;
           let importedId = '';
-          await context.route('**/api/coproxy/workspace', async (route: any) => {
+          await context.route('**/api/cocoproxy/workspace', async (route: any) => {
             if (!emptyImportView || route.request().method() !== 'GET') { await route.continue(); return; }
             const response = await route.fetch(); const body = await response.json();
             body.sources = []; body.workspace.mode = 'local'; body.workspace.sourceIds = [];
             await route.fulfill({ response, json: body });
           });
-          await context.route('**/api/coproxy/sources/*', async (route: any) => {
+          await context.route('**/api/cocoproxy/sources/*', async (route: any) => {
             if (route.request().method() === 'PUT') emptyImportView = false;
             await route.continue();
           });
-          await context.route('**/api/coproxy/sources/*/refresh', async (route: any) => {
+          await context.route('**/api/cocoproxy/sources/*/refresh', async (route: any) => {
             importedId = new URL(route.request().url()).pathname.split('/').at(-2)!;
             emptyImportView = false;
             await route.fulfill({ json: await refreshBrowserSource!(importedId, route.request().postDataJSON().expectedRevision) });
@@ -194,21 +194,21 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           await page.getByPlaceholder('订阅名称', { exact: true }).fill('首次导入测试');
           await page.getByPlaceholder('https://…', { exact: true }).fill('https://subscription.example/first-import');
           const [firstActivation] = await Promise.all([
-            page.waitForResponse((response: any) => new URL(response.url()).pathname === '/api/coproxy/workspace/apply'),
+            page.waitForResponse((response: any) => new URL(response.url()).pathname === '/api/cocoproxy/workspace/apply'),
             page.getByRole('button', { name: '导入', exact: true }).click(),
           ]);
           assert.equal(firstActivation.status(), 503);
           await page.waitForFunction(() => !(document.querySelector('select[aria-label="配置方案"]') as HTMLSelectElement)?.disabled);
           const imported = await workspace();
           assert.deepEqual(imported.workspace.sourceIds, [importedId]);
-          await context.unroute('**/api/coproxy/workspace');
-          await context.unroute('**/api/coproxy/sources/*/refresh');
-          await context.unroute('**/api/coproxy/sources/*');
+          await context.unroute('**/api/cocoproxy/workspace');
+          await context.unroute('**/api/cocoproxy/sources/*/refresh');
+          await context.unroute('**/api/cocoproxy/sources/*');
           const { revision: _revision, ...originalSettings } = beforeImport.workspace;
-          assert.equal((await context.request.put(origin + '/api/coproxy/workspace', { headers: { origin },
+          assert.equal((await context.request.put(origin + '/api/cocoproxy/workspace', { headers: { origin },
             data: { expectedRevision: imported.workspace.revision, settings: originalSettings } })).status(), 200);
-          const importedSource = await (await context.request.get(`${origin}/api/coproxy/sources/${importedId}`)).json();
-          assert.equal((await context.request.delete(`${origin}/api/coproxy/sources/${importedId}`, { headers: { origin },
+          const importedSource = await (await context.request.get(`${origin}/api/cocoproxy/sources/${importedId}`)).json();
+          assert.equal((await context.request.delete(`${origin}/api/cocoproxy/sources/${importedId}`, { headers: { origin },
             data: { expectedRevision: importedSource.source.revision } })).status(), 200);
           await page.reload();
           await navigate('subscriptions');
@@ -259,7 +259,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           assert.equal(await page.getByRole('button', { name: '应用', exact: true }).count(), 0);
           await page.getByRole('alert').filter({ hasText: '配置校验失败' }).waitFor();
           assert.equal(await page.getByRole('status').filter({ hasText: /已生效|已切换/ }).count(), 0);
-          const status = await (await call('/api/coproxy/status', 'GET', undefined, cookie)).json();
+          const status = await (await call('/api/cocoproxy/status', 'GET', undefined, cookie)).json();
           assert.equal(status.active, null); assert.match(status.desired, /^[a-f0-9]{64}$/);
           assert.equal(status.gateway.ready, false);
           // A controlled core receipt exercises the successful browser path:
@@ -270,7 +270,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           let interruptNextActivation = false;
           let activations = 0;
           let observedActive = 'c'.repeat(64);
-          await context.route('**/api/coproxy/workspace/apply', async (route: any) => {
+          await context.route('**/api/cocoproxy/workspace/apply', async (route: any) => {
             activations++;
             const current = await workspace();
             assert.equal(route.request().postDataJSON().expectedRevision, current.workspace.revision);
@@ -290,7 +290,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
             }
             await route.fulfill({ json: { active: observedActive, workspaceRevision: effectiveRevision } });
           });
-          await context.route('**/api/coproxy/workspace', async (route: any) => {
+          await context.route('**/api/cocoproxy/workspace', async (route: any) => {
             if (route.request().method() !== 'GET') { await route.continue(); return; }
             const response = await route.fetch();
             const body = await response.json();
@@ -307,7 +307,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
             for (const name of new Set([...effectiveGroups.flatMap(group => group.options), ...Array.from({ length: 60 }, (_, i) => `synthetic-scroll-${i}`)])) if (!proxies[name])
               proxies[name] = { name, type: name === 'DIRECT' ? 'Direct' : name === 'REJECT' ? 'Reject' : 'Socks5', history: [], udp: true };
             proxies.GLOBAL = { name: 'GLOBAL', type: 'Selector', now: 'DIRECT', all: Object.keys(proxies), history: [], udp: true };
-            return route.fulfill({ headers: { 'x-coproxy-generation': observedActive }, json: { proxies } });
+            return route.fulfill({ headers: { 'x-cocoproxy-generation': observedActive }, json: { proxies } });
           });
           await context.route('**/api/clash/providers/proxies', (route: any) => route.fulfill({ json: { providers: {} } }));
           await navigate('proxies');
@@ -364,7 +364,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           await testLatency.click();
           await page.getByText('代理 88 ms', { exact: true }).first().waitFor();
           await page.locator('[data-sonner-toast]').first().waitFor({ state: 'hidden' });
-          await context.route('**/api/coproxy/workspace/tcp-delay', (route: any) => {
+          await context.route('**/api/cocoproxy/workspace/tcp-delay', (route: any) => {
             const body = route.request().postDataJSON();
             return route.fulfill({ json: { name: body.name, fingerprint: body.fingerprint, status: 'success', delay: 12, checkedAt: new Date().toISOString() } });
           });
@@ -397,7 +397,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
               // Common controls must have words rendered on touch devices;
               // an aria-label or hover tooltip alone does not meet this check.
               assert.match(await page.getByRole('button', { name: '刷新', exact: true }).innerText(), /刷新/);
-              assert.equal(await page.locator('select[aria-label="配置方案"]').locator('..').locator('a[href$="/coproxy"]').count(), 0);
+              assert.equal(await page.locator('select[aria-label="配置方案"]').locator('..').locator('a[href$="/cocoproxy"]').count(), 0);
               if (route === 'subscriptions') {
                 await page.getByRole('heading', { name: '浏览器测试订阅', exact: true }).waitFor();
                 for (const action of ['更新', '编辑', '删除']) {
@@ -452,11 +452,11 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
               await screenshot(`${route}-${viewport.name}`);
             }
           }
-          if (!await page.locator('a[href$="/coproxy"]:visible').count()) await page.getByRole('button', { name: 'More menu', exact: true }).click();
-          await page.locator('a[href$="/coproxy"]:visible').first().click();
+          if (!await page.locator('a[href$="/cocoproxy"]:visible').count()) await page.getByRole('button', { name: 'More menu', exact: true }).click();
+          await page.locator('a[href$="/cocoproxy"]:visible').first().click();
           await page.getByRole('heading', { name: '设置', exact: true }).waitFor();
           await page.getByRole('button', { name: '退出登录', exact: true }).click();
-          await page.locator('#coproxy-username').waitFor();
+          await page.locator('#cocoproxy-username').waitFor();
           assert.equal((await context.request.get(origin + '/api/session')).status(), 401);
           assert.deepEqual(errors, []);
         } catch (error) {

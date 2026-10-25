@@ -16,7 +16,7 @@ function input() {
     policy: { proxies: [], rules: ['MATCH,REJECT'] } },
   network: { schemaVersion: 1, core: { serviceUid: 12345, binarySha256: GATEWAY_CORE_SHA256, unitSha256: 'c'.repeat(64) },
     ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
-    routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353, tun: { interface: 'coproxy-tun', mtu: 1500 },
+    routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353, tun: { interface: 'cocoproxy-tun', mtu: 1500 },
     marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
     tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } } };
 }
@@ -28,12 +28,12 @@ test('gateway preview binds complete network deployment to the canonical core ge
   assert.equal(preview.networkPlan.deployment.generation, preview.candidate.id);
   assert.equal(config['routing-mark'], source.network.marks.egress);
   assert.equal(config['interface-name'], 'lan-test');
-  assert.deepEqual(config.tun, { enable: true, device: 'coproxy-tun', stack: 'mips', mtu: 1500,
+  assert.deepEqual(config.tun, { enable: true, device: 'cocoproxy-tun', stack: 'mips', mtu: 1500,
     'auto-route': false, 'auto-redirect': false, 'auto-detect-interface': false, gso: false, 'dns-hijack': [], 'disable-icmp-forwarding': true });
   assert.equal((config.dns as Record<string, unknown>).listen, '192.0.2.2:15353');
   assert.equal((config.dns as Record<string, unknown>)['listen-routing-mark'], source.network.marks.egress);
   assert.equal((config.dns as Record<string, unknown>)['enhanced-mode'], 'redir-host');
-  assert.deepEqual(preview.expectedTun, { interface: 'coproxy-tun', address: '198.18.0.1/30', mtu: 1500 });
+  assert.deepEqual(preview.expectedTun, { interface: 'cocoproxy-tun', address: '198.18.0.1/30', mtu: 1500 });
   assert.equal(preview.activation, 'unsupported-by-current-runtime');
   assert.equal(preview.networkPlan.status.terminalPath, 'unverified');
   source.network.routerMAC = '02:00:00:00:00:02';
@@ -44,9 +44,9 @@ test('gateway preview binds complete network deployment to the canonical core ge
   const separate = compileGatewayPreview({ ...input(), network: { ...input().network, management: { serviceUid: 12346 } } });
   assert.notEqual(separate.candidate.id, preview.candidate.id);
   assert.deepEqual(separate.networkPlan.deployment.management, { serviceUid: 12346 });
-  assert.deepEqual((separate.candidate.config['x-coproxy-network'] as Record<string, unknown>).management, { serviceUid: 12346 });
+  assert.deepEqual((separate.candidate.config['x-cocoproxy-network'] as Record<string, unknown>).management, { serviceUid: 12346 });
   const explicit = compileConfig(input().base);
-  assert.equal(explicit.config['x-coproxy-network'], undefined);
+  assert.equal(explicit.config['x-cocoproxy-network'], undefined);
   assert.deepEqual(explicit.config.tun, { enable: false });
 });
 
@@ -62,7 +62,7 @@ test('gateway preview rejects deployment mismatches, recursive policy injection 
   }
   const overlap = input(); Object.assign(overlap.network, { gatewayIPv4: '198.18.0.2', routerIPv4: '198.18.0.1', clientIPv4: '198.18.0.3' }); invalid(overlap);
   invalid({ ...input(), network: { ...input().network, generation: 'a'.repeat(64) } });
-  for (const policy of [{ 'x-coproxy-network': {} }, { proxies: [{ name: 'node', type: 'vless', 'x-coproxy-network': {} }] }]) {
+  for (const policy of [{ 'x-cocoproxy-network': {} }, { proxies: [{ name: 'node', type: 'vless', 'x-cocoproxy-network': {} }] }]) {
     invalid({ ...input(), base: { ...input().base, policy } });
   }
   let executed = false;
@@ -74,19 +74,19 @@ test('gateway preview rejects deployment mismatches, recursive policy injection 
 
 test('explicit runtime rejects a hash-valid gateway preview before it can gain network capability',
   { skip: process.platform !== 'linux' }, async t => {
-    const root = await mkdtemp(join(tmpdir(), 'coproxy-gateway-profile-'));
+    const root = await mkdtemp(join(tmpdir(), 'cocoproxy-gateway-profile-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const preview = compileGatewayPreview(input());
     await new FileTransactionStore(root).stage(preview.candidate);
     await assert.rejects(loadRuntimeCandidate({ schemaVersion: 1, stateDirectory: root,
-      binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256, systemctlPath: '/usr/bin/systemctl',
-      unitPath: '/etc/systemd/system/coproxy-mihomo.service', unitSha256: 'c'.repeat(64), serviceUid: 12345 }, preview.candidate.id),
+      binaryPath: '/opt/cocoproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256, systemctlPath: '/usr/bin/systemctl',
+      unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', unitSha256: 'c'.repeat(64), serviceUid: 12345 }, preview.candidate.id),
     (error: unknown) => error instanceof Error && error.message === 'CANDIDATE_UNTRUSTED');
   });
 
 test('reviewed core parses the protected gateway preview without starting TUN or listeners',
-  { skip: !process.env.COPROXY_TEST_MIHOMO, timeout: 20_000 }, async () => {
-    const binaryPath = process.env.COPROXY_TEST_MIHOMO!;
+  { skip: !process.env.COCOPROXY_TEST_MIHOMO, timeout: 20_000 }, async () => {
+    const binaryPath = process.env.COCOPROXY_TEST_MIHOMO!;
     const review = JSON.parse(await readFile(new URL('../integrations/metacubexd/review.json', import.meta.url), 'utf8'));
     assert.equal(GATEWAY_CORE_SHA256, review.coreCandidate.binarySha256);
     assert.equal(createHash('sha256').update(await readFile(binaryPath)).digest('hex'), GATEWAY_CORE_SHA256);

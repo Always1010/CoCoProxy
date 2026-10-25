@@ -1,5 +1,5 @@
 import { useWorkspace } from './useWorkspace'
-import { coproxyErrorMessage } from './useCoproxy'
+import { cocoproxyErrorMessage } from './useCoCoProxy'
 
 type TcpResult = {
   name: string
@@ -13,7 +13,7 @@ const pending = new Map<string, Promise<void>>()
 
 export function useTcpDelay() {
   const { api, view } = useWorkspace()
-  const results = useState<Record<string, Entry>>('coproxy-tcp-delay-results', () => ({}))
+  const results = useState<Record<string, Entry>>('cocoproxy-tcp-delay-results', () => ({}))
   const isRunning = ref(false)
   const completed = ref(0)
   const total = ref(0)
@@ -34,7 +34,7 @@ export function useTcpDelay() {
     const task = (async () => {
       results.value[node.fingerprint] = { status: 'testing' }
       try {
-        const result = await api.request<TcpResult>('/api/coproxy/workspace/tcp-delay', {
+        const result = await api.request<TcpResult>('/api/cocoproxy/workspace/tcp-delay', {
           method: 'POST', signal,
           body: { expectedRevision: current.workspace.revision, expectedActive: current.active, name, fingerprint: node.fingerprint },
         })
@@ -42,7 +42,7 @@ export function useTcpDelay() {
           results.value[node.fingerprint] = result
       } catch (error) {
         if (api.session.value === session && !signal?.aborted)
-          results.value[node.fingerprint] = { status: 'error', message: coproxyErrorMessage(error) }
+          results.value[node.fingerprint] = { status: 'error', message: cocoproxyErrorMessage(error) }
       } finally {
         if (results.value[node.fingerprint]?.status === 'testing') delete results.value[node.fingerprint]
         pending.delete(node.fingerprint)

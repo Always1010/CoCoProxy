@@ -39,7 +39,7 @@ class TestRuntime implements RuntimeAdapter {
 }
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-transaction-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-transaction-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new FileTransactionStore(root);
   const runtime = new TestRuntime();

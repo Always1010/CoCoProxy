@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="970" viewBox="0 0 1440 970" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" fill="#182b43" role="img" aria-labelledby="title desc">
-  <title id="title">Coproxy 当前软件架构</title>
-  <desc id="desc">箭头仅表示请求、配置或业务数据从发起方传到接收方，响应省略。管理面使用经适配的 MetaCubeXD UI 和 Nitro Server，连接 Coproxy 自有模块；数据面由 Mihomo 处理。启动、监管、权限检查和 Linux 运行底座在独立的系统运行图中展示。</desc>
+  <title id="title">CoCoProxy 当前软件架构</title>
+  <desc id="desc">箭头仅表示请求、配置或业务数据从发起方传到接收方，响应省略。管理面使用经适配的 MetaCubeXD UI 和 Nitro Server，连接 CoCoProxy 自有模块；数据面由 Mihomo 处理。启动、监管、权限检查和 Linux 运行底座在独立的系统运行图中展示。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#486079"/></marker>
     <marker id="greenArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#16745b"/></marker>
   </defs>
   <rect width="1440" height="970" fill="#ffffff"/>
-  <text x="48" y="53" font-size="31" font-weight="700">Coproxy · 软件组成与运行关系</text>
+  <text x="48" y="53" font-size="31" font-weight="700">CoCoProxy · 软件组成与运行关系</text>
   <text x="48" y="87" font-size="17" fill="#53677d">一个代理内核，两条业务入口；管理配置与终端数据分开流动</text>
   <rect x="970" y="34" width="15" height="15" rx="3" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/><text x="994" y="48" font-size="15" fill="#53677d">开源应用</text>
   <rect x="1100" y="34" width="15" height="15" rx="3" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/><text x="1124" y="48" font-size="15" fill="#53677d">自有模块</text>
@@ -14,7 +14,7 @@
 
   <rect x="48" y="130" width="330" height="118" rx="13" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
   <text x="70" y="163" font-size="20" font-weight="700">浏览器 · MetaCubeXD UI</text>
-  <text x="70" y="193" font-size="17">Vue / Nuxt 静态界面 + Coproxy 页面</text>
+  <text x="70" y="193" font-size="17">Vue / Nuxt 静态界面 + CoCoProxy 页面</text>
   <text x="70" y="222" font-size="15" fill="#53677d">策略、订阅、节点、连接、规则与日志</text>
   <rect x="454" y="130" width="226" height="118" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
   <text x="477" y="165" font-size="20" font-weight="700">HTTPS 入口</text>
@@ -28,7 +28,7 @@
   <path d="M680 187 H756" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/><text x="687" y="171" font-size="15" fill="#53677d">loopback</text>
 
   <rect x="48" y="306" width="816" height="334" rx="16" fill="#f7fcf9" stroke="#80bca6" stroke-width="1.5"/>
-  <text x="72" y="342" font-size="20" font-weight="700">Coproxy 控制模块 · 运行于管理进程内</text>
+  <text x="72" y="342" font-size="20" font-weight="700">CoCoProxy 控制模块 · 运行于管理进程内</text>
   <text x="72" y="368" font-size="15" fill="#53677d">management：独立认证、会话、管理 API 与启动恢复</text>
   <rect x="72" y="393" width="220" height="105" rx="10" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
   <text x="89" y="425" font-size="20" font-weight="700">工作区与订阅</text>
@@ -66,7 +66,7 @@
   <rect x="657" y="556" width="205" height="27" fill="#f7fcf9"/>
   <text x="667" y="575" font-size="15" fill="#53677d">认证 HTTP / WS 状态与控制</text>
 
-  <text x="48" y="687" font-size="19" font-weight="700">原生网关：终端流量如何进入 Coproxy</text>
+  <text x="48" y="687" font-size="19" font-weight="700">原生网关：终端流量如何进入 CoCoProxy</text>
   <rect x="48" y="725" width="260" height="100" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
   <text x="72" y="759" font-size="20" font-weight="700">受管终端</text>
   <text x="72" y="787" font-size="16">发起业务访问与 DNS 查询</text>
@@ -76,7 +76,7 @@
   <text x="480" y="787" font-size="16">选择并交付受管终端流量</text>
   <text x="480" y="813" font-size="15" fill="#53677d">关闭时撤销交付并恢复直连</text>
   <rect x="956" y="725" width="436" height="100" rx="13" fill="#f1f4f8" stroke="#b1becc" stroke-width="1.5"/>
-  <text x="980" y="759" font-size="20" font-weight="700">Coproxy 网关主机入口</text>
+  <text x="980" y="759" font-size="20" font-weight="700">CoCoProxy 网关主机入口</text>
   <text x="980" y="787" font-size="16">Linux 网络入口与独立 guard</text>
   <text x="980" y="813" font-size="15" fill="#53677d">受管业务流量和公网 DNS 分别交给 Mihomo</text>
   <path d="M308 775 H456" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
@@ -87,7 +87,7 @@
   <path d="M1174 725 V640" fill="none" stroke="#486079" stroke-width="2" marker-end="url(#arrow)"/>
   <text x="1188" y="682" font-size="15" fill="#53677d">业务流量 / DNS 请求</text>
 
-  <text x="48" y="859" font-size="15" fill="#53677d">网关入口与上方 Mihomo 位于同一台 Coproxy 主机；入口后的业务转发和 DNS 解析由核心处理。</text>
+  <text x="48" y="859" font-size="15" fill="#53677d">网关入口与上方 Mihomo 位于同一台 CoCoProxy 主机；入口后的业务转发和 DNS 解析由核心处理。</text>
   <text x="48" y="887" font-size="15" fill="#53677d">完整 WAN 出口与回程见「终端访问公网数据流图」；服务启动和权限检查见「系统运行图」。</text>
   <text x="48" y="915" font-size="15" fill="#53677d">读图：箭头只表示请求 / 配置 / 业务数据从谁传给谁；框内只描述该对象的身份和职责。</text>
   <text x="48" y="943" font-size="15" fill="#53677d">边界：自动网关当前为单终端 IPv4；sing-box 仅用于测试，旧 network 不在启动链路；协同路由器按网络能力接入。</text>

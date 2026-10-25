@@ -12,7 +12,7 @@ import { compareVersions, isSingBoxVersion } from '~/utils'
 import { useControlApi } from './useControlApi'
 import { useControlInfo } from './useControlInfo'
 import { useMockData } from './useMockData'
-import { useCoproxy } from './useCoproxy'
+import { useCoCoProxy } from './useCoCoProxy'
 import type { LatencyFailureReason } from './useLatencyFeedback'
 
 export class LatencyTestError extends Error {
@@ -224,7 +224,7 @@ function getMockData(url: string): unknown {
 }
 
 export function useRequest() {
-  const { generation, clearSession } = useCoproxy()
+  const { generation, clearSession } = useCoCoProxy()
   const app = useNuxtApp()
   return ky.create({
     prefix: `${window.location.origin}/api/clash`,
@@ -253,7 +253,7 @@ export function useRequest() {
           throw new Error('会话已失效，请重新登录。')
         }
         if (response.ok && request.method === 'GET') {
-          const observed = response.headers.get('X-Coproxy-Generation')
+          const observed = response.headers.get('X-CoCoProxy-Generation')
           if (observed && /^[a-f0-9]{64}$/.test(observed)) generation.value = observed
         }
         if (response.status === 409)

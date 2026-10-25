@@ -7,7 +7,7 @@ import { observeGatewayManagement, observeGatewayManagementFixture, type Gateway
   type GatewayManagementFixtureReader, type GatewayManagementObservation, type GatewayManagementRequest } from '../packages/network/management-observer.ts';
 
 const pid = 65432, uid = 12345, boot = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-const fragment = '/etc/systemd/system/coproxy-management.service', proc = `/proc/${pid}`;
+const fragment = '/etc/systemd/system/cocoproxy-management.service', proc = `/proc/${pid}`;
 function metadata(mode = 0o100644n): GatewayManagementFileMetadata {
   return { dev: 1n, ino: 100n, uid: 0n, mode, nlink: 1n, size: 100n, mtimeNs: 1n, ctimeNs: 1n };
 }
@@ -47,7 +47,7 @@ function fixture() {
     async command(binary, args) {
       assert.equal(binary, '/usr/bin/systemctl');
       assert.deepEqual(args, ['--no-ask-password', '--no-pager', 'show',
-        '--property=LoadState,ActiveState,SubState,MainPID,Job,ControlGroup,User,FragmentPath,DropInPaths,NeedDaemonReload', 'coproxy-management.service']);
+        '--property=LoadState,ActiveState,SubState,MainPID,Job,ControlGroup,User,FragmentPath,DropInPaths,NeedDaemonReload', 'cocoproxy-management.service']);
       if (model.queries++ === 1) model.afterFirst?.();
       calls.push('query'); return Object.entries(properties).map(([key, value]) => `${key}=${value}\n`).join('');
     },

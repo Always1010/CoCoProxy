@@ -82,8 +82,8 @@ function build(input: unknown) {
     'interface-name': seed.ingressInterface,
     'routing-mark': seed.marks.egress,
     // Hash all network deployment inputs, including guard and return resources.
-    // Mihomo ignores this reserved extension; Coproxy must still authenticate it.
-    'x-coproxy-network': JSON.parse(JSON.stringify(metadata)) as JsonObject,
+    // Mihomo ignores this reserved extension; CoCoProxy must still authenticate it.
+    'x-cocoproxy-network': JSON.parse(JSON.stringify(metadata)) as JsonObject,
     tun: { enable: true, device: seed.tun.interface, stack: 'mips', mtu: seed.tun.mtu,
       'auto-route': false, 'auto-redirect': false, 'auto-detect-interface': false,
       gso: false, 'dns-hijack': [], 'disable-icmp-forwarding': true },

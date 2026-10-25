@@ -1,7 +1,7 @@
 /** Background reads retain existing data and report failures in the core banner. */
 export function useProxyRefresh() {
   const proxies = useProxiesStore()
-  const error = useState('coproxy-proxy-read-error', () => '')
+  const error = useState('cocoproxy-proxy-read-error', () => '')
 
   async function refresh() {
     try {

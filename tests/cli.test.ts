@@ -30,7 +30,7 @@ function cli(args: string[]): Promise<{ code: number; stdout: string; stderr: st
 }
 
 async function fixture(run: (dir: string, file: string) => Promise<void>) {
-  const dir = await mkdtemp(join(tmpdir(), 'coproxy-cli-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'cocoproxy-cli-test-'));
   try {
     const file = join(dir, 'input.json');
     await writeFile(file, JSON.stringify(input), { mode: 0o600 });
@@ -186,10 +186,10 @@ test('runtime CLI produces a private review plan and refuses mismatched state be
   await fixture(async (dir) => {
     const file = join(dir, 'deployment.json');
     const output = join(dir, 'plan.json');
-    await writeFile(file, JSON.stringify({ schemaVersion: 1, stateDirectory: '/var/lib/coproxy',
-      binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: 'a'.repeat(64), systemctlPath: '/usr/bin/systemctl',
-      nodePath: '/usr/bin/node', sourceDirectory: '/opt/coproxy/source', settingsPath: '/etc/coproxy/runtime.json',
-      unitPath: '/etc/systemd/system/coproxy-mihomo.service', serviceUid: 12345 }), { mode: 0o600 });
+    await writeFile(file, JSON.stringify({ schemaVersion: 1, stateDirectory: '/var/lib/cocoproxy',
+      binaryPath: '/opt/cocoproxy/bin/mihomo', binarySha256: 'a'.repeat(64), systemctlPath: '/usr/bin/systemctl',
+      nodePath: '/usr/bin/node', sourceDirectory: '/opt/cocoproxy/source', settingsPath: '/etc/cocoproxy/runtime.json',
+      unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', serviceUid: 12345 }), { mode: 0o600 });
     const result = await cli(['runtime-plan', '--input', file, '--output', output]);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).runtime, 'not_started');

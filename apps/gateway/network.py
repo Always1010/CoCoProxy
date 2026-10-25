@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 
-TABLE = 'coproxy_auto_guard'
+TABLE = 'cocoproxy_auto_guard'
 IP, NFT = '/usr/sbin/ip', '/usr/sbin/nft'
 
 
@@ -89,7 +89,7 @@ def guard(n):
     network = ipaddress.ip_network(lan)
     excluded = (f'  iifname "{i}" meta nfproto ipv4 ip daddr != {lan} ip saddr {{ {g}, {r}, {network.network_address}, {network.broadcast_address} }} drop\n'
                 if 'clientCIDR' in n else '')
-    return f'''table inet coproxy_auto_guard {{
+    return f'''table inet cocoproxy_auto_guard {{
  chain ingress {{
   type filter hook prerouting priority -310; policy accept;
 {excluded}  iifname "{i}" meta nfproto ipv4 ip daddr != {lan} ip saddr != {c} drop
@@ -104,7 +104,7 @@ def guard(n):
  chain forwarding {{
   type filter hook forward priority -310; policy accept;
   iifname "{i}" meta nfproto ipv6 drop
-  iifname "{i}" ip saddr {c} ip daddr != {lan} oifname != "coproxy-tun" drop
+  iifname "{i}" ip saddr {c} ip daddr != {lan} oifname != "cocoproxy-tun" drop
  }}
 }}
 '''
@@ -168,7 +168,7 @@ def return_table(n):
 
 def return_rule_args(n, operation):
     return [IP, '-4', 'rule', operation, 'priority', str(n['egressPriority']+1),
-            'iif', 'coproxy-tun', 'to', source(n), 'table', return_table(n)]
+            'iif', 'cocoproxy-tun', 'to', source(n), 'table', return_table(n)]
 
 
 def snapshot(n):
@@ -184,7 +184,7 @@ def snapshot(n):
             # A named TUN input rule is detached before core start/after stop.
             # Its name/selector/table identity is unchanged by that lifecycle.
             'capture': [{k: v for k, v in r.items() if not (k == 'iif_detached' and
-                         'clientCIDR' in n and r.get('iif') == 'coproxy-tun')}
+                         'clientCIDR' in n and r.get('iif') == 'cocoproxy-tun')}
                         for r in run([IP, '-j', '-4', 'rule', 'show'])
                         if r.get('priority') in (n['egressPriority']+1, n['egressPriority']+2)]}
 
@@ -229,7 +229,7 @@ def capture_args(n, operation, local):
 
 
 def require_upstream_stopped():
-    require(not any(link.get('ifname') == 'coproxy-tun' for link in run([IP, '-j', 'link', 'show'])))
+    require(not any(link.get('ifname') == 'cocoproxy-tun' for link in run([IP, '-j', 'link', 'show'])))
     require(not any(9000 <= rule.get('priority', -1) <= 9010 for rule in run([IP, '-j', '-4', 'rule', 'show'])))
     require(not any(str(r.get('table')) == '2022' for r in run([IP, '-N', '-j', '-4', 'route', 'show', 'table', 'all'])))
     require(not any(item.get('table', {}).get('name') == 'mihomo' for item in run([NFT, '-j', 'list', 'tables'])['nftables']))

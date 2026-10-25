@@ -29,7 +29,7 @@ export interface NetworkIdentity {
   bootId: string;
   corePid: number;
   corePidStartTime: string;
-  coreUnitControlGroup: '/system.slice/coproxy-mihomo.service';
+  coreUnitControlGroup: '/system.slice/cocoproxy-mihomo.service';
   coreCgroupKernelId: string;
   serviceUid: number;
   binarySha256: string;
@@ -38,7 +38,7 @@ export interface NetworkIdentity {
   socketCgroupIsolationVerified: true;
   /** Required whenever the plan binds an independent management identity. */
   management?: { pid: number; pidStartTime: string; serviceUid: number;
-    unitControlGroup: '/system.slice/coproxy-management.service'; cgroupKernelId: string };
+    unitControlGroup: '/system.slice/cocoproxy-management.service'; cgroupKernelId: string };
 }
 const checks = ['dnsSocketsOwned', 'dnsUdpQuery', 'dnsTcpQuery', 'tunOwned', 'linkAndNeighbour',
   'socketEgressMark', 'ownedResources'] as const;
@@ -250,7 +250,7 @@ export class NetworkCoordinator {
       typeof value.bootId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value.bootId) ||
       !Number.isSafeInteger(value.corePid) || (value.corePid as number) <= 1 || (value.corePid as number) > 0x7fff_ffff ||
       typeof value.corePidStartTime !== 'string' || !/^[1-9]\d{0,19}$/.test(value.corePidStartTime) ||
-      value.coreUnitControlGroup !== '/system.slice/coproxy-mihomo.service' ||
+      value.coreUnitControlGroup !== '/system.slice/cocoproxy-mihomo.service' ||
       typeof value.coreCgroupKernelId !== 'string' || !/^[1-9]\d{0,19}$/.test(value.coreCgroupKernelId) ||
       value.serviceUid !== plan.deployment.core.serviceUid || value.binarySha256 !== plan.deployment.core.binarySha256 ||
       value.unitSha256 !== plan.deployment.core.unitSha256 || value.processAndUnitVerified !== true ||
@@ -260,7 +260,7 @@ export class NetworkCoordinator {
       if (!Number.isSafeInteger(management.pid) || (management.pid as number) <= 1 || (management.pid as number) > 0x7fff_ffff ||
         management.pid === value.corePid || typeof management.pidStartTime !== 'string' || !/^[1-9]\d{0,19}$/.test(management.pidStartTime) ||
         management.serviceUid !== plan.deployment.management.serviceUid || management.serviceUid === value.serviceUid ||
-        management.unitControlGroup !== '/system.slice/coproxy-management.service' || typeof management.cgroupKernelId !== 'string' ||
+        management.unitControlGroup !== '/system.slice/cocoproxy-management.service' || typeof management.cgroupKernelId !== 'string' ||
         !/^[1-9]\d{0,19}$/.test(management.cgroupKernelId) || management.cgroupKernelId === value.coreCgroupKernelId) fail('NETWORK_IDENTITY_MISMATCH');
     } else if (this.scope === 'production') fail('NETWORK_IDENTITY_MISMATCH');
     return freeze({ ...value } as unknown as NetworkIdentity);

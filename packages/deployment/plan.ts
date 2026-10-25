@@ -144,14 +144,14 @@ function render(input: unknown): DeploymentPlan {
   const unitPath = path(management.unitPath);
   const policyPath = path(management.policyPath);
   const networkSettingsPath = posix.join(posix.dirname(runtimeSettingsPath), 'gateway-network.json');
-  const networkStateDirectory = '/var/lib/coproxy-gateway-network';
+  const networkStateDirectory = '/var/lib/cocoproxy-gateway-network';
   const networkPlan = core.settings.automaticGateway ? renderAutomaticGatewayHostPlan({
     network: core.settings.automaticGateway, sourceDirectory, pythonPath: '/usr/bin/python3',
     settingsPath: networkSettingsPath, stateDirectory: networkStateDirectory,
   }) : null;
-  if (coreUnitPath !== '/etc/systemd/system/coproxy-mihomo.service' ||
-    unitPath !== '/etc/systemd/system/coproxy-management.service' ||
-    policyPath !== '/etc/polkit-1/rules.d/50-coproxy-management.rules') fail();
+  if (coreUnitPath !== '/etc/systemd/system/cocoproxy-mihomo.service' ||
+    unitPath !== '/etc/systemd/system/cocoproxy-management.service' ||
+    policyPath !== '/etc/polkit-1/rules.d/50-cocoproxy-management.rules') fail();
   if (typeof management.serviceUser !== 'string' || !/^[a-z_][a-z0-9_-]{0,31}$/.test(management.serviceUser) ||
     ['root', 'nobody'].includes(management.serviceUser)) fail();
   if (typeof management.listenPort !== 'number' || !Number.isInteger(management.listenPort) ||
@@ -164,7 +164,7 @@ function render(input: unknown): DeploymentPlan {
   const controlledFiles = [binaryPath, systemctlPath, nodePath, runtimeSettingsPath, coreUnitPath,
     serverEntry, settingsPath, credentialPath, unitPath, policyPath,
     posix.join(sourceDirectory, 'apps/runtime/launch-core.ts'),
-    ...(networkPlan ? [networkSettingsPath, '/etc/systemd/system/coproxy-gateway-network.service',
+    ...(networkPlan ? [networkSettingsPath, '/etc/systemd/system/cocoproxy-gateway-network.service',
       posix.join(sourceDirectory, 'apps/gateway/network.py'), '/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft',
       '/usr/bin/ip', '/usr/bin/nft'] : [])];
   if (networkPlan && (overlap(networkStateDirectory, stateDirectory) || overlap(networkStateDirectory, sourceDirectory) ||
@@ -205,11 +205,11 @@ function render(input: unknown): DeploymentPlan {
   const settingsContent = JSON.stringify(settings, null, 2) + '\n';
   if (Buffer.byteLength(settingsContent, 'utf8') > 64 * 1024) fail();
   const managementUnit = [
-    '[Unit]', 'Description=Coproxy management server', '', '[Service]', 'Type=exec', `User=${serviceUid}`,
+    '[Unit]', 'Description=CoCoProxy management server', '', '[Service]', 'Type=exec', `User=${serviceUid}`,
     `ExecStart=${[nodePath, serverEntry].map(argument => quote(argument, true)).join(' ')}`,
     'Environment="NODE_ENV=production"', 'Environment="NITRO_HOST=127.0.0.1"',
     `Environment="NITRO_PORT=${management.listenPort}"`,
-    `Environment=${quote('COPROXY_MANAGEMENT_CONFIG=' + settingsPath)}`,
+    `Environment=${quote('COCOPROXY_MANAGEMENT_CONFIG=' + settingsPath)}`,
     'Restart=on-failure', 'RestartSec=2', 'KillMode=control-group', 'TimeoutStopSec=30',
     'UMask=0077', 'NoNewPrivileges=true', 'PrivateTmp=true', 'PrivateDevices=true',
     'ProtectSystem=strict', 'ProtectHome=true', 'ProtectKernelTunables=true',
@@ -225,7 +225,7 @@ function render(input: unknown): DeploymentPlan {
     '    if (action.id === "org.freedesktop.systemd1.manage-unit-files") return polkit.Result.NO;',
     '    if (action.id !== "org.freedesktop.systemd1.manage-units") return;',
     '    var verb = action.lookup("verb");',
-    '    if (action.lookup("unit") === "coproxy-mihomo.service" && (verb === "start" || verb === "stop")) {',
+    '    if (action.lookup("unit") === "cocoproxy-mihomo.service" && (verb === "start" || verb === "stop")) {',
     '        return polkit.Result.YES;', '    }', '    return polkit.Result.NO;', '});', '',
   ].join('\n');
   const files: DeploymentFile[] = [
@@ -235,7 +235,7 @@ function render(input: unknown): DeploymentPlan {
     { path: settingsPath, mode: '0600', owner: serviceUid, sensitive: true, content: settingsContent },
     { path: policyPath, mode: '0644', owner: 'root', sensitive: false, content: policy },
     ...(networkPlan ? [
-      { path: '/etc/systemd/system/coproxy-gateway-network.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.unit },
+      { path: '/etc/systemd/system/cocoproxy-gateway-network.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.unit },
       { path: networkSettingsPath, mode: '0600' as const, owner: 'root' as const, sensitive: true, content: JSON.stringify(networkPlan.settings, null, 2) + '\n' },
     ] : []),
   ];

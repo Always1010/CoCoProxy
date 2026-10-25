@@ -91,7 +91,7 @@ async function identity(pid: number, binary: string, uid: number, suffix: string
   if (args.length < suffix.length || !suffix.every((value, offset) => args[args.length - suffix.length + offset] === value)) fail('PROCESS_UNVERIFIED');
   if (native) {
     if (args.length !== suffix.length + 1 || args[0] !== binary ||
-        (await reader.read(`${root}/cgroup`, 64 * 1024)).toString('utf8') !== '0::/system.slice/coproxy-mihomo.service\n') fail('PROCESS_UNVERIFIED');
+        (await reader.read(`${root}/cgroup`, 64 * 1024)).toString('utf8') !== '0::/system.slice/cocoproxy-mihomo.service\n') fail('PROCESS_UNVERIFIED');
   }
   let executable: string | null;
   try { executable = await reader.realpath(`${root}/exe`); }

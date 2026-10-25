@@ -22,7 +22,7 @@ function source() {
     sources: [{ id: 'synthetic-source', proxies: [{ name: 'source-node', type: 'http', server: '192.0.2.81', port: 8080 }] }] },
   network: { schemaVersion: 1, core: { serviceUid: 12345, binarySha256: GATEWAY_CORE_SHA256, unitSha256: 'c'.repeat(64) },
     ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
-    routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353, tun: { interface: 'coproxy-tun', mtu: 1500 },
+    routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353, tun: { interface: 'cocoproxy-tun', mtu: 1500 },
     marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
     tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } } };
 }
@@ -37,8 +37,8 @@ function rehash(config: JsonObject): Candidate {
 const untrusted = (error: unknown) => error instanceof GatewayCandidateError &&
   error.message === 'GATEWAY_CANDIDATE_UNTRUSTED' && error.code === error.message && !('cause' in error);
 function settings(root: string): RuntimeSettings {
-  return { schemaVersion: 1, stateDirectory: root, binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
-    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/coproxy-mihomo.service',
+  return { schemaVersion: 1, stateDirectory: root, binaryPath: '/opt/cocoproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
+    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service',
     unitSha256: 'c'.repeat(64), serviceUid: 12345 };
 }
 
@@ -112,7 +112,7 @@ test('network deployment and core identity must match the independent expected b
     const different = structuredClone(expected); change(different);
     assert.throws(() => validateGatewayCandidate(candidate, different), untrusted);
   }
-  const metadata = candidate.config['x-coproxy-network'] as JsonObject;
+  const metadata = candidate.config['x-cocoproxy-network'] as JsonObject;
   metadata.routerMAC = '02:00:00:00:00:02';
   const changed = rehash(candidate.config);
   assert.throws(() => validateGatewayCandidate(changed, { ...expected, generation: changed.id }), untrusted);
@@ -137,7 +137,7 @@ test('candidate validation rejects forged envelopes, supplied previews, hooks an
 
 test('private loader binds immutable candidate, generation and runtime identity while explicit runtime still rejects gateway',
   { skip: process.platform !== 'linux' }, async t => {
-    const root = await mkdtemp(join(tmpdir(), 'coproxy-gateway-candidate-'));
+    const root = await mkdtemp(join(tmpdir(), 'cocoproxy-gateway-candidate-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const { candidate, expected } = fixture();
     await new FileTransactionStore(root).stage(candidate);
@@ -183,7 +183,7 @@ test('private loader binds immutable candidate, generation and runtime identity 
   });
 
 test('missing private store stays missing after loader rejection', { skip: process.platform !== 'linux' }, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-gateway-candidate-missing-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-gateway-candidate-missing-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const { candidate, expected } = fixture(), missing = join(root, 'absent');
   await assert.rejects(loadGatewayCandidate(settings(missing), candidate.id, expected), untrusted);

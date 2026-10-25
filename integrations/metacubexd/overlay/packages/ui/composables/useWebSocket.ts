@@ -1,6 +1,6 @@
 import type { Log, MemoryData, TrafficData, WsMsg } from '~/types'
 import { getCurrentScope, onScopeDispose, watch } from 'vue'
-import { useCoproxy } from './useCoproxy'
+import { useCoCoProxy } from './useCoCoProxy'
 import { useMockMode } from './useApi'
 import { useMockData } from './useMockData'
 
@@ -8,7 +8,7 @@ import { useMockData } from './useMockData'
 const RECONNECT_DELAY = 3000
 
 export function useBackendWebSocket() {
-  const { session } = useCoproxy()
+  const { session } = useCoCoProxy()
   const connectionsStore = useConnectionsStore()
   const globalStore = useGlobalStore()
   const logsStore = useLogsStore()

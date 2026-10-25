@@ -17,16 +17,16 @@ function metadata(overrides: Partial<GatewayCoreFileMetadata> = {}): GatewayCore
   return { dev: 1n, ino: 100n, uid: 0n, mode: 0o100755n, size: 100n, nlink: 1n, mtimeNs: 1n, ctimeNs: 1n, ...overrides };
 }
 function fixture() {
-  const runtime = renderGatewayRuntimePlan({ schemaVersion: 1, stateDirectory: '/var/lib/coproxy-observer-fixture',
-    coreHome: '/var/lib/coproxy-observer-home', binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
-    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/coproxy-mihomo.service', serviceUid: 12345 });
+  const runtime = renderGatewayRuntimePlan({ schemaVersion: 1, stateDirectory: '/var/lib/cocoproxy-observer-fixture',
+    coreHome: '/var/lib/cocoproxy-observer-home', binaryPath: '/opt/cocoproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
+    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', serviceUid: 12345 });
   const preview = compileGatewayPreview({ schemaVersion: 1, base: { schemaVersion: 1,
     deployment: { mixedPort: 17890, controllerPort: 19090, controllerSecret: secret, dnsPort: 15353, bootstrapResolvers: ['192.0.2.53'] },
     policy: { proxies: [], rules: ['MATCH,REJECT'] } }, network: { schemaVersion: 1,
     core: { serviceUid: 12345, binarySha256: GATEWAY_CORE_SHA256, unitSha256: runtime.settings.unitSha256 },
     ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
     routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-    tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+    tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
     tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } } });
   const settings = { runtime: runtime.settings, coreHome: runtime.coreHome };
   const files = new Map<string, Buffer>(), links = new Map<string, string>(), meta = new Map<string, GatewayCoreFileMetadata>();
@@ -88,7 +88,7 @@ function fixture() {
     async digest(path) { const value = digests.get(path); if (!value) throw new Error(secret); return value; },
     async command(binary, args) {
       calls.push('unit'); assert.equal(binary, '/usr/bin/systemctl');
-      assert.equal(args.at(-1), 'coproxy-mihomo.service'); assert.equal(args[2], 'show');
+      assert.equal(args.at(-1), 'cocoproxy-mihomo.service'); assert.equal(args[2], 'show');
       return Object.entries(model.properties).map(([name, value]) => `${name}=${value}\n`).join('');
     },
     async candidate(input, generation, expected) {
@@ -194,7 +194,7 @@ test('gateway core observer rejects unsupported privilege and unsafe host views 
       if (kind === 'root') f.reader.root = false;
       if (kind === 'procfs') f.model.procType = 0n;
       if (kind === 'proc-overlay') f.files.set('/proc/self/mountinfo', Buffer.from(`1 0 0:1 / /proc rw - proc proc rw\n2 1 0:2 / ${proc}/root ro - tmpfs tmpfs ro\n`));
-      if (kind === 'binary-parent') f.meta.set('/opt/coproxy', metadata({ mode: 0o040777n }));
+      if (kind === 'binary-parent') f.meta.set('/opt/cocoproxy', metadata({ mode: 0o040777n }));
       if (kind === 'systemctl-owner') f.meta.get('/usr/bin/systemctl')!.uid = 12345n;
       unverified(await f.observe()); assert.equal(f.calls.includes('version'), false);
     });

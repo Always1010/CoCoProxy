@@ -5,13 +5,13 @@ import { observeCoreFixture, type CoreObserverFixtureReader } from '../packages/
 import type { RuntimeSettings, RuntimeUnitState } from '../packages/runtime/types.ts';
 
 const generation = 'a'.repeat(64), pid = 43210, uid = 12345;
-const binary = '/opt/coproxy/mihomo', home = '/var/lib/coproxy/core-home';
-const path = `/var/lib/coproxy/candidates/${generation}.json`, proc = `/proc/${pid}`;
+const binary = '/opt/cocoproxy/mihomo', home = '/var/lib/cocoproxy/core-home';
+const path = `/var/lib/cocoproxy/candidates/${generation}.json`, proc = `/proc/${pid}`;
 const errno = (code: string) => Object.assign(new Error('synthetic private diagnostic'), { code });
 function fixture() {
-  const settings: RuntimeSettings = { schemaVersion: 1, stateDirectory: '/var/lib/coproxy', binaryPath: binary,
+  const settings: RuntimeSettings = { schemaVersion: 1, stateDirectory: '/var/lib/cocoproxy', binaryPath: binary,
     binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256, systemctlPath: '/usr/bin/systemctl',
-    unitPath: '/etc/systemd/system/coproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: uid,
+    unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: uid,
     automaticGateway: { schemaVersion: 1, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', routerIPv4: '192.0.2.1',
       routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24, dnsPort: 15353,
       egressMark: 0x200, egressTable: 10002, egressPriority: 8000, tunMtu: 1500 } };
@@ -21,7 +21,7 @@ function fixture() {
   const files = new Map([
     [`${proc}/stat`, stat()], [`${proc}/status`, `Uid:\t${uid}\t${uid}\t${uid}\t${uid}\nCapPrm:\t0000000000003000\n`],
     [`${proc}/cmdline`, [binary, '-d', home, '-f', path, ''].join('\0')],
-    [`${proc}/cgroup`, '0::/system.slice/coproxy-mihomo.service\n'],
+    [`${proc}/cgroup`, '0::/system.slice/cocoproxy-mihomo.service\n'],
     [`${proc}/net/tcp`, 'header\n0: 0100007F:4A92 00000000:0000 0A 0 0 0 0 0 777\n'],
   ]);
   const faults = new Map<string, string>(), calls = { unit: 0, binary: 0, version: 0 };

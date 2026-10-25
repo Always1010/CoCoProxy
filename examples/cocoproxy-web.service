@@ -1,20 +1,20 @@
 [Unit]
-Description=Coproxy LAN HTTPS management entry
-After=network-online.target coproxy-management.service
+Description=CoCoProxy LAN HTTPS management entry
+After=network-online.target cocoproxy-management.service
 Wants=network-online.target
-Requires=coproxy-management.service
+Requires=cocoproxy-management.service
 
 [Service]
 Type=simple
 # Match the dedicated account selected in the deployment input.
-User=coproxy
-Group=coproxy
-ExecStart=/usr/sbin/nginx -c /etc/coproxy/web/nginx.conf -g "daemon off;"
+User=cocoproxy
+Group=cocoproxy
+ExecStart=/usr/sbin/nginx -c /etc/cocoproxy/web/nginx.conf -g "daemon off;"
 Restart=on-failure
 RestartSec=2
-RuntimeDirectory=coproxy-web
+RuntimeDirectory=cocoproxy-web
 RuntimeDirectoryMode=0700
-StateDirectory=coproxy-web
+StateDirectory=cocoproxy-web
 StateDirectoryMode=0700
 NoNewPrivileges=yes
 CapabilityBoundingSet=
@@ -23,7 +23,7 @@ ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-ReadWritePaths=/var/lib/coproxy-web /run/coproxy-web
+ReadWritePaths=/var/lib/cocoproxy-web /run/cocoproxy-web
 
 [Install]
 WantedBy=multi-user.target

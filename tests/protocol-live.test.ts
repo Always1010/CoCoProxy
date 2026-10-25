@@ -10,8 +10,8 @@ import test from 'node:test';
 import { compileConfig, type JsonObject } from '../packages/config/index.ts';
 import { freePort, httpNonce, managedProcess, ownNetworkBindings, privateJson, reviewedBinary, udpNonce, waitBindings } from './protocol-live-helpers.ts';
 
-const coreInput = process.env.COPROXY_TEST_MIHOMO;
-const fixtureInput = process.env.COPROXY_TEST_SING_BOX;
+const coreInput = process.env.COCOPROXY_TEST_MIHOMO;
+const fixtureInput = process.env.COCOPROXY_TEST_SING_BOX;
 const enabled = Boolean(coreInput && fixtureInput) && process.platform === 'linux' && process.geteuid?.() !== 0;
 const protocols = ['vmess', 'vless', 'trojan', 'ss', 'hysteria2', 'tuic'] as const;
 type Protocol = typeof protocols[number];
@@ -23,7 +23,7 @@ test('reviewed official cores interoperate across six loopback node protocols wi
     const core = await reviewedBinary(coreInput!, coreReview.coreCandidate.binarySha256);
     const fixtureBinary = await reviewedBinary(fixtureInput!, review.server.binarySha256);
     const previousUmask = process.umask(0o077);
-    const root = await mkdtemp(join(tmpdir(), 'coproxy-protocol-live-'));
+    const root = await mkdtemp(join(tmpdir(), 'cocoproxy-protocol-live-'));
     await chmod(root, 0o700);
     // A single finally owns processes before removing their private state.
     const processes = new Set<ReturnType<typeof managedProcess>>();

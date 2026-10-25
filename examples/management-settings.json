@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "origin": "https://management.example",
-  "credentialPath": "/etc/coproxy/admin.json",
-  "runtimeSettingsPath": "/etc/coproxy/runtime.json",
+  "credentialPath": "/etc/cocoproxy/admin.json",
+  "runtimeSettingsPath": "/etc/cocoproxy/runtime.json",
   "deployment": {
     "mixedPort": 17890,
     "controllerPort": 19090,

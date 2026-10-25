@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { useCoproxy } from '~/composables/useCoproxy'
+import { useCoCoProxy } from '~/composables/useCoCoProxy'
 
 const { connect, disconnect, reconnectLogs } = useBackendWebSocket()
-const { session } = useCoproxy()
+const { session } = useCoCoProxy()
 const configStore = useConfigStore()
 
 watch(session, (current) => {

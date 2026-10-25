@@ -9,7 +9,7 @@ const plan = renderNetworkPlan({ schemaVersion: 1, generation: 'a'.repeat(64),
   core: { serviceUid: 12345, binarySha256: GATEWAY_CORE_SHA256, unitSha256: 'c'.repeat(64) },
   ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
   routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-  tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+  tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
   tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } });
 const options: NetworkLinkOptions = { ipBinary: '/usr/sbin/ip', probeIPv4: '203.0.113.80' };
 type Row = Record<string, unknown>;
@@ -147,7 +147,7 @@ test('route lookup must independently return exact mark, source, UID, table, via
   const changes: Array<(value: Data) => void> = [
     value => { value.route.dst = '203.0.113.81'; }, value => { value.route.from = '192.0.2.3'; },
     value => { value.route.prefsrc = '192.0.2.3'; }, value => { value.route.gateway = '192.0.2.4'; },
-    value => { value.route.dev = 'coproxy-tun'; }, value => { value.route.mark = 0x100; },
+    value => { value.route.dev = 'cocoproxy-tun'; }, value => { value.route.mark = 0x100; },
     value => { value.route.mark = '512'; }, value => { value.route.mark = '0x200'; },
     value => { value.route.uid = 0; }, value => { value.route.table = 'main'; },
     value => { value.route.type = 'blackhole'; }, value => { value.route.flags = ['linkdown']; },

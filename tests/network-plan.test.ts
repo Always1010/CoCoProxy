@@ -10,7 +10,7 @@ function input(): NetworkPlanInput {
     core: { serviceUid: 12345, binarySha256: 'b'.repeat(64), unitSha256: 'c'.repeat(64) },
     ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24,
     routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-    tun: { interface: 'coproxy-tun', mtu: 1500 },
+    tun: { interface: 'cocoproxy-tun', mtu: 1500 },
     marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
     tables: { capture: 10003, egress: 10002, return: 10001 },
     priorities: { capture: 10003, egress: 10002, return: 10001 },
@@ -93,11 +93,11 @@ test('fail-closed route domains cannot fall through or directly resolve the clie
   assert.equal(returnRoute.via, '192.0.2.1');
   assert.equal(returnRoute.interface, 'lan-test');
   const returnRule = plan.rules.find(rule => rule.role === 'return')!;
-  assert.equal(returnRule.incomingInterface, 'coproxy-tun');
+  assert.equal(returnRule.incomingInterface, 'cocoproxy-tun');
   assert.equal(returnRule.destination, '192.0.2.3/32');
   const egress = plan.egressRoutes.find(route => route.role === 'egress' && route.destination === '0.0.0.0/0')!;
   assert.equal(egress.via, '192.0.2.1');
-  assert.equal(plan.captureRoute.interface, 'coproxy-tun');
+  assert.equal(plan.captureRoute.interface, 'cocoproxy-tun');
   assert.equal(plan.captureRoute.table, plan.deployment.tables.capture);
   assert.equal(plan.egressRoutes.some(route => route.table === plan.captureRoute.table), false);
   assert.ok([...plan.blackholes, ...plan.egressRoutes, plan.captureRoute].every(route => route.protocol === 186));
@@ -108,11 +108,11 @@ test('fail-closed route domains cannot fall through or directly resolve the clie
   // Core and management can share a UID: that UID cannot identify socket origin.
   const socketBinding = plan.guard.coreOutput.socketBinding;
   assert.equal(socketBinding.cgroupVersion, 2);
-  assert.equal(socketBinding.unit, 'coproxy-mihomo.service');
-  assert.equal(socketBinding.controlGroup, '/system.slice/coproxy-mihomo.service');
+  assert.equal(socketBinding.unit, 'cocoproxy-mihomo.service');
+  assert.equal(socketBinding.controlGroup, '/system.slice/cocoproxy-mihomo.service');
   assert.equal(socketBinding.kernelIdentity, 'resolve-and-bind-current-cgroup-v2-kernel-id');
   assert.equal(socketBinding.uidOnlyFallback, false);
-  assert.equal(socketBinding.sameUidManagementUnit, 'coproxy-management.service');
+  assert.equal(socketBinding.sameUidManagementUnit, 'cocoproxy-management.service');
   assert.equal(socketBinding.sameUidManagementUpstreamException, false);
   assert.equal(socketBinding.onUnsupportedOrUnprovable, 'remain-blocked');
   assert.deepEqual(plan.binding.coreSocketBinding, socketBinding);
@@ -194,7 +194,7 @@ test('deployment constraints reject ambiguous addresses, interfaces, marks and r
   invalid({ ...input(), clientIPv4: input().routerIPv4 });
   invalid({ ...input(), gatewayIPv4: input().routerIPv4 });
   invalid({ ...input(), clientIPv4: input().gatewayIPv4 });
-  for (const name of ['lo', 'all', 'default', '123', 'eth0.1', 'a'.repeat(16), 'eth0;id', 'eth0\n', 'coproxy-tun']) {
+  for (const name of ['lo', 'all', 'default', '123', 'eth0.1', 'a'.repeat(16), 'eth0;id', 'eth0\n', 'cocoproxy-tun']) {
     invalid({ ...input(), ingressInterface: name });
   }
   invalid({ ...input(), tun: { interface: 'foreign-tun', mtu: 1500 } });

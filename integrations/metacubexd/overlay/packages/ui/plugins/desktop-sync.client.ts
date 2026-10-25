@@ -1,2 +1,2 @@
-// Desktop bridge synchronization is disabled in the Coproxy web mount.
+// Desktop bridge synchronization is disabled in the CoCoProxy web mount.
 export default defineNuxtPlugin(() => {})

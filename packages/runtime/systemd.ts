@@ -11,7 +11,7 @@ import { selectionChanges, setControllerSelection } from './selections.ts';
 import { RuntimeError } from './types.ts';
 import type { CoreObservation, RuntimeSettings, RuntimeSelection, RuntimeUnitState } from './types.ts';
 
-const unitName = 'coproxy-mihomo.service';
+const unitName = 'cocoproxy-mihomo.service';
 const properties = ['LoadState', 'ActiveState', 'SubState', 'MainPID', 'Job', 'FragmentPath', 'DropInPaths', 'NeedDaemonReload', 'User'];
 
 export function parseUnitState(output: string): RuntimeUnitState {

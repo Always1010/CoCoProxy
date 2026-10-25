@@ -10,10 +10,10 @@ import { renderNetworkPlan, type NetworkPlan } from '../packages/network/plan.ts
 import { renderGatewayRuntimePlan } from '../packages/network/runtime-plan.ts';
 import { NetworkDriverError, NetworkTransactionError, type NetworkIdentity } from '../packages/network/transaction.ts';
 
-function configuration(parent = '/var/lib/coproxy-fixture'): GatewayDriverSettings {
+function configuration(parent = '/var/lib/cocoproxy-fixture'): GatewayDriverSettings {
   const core = renderGatewayRuntimePlan({ schemaVersion: 1, stateDirectory: parent + '/core-state', coreHome: parent + '/home',
-    binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256, systemctlPath: '/usr/bin/systemctl',
-    unitPath: '/etc/systemd/system/coproxy-mihomo.service', serviceUid: 12345 });
+    binaryPath: '/opt/cocoproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256, systemctlPath: '/usr/bin/systemctl',
+    unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', serviceUid: 12345 });
   return { authorityDirectory: parent + '/network', resourceDirectory: parent + '/resources',
     core: { runtime: core.settings, coreHome: core.coreHome }, tools: { ipBinary: '/usr/sbin/ip', nftBinary: '/usr/sbin/nft' },
     host: { ipBinary: '/usr/sbin/ip', tcBinary: '/usr/sbin/tc', iptablesLegacySaveBinary: '/usr/sbin/iptables-legacy-save',
@@ -26,15 +26,15 @@ function plan(settings: GatewayDriverSettings, generation = 'a'.repeat(64)): Net
     core: { serviceUid: 12345, binarySha256: GATEWAY_CORE_SHA256, unitSha256: settings.core.runtime.unitSha256 },
     management: { serviceUid: 12346 }, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24,
     routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-    tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+    tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
     tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } });
 }
 function identity(p: NetworkPlan): NetworkIdentity {
   return { scope: 'fixture', generation: p.deployment.generation, planSha256: p.sha256, checkedAt: Date.now(),
     bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', corePid: 101, corePidStartTime: '12345',
-    coreUnitControlGroup: '/system.slice/coproxy-mihomo.service', coreCgroupKernelId: '9007199254740999',
+    coreUnitControlGroup: '/system.slice/cocoproxy-mihomo.service', coreCgroupKernelId: '9007199254740999',
     ...p.deployment.core, processAndUnitVerified: true, socketCgroupIsolationVerified: true,
-    management: { pid: 202, pidStartTime: '23456', serviceUid: 12346, unitControlGroup: '/system.slice/coproxy-management.service',
+    management: { pid: 202, pidStartTime: '23456', serviceUid: 12346, unitControlGroup: '/system.slice/cocoproxy-management.service',
       cgroupKernelId: '9007199254741000' } };
 }
 function fixture(settings = configuration()) {
@@ -85,7 +85,7 @@ function fixture(settings = configuration()) {
     async management() { calls.push('management'); return { scope: 'fixture', verified: true, commandsSettled: true,
       checkedAt: Date.now(), reason: null, facts: { managementPid: 202, managementPidStartTime: model.managementStart,
         managementUid: 12346, bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-        managementUnitControlGroup: '/system.slice/coproxy-management.service' } }; },
+        managementUnitControlGroup: '/system.slice/cocoproxy-management.service' } }; },
     async identity(p, observer) { calls.push('identity'); assert.equal(observer.managementPid, 202);
       const value = identity(p); if (model.changedIdentity) value.corePid++; return value; },
     async evidence(p, observer, expected, options) { calls.push('evidence:' + options.mode); assert.equal(observer.managementPid, 202);
@@ -166,7 +166,7 @@ test('factory isolates scopes, rejects overlapping stores and never invokes host
 
 test('actual coordinator persists mutation fences, rejects unsafe retry and explicitly recovers composed driver',
   { skip: process.platform !== 'linux' }, async t => {
-    const parent = await mkdtemp(join(tmpdir(), 'coproxy-driver-')); await chmod(parent, 0o700);
+    const parent = await mkdtemp(join(tmpdir(), 'cocoproxy-driver-')); await chmod(parent, 0o700);
     t.after(() => rm(parent, { recursive: true, force: true }));
     const f = fixture(configuration(parent)), p = plan(f.settings), coordinator = f.driver.coordinator();
     f.model.fence = async () => {

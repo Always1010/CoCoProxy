@@ -14,7 +14,7 @@ import { fencedNetworkCommandDigest, fencedProcessIdentity, fencedReceiptName, f
 
 const linux = { skip: process.platform !== 'linux' };
 async function temporary(t: { after: (callback: () => Promise<unknown>) => void }): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-fenced-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-fenced-'));
   t.after(() => rm(root, { recursive: true, force: true })); return root;
 }
 async function until(check: () => Promise<boolean>): Promise<void> {
@@ -158,7 +158,7 @@ test('explicit namespace fixture proof allows unmapped root ancestors without we
   const source = `import assert from 'node:assert/strict';
     import {mkdtemp,readlink,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
     import {runFencedNetworkCommand as run,inspectFencedNetworkCommand as inspect,readFencedNetworkCommandResult as read,settleFencedNetworkCommand as settle} from ${JSON.stringify(moduleURL)};
-    const root=await mkdtemp(join(tmpdir(),'coproxy-fenced-fixture-'));
+    const root=await mkdtemp(join(tmpdir(),'cocoproxy-fenced-fixture-'));
     const proof={scope:'fixture',outerUser:process.argv[1],outerNet:process.argv[2]};
     try {
       const same={...proof,outerUser:await readlink('/proc/self/ns/user')};

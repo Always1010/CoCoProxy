@@ -1,6 +1,6 @@
 # 软件架构
 
-Coproxy 使用 Mihomo 作为唯一运行代理核心，复用 MetaCubeXD UI／Nitro Server，自行维护认证、工作区、订阅、配置事务、运行核验和部署集成。管理服务与业务流量分开，systemd 负责核心监管。支持范围与验收结论统一见[发行说明](release-notes.md)。
+CoCoProxy 使用 Mihomo 作为唯一运行代理核心，复用 MetaCubeXD UI／Nitro Server，自行维护认证、工作区、订阅、配置事务、运行核验和部署集成。管理服务与业务流量分开，systemd 负责核心监管。支持范围与验收结论统一见[发行说明](release-notes.md)。
 
 ## 组件与进程
 
@@ -23,9 +23,9 @@ sing-box 只作为[协议测试对端](../integrations/protocol-fixture/README.m
 | 运行单元 | 行为 |
 | --- | --- |
 | 浏览器 | 访问同源管理 API 和实时流，不持有核心 secret |
-| `coproxy-management.service` | 单个非 root Node/Nitro 进程，承载管理与静态页面；通过受限 polkit 请求固定核心 start/stop，不取得网络 capability |
-| `coproxy-mihomo.service` | 启动器核验选择和二进制后以 `execve` 替换为 Mihomo；systemd 为唯一失败重启者 |
-| `coproxy-gateway-network.service` | 原生模式的 root oneshot，执行 `network.py prepare` 后退出；核心以 Requires/After/BindsTo 依赖它 |
+| `cocoproxy-management.service` | 单个非 root Node/Nitro 进程，承载管理与静态页面；通过受限 polkit 请求固定核心 start/stop，不取得网络 capability |
+| `cocoproxy-mihomo.service` | 启动器核验选择和二进制后以 `execve` 替换为 Mihomo；systemd 为唯一失败重启者 |
+| `cocoproxy-gateway-network.service` | 原生模式的 root oneshot，执行 `network.py prepare` 后退出；核心以 Requires/After/BindsTo 依赖它 |
 | CLI | 按需复用模块，不常驻 |
 
 管理启动时对未完成事务执行一次恢复检查，不自动应用新设置。草稿、工作区、来源快照、候选、事务和 selection 存于私有文件；候选可能含凭据。会话仅在管理进程内存中，重启失效。root 网络回执与管理状态分开存放。
@@ -40,11 +40,11 @@ sing-box 只作为[协议测试对端](../integrations/protocol-fixture/README.m
 
 | 场景 | 路径 |
 | --- | --- |
-| 命中代理规则 | 终端 → 路由器 → Coproxy；Mihomo 的代理连接 → 同一路由器 WAN → 节点 → 网站，响应按图返回 |
-| 命中 DIRECT | 原流量仍先交给 Coproxy，Mihomo 直接经路由器 WAN 连接网站，响应先回核心 |
+| 命中代理规则 | 终端 → 路由器 → CoCoProxy；Mihomo 的代理连接 → 同一路由器 WAN → 节点 → 网站，响应按图返回 |
+| 命中 DIRECT | 原流量仍先交给 CoCoProxy，Mihomo 直接经路由器 WAN 连接网站，响应先回核心 |
 | 路由器关闭交付 | 撤销交付并恢复 DNS，终端通过路由器普通直连 |
 | 开启状态下核心／DNS／链路故障 | 保留开启意图，阻断受管外网，不自动改成直连 |
-| 普通公网 DNS | 终端 → 路由器 → Coproxy 受限 DNS → 部署上游；本地域和无点名称留给基础解析 |
+| 普通公网 DNS | 终端 → 路由器 → CoCoProxy 受限 DNS → 部署上游；本地域和无点名称留给基础解析 |
 
 防循环依靠流量分类和路由：路由器保留终端源 IP，排除自身、外设出站和回程；核心以部署接口、mark 和出口表出站，本机其他应用通过 UID 排除保留原出口。交付段不做 SNAT，WAN NAT 可按部署保留。DNS 使用真实地址，TUN DNS hijack 关闭，bootstrap 不循环依赖受管 DNS。DoH/DoT 需单独验证。
 

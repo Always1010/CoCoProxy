@@ -11,7 +11,7 @@ import { ReleaseStageError, stageExplicitRelease, type StageExplicitReleaseOptio
 const execute = promisify(execFile);
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions> {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'coproxy-release-')));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cocoproxy-release-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const sourceDir = join(root, 'repo'); const serverDir = join(root, 'nitro');
   const runtimeDependencies = join(root, 'dependencies'); const core = join(root, 'approved-core');
@@ -32,7 +32,7 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'scripts/measure-latency.mjs'), 'console.log("synthetic latency baseline");\n');
   await put(join(sourceDir, '.gitignore'), '.local/\n');
   const dependencies = { ws: '1.0.0', yaml: '1.0.0' };
-  const pkg = { name: 'synthetic-coproxy', version: '0.0.0', dependencies };
+  const pkg = { name: 'synthetic-cocoproxy', version: '0.0.0', dependencies };
   const packages: Record<string, unknown> = { '': pkg };
   for (const name of ['ws', 'yaml']) {
     packages[`node_modules/${name}`] = { version: '1.0.0', integrity: `sha512-${Buffer.from(name).toString('base64')}` };
@@ -133,7 +133,7 @@ test('rejects wrong reviewed binary and cleans only its temporary staging direct
   await writeFile(options.core, 'unapproved core');
   await rejects(stageExplicitRelease(options), 'CORE_HASH_MISMATCH');
   await assert.rejects(lstat(options.output), { code: 'ENOENT' });
-  assert.ok((await readdir(join(options.output, '..'))).every(name => !name.startsWith('.coproxy-stage-')));
+  assert.ok((await readdir(join(options.output, '..'))).every(name => !name.startsWith('.cocoproxy-stage-')));
   assert.equal(await readFile(options.core, 'utf8'), 'unapproved core');
 });
 

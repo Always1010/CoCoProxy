@@ -400,7 +400,7 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(gateway.call('native', action='recover-checkpoint'), 'NATIVE_IP_RECOVERY_CHECKPOINT_FAILED')
         check(gateway.call('native', action='recover'), 'NATIVE_IP_RECOVERY_FAILED')
         result['nativePendingIpRecovered'] = True
-        check(not any(link['ifname'] == 'coproxy-tun' for link in json.loads(gateway.ip('-j', 'link', 'show'))), 'TUN_EXISTS_BEFORE_CORE')
+        check(not any(link['ifname'] == 'cocoproxy-tun' for link in json.loads(gateway.ip('-j', 'link', 'show'))), 'TUN_EXISTS_BEFORE_CORE')
         check(gateway.call('native', action='prepare'), 'NATIVE_PREPARE_FAILED')
         check(gateway.call('native', action='pending-nft'), 'NATIVE_NFT_PENDING_FAILED')
         gateway.call('stop', label='native')
@@ -420,7 +420,7 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         for _ in range(40):
             check(gateway.call('alive', label='core'), 'CORE_EXITED_BEFORE_READY')
             links = json.loads(gateway.ip('-j', 'link', 'show'))
-            if any(link['ifname'] == 'coproxy-tun' for link in links):
+            if any(link['ifname'] == 'cocoproxy-tun' for link in links):
                 break
             time.sleep(.1)
         else:
@@ -520,7 +520,7 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         # Kernel removes the nonpersistent TUN on core termination. Capture's
         # persistent blackhole and guard must continue to prevent direct routing.
         links = json.loads(gateway.ip('-j', 'link', 'show'))
-        check(not any(link['ifname'] == 'coproxy-tun' for link in links), 'TUN_SURVIVED_CORE')
+        check(not any(link['ifname'] == 'cocoproxy-tun' for link in links), 'TUN_SURVIVED_CORE')
         check(not client.call('http') and not client.call('udp'), 'TUN_LOSS_ESCAPED')
         check(before == origin.call('stats'), 'TUN_LOSS_ORIGIN_TOUCHED')
 
@@ -528,7 +528,7 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
             gateway.call('start', label='core', binary=data['core'], args=['-d', '@ROOT', '-f', '@CONFIG'], config=data['config'])
             for _ in range(40):
                 check(gateway.call('alive', label='core'), 'RESTARTED_CORE_EXITED')
-                if any(link['ifname'] == 'coproxy-tun' for link in json.loads(gateway.ip('-j', 'link', 'show'))):
+                if any(link['ifname'] == 'cocoproxy-tun' for link in json.loads(gateway.ip('-j', 'link', 'show'))):
                     break
                 time.sleep(.1)
             else:
@@ -540,7 +540,7 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
 
         restart_core()
         check(gateway.call('alive', label='core'), 'CORE_NOT_LIVE_BEFORE_TUN_DELETE')
-        gateway.ip('link', 'delete', 'coproxy-tun')
+        gateway.ip('link', 'delete', 'cocoproxy-tun')
         before = origin.call('stats')
         check(not client.call('http') and not client.call('udp'), 'LIVE_TUN_DELETE_ESCAPED')
         check(before == origin.call('stats'), 'LIVE_TUN_DELETE_ORIGIN_TOUCHED')
@@ -562,7 +562,7 @@ add rule inet fixture_observe forward iifname "lan-test" oifname "lan-test" ip s
         check(gateway.call('native', action='retain'), 'NATIVE_RETAIN_FAILED')
         retained = gateway.call('native', action='inspect')
         check(retained['mode'] == 'blocked' and len(retained['routesPresent']) == 7, 'NATIVE_RETAIN_READBACK_FAILED')
-        gateway.nft('add rule inet coproxy_guard forward_guard accept\n')
+        gateway.nft('add rule inet cocoproxy_guard forward_guard accept\n')
         check(gateway.call('native', action='tamper-check'), 'NATIVE_TAMPER_NOT_REJECTED')
         result['nativeTamperRejected'] = True
         return result

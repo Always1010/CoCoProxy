@@ -28,13 +28,13 @@ test('controller HTTP responses and WebSocket checks share the same revocable co
     const stripped = stripControllerMount(input);
     assert.equal(new URL(stripped.url).pathname, '/proxies/%E8%8A%82%E7%82%B9');
     assert.equal(stripped.method, 'DELETE');
-    return new Response(null, { status: 204, headers: { 'x-coproxy-generation': 'a'.repeat(64) } });
+    return new Response(null, { status: 204, headers: { 'x-cocoproxy-generation': 'a'.repeat(64) } });
   });
   const cookie = await login(gateway.fetch);
   const input = request('/api/clash/proxies/%E8%8A%82%E7%82%B9', 'DELETE', undefined, cookie);
   const response = await gateway.fetch(input);
   assert.equal(response.status, 204);
-  assert.equal(response.headers.get('x-coproxy-generation'), 'a'.repeat(64));
+  assert.equal(response.headers.get('x-cocoproxy-generation'), 'a'.repeat(64));
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const ws = request('/api/clash/logs?level=info', 'GET', undefined, cookie, { origin });
   assert.equal(gateway.authorize(ws, true).username, username);
@@ -53,13 +53,13 @@ async function login(handler: (r: Request) => Promise<Response>) {
   const response = await handler(request('/api/session/login', 'POST', { username, password }));
   assert.equal(response.status, 200, await response.clone().text());
   const cookie = response.headers.get('set-cookie')!;
-  assert.match(cookie, /^__Host-coproxy_session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict; Secure; Max-Age=/);
+  assert.match(cookie, /^__Host-cocoproxy_session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict; Secure; Max-Age=/);
   assert.ok(!(await response.clone().text()).includes(cookie.split(';')[0].split('=')[1]));
   assert.equal(response.headers.get('cache-control'), 'no-store');
   return cookie.split(';')[0];
 }
 async function fixture(t: test.TestContext, automaticGateway?: AutomaticGatewaySettings) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-management-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-management-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const state = join(root, 'state');
   const events: string[] = [];
@@ -75,29 +75,29 @@ async function fixture(t: test.TestContext, automaticGateway?: AutomaticGatewayS
 test('cookie session gates every action and rejects cross-origin, URL tokens and legacy bearer credentials', async () => {
   let actions = 0;
   const handler = createManagementHandler({ origin, credential }, async () => { actions++; return { ok: true }; });
-  assert.equal((await handler(request('/api/coproxy/status'))).status, 401);
+  assert.equal((await handler(request('/api/cocoproxy/status'))).status, 401);
   assert.equal((await handler(request('/config.js'))).status, 401);
-  const publicHealth = await handler(request('/api/coproxy/health'));
+  const publicHealth = await handler(request('/api/cocoproxy/health'));
   assert.deepEqual(await publicHealth.json(), { responding: true, scope: 'management_only' });
   const cookie = await login(handler);
   assert.equal((await handler(request('/api/session', 'GET', undefined, cookie))).status, 200);
-  for (const bad of [request('/api/coproxy/apply', 'POST', {}, cookie, { origin: 'https://other.example' }),
-    new Request(origin + '/api/coproxy/apply', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{}' }),
-    request('/api/coproxy/status?token=' + password, 'GET', undefined, cookie),
-    request('/api/coproxy/status', 'GET', undefined, cookie, { authorization: 'Bearer ' + password }),
-    request('/api/coproxy/status', 'GET', undefined, cookie, { 'sec-fetch-site': 'cross-site' }),
-    new Request('https://other.example/api/coproxy/status', { headers: { cookie } }),
-    request('/api/coproxy/status', 'GET', undefined, cookie + '; ' + cookie)]) {
+  for (const bad of [request('/api/cocoproxy/apply', 'POST', {}, cookie, { origin: 'https://other.example' }),
+    new Request(origin + '/api/cocoproxy/apply', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{}' }),
+    request('/api/cocoproxy/status?token=' + password, 'GET', undefined, cookie),
+    request('/api/cocoproxy/status', 'GET', undefined, cookie, { authorization: 'Bearer ' + password }),
+    request('/api/cocoproxy/status', 'GET', undefined, cookie, { 'sec-fetch-site': 'cross-site' }),
+    new Request('https://other.example/api/cocoproxy/status', { headers: { cookie } }),
+    request('/api/cocoproxy/status', 'GET', undefined, cookie + '; ' + cookie)]) {
     const response = await handler(bad);
     assert.ok([400, 401, 403, 421].includes(response.status));
     assert.ok(!(await response.text()).includes(password));
   }
   assert.equal(actions, 0);
-  assert.equal((await handler(request('/api/coproxy/status', 'GET', undefined, cookie))).status, 200);
+  assert.equal((await handler(request('/api/cocoproxy/status', 'GET', undefined, cookie))).status, 200);
   assert.equal(actions, 1);
   const logout = await handler(request('/api/session/logout', 'POST', {}, cookie));
   assert.match(logout.headers.get('set-cookie')!, /Max-Age=0$/);
-  assert.equal((await handler(request('/api/coproxy/status', 'GET', undefined, cookie))).status, 401);
+  assert.equal((await handler(request('/api/cocoproxy/status', 'GET', undefined, cookie))).status, 401);
 });
 
 test('login limits attempts and concurrent password work, expiry is absolute and bad deployment origins fail closed', async () => {
@@ -154,45 +154,45 @@ for (const profile of ['explicit', 'automatic'] as const) test(`authenticated ${
   const f = await fixture(t, automaticGateway);
   const cookie = await login(f.handler);
   const call = async (path: string, method = 'GET', body?: unknown) => f.handler(request(path, method, body, cookie));
-  assert.equal((await call('/api/coproxy/status')).status, 200);
+  assert.equal((await call('/api/cocoproxy/status')).status, 200);
   await assert.rejects(stat(f.state), { code: 'ENOENT' });
-  const injected = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy, deployment: { ...deployment, controllerSecret: 'attacker' } });
+  const injected = await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy, deployment: { ...deployment, controllerSecret: 'attacker' } });
   assert.equal(injected.status, 400);
-  const protectedPolicy = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy: { ...policy, tun: { enable: true } } });
+  const protectedPolicy = await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy: { ...policy, tun: { enable: true } } });
   assert.equal(protectedPolicy.status, 400);
-  const networkBypass = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy: { ...policy,
+  const networkBypass = await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy: { ...policy,
     iptables: { enable: true, 'inbound-interface': 'synthetic0', 'dns-redirect': true } } });
   assert.equal(networkBypass.status, 400);
-  const saved = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy });
+  const saved = await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy });
   const metadata = await saved.json();
   assert.equal(metadata.revision, 1);
   assert.deepEqual(f.events, []);
-  const draftText = await (await call('/api/coproxy/draft')).text();
+  const draftText = await (await call('/api/cocoproxy/draft')).text();
   assert.ok(!draftText.includes(secret) && !draftText.includes('deployment'));
   assert.deepEqual(JSON.parse(draftText).draft.policy, policy);
-  const staged = await (await call('/api/coproxy/stage', 'POST', { expectedRevision: 1 })).json();
+  const staged = await (await call('/api/cocoproxy/stage', 'POST', { expectedRevision: 1 })).json();
   assert.equal(staged.stagedRevision, 1);
   if (profile === 'explicit') assert.equal(staged.generation, metadata.generation);
   else assert.notEqual(staged.generation, metadata.generation);
   assert.deepEqual(f.events, []);
-  const conflict = await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy });
+  const conflict = await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy });
   assert.equal(conflict.status, 409);
-  const applied = await call('/api/coproxy/apply', 'POST', { generation: staged.generation, expectedActive: null });
+  const applied = await call('/api/cocoproxy/apply', 'POST', { generation: staged.generation, expectedActive: null });
   assert.equal(applied.status, 200, await applied.clone().text());
   assert.deepEqual(f.events, ['validate', 'activate', 'confirm']);
-  const status = await (await call('/api/coproxy/status')).json();
+  const status = await (await call('/api/cocoproxy/status')).json();
   assert.equal(status.active, staged.generation);
   assert.equal(status.core.ready, true);
   assert.equal(status.gateway.ready, false);
   if (automaticGateway) assert.equal(status.gateway.reason, 'GATEWAY_PATH_UNVERIFIED');
   assert.equal(status.readiness, 'unknown');
   assert.ok(!JSON.stringify(status).includes(secret));
-  const wrongCAS = await call('/api/coproxy/apply', 'POST', { generation: staged.generation, expectedActive: null });
+  const wrongCAS = await call('/api/cocoproxy/apply', 'POST', { generation: staged.generation, expectedActive: null });
   assert.equal(wrongCAS.status, 409);
   // A CLI-staged candidate still cannot change this service's private deployment.
   const foreign = compileConfig({ schemaVersion: 1, deployment: { ...deployment, controllerPort: 19091 }, policy });
   await new FileTransactionStore(f.state).stage(foreign);
-  const mismatch = await call('/api/coproxy/apply', 'POST', { generation: foreign.id, expectedActive: staged.generation });
+  const mismatch = await call('/api/cocoproxy/apply', 'POST', { generation: foreign.id, expectedActive: staged.generation });
   assert.equal(mismatch.status, 409);
   assert.equal((await mismatch.json()).error.code, 'DEPLOYMENT_MISMATCH');
   const bypasses: JsonObject[] = [{ listeners: [] }, { iptables: { enable: true } }];
@@ -200,7 +200,7 @@ for (const profile of ['explicit', 'automatic'] as const) test(`authenticated ${
     const invalidConfig = { ...compileConfig({ schemaVersion: 1, deployment, policy }).config, ...bypass };
     const invalidDigest = createHash('sha256').update(canonicalJson(invalidConfig)).digest('hex');
     await new FileTransactionStore(f.state).stage({ id: invalidDigest, sha256: invalidDigest, config: invalidConfig });
-    assert.equal((await call('/api/coproxy/apply', 'POST', { generation: invalidDigest, expectedActive: staged.generation })).status, 400);
+    assert.equal((await call('/api/cocoproxy/apply', 'POST', { generation: invalidDigest, expectedActive: staged.generation })).status, 400);
   }
   assert.deepEqual(f.events, ['validate', 'activate', 'confirm']);
   const privateConfig = JSON.parse(await readFile(join(f.state, 'candidates', staged.generation + '.json'), 'utf8'));
@@ -212,19 +212,19 @@ test('browser source updates expose metadata and capture exact snapshots without
   const f = await fixture(t);
   const cookie = await login(f.handler);
   const call = async (path: string, method = 'GET', body?: unknown) => f.handler(request(path, method, body, cookie));
-  assert.deepEqual(await (await call('/api/coproxy/sources')).json(), { sources: [] });
+  assert.deepEqual(await (await call('/api/cocoproxy/sources')).json(), { sources: [] });
   await assert.rejects(stat(f.state), { code: 'ENOENT' });
-  const configured = await call('/api/coproxy/sources/primary', 'PUT', { expectedRevision: 0, url: 'https://subscription.example/feed?token=' + password });
+  const configured = await call('/api/cocoproxy/sources/primary', 'PUT', { expectedRevision: 0, url: 'https://subscription.example/feed?token=' + password });
   assert.equal(configured.status, 200);
   assert.ok(!(await configured.text()).includes(password));
-  assert.equal((await call('/api/coproxy/sources/primary/refresh', 'POST', { expectedRevision: 1 })).status, 200);
-  const inventory = await (await call('/api/coproxy/sources')).text();
+  assert.equal((await call('/api/cocoproxy/sources/primary/refresh', 'POST', { expectedRevision: 1 })).status, 200);
+  const inventory = await (await call('/api/cocoproxy/sources')).text();
   assert.ok(!inventory.includes(password) && !inventory.includes('https://'));
   assert.equal(JSON.parse(inventory).sources[0].revision, 2);
-  await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy });
-  const stale = await call('/api/coproxy/stage', 'POST', { expectedRevision: 1, sources: [{ id: 'primary', expectedRevision: 1 }] });
+  await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy });
+  const stale = await call('/api/cocoproxy/stage', 'POST', { expectedRevision: 1, sources: [{ id: 'primary', expectedRevision: 1 }] });
   assert.equal(stale.status, 409);
-  const staged = await call('/api/coproxy/stage', 'POST', { expectedRevision: 1, sources: [{ id: 'primary', expectedRevision: 2 }] });
+  const staged = await call('/api/cocoproxy/stage', 'POST', { expectedRevision: 1, sources: [{ id: 'primary', expectedRevision: 2 }] });
   assert.equal(staged.status, 200, await staged.clone().text());
   const receipt = await staged.json();
   assert.equal(receipt.sources[0].expectedRevision, 2);
@@ -234,23 +234,23 @@ test('browser source updates expose metadata and capture exact snapshots without
   assert.deepEqual(f.events, []);
   await writeFile(join(f.state, 'subscriptions', '.write-00000000-0000-4000-8000-000000000001'), '', { mode: 0o600 });
   assert.equal((await new SubscriptionStore(f.state).list()).length, 1);
-  assert.equal((await f.handler(request('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 2 }, cookie,
+  assert.equal((await f.handler(request('/api/cocoproxy/sources/primary', 'DELETE', { expectedRevision: 2 }, cookie,
     { origin: 'https://other.example' }))).status, 403);
-  assert.equal((await call('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 1 })).status, 409);
-  const inUse = await call('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 2 });
+  assert.equal((await call('/api/cocoproxy/sources/primary', 'DELETE', { expectedRevision: 1 })).status, 409);
+  const inUse = await call('/api/cocoproxy/sources/primary', 'DELETE', { expectedRevision: 2 });
   assert.equal(inUse.status, 409);
   assert.equal((await inUse.json()).error.code, 'SOURCE_IN_USE');
-  assert.equal((await call('/api/coproxy/sources/secondary', 'PUT', {
+  assert.equal((await call('/api/cocoproxy/sources/secondary', 'PUT', {
     expectedRevision: 0, url: 'https://subscription.example/secondary',
   })).status, 200);
-  assert.equal((await call('/api/coproxy/sources/secondary/refresh', 'POST', { expectedRevision: 1 })).status, 200);
-  const { revision, ...settings } = (await (await call('/api/coproxy/workspace')).json()).workspace;
-  assert.equal((await call('/api/coproxy/workspace', 'PUT', {
+  assert.equal((await call('/api/cocoproxy/sources/secondary/refresh', 'POST', { expectedRevision: 1 })).status, 200);
+  const { revision, ...settings } = (await (await call('/api/cocoproxy/workspace')).json()).workspace;
+  assert.equal((await call('/api/cocoproxy/workspace', 'PUT', {
     expectedRevision: revision, settings: { ...settings, sourceIds: ['secondary'] },
   })).status, 200);
-  assert.equal((await call('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 2 })).status, 200);
+  assert.equal((await call('/api/cocoproxy/sources/primary', 'DELETE', { expectedRevision: 2 })).status, 200);
   assert.equal(await new SubscriptionStore(f.state).status('primary'), null);
-  assert.equal((await call('/api/coproxy/status', 'DELETE', {})).status, 405);
+  assert.equal((await call('/api/cocoproxy/status', 'DELETE', {})).status, 405);
   await writeFile(join(f.state, 'subscriptions', 'unexpected.txt'), '', { mode: 0o600 });
   await assert.rejects(new SubscriptionStore(f.state).list(), { code: 'SOURCE_CORRUPT' });
 });
@@ -259,15 +259,15 @@ test('failed runtime application is restored and never leaks diagnostics or enab
   const f = await fixture(t);
   const cookie = await login(f.handler);
   const call = async (path: string, method = 'GET', body?: unknown) => f.handler(request(path, method, body, cookie));
-  await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy });
-  const staged = await (await call('/api/coproxy/stage', 'POST', { expectedRevision: 1 })).json();
+  await call('/api/cocoproxy/draft', 'PUT', { expectedRevision: 0, policy });
+  const staged = await (await call('/api/cocoproxy/stage', 'POST', { expectedRevision: 1 })).json();
   f.setFailure();
-  const response = await call('/api/coproxy/apply', 'POST', { generation: staged.generation, expectedActive: null });
+  const response = await call('/api/cocoproxy/apply', 'POST', { generation: staged.generation, expectedActive: null });
   assert.equal(response.status, 503);
   assert.ok(!(await response.clone().text()).includes(secret));
   assert.equal((await response.json()).error.code, 'ACTIVATION_FAILED');
   assert.deepEqual(f.events, ['validate', 'activate', 'restore']);
-  assert.equal((await (await call('/api/coproxy/status')).json()).active, null);
+  assert.equal((await (await call('/api/cocoproxy/status')).json()).active, null);
   for (const path of ['/api/control/kernel/start', '/api/control/config', '/api/control/geo/update', '/config.js']) {
     assert.equal((await call(path, 'POST', {})).status, 404);
   }
@@ -276,7 +276,7 @@ test('failed runtime application is restored and never leaks diagnostics or enab
 test('production factory reads private deployment settings and never creates state or controls a service on load', {
   skip: process.platform !== 'linux' ? 'Production runtime settings require Linux and canonical POSIX paths' : false,
 }, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-management-load-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-management-load-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const state = join(root, 'absent');
   const credentialPath = join(root, 'admin.json');
@@ -285,12 +285,12 @@ test('production factory reads private deployment settings and never creates sta
   await writeFile(credentialPath, JSON.stringify(credential), { mode: 0o600 });
   await writeFile(runtimeSettingsPath, JSON.stringify({ schemaVersion: 1, stateDirectory: state,
     binaryPath: '/synthetic/not-installed', binarySha256: 'a'.repeat(64), systemctlPath: '/synthetic/not-systemctl',
-    unitPath: '/synthetic/coproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 }), { mode: 0o600 });
+    unitPath: '/synthetic/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 }), { mode: 0o600 });
   const settings = { schemaVersion: 1, origin, credentialPath, runtimeSettingsPath, deployment };
   await writeFile(configPath, JSON.stringify(settings), { mode: 0o600 });
   const handler = await loadManagementService(configPath);
   const cookie = await login(handler);
-  const response = await handler(request('/api/coproxy/status', 'GET', undefined, cookie));
+  const response = await handler(request('/api/cocoproxy/status', 'GET', undefined, cookie));
   assert.equal(response.status, 200);
   assert.equal((await response.json()).core, null);
   await assert.rejects(stat(state), { code: 'ENOENT' });

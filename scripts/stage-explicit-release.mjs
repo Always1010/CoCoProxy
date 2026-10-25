@@ -189,7 +189,7 @@ export async function stageExplicitRelease(options) {
     const serverModules = join(serverDir, 'server', 'node_modules');
     await noLinks(join(serverDir, 'server')); await noLinks(join(serverDir, 'public')); await noLinks(serverModules);
     if ((await moduleNames(serverModules)).sort().join(',') !== [...modules.keys()].sort().join(',')) fail('SERVER_DEPENDENCY_MISMATCH');
-    staging = join(parent, `.coproxy-stage-${randomUUID()}`);
+    staging = join(parent, `.cocoproxy-stage-${randomUUID()}`);
     await mkdir(staging, { mode: 0o700 });
     await chmod(staging, 0o700);
     const files = []; const names = new Set(); let total = 0;
@@ -213,7 +213,7 @@ export async function stageExplicitRelease(options) {
           'docs/cooperating-router-requirements.md', 'docs/release-notes.md',
           'examples/deployment-plan.json', 'examples/automatic-gateway-deployment.json', 'examples/deployment-options.md',
           'scripts/measure-latency.mjs',
-          'examples/nginx-management.conf', 'examples/coproxy-web.service'].includes(entry.path);
+          'examples/nginx-management.conf', 'examples/cocoproxy-web.service'].includes(entry.path);
       if (selected) {
         if (sensitive(entry.path)) fail('SOURCE_FILE_FORBIDDEN');
         await write(`source/${entry.path}`, await blob(entry.path), entry.mode);
@@ -262,7 +262,7 @@ export async function stageExplicitRelease(options) {
     await write('bin/mihomo', coreBytes, '0755');
     const manifest = {
       schemaVersion: 1, scope: 'local-explicit-proxy-payload', commit,
-      components: { coproxy: { version: pkg.version, lockSha256: sha256(lockBytes) },
+      components: { cocoproxy: { version: pkg.version, lockSha256: sha256(lockBytes) },
         metacubexd: { version: uiTag, commit: uiCommit }, mihomo: { version: coreTag, commit: coreCommit, binarySha256: reviewedHash, ...(corePlatform ? { platform: corePlatform } : {}) },
         runtimeDependencies: dependencyVersions },
       sourceSelection: 'HEAD blobs: apps, packages, selected deployment docs/examples, root package metadata and license/source notices; no links or local/build data',

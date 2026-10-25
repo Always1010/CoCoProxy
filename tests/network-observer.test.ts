@@ -9,14 +9,14 @@ import { NativeNetworkError } from '../packages/network/native.ts';
 import { NetworkReadbackError } from '../packages/network/readback.ts';
 import { NetworkCommandError } from '../packages/network/command.ts';
 
-const runtime = renderGatewayRuntimePlan({ schemaVersion: 1, stateDirectory: '/var/lib/coproxy-observer-fixture',
-  coreHome: '/var/lib/coproxy-observer-home', binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
-  systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/coproxy-mihomo.service', serviceUid: 12345 });
+const runtime = renderGatewayRuntimePlan({ schemaVersion: 1, stateDirectory: '/var/lib/cocoproxy-observer-fixture',
+  coreHome: '/var/lib/cocoproxy-observer-home', binaryPath: '/opt/cocoproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
+  systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', serviceUid: 12345 });
 const plan = renderNetworkPlan({ schemaVersion: 1, generation: 'a'.repeat(64),
   core: { serviceUid: 12345, binarySha256: GATEWAY_CORE_SHA256, unitSha256: runtime.settings.unitSha256 }, management: { serviceUid: 12346 },
   ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
   routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-  tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+  tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
   tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } });
 const settings = { core: { runtime: runtime.settings, coreHome: runtime.coreHome }, managementPid: 202 };
 const bootId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -29,13 +29,13 @@ function fixture() {
   const reader: GatewayObserverFixture = {
     async core() { calls.push('core'); return { ...stamp(), commandsSettled: state.commandsSettled, terminalPath: 'unverified',
       facts: { generation: plan.deployment.generation, planSha256: plan.sha256, bootId, corePid: state.corePid,
-        corePidStartTime: '12345', coreUnitControlGroup: '/system.slice/coproxy-mihomo.service', ...plan.deployment.core } }; },
+        corePidStartTime: '12345', coreUnitControlGroup: '/system.slice/cocoproxy-mihomo.service', ...plan.deployment.core } }; },
     async cgroup(request) {
       calls.push('cgroup'); assert.equal(request.managementUid, 12346);
       return { ...stamp(), identity: { bootId, corePid: state.corePid, corePidStartTime: '12345',
-        coreUnitControlGroup: '/system.slice/coproxy-mihomo.service', coreCgroupKernelId: '9007199254740999',
+        coreUnitControlGroup: '/system.slice/cocoproxy-mihomo.service', coreCgroupKernelId: '9007199254740999',
         managementPid: 202, managementPidStartTime: state.managementStart,
-        managementUnitControlGroup: '/system.slice/coproxy-management.service', managementCgroupKernelId: '9007199254741000' } };
+        managementUnitControlGroup: '/system.slice/cocoproxy-management.service', managementCgroupKernelId: '9007199254741000' } };
     },
     async sockets(_, binding, stage) {
       calls.push('sockets:' + stage.stage); assert.equal(binding.management.uid, 12346);

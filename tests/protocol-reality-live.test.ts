@@ -11,8 +11,8 @@ import test from 'node:test';
 import { compileConfig } from '../packages/config/index.ts';
 import { freePort, httpNonce, managedProcess, ownNetworkBindings, privateJson, reviewedBinary, udpNonce, waitBindings } from './protocol-live-helpers.ts';
 
-const coreInput = process.env.COPROXY_TEST_MIHOMO;
-const fixtureInput = process.env.COPROXY_TEST_SING_BOX;
+const coreInput = process.env.COCOPROXY_TEST_MIHOMO;
+const fixtureInput = process.env.COCOPROXY_TEST_SING_BOX;
 const enabled = Boolean(coreInput && fixtureInput) && process.platform === 'linux' && process.geteuid?.() !== 0;
 
 // Node's standard X25519 key generation supplies ephemeral synthetic inputs;
@@ -28,7 +28,7 @@ test('reviewed official cores pass VLESS REALITY loopback TCP and UDP and reject
     const coreReview = JSON.parse(await readFile(new URL('../integrations/metacubexd/review.json', import.meta.url), 'utf8'));
     const core = await reviewedBinary(coreInput!, coreReview.coreCandidate.binarySha256);
     const fixtureBinary = await reviewedBinary(fixtureInput!, review.server.binarySha256);
-    const root = await mkdtemp(join(tmpdir(), 'coproxy-reality-live-'));
+    const root = await mkdtemp(join(tmpdir(), 'cocoproxy-reality-live-'));
     await chmod(root, 0o700);
     const previousUmask = process.umask(0o077);
     const processes = new Set<ReturnType<typeof managedProcess>>();

@@ -12,15 +12,15 @@ import type { JsonObject } from '../packages/config/index.ts';
 
 function input() {
   return { schemaVersion: 1, runtime: {
-    schemaVersion: 1, stateDirectory: '/var/lib/coproxy', binaryPath: '/opt/coproxy/bin/mihomo',
+    schemaVersion: 1, stateDirectory: '/var/lib/cocoproxy', binaryPath: '/opt/cocoproxy/bin/mihomo',
     binarySha256: 'a'.repeat(64), systemctlPath: '/usr/bin/systemctl', nodePath: '/usr/bin/node',
-    sourceDirectory: '/opt/coproxy/source', settingsPath: '/etc/coproxy/runtime.json',
-    unitPath: '/etc/systemd/system/coproxy-mihomo.service', serviceUid: 12345,
+    sourceDirectory: '/opt/cocoproxy/source', settingsPath: '/etc/cocoproxy/runtime.json',
+    unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', serviceUid: 12345,
   }, management: {
-    origin: 'https://management.example', listenPort: 13000, serviceUser: 'coproxy',
-    serverEntry: '/opt/coproxy/server/.output/server/index.mjs', settingsPath: '/etc/coproxy/management.json',
-    credentialPath: '/etc/coproxy/admin.json', unitPath: '/etc/systemd/system/coproxy-management.service',
-    policyPath: '/etc/polkit-1/rules.d/50-coproxy-management.rules',
+    origin: 'https://management.example', listenPort: 13000, serviceUser: 'cocoproxy',
+    serverEntry: '/opt/cocoproxy/server/.output/server/index.mjs', settingsPath: '/etc/cocoproxy/management.json',
+    credentialPath: '/etc/cocoproxy/admin.json', unitPath: '/etc/systemd/system/cocoproxy-management.service',
+    policyPath: '/etc/polkit-1/rules.d/50-cocoproxy-management.rules',
     deployment: { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'SYNTHETIC_CONTROLLER_SECRET',
       dnsPort: 15353, bootstrapResolvers: ['192.0.2.53'] },
   } };
@@ -38,18 +38,18 @@ test('installer renders optional encrypted resolvers without altering bootstrap 
   const value = input();
   (value.management.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];
   (value.management.deployment as JsonObject).sniffing = true;
-  const settings = JSON.parse(renderDeploymentPlan(value).files.find(file => file.path === '/etc/coproxy/management.json')!.content);
+  const settings = JSON.parse(renderDeploymentPlan(value).files.find(file => file.path === '/etc/cocoproxy/management.json')!.content);
   assert.deepEqual(settings.deployment.nameservers, ['https://192.0.2.54/dns-query']);
   assert.deepEqual(settings.deployment.bootstrapResolvers, ['192.0.2.53']);
   assert.equal(settings.deployment.sniffing, true);
 });
 
 test('installed systemd parser accepts both generated unit definitions', {
-  skip: process.platform !== 'linux' || !process.env.COPROXY_TEST_SYSTEMD_ANALYZE,
+  skip: process.platform !== 'linux' || !process.env.COCOPROXY_TEST_SYSTEMD_ANALYZE,
 }, async t => {
-  const binary = process.env.COPROXY_TEST_SYSTEMD_ANALYZE!;
+  const binary = process.env.COCOPROXY_TEST_SYSTEMD_ANALYZE!;
   assert.ok(isAbsolute(binary));
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-unit-syntax-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-unit-syntax-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const value of [input(), automaticInput()]) {
     const directory = await mkdtemp(join(root, 'profile-'));
@@ -67,11 +67,11 @@ test('installed systemd parser accepts both generated unit definitions', {
 test('native deployment adds one root oneshot without granting management network privileges', () => {
   const plan = renderDeploymentPlan(automaticInput());
   assert.equal(plan.files.length, 7);
-  const core = plan.files.find(file => file.path.endsWith('/coproxy-mihomo.service'))!;
-  const manager = plan.files.find(file => file.path.endsWith('/coproxy-management.service'))!;
-  const network = plan.files.find(file => file.path.endsWith('/coproxy-gateway-network.service'))!;
-  assert.match(core.content, /^Requires=coproxy-gateway-network.service$/m);
-  assert.match(core.content, /^BindsTo=coproxy-gateway-network.service$/m);
+  const core = plan.files.find(file => file.path.endsWith('/cocoproxy-mihomo.service'))!;
+  const manager = plan.files.find(file => file.path.endsWith('/cocoproxy-management.service'))!;
+  const network = plan.files.find(file => file.path.endsWith('/cocoproxy-gateway-network.service'))!;
+  assert.match(core.content, /^Requires=cocoproxy-gateway-network.service$/m);
+  assert.match(core.content, /^BindsTo=cocoproxy-gateway-network.service$/m);
   assert.match(core.content, /^AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW$/m);
   assert.match(manager.content, /^CapabilityBoundingSet=$/m);
   assert.doesNotMatch(manager.content, /AmbientCapabilities/);
@@ -79,7 +79,7 @@ test('native deployment adds one root oneshot without granting management networ
   assert.doesNotMatch(network.content, /ExecStop|Restart=|WantedBy/);
   const rootSettings = plan.files.find(file => file.path.endsWith('/gateway-network.json'))!;
   assert.equal(rootSettings.owner, 'root'); assert.equal(rootSettings.mode, '0600');
-  assert.ok(plan.directories.some(dir => dir.path === '/var/lib/coproxy-gateway-network' && dir.owner === 'root' && dir.mode === '0700'));
+  assert.ok(plan.directories.some(dir => dir.path === '/var/lib/cocoproxy-gateway-network' && dir.owner === 'root' && dir.mode === '0700'));
   for (const dependency of ['/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft', '/usr/bin/ip', '/usr/bin/nft']) {
     const collision = automaticInput(); collision.management.settingsPath = dependency;
     assert.throws(() => renderDeploymentPlan(collision), DeploymentPlanError);
@@ -104,12 +104,12 @@ test('deployment proposal shares the private runtime identity and pins core byte
     assert.match(unit.content, /^User=12345$/m);
     assert.match(unit.content, /^NoNewPrivileges=true$/m);
     assert.match(unit.content, /^ProtectSystem=strict$/m);
-    assert.match(unit.content, /^ReadWritePaths="\/var\/lib\/coproxy"$/m);
+    assert.match(unit.content, /^ReadWritePaths="\/var\/lib\/cocoproxy"$/m);
   }
   assert.match(server.content, /^Environment="NITRO_HOST=127\.0\.0\.1"$/m);
   assert.match(server.content, /^Environment="NITRO_PORT=13000"$/m);
-  assert.match(server.content, /^Environment="COPROXY_MANAGEMENT_CONFIG=\/etc\/coproxy\/management\.json"$/m);
-  assert.doesNotMatch(server.content, /Wants=|Requires=|coproxy-mihomo|ExecStartPre|ExecStartPost|Condition|ExecReload|AmbientCapabilities|CAP_NET_ADMIN/);
+  assert.match(server.content, /^Environment="COCOPROXY_MANAGEMENT_CONFIG=\/etc\/cocoproxy\/management\.json"$/m);
+  assert.doesNotMatch(server.content, /Wants=|Requires=|cocoproxy-mihomo|ExecStartPre|ExecStartPost|Condition|ExecReload|AmbientCapabilities|CAP_NET_ADMIN/);
   assert.equal(settings.runtimeSettingsPath, value.runtime.settingsPath);
   assert.equal(settings.credentialPath, value.management.credentialPath);
   assert.deepEqual(settings.deployment, value.management.deployment);
@@ -118,7 +118,7 @@ test('deployment proposal shares the private runtime identity and pins core byte
   for (const path of [value.runtime.settingsPath, value.management.settingsPath]) {
     assert.equal(find(path).owner, 12345); assert.equal(find(path).mode, '0600'); assert.equal(find(path).sensitive, true);
   }
-  assert.deepEqual(plan.directories[0], { path: '/var/lib/coproxy', mode: '0700', owner: 12345 });
+  assert.deepEqual(plan.directories[0], { path: '/var/lib/cocoproxy', mode: '0700', owner: 12345 });
   assert.equal(plan.files.some(file => file.path === value.management.credentialPath), false);
   assert.equal(plan.files.filter(file => file.content.includes(value.management.deployment.controllerSecret)).length, 1);
   assert.match(plan.requirements.join('\n'), /expectedActive CAS/);
@@ -133,30 +133,30 @@ test('generated polkit code grants exactly start/stop for one account and one un
   const check = (user: string, id: string, unit?: string, verb?: string) => rule({ id,
     lookup: key => key === 'unit' ? unit : key === 'verb' ? verb : undefined }, { user });
   const action = 'org.freedesktop.systemd1.manage-units';
-  for (const verb of ['start', 'stop']) assert.equal(check('coproxy', action, 'coproxy-mihomo.service', verb), 'yes');
+  for (const verb of ['start', 'stop']) assert.equal(check('cocoproxy', action, 'cocoproxy-mihomo.service', verb), 'yes');
   for (const verb of [undefined, '', 'restart', 'reload', 'try-restart', 'reload-or-restart', 'enable', 'start\n']) {
-    assert.equal(check('coproxy', action, 'coproxy-mihomo.service', verb), 'no');
+    assert.equal(check('cocoproxy', action, 'cocoproxy-mihomo.service', verb), 'no');
   }
-  for (const unit of [undefined, 'other.service', 'coproxy-management.service', 'coproxy-mihomo@x.service']) {
-    assert.equal(check('coproxy', action, unit, 'start'), 'no');
+  for (const unit of [undefined, 'other.service', 'cocoproxy-management.service', 'cocoproxy-mihomo@x.service']) {
+    assert.equal(check('cocoproxy', action, unit, 'start'), 'no');
   }
-  for (const user of ['root', 'other', '12345']) assert.equal(check(user, action, 'coproxy-mihomo.service', 'start'), undefined);
-  assert.equal(check('coproxy', 'org.freedesktop.systemd1.manage-unit-files', undefined, 'enable'), 'no');
-  assert.equal(check('coproxy', 'org.freedesktop.systemd1.reload-daemon'), undefined);
-  assert.equal(check('coproxy', 'org.freedesktop.policykit.exec'), undefined);
+  for (const user of ['root', 'other', '12345']) assert.equal(check(user, action, 'cocoproxy-mihomo.service', 'start'), undefined);
+  assert.equal(check('cocoproxy', 'org.freedesktop.systemd1.manage-unit-files', undefined, 'enable'), 'no');
+  assert.equal(check('cocoproxy', 'org.freedesktop.systemd1.reload-daemon'), undefined);
+  assert.equal(check('cocoproxy', 'org.freedesktop.policykit.exec'), undefined);
   assert.doesNotMatch(code, /polkit\.spawn|AUTH_ADMIN|YES_KEEP|sudo/);
 });
 
 test('systemd arguments and environments escape words without allowing unit or shell injection', () => {
   const value = input();
   value.management.serverEntry = '/opt/server "quoted"\\$HOME%instance/index.mjs';
-  value.management.settingsPath = '/etc/coproxy/config "quoted"\\$HOME%i.json';
-  value.runtime.stateDirectory = '/var/lib/coproxy "quoted"\\%i';
+  value.management.settingsPath = '/etc/cocoproxy/config "quoted"\\$HOME%i.json';
+  value.runtime.stateDirectory = '/var/lib/cocoproxy "quoted"\\%i';
   const plan = renderDeploymentPlan(value);
   const unit = plan.files.find(file => file.path === value.management.unitPath)!.content;
   assert.ok(unit.includes('ExecStart="/usr/bin/node" "/opt/server \\"quoted\\"\\\\$$HOME%%instance/index.mjs"\n'));
-  assert.ok(unit.includes('Environment="COPROXY_MANAGEMENT_CONFIG=/etc/coproxy/config \\"quoted\\"\\\\$HOME%%i.json"\n'));
-  assert.ok(unit.includes('ReadWritePaths="/var/lib/coproxy \\"quoted\\"\\\\%%i"\n'));
+  assert.ok(unit.includes('Environment="COCOPROXY_MANAGEMENT_CONFIG=/etc/cocoproxy/config \\"quoted\\"\\\\$HOME%%i.json"\n'));
+  assert.ok(unit.includes('ReadWritePaths="/var/lib/cocoproxy \\"quoted\\"\\\\%%i"\n'));
   assert.equal(unit.split('\n').filter(line => line.startsWith('ExecStart=')).length, 1);
 });
 
@@ -166,16 +166,16 @@ test('deployment rejects root, overlapping trust boundaries and paths hidden by 
     const candidate = input(); (candidate[section] as Record<string, unknown>)[key] = value; cases.push(candidate);
   };
   change('runtime', 'serviceUid', 0);
-  change('runtime', 'unitPath', '/opt/coproxy-mihomo.service');
+  change('runtime', 'unitPath', '/opt/cocoproxy-mihomo.service');
   change('management', 'unitPath', '/etc/systemd/system/other.service');
   change('management', 'policyPath', '/etc/polkit-1/rules.d/00-everything.rules');
   change('management', 'serviceUser', 'root');
-  change('management', 'serviceUser', 'coproxy" || true');
+  change('management', 'serviceUser', 'cocoproxy" || true');
   change('management', 'settingsPath', input().runtime.settingsPath);
   change('management', 'credentialPath', input().management.settingsPath);
-  change('management', 'serverEntry', '/var/lib/coproxy/server/index.mjs');
-  change('runtime', 'sourceDirectory', '/var/lib/coproxy/source');
-  change('runtime', 'stateDirectory', '/opt/coproxy');
+  change('management', 'serverEntry', '/var/lib/cocoproxy/server/index.mjs');
+  change('runtime', 'sourceDirectory', '/var/lib/cocoproxy/source');
+  change('runtime', 'stateDirectory', '/opt/cocoproxy');
   change('runtime', 'stateDirectory', '/var/lib');
   change('runtime', 'nodePath', input().management.serverEntry + '/node');
   change('management', 'settingsPath', input().runtime.sourceDirectory + '/management.json');

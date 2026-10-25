@@ -10,7 +10,7 @@ const commit = '8bbc8f58fef71148a94fb5c0ff808f79b057337d';
 const gitBlob = (text: string) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest('hex');
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-overlay-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-overlay-'));
   const directory = join(root, 'upstream');
   const overlayDirectory = join(root, 'overlay');
   const manifestPath = join(root, 'source-tree.json');

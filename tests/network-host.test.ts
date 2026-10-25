@@ -9,7 +9,7 @@ const deployment = { schemaVersion: 1, generation: 'a'.repeat(64),
   core: { serviceUid: 12345, binarySha256: 'b'.repeat(64), unitSha256: 'c'.repeat(64) },
   ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
   routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-  tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+  tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
   tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } };
 const options: NetworkHostOptions = { ipBinary: '/usr/sbin/ip', tcBinary: '/usr/sbin/tc',
   iptablesLegacySaveBinary: '/usr/sbin/iptables-legacy-save', ip6tablesLegacySaveBinary: '/usr/sbin/ip6tables-legacy-save' };
@@ -101,16 +101,16 @@ test('two complete read-only snapshots bind trusted views, sysctls and absent by
 
 test('supported nested mq and fq_codel handles are all queried; an existing TUN receives the same sysctl checks', async () => {
   const f = fixture();
-  f.value.links.push({ ifindex: 8, ifname: 'coproxy-tun', link_type: 'none', flags: ['UP'], linkinfo: { info_kind: 'tun' } });
+  f.value.links.push({ ifindex: 8, ifname: 'cocoproxy-tun', link_type: 'none', flags: ['UP'], linkinfo: { info_kind: 'tun' } });
   f.value.queues = [{ kind: 'mq', handle: '1:', root: true, options: {} },
     { kind: 'fq_codel', handle: '10:', parent: '1:1', options: { limit: 10240, flows: 1024, quantum: 1514, target: 5000, interval: 100000, memory_limit: 33554432, ecn: true } },
     { kind: 'clsact', handle: 'ffff:', parent: 'ffff:fff1', options: {} }];
   assert.equal((await observeNetworkHostFixture(deployment, options, f.reader)).verified, true);
   for (const parent of ['1:', '10:', '1:1', 'ffff:', 'ffff:fff1']) assert.ok(f.commands.some(args => args.includes('parent') && args.includes(parent)));
   for (const setting of ['rp_filter', 'send_redirects', 'accept_redirects', 'accept_source_route', 'route_localnet']) {
-    assert.ok(f.reads.includes('/proc/sys/net/ipv4/conf/coproxy-tun/' + setting));
+    assert.ok(f.reads.includes('/proc/sys/net/ipv4/conf/cocoproxy-tun/' + setting));
   }
-  f.overrides.set('/proc/sys/net/ipv4/conf/coproxy-tun/route_localnet', '1\n');
+  f.overrides.set('/proc/sys/net/ipv4/conf/cocoproxy-tun/route_localnet', '1\n');
   assert.equal((await observeNetworkHostFixture(deployment, options, f.reader)).verified, false);
 });
 

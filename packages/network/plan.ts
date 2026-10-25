@@ -22,7 +22,7 @@ export interface NetworkPlanInput {
   routerMAC: string;
   clientIPv4: string;
   dnsPort: number;
-  tun: { interface: 'coproxy-tun'; mtu: number };
+  tun: { interface: 'cocoproxy-tun'; mtu: number };
   marks: { mask: number; capture: number; egress: number; return: number };
   tables: { capture: number; egress: number; return: number };
   priorities: { capture: number; egress: number; return: number };
@@ -111,7 +111,7 @@ function validate(input: unknown): NetworkPlanInput {
   const tables = record(root.tables, roles);
   const priorities = record(root.priorities, roles);
   const ingressInterface = interfaceName(root.ingressInterface);
-  if (interfaceName(tun.interface) !== 'coproxy-tun' || ingressInterface === tun.interface) fail();
+  if (interfaceName(tun.interface) !== 'cocoproxy-tun' || ingressInterface === tun.interface) fail();
   const gateway = ipv4(root.gatewayIPv4);
   const router = ipv4(root.routerIPv4);
   const client = ipv4(root.clientIPv4);
@@ -139,7 +139,7 @@ function validate(input: unknown): NetworkPlanInput {
     ...(management ? { management } : {}),
     ingressInterface, gatewayIPv4: gateway.text, prefixLength, routerIPv4: router.text,
     routerMAC: root.routerMAC, clientIPv4: client.text, dnsPort: integer(root.dnsPort, 1024, 65535),
-    tun: { interface: 'coproxy-tun', mtu: integer(tun.mtu, 1280, 9000) },
+    tun: { interface: 'cocoproxy-tun', mtu: integer(tun.mtu, 1280, 9000) },
     marks: { mask, capture: markValues[0], egress: markValues[1], return: markValues[2] },
     tables: { capture: tableValues[0], egress: tableValues[1], return: tableValues[2] },
     priorities: { capture: priorityValues[0], egress: priorityValues[1], return: priorityValues[2] },
@@ -154,8 +154,8 @@ function buildPlan(input: unknown) {
   const routerCIDR = routerIPv4 + '/32';
   const gatewayCIDR = gatewayIPv4 + '/32';
   const ownership = {
-    owner: 'coproxy-network-v1',
-    nftables: { family: 'inet', guardTable: 'coproxy_guard', dataTable: 'coproxy_data',
+    owner: 'cocoproxy-network-v1',
+    nftables: { family: 'inet', guardTable: 'cocoproxy_guard', dataTable: 'cocoproxy_data',
       guardChains: ['input_guard', 'forward_guard', 'output_guard'], dataChains: ['classify_ingress', 'classify_output', 'classify_return'] },
     tunInterface: tun.interface,
     tunIPv4Address: NETWORK_TUN_ADDRESS,
@@ -169,14 +169,14 @@ function buildPlan(input: unknown) {
     conntrack: 'same-mask-only' as const }));
   const coreSocketBinding = {
     mechanism: 'nft-socket-cgroup-v2-or-proven-equivalent-per-socket',
-    cgroupVersion: 2, unit: 'coproxy-mihomo.service',
-    controlGroup: '/system.slice/coproxy-mihomo.service',
+    cgroupVersion: 2, unit: 'cocoproxy-mihomo.service',
+    controlGroup: '/system.slice/cocoproxy-mihomo.service',
     kernelIdentity: 'resolve-and-bind-current-cgroup-v2-kernel-id',
     membership: 'bound-core-process-only-no-foreign-processes-or-delegation',
     permission: 'root-controlled-no-shared-uid-cgroup-migration',
     verifyAt: 'socket-origin-before-first-packet-and-every-generation',
     uidOnlyFallback: false,
-    sameUidManagementUnit: 'coproxy-management.service',
+    sameUidManagementUnit: 'cocoproxy-management.service',
     sameUidManagementUpstreamException: false,
     equivalentMechanismRequires: 'prove-every-exempt-socket-originates-from-this-exact-bound-cgroup',
     onUnsupportedOrUnprovable: 'remain-blocked',
@@ -202,7 +202,7 @@ function buildPlan(input: unknown) {
     bootstrap: 'independent-of-router-forwarded-dns', resolverMode: 'real-ip',
   } as const;
   const guard = {
-    resource: 'coproxy_guard', persistentAcrossCoreFailure: true,
+    resource: 'cocoproxy_guard', persistentAcrossCoreFailure: true,
     managedIPv4: { interface: ingressInterface, source: clientCIDR, ethernetSource: routerMAC },
     sourceMismatch: 'drop-client-source-on-wrong-interface-or-mac',
     forwardedClient: 'drop-unless-current-generation-capture-to-tun',
@@ -336,7 +336,7 @@ function buildPlan(input: unknown) {
     manualDisable: 'separate-authorized-lifecycle-not-generated-by-this-plan',
   } as const;
   const body = {
-    schemaVersion: 1, kind: 'coproxy-network-plan', sensitive: true,
+    schemaVersion: 1, kind: 'cocoproxy-network-plan', sensitive: true,
     deployment, binding, coreIdentityEvidence, ownership, markActions, dns, guard, blackholes, rules,
     egressRoutes, captureRoute, preflight, evidence, phases, faultPolicy,
     status: { executable: false, applied: false, core: 'unverified', dns: 'unverified',

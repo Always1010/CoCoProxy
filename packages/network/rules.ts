@@ -14,7 +14,7 @@ export interface NetworkRulesOptions {
 export interface IpStep { args: string[] }
 function fail(): never { throw new NetworkRulesError(); }
 const productionCgroups = {
-  core: '/system.slice/coproxy-mihomo.service', management: '/system.slice/coproxy-management.service',
+  core: '/system.slice/cocoproxy-mihomo.service', management: '/system.slice/cocoproxy-management.service',
 };
 function fields(value: unknown, allowed: string[], required: string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || types.isProxy(value) || Array.isArray(value) ||
@@ -106,7 +106,7 @@ function build(input: unknown, rawOptions: unknown) {
   const dnsIngress = `iifname ${ingress} ether saddr ${d.routerMAC} ip saddr { ${client}, ${router} } ip daddr ${d.gatewayIPv4}`;
   const dnsSyn = `${dnsIngress} tcp dport ${d.dnsPort} tcp flags & (fin | syn | rst | ack) == syn`;
   const coreCgroup = `socket cgroupv2 level ${opt.cgroups.core.level} ${quote(opt.cgroups.core.path.slice(1))}`;
-  const guard = table('coproxy_guard', [
+  const guard = table('cocoproxy_guard', [
     { name: 'input_guard', definition: 'type filter hook input priority -10', rules: [
       `iifname "lo" ip saddr 127.0.0.1 ip daddr ${d.gatewayIPv4} meta l4proto { tcp, udp } th dport ${d.dnsPort} accept`,
       ...(active ? [
@@ -147,7 +147,7 @@ function build(input: unknown, rawOptions: unknown) {
       ...(d.management ? [`meta skuid ${managementUid} drop`] : []),
     ] },
   ]);
-  const data = table('coproxy_data', [
+  const data = table('cocoproxy_data', [
     { name: 'classify_ingress', definition: 'type filter hook prerouting priority -150', rules: [
       `iifname ${ingress} ip saddr ${client} meta mark set meta mark & ${preserve}`,
       ...(active ? [`${allowedIngress} ${exclusions} meta l4proto { tcp, udp } ${setMark('capture')}`] : []),
@@ -171,7 +171,7 @@ function build(input: unknown, rawOptions: unknown) {
     ...('scope' in r ? ['scope', r.scope!] : []), ...('preferredSource' in r ? ['src', r.preferredSource!] : []),
     'table', r.table, 'proto', r.protocol, 'metric', r.metric));
   const capture = plan.captureRoute;
-  return { schemaVersion: 1, kind: 'coproxy-network-rules', mode: opt.mode, scope: opt.scope,
+  return { schemaVersion: 1, kind: 'cocoproxy-network-rules', mode: opt.mode, scope: opt.scope,
     generation: d.generation, planSha256: plan.sha256, cgroups: opt.cgroups,
     nft: { guard, data }, ip: { blackholes, rules, prepareRoutes,
       activateCapture: [route('replace', capture.destination, 'dev', capture.interface,

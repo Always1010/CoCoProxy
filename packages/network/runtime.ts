@@ -19,7 +19,7 @@ import { renderNetworkPlan, type NetworkPlanInput } from './plan.ts';
 import { renderGatewayRuntimePlan } from './runtime-plan.ts';
 import { NetworkDriverError } from './transaction.ts';
 
-const unit = 'coproxy-mihomo.service';
+const unit = 'cocoproxy-mihomo.service';
 const group = '/system.slice/' + unit;
 const properties = 'LoadState,ActiveState,SubState,MainPID,Job,FragmentPath,DropInPaths,NeedDaemonReload,User';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');

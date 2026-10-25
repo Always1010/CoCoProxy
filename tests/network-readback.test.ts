@@ -7,7 +7,7 @@ const deployment: NetworkPlanInput = { schemaVersion: 1, generation: 'a'.repeat(
   core: { serviceUid: 12345, binarySha256: 'b'.repeat(64), unitSha256: 'c'.repeat(64) },
   ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24,
   routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-  tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+  tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
   tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } };
 const plan = renderNetworkPlan(deployment);
 const builtin = [{ priority: 0, src: 'all', table: 'local' },
@@ -25,9 +25,9 @@ function ownedRoutes() {
 }
 function nftFixture() {
   const nftables: Record<string, unknown>[] = [{ metainfo: { version: '1.0.6', release_name: 'Synthetic', json_schema_version: 1 } }];
-  for (const [table, definitions] of Object.entries({ coproxy_guard: [
+  for (const [table, definitions] of Object.entries({ cocoproxy_guard: [
     ['input_guard', 'filter', 'input', -10], ['forward_guard', 'filter', 'forward', -10], ['output_guard', 'filter', 'output', -10]],
-  coproxy_data: [['classify_ingress', 'filter', 'prerouting', -150], ['classify_output', 'route', 'output', -150],
+  cocoproxy_data: [['classify_ingress', 'filter', 'prerouting', -150], ['classify_output', 'route', 'output', -150],
     ['classify_return', 'filter', 'prerouting', -149]] })) {
     nftables.push({ table: { family: 'inet', name: table, handle: 1 } });
     for (const [name, type, hook, prio] of definitions) {
@@ -80,7 +80,7 @@ test('wrong hook priority, changed or reordered expressions and additional objec
     (n: ReturnType<typeof nftFixture>) => { const r = n.nftables.find(x => 'rule' in x)!.rule as { expr: unknown[] }; r.expr.push({ accept: null }); },
     (n: ReturnType<typeof nftFixture>) => { n.nftables.push({ flowtable: { name: 'foreign' } }); },
     (n: ReturnType<typeof nftFixture>) => { n.nftables.push({ table: { family: 'inet', name: 'foreign', handle: 20 } }); },
-    (n: ReturnType<typeof nftFixture>) => { (n.nftables.find(x => 'rule' in x)!.rule as Record<string, unknown>).comment = 'coproxy'; },
+    (n: ReturnType<typeof nftFixture>) => { (n.nftables.find(x => 'rule' in x)!.rule as Record<string, unknown>).comment = 'cocoproxy'; },
   ]) {
     const n = nftFixture(); mutate(n); reject({ ...snapshot(), nft: JSON.stringify(n) });
   }
@@ -100,7 +100,7 @@ test('RPDB rejects foreign bypass, duplicates, changed selectors and occupied pr
   for (const routes of ['partial', 'prepared', 'retained'] as const) {
     assert.equal(verifyNetworkReadback(deployment, detached, { ...expected, routes }).rulesPresent.length, 3);
   }
-  const capture = { dst: 'default', dev: 'coproxy-tun', table: deployment.tables.capture, protocol: 186, metric: 10, scope: 'link' };
+  const capture = { dst: 'default', dev: 'cocoproxy-tun', table: deployment.tables.capture, protocol: 186, metric: 10, scope: 'link' };
   assert.throws(() => verifyNetworkReadback(deployment, { ...detached,
     ipv4Routes: JSON.stringify([...ownedRoutes(), capture]) }, { ...expected, routes: 'active' }), NetworkReadbackError);
   for (const rules of [
@@ -117,18 +117,18 @@ test('routes reject foreign occupation, unsafe attributes, capture during blocki
     ownedRoutes().map((r, i) => i === 0 ? { ...r, protocol: 187 } : r),
     ownedRoutes().map((r, i) => i === 3 ? { ...r, gateway: '192.0.2.99' } : r),
     ownedRoutes().map((r, i) => i === 3 ? { ...r, flags: ['onlink'] } : r),
-    [...ownedRoutes(), { dst: 'default', dev: 'coproxy-tun', table: 'main' }],
+    [...ownedRoutes(), { dst: 'default', dev: 'cocoproxy-tun', table: 'main' }],
     [...ownedRoutes(), { dst: '192.0.2.3', dev: 'lan-test', table: 'local', type: 'local' }],
     [...ownedRoutes(), { dst: 'default', dev: 'lan-test', table: 'local', type: 'unicast' }],
-    [...ownedRoutes(), { dst: 'default', dev: 'coproxy-tun', table: deployment.tables.capture, protocol: 186, metric: 10, scope: 'link' }],
+    [...ownedRoutes(), { dst: 'default', dev: 'cocoproxy-tun', table: deployment.tables.capture, protocol: 186, metric: 10, scope: 'link' }],
     ownedRoutes().map((r, i) => i === 0 ? { ...r, nhid: 8 } : r),
   ]) reject({ ...snapshot(), ipv4Routes: JSON.stringify(routes) });
   const active = { ...snapshot(), ipv4Routes: JSON.stringify([...ownedRoutes(),
-    { dst: 'default', dev: 'coproxy-tun', table: deployment.tables.capture, protocol: 186, metric: 10, scope: 'link' }]) };
+    { dst: 'default', dev: 'cocoproxy-tun', table: deployment.tables.capture, protocol: 186, metric: 10, scope: 'link' }]) };
   assert.equal(verifyNetworkReadback(deployment, active, { ...expected, routes: 'active' }).routesPresent.length, 8);
-  const kernelRoutes = [{ dst: '198.18.0.0/30', dev: 'coproxy-tun', protocol: 'kernel', scope: 'link', prefsrc: '198.18.0.1', flags: [] },
-    { type: 'local', dst: '198.18.0.1', dev: 'coproxy-tun', table: 'local', protocol: 'kernel', scope: 'host', prefsrc: '198.18.0.1', flags: [] },
-    { type: 'broadcast', dst: '198.18.0.3', dev: 'coproxy-tun', table: 'local', protocol: 'kernel', scope: 'link', prefsrc: '198.18.0.1', flags: [] }];
+  const kernelRoutes = [{ dst: '198.18.0.0/30', dev: 'cocoproxy-tun', protocol: 'kernel', scope: 'link', prefsrc: '198.18.0.1', flags: [] },
+    { type: 'local', dst: '198.18.0.1', dev: 'cocoproxy-tun', table: 'local', protocol: 'kernel', scope: 'host', prefsrc: '198.18.0.1', flags: [] },
+    { type: 'broadcast', dst: '198.18.0.3', dev: 'cocoproxy-tun', table: 'local', protocol: 'kernel', scope: 'link', prefsrc: '198.18.0.1', flags: [] }];
   const withKernel = { ...snapshot(), ipv4Routes: JSON.stringify([
     ...ownedRoutes().map(r => ({ ...r, protocol: 'bgp' })), ...kernelRoutes]) };
   assert.equal(verify(withKernel).routesPresent.length, 7);
@@ -151,15 +151,15 @@ test('malformed, duplicate-key, hostile input and unknown fields never run suppl
 
 test('trusted JSON commit echo reconstructs create/replace and rejects missing or unrelated changes', () => {
   const fixture = nftFixture();
-  const counts = { coproxy_guard: { input_guard: 1, forward_guard: 1, output_guard: 1 },
-    coproxy_data: { classify_ingress: 1, classify_output: 1, classify_return: 1 } };
-  const updates = [{ table: 'coproxy_guard' as const, operation: 'create' as const, ruleCounts: counts.coproxy_guard },
-    { table: 'coproxy_data' as const, operation: 'create' as const, ruleCounts: counts.coproxy_data }];
+  const counts = { cocoproxy_guard: { input_guard: 1, forward_guard: 1, output_guard: 1 },
+    cocoproxy_data: { classify_ingress: 1, classify_output: 1, classify_return: 1 } };
+  const updates = [{ table: 'cocoproxy_guard' as const, operation: 'create' as const, ruleCounts: counts.cocoproxy_guard },
+    { table: 'cocoproxy_data' as const, operation: 'create' as const, ruleCounts: counts.cocoproxy_data }];
   const echoEntries = fixture.nftables.map(o => 'metainfo' in o ? o : { add: o });
   const echo = JSON.stringify({ nftables: echoEntries });
   const created = nftSnapshotFromEcho('{"nftables":[]}', echo, updates);
   assert.equal(verify({ ...snapshot(), nft: created }).nftSha256, verify().nftSha256);
-  const replacement = fixture.nftables.filter(o => 'rule' in o && (o.rule as { table: string }).table === 'coproxy_guard');
+  const replacement = fixture.nftables.filter(o => 'rule' in o && (o.rule as { table: string }).table === 'cocoproxy_guard');
   const replacementEcho = JSON.stringify({ nftables: replacement.map(o => ({ add: o })) });
   const replaced = nftSnapshotFromEcho(created, replacementEcho,
     [{ ...updates[0], operation: 'replace' }]);
@@ -171,5 +171,5 @@ test('trusted JSON commit echo reconstructs create/replace and rejects missing o
   }
   assert.throws(() => nftSnapshotFromEcho(created, echo, updates), NetworkReadbackError);
   assert.throws(() => nftSnapshotFromEcho(created, replacementEcho,
-    [{ ...updates[0], operation: 'replace', ruleCounts: { ...counts.coproxy_guard, input_guard: 2 } }]), NetworkReadbackError);
+    [{ ...updates[0], operation: 'replace', ruleCounts: { ...counts.cocoproxy_guard, input_guard: 2 } }]), NetworkReadbackError);
 });

@@ -4,7 +4,7 @@ import { types } from 'node:util';
 import { parseRuntimeSettings } from '../runtime/settings.ts';
 import { GATEWAY_CORE_SHA256 } from './config.ts';
 
-export const GATEWAY_CREDENTIAL_PATH = '/run/credentials/coproxy-mihomo.service/core-config';
+export const GATEWAY_CREDENTIAL_PATH = '/run/credentials/cocoproxy-mihomo.service/core-config';
 export class GatewayRuntimePlanError extends Error {
   readonly code = 'GATEWAY_RUNTIME_PLAN_INVALID';
   constructor() { super('GATEWAY_RUNTIME_PLAN_INVALID'); this.name = 'GatewayRuntimePlanError'; }
@@ -46,7 +46,7 @@ export function renderGatewayRuntimePlan(input: unknown) {
     const stateDirectory = path(values.stateDirectory), coreHome = path(values.coreHome);
     const binaryPath = path(values.binaryPath), unitPath = path(values.unitPath), systemctlPath = path(values.systemctlPath);
     if (within(stateDirectory, coreHome) || within(coreHome, stateDirectory) ||
-      posix.basename(unitPath) !== 'coproxy-mihomo.service' ||
+      posix.basename(unitPath) !== 'cocoproxy-mihomo.service' ||
       !['/usr/bin/systemctl', '/bin/systemctl'].includes(systemctlPath)) invalid();
     // A writable home must never contain the executable, unit or control tool.
     // The non-root core also cannot traverse a root-only state directory.
@@ -57,10 +57,10 @@ export function renderGatewayRuntimePlan(input: unknown) {
     const selectedPath = posix.join(stateDirectory, 'selected-core.json');
     const unit = [
       '[Unit]',
-      'Description=Coproxy protected gateway core',
-      'Requires=coproxy-network.service coproxy-management.service',
-      'After=coproxy-network.service coproxy-management.service',
-      'BindsTo=coproxy-network.service coproxy-management.service',
+      'Description=CoCoProxy protected gateway core',
+      'Requires=cocoproxy-network.service cocoproxy-management.service',
+      'After=cocoproxy-network.service cocoproxy-management.service',
+      'BindsTo=cocoproxy-network.service cocoproxy-management.service',
       '',
       '[Service]',
       'Type=exec',

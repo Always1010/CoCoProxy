@@ -58,7 +58,7 @@ type View = { workspace: Workspace; active: string | null; pending: boolean; err
   rules: { value: string; source: string; editable: boolean }[]; ruleCount: number; invalidSelections: string[] };
 
 async function directory(t: TestContext) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-workspace-test-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-workspace-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -91,7 +91,7 @@ async function fixture(t: TestContext) {
       return { status: 'modified' as const, text };
     } } });
   async function call<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T> {
-    const request = new Request(`https://management.example/api/coproxy${path}`, { method,
+    const request = new Request(`https://management.example/api/cocoproxy${path}`, { method,
       headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return await action(request, { username: 'synthetic-admin', expiresAt: Date.now() + 60_000 }) as T;
   }

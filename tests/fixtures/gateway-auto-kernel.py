@@ -125,7 +125,7 @@ def driver(root):
         gateway.call('start', label='core', binary=data['core'], args=['-d', '@ROOT', '-f', '@CONFIG'], config=data['config'])
         for _ in range(40):
             f.check(gateway.call('alive', label='core'), 'CORE_EXITED')
-            if 'coproxy-tun' in gateway.ip('-j', 'link', 'show'):
+            if 'cocoproxy-tun' in gateway.ip('-j', 'link', 'show'):
                 break
             time.sleep(.1)
         else:
@@ -140,7 +140,7 @@ def driver(root):
         f.check(router.call('dns') and router.call('dns_tcp'), 'ROUTER_DNS_FAILED')
         f.check(not first.call('dns') and not second.call('dns_tcp'), 'CLIENT_DNS_EXPOSED')
         for address in ['192.0.2.10', '192.0.2.20']:
-            returned = json.loads(gateway.ip('-j', 'route', 'get', address, 'from', '198.51.100.2', 'iif', 'coproxy-tun'))[0]
+            returned = json.loads(gateway.ip('-j', 'route', 'get', address, 'from', '198.51.100.2', 'iif', 'cocoproxy-tun'))[0]
             f.check(returned.get('gateway') == n['routerIPv4'] and str(returned.get('table')) == str(n['egressTable'] + 20000), 'RETURN_POLICY_NOT_USED')
             local = json.loads(gateway.ip('-j', 'route', 'get', address))[0]
             f.check('gateway' not in local and local.get('dev') == 'lan-test', 'MANAGEMENT_ROUTE_CHANGED')

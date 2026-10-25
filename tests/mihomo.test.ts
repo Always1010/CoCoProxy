@@ -16,7 +16,7 @@ const input = {
 };
 
 async function fixture(body: string, run: (binary: string, dir: string) => Promise<void>) {
-  const dir = await mkdtemp(join(tmpdir(), 'coproxy-checker-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'cocoproxy-checker-test-'));
   try {
     const binary = join(dir, 'checker');
     await writeFile(binary, '#!/usr/bin/env node\n' + body + '\n', { mode: 0o700 });

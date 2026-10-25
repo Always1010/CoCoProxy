@@ -11,10 +11,10 @@ import { compileGatewayPreview, GATEWAY_CORE_SHA256 } from '../packages/network/
 import { renderNetworkRules } from '../packages/network/rules.ts';
 import { reviewedBinary } from './protocol-live-helpers.ts';
 
-const coreInput = process.env.COPROXY_TEST_MIHOMO;
-const serverInput = process.env.COPROXY_TEST_SING_BOX;
+const coreInput = process.env.COCOPROXY_TEST_MIHOMO;
+const serverInput = process.env.COCOPROXY_TEST_SING_BOX;
 const skip = process.platform !== 'linux' ? 'requires Linux user and network namespaces' :
-  !coreInput || !serverInput ? 'set COPROXY_TEST_MIHOMO and COPROXY_TEST_SING_BOX to reviewed binaries' :
+  !coreInput || !serverInput ? 'set COCOPROXY_TEST_MIHOMO and COCOPROXY_TEST_SING_BOX to reviewed binaries' :
     process.getuid?.() === 0 ? 'requires an unprivileged invoking user' : false;
 
 async function members(group: number): Promise<number[]> {
@@ -58,7 +58,7 @@ test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a 
         rules: ['DOMAIN-SUFFIX,blocked.invalid,REJECT', 'MATCH,single-node'] } },
     network: { schemaVersion: 1, core: { serviceUid: process.getuid!(), binarySha256: GATEWAY_CORE_SHA256, unitSha256: 'c'.repeat(64) },
       ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
-      routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353, tun: { interface: 'coproxy-tun', mtu: 1500 },
+      routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353, tun: { interface: 'cocoproxy-tun', mtu: 1500 },
       marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
       tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } } });
     assert.deepEqual(preview.candidate.config.rules, ['DOMAIN-SUFFIX,blocked.invalid,REJECT', 'MATCH,single-node']);
@@ -69,7 +69,7 @@ test('isolated four-role kernel forwards transparent TCP, UDP and DNS through a 
     assert.equal(active.scope, 'fixture');
     assert.equal(active.generation, preview.candidate.id);
     assert.equal(active.planSha256, preview.networkPlan.sha256);
-    const root = await mkdtemp(join(tmpdir(), 'coproxy-network-kernel-'));
+    const root = await mkdtemp(join(tmpdir(), 'cocoproxy-network-kernel-'));
     await chmod(root, 0o700);
     let cleanup = false;
     let child: ReturnType<typeof spawn> | undefined;

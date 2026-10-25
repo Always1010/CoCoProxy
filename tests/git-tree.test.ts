@@ -21,7 +21,7 @@ function manifest(files: Manifest['files']): Manifest {
 }
 
 async function fixture(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-git-tree-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-git-tree-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }

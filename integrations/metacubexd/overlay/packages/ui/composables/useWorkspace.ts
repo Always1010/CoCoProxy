@@ -1,5 +1,5 @@
-import type { CoproxySource } from './useCoproxy'
-import { CoproxyError, coproxyErrorMessage, useCoproxy } from './useCoproxy'
+import type { CoCoProxySource } from './useCoCoProxy'
+import { CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy } from './useCoCoProxy'
 
 export interface WorkspaceOverrides {
   selections: Record<string, string>
@@ -15,7 +15,7 @@ export interface WorkspaceSettings {
   subscriptionOverrides: Record<string, WorkspaceOverrides>
 }
 
-export interface WorkspaceSource extends CoproxySource {
+export interface WorkspaceSource extends CoCoProxySource {
   name: string
   host: string
   kind: 'nodes' | 'profile'
@@ -39,12 +39,12 @@ export interface WorkspaceView {
 }
 
 export function useWorkspace() {
-  const api = useCoproxy()
-  const view = useState<WorkspaceView | null>('coproxy-workspace', () => null)
-  const busy = useState('coproxy-workspace-busy', () => false)
-  const error = useState('coproxy-workspace-error', () => '')
-  const feedback = useState('coproxy-workspace-feedback', () => '')
-  const operation = useState('coproxy-workspace-operation', () => '')
+  const api = useCoCoProxy()
+  const view = useState<WorkspaceView | null>('cocoproxy-workspace', () => null)
+  const busy = useState('cocoproxy-workspace-busy', () => false)
+  const error = useState('cocoproxy-workspace-error', () => '')
+  const feedback = useState('cocoproxy-workspace-feedback', () => '')
+  const operation = useState('cocoproxy-workspace-operation', () => '')
   const workspace = computed(() => view.value?.workspace)
   const overrides = computed(() => {
     const settings = workspace.value
@@ -55,17 +55,17 @@ export function useWorkspace() {
   })
 
   async function load() {
-    view.value = await api.request<WorkspaceView>('/api/coproxy/workspace')
+    view.value = await api.request<WorkspaceView>('/api/cocoproxy/workspace')
     api.generation.value = view.value.active
   }
 
   async function execute(action: () => Promise<void>) {
-    if (busy.value) throw new CoproxyError('STORE_LOCKED')
+    if (busy.value) throw new CoCoProxyError('STORE_LOCKED')
     busy.value = true
     error.value = ''
     feedback.value = ''
     try { await action() }
-    catch (cause) { error.value = coproxyErrorMessage(cause); throw cause }
+    catch (cause) { error.value = cocoproxyErrorMessage(cause); throw cause }
     finally { busy.value = false; operation.value = '' }
   }
 
@@ -74,21 +74,21 @@ export function useWorkspace() {
   }
 
   async function save(change: (settings: WorkspaceSettings) => void, message = '设置已生效') {
-    if (!workspace.value || !view.value) throw new CoproxyError('WORKSPACE_UNAVAILABLE')
+    if (!workspace.value || !view.value) throw new CoCoProxyError('WORKSPACE_UNAVAILABLE')
     const { revision, ...current } = workspace.value
     const expectedActive = view.value.active
     const settings = JSON.parse(JSON.stringify(current)) as WorkspaceSettings
     change(settings)
     operation.value = '正在使设置生效…'
     try {
-      const saved = await api.request<{ workspace: WorkspaceSettings & { revision: number } }>('/api/coproxy/workspace', {
+      const saved = await api.request<{ workspace: WorkspaceSettings & { revision: number } }>('/api/cocoproxy/workspace', {
         method: 'PUT', body: { expectedRevision: revision, settings },
       })
-      const result = await api.request<{ active: string }>('/api/coproxy/workspace/apply', {
+      const result = await api.request<{ active: string }>('/api/cocoproxy/workspace/apply', {
         method: 'POST', body: { expectedRevision: saved.workspace.revision, expectedActive },
       })
       await load()
-      if (view.value.active !== result.active || view.value.pending) throw new CoproxyError('WORKSPACE_CONFLICT')
+      if (view.value.active !== result.active || view.value.pending) throw new CoCoProxyError('WORKSPACE_CONFLICT')
       feedback.value = message
     } catch (cause) {
       // An interrupted request may already have taken effect. Read the core's
@@ -102,7 +102,7 @@ export function useWorkspace() {
     await execute(async () => {
       await save(settings => { editOverrides(settings).selections[group] = name }, '')
       const observed = await api.request<{ proxies: Record<string, { now?: string }> }>('/api/clash/proxies')
-      if (observed.proxies[group]?.now !== name) throw new CoproxyError('SELECTION_UNCONFIRMED')
+      if (observed.proxies[group]?.now !== name) throw new CoCoProxyError('SELECTION_UNCONFIRMED')
       feedback.value = `已切换：${group} → ${name}`
     })
   }

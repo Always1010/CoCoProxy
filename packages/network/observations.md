@@ -20,11 +20,11 @@ commandsSettled只表示本次工具后代是否已收敛，不等于verified。
 
 核心观察要求固定root控制systemctl、unit和祖先，unit loaded/active/running、无Job、drop-in或待reload，精确数字User、FragmentPath与ControlGroup。流式核验磁盘及实际运行executable inode／摘要；四类UID、进程状态、启动时间和完整argv匹配。argv固定binary、-d coreHome、-f systemd credential。
 
-配置证据读取核心实际mount view中的 `/proc/<pid>/root/run/credentials/coproxy-mihomo.service/core-config`，要求普通单链接、无写位、有界canonical JSON、摘要等于generation。root selected-core.json相符不能替代实际快照。可信候选loader重编译提供controller端口和secret。
+配置证据读取核心实际mount view中的 `/proc/<pid>/root/run/credentials/cocoproxy-mihomo.service/core-config`，要求普通单链接、无写位、有界canonical JSON、摘要等于generation。root selected-core.json相符不能替代实际快照。可信候选loader重编译提供controller端口和secret。
 
 controller须唯一精确127.0.0.1 TCP listener，拒绝wildcard、IPv6或其他地址，inode由核心FD持有；再以认证/version作有界HTTP请求，无重定向／resolver／代理。前后复核unit、进程、namespace、binary、credential和socket。该观察不证明socket创建cgroup或FD转交历史。
 
-管理观察核对root控制固定 `coproxy-management.service`、loaded/active/running、无job/drop-in/待reload、数字UID和固定cgroup，前后绑定boot、PID/starttime、四UID及mount视图；单命令1秒、16 KiB，整次5秒。它不证明unit正文摘要、二进制、cgroup唯一成员或socket，需与其他观察关联。
+管理观察核对root控制固定 `cocoproxy-management.service`、loaded/active/running、无job/drop-in/待reload、数字UID和固定cgroup，前后绑定boot、PID/starttime、四UID及mount视图；单命令1秒、16 KiB，整次5秒。它不证明unit正文摘要、二进制、cgroup唯一成员或socket，需与其他观察关联。
 
 ## cgroup 身份
 
@@ -34,7 +34,7 @@ controller须唯一精确127.0.0.1 TCP listener，拒绝wildcard、IPv6或其他
 
 两固定cgroup必须：
 
-- 路径为/system.slice/coproxy-mihomo.service与coproxy-management.service，domain、无子组、无下级控制器，各恰有指定唯一进程。
+- 路径为/system.slice/cocoproxy-mihomo.service与cocoproxy-management.service，domain、无子组、无下级控制器，各恰有指定唯一进程。
 - 根至叶目录及procs/threads/subtree_control由root控制、不可被其他身份写入，无目录／叶链接。
 - 四类UID对应受信请求，NoNewPrivs=1；管理所有capabilities为空，核心只允许NET_ADMIN/NET_RAW。
 - 两轮boot、starttime、mount、namespace、权限、ctime与ID一致。不同服务ID不能相同，ID全程bigint／十进制字符串，不经Number截断。
@@ -95,7 +95,7 @@ ip -N避免表别名；邻居查询已带dev时JSON可省略dev，router标志�
 
 ## DNS 与 TUN 探针
 
-`observeNetworkReadiness(plan,identity,options)` 在同一受信namespace核对核心FD，并分别发送UDP/TCP DNS。DNS精确IPv4 gateway:dnsPort各一个核心listener，拒绝其他地址／IPv6；TUN FD为字符设备10:200，iff=coproxy-tun，ip回读为tun/UP/计划MTU/唯一198.18.0.1/30，前后身份稳定。
+`observeNetworkReadiness(plan,identity,options)` 在同一受信namespace核对核心FD，并分别发送UDP/TCP DNS。DNS精确IPv4 gateway:dnsPort各一个核心listener，拒绝其他地址／IPv6；TUN FD为字符设备10:200，iff=cocoproxy-tun，ip回读为tun/UP/计划MTU/唯一198.18.0.1/30，前后身份稳定。
 
 options的queryDomain为部署者控制的wildcard测试域，随机子域最终返回expectedIPv4，不从浏览器或订阅取值。每传输独立128-bit名称nonce和随机16-bit ID，本地绑定127.0.0.1，目标固定gateway:dnsPort，无系统resolver、重试或预热。
 

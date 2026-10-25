@@ -46,11 +46,11 @@ const transactionCode = (code: string) => (error: unknown): boolean => {
 };
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-systemd-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-systemd-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const settings: RuntimeSettings = { schemaVersion: 1, stateDirectory: join(root, 'state'),
     binaryPath: '/synthetic/pinned-core', binarySha256: 'a'.repeat(64), systemctlPath: '/synthetic/systemctl',
-    unitPath: '/synthetic/coproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 };
+    unitPath: '/synthetic/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 };
   const store = new FileTransactionStore(settings.stateDirectory);
   const first = candidate('warning');
   const second = candidate('error');
@@ -80,7 +80,7 @@ async function fixture(t: test.TestContext) {
     command: async (binary, args) => {
       assert.equal(binary, settings.systemctlPath);
       assert.deepEqual(args.slice(0, 2), ['--no-ask-password', '--no-pager']);
-      assert.equal(args.at(-1), 'coproxy-mihomo.service');
+      assert.equal(args.at(-1), 'cocoproxy-mihomo.service');
       const action = args[2];
       const selected = await readSelection(settings);
       events.push({ action, selected, pending: unit.jobPending, pid: unit.mainPid });
@@ -203,7 +203,7 @@ test('an untrusted unit is rejected during validation before any service change'
 
 test('systemd show parser rejects partial, duplicate, injected and malformed state', () => {
   const unit: RuntimeUnitState = { loadState: 'loaded', activeState: 'active', subState: 'running', mainPid: 22001,
-    jobPending: false, fragmentPath: '/synthetic/coproxy-mihomo.service', hasDropIns: false, needsReload: false, user: '12345' };
+    jobPending: false, fragmentPath: '/synthetic/cocoproxy-mihomo.service', hasDropIns: false, needsReload: false, user: '12345' };
   const good = show(unit);
   assert.deepEqual(parseUnitState(good), unit);
   assert.equal(parseUnitState(good.replace('Job=', 'Job=12')).jobPending, true);

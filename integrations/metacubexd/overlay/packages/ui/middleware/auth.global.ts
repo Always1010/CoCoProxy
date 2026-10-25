@@ -1,8 +1,8 @@
-import { useCoproxy } from '~/composables/useCoproxy'
+import { useCoCoProxy } from '~/composables/useCoCoProxy'
 
 export default defineNuxtRouteMiddleware(async (to) => {
   if (import.meta.server) return
-  const { readSession } = useCoproxy()
+  const { readSession } = useCoCoProxy()
   let authenticated = false
   try { authenticated = !!await readSession() }
   catch {
@@ -18,5 +18,5 @@ export default defineNuxtRouteMiddleware(async (to) => {
   if (to.path === '/profiles' || /^\/profiles\/[^/]+\/edit\/?$/.test(to.path))
     return navigateTo('/subscriptions', { replace: true })
   if (['/config', '/control'].includes(to.path))
-    return navigateTo('/coproxy', { replace: true })
+    return navigateTo('/cocoproxy', { replace: true })
 })

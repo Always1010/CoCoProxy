@@ -143,7 +143,7 @@ export async function applyMetacubexdOverlay(directory, { overlayDirectory = def
     const destination = await checkedPath(target, item.path, true);
     const current = await inspect(destination);
     if ((current ? blob(await readRegular(destination)) : null) !== item.previous) fail('SOURCE_CHANGED');
-    const temporary = join(dirname(destination), `.coproxy-overlay-${randomUUID()}.tmp`);
+    const temporary = join(dirname(destination), `.cocoproxy-overlay-${randomUUID()}.tmp`);
     let handle;
     try {
       handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), item.mode);
