@@ -209,10 +209,26 @@ test('runtime CLI produces a private review plan and refuses mismatched state be
     assert.equal(JSON.parse(status.stdout).core, null);
     assert.equal(JSON.parse(status.stdout).scope, 'core_only');
     await assert.rejects(stat(plan.settings.stateDirectory), { code: 'ENOENT' });
+    const lifecycleArgs = ['--state-dir', plan.settings.stateDirectory, '--runtime-settings', settings];
+    const lifecycle = await cli(['runtime-lifecycle-status', ...lifecycleArgs]);
+    assert.equal(lifecycle.code, 0, lifecycle.stderr);
+    assert.deepEqual(JSON.parse(lifecycle.stdout).lifecycle, { schemaVersion: 1, enabled: false, paused: false });
+    await assert.rejects(stat(plan.settings.stateDirectory), { code: 'ENOENT' });
+    const premature = await cli(['runtime-enable', ...lifecycleArgs]);
+    assert.equal(JSON.parse(premature.stderr).error.code, 'RUNTIME_RECOVERY_REQUIRED');
     const invalid = await cli(['runtime-apply', '--state-dir', plan.settings.stateDirectory, '--runtime-settings', settings,
       '--generation', 'invalid', '--expected-active', 'none']);
     assert.equal(JSON.parse(invalid.stderr).error.code, 'INVALID_GENERATION');
     await assert.rejects(stat(plan.settings.stateDirectory), { code: 'ENOENT' });
+    const paused = await cli(['runtime-pause', ...lifecycleArgs]);
+    assert.equal(paused.code, 0, paused.stderr);
+    assert.deepEqual(JSON.parse(paused.stdout).lifecycle, { schemaVersion: 1, enabled: false, paused: true });
+    assert.equal(JSON.parse(paused.stdout).servicesChanged, false);
+    const resume = await cli(['runtime-resume', ...lifecycleArgs]);
+    assert.equal(JSON.parse(resume.stderr).error.code, 'RUNTIME_LIFECYCLE_NOT_ENABLED');
+    const disabled = await cli(['runtime-disable', ...lifecycleArgs]);
+    assert.equal(disabled.code, 0, disabled.stderr);
+    assert.equal(JSON.parse(disabled.stdout).routerChanged, false);
   });
 });
 
