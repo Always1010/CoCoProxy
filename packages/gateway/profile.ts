@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { types } from 'node:util';
 import { canonicalJson, compileConfig, deploymentDnsOptions, type Candidate, type JsonObject } from '../config/index.ts';
+import { expandCompilerRuleSets } from '../config/compact-rules.ts';
 
 /** Legacy ARM64 pin retained for existing fixtures and deployment inputs. */
 export const AUTOMATIC_GATEWAY_CORE_SHA256 = '8c73570d9a5f388bc2f58eee0b347ccfab84fb3cf1a0f8f2cf5eac7005fbcdc0';
@@ -186,7 +187,7 @@ const overlayKeys = ['allow-lan', 'bind-address', 'mixed-port', 'external-contro
 export function automaticGatewayPolicy(config: JsonObject): JsonObject {
   dataOnly(config);
   object(config);
-  const policy = { ...config };
+  const policy = expandCompilerRuleSets(config);
   for (const key of overlayKeys) delete policy[key];
   return policy;
 }

@@ -209,7 +209,7 @@ test('full subscription and local schemes preserve their own rules and selection
   assert.deepEqual(view.rules[0], { value: 'DOMAIN,local.example,REJECT', source: 'user', editable: true });
   assert.equal(view.groups.find(group => group.name === 'Other')!.selected, 'DIRECT');
   const localActive = await f.apply(local, fullActive.active);
-  assert.equal((await f.candidate(localActive.active))['tcp-concurrent'], undefined);
+  assert.equal((await f.candidate(localActive.active))['tcp-concurrent'], true);
   const back = await f.save({ ...localSettings, mode: 'subscription', sourceIds: ['missing-unused'] }, local.revision);
   view = await f.view();
   assert.equal(view.groups.find(group => group.name === 'Provider')!.selected, 'REJECT');

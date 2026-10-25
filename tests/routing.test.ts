@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildLocalPolicy, localGroupChoices, serviceCatalog } from '../packages/routing/index.ts';
 import { compileConfig, ConfigError } from '../packages/config/index.ts';
+import { expandCompilerRuleSets } from '../packages/config/compact-rules.ts';
+import { compileAutomaticGatewayConfig, recompileAutomaticGatewayConfig } from '../packages/gateway/profile.ts';
 import type { JsonObject } from '../packages/config/index.ts';
 
 const nodes: JsonObject[] = [{ name: 'example-node', type: 'socks5', server: '192.0.2.10', port: 1080 }];
@@ -107,10 +109,29 @@ test('manual match types preserve order and validate references before core chec
   }
 });
 
-test('expanded offline template fits compiler safety bounds and owns no DNS fields', () => {
+test('offline template compacts only pinned blocks and round-trips without accepting external providers', () => {
   const value = policy();
-  const result = compileConfig({ schemaVersion: 1, deployment: { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'EXAMPLE_ONLY', dnsPort: 15353, bootstrapResolvers: ['192.0.2.53'] }, policy: value });
-  assert.deepEqual(result.config.rules, value.rules);
+  const deployment = { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'EXAMPLE_ONLY', dnsPort: 15353, bootstrapResolvers: ['192.0.2.53'] };
+  const result = compileConfig({ schemaVersion: 1, deployment, policy: value });
+  assert.deepEqual(expandCompilerRuleSets(result.config).rules, value.rules);
+  assert.ok((result.config.rules as string[]).length < 110);
+  const sets = result.config['rule-providers'] as JsonObject;
+  assert.deepEqual(Object.values(sets).map(set => (set as JsonObject).type), ['inline', 'inline']);
+  const restored = expandCompilerRuleSets(result.config);
+  for (const key of ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns']) delete restored[key];
+  assert.equal(compileConfig({ schemaVersion: 1, deployment, policy: restored }).id, result.id);
+  const network = { schemaVersion: 1, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', routerIPv4: '192.0.2.1',
+    routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24, dnsPort: 15353,
+    egressMark: 65536, egressTable: 2024, egressPriority: 8000, tunMtu: 1500 };
+  const gateway = compileAutomaticGatewayConfig({ schemaVersion: 1, deployment, policy: value }, network);
+  assert.equal(recompileAutomaticGatewayConfig(gateway.config, network).id, gateway.id);
+  assert.throws(() => compileConfig({ schemaVersion: 1, deployment, policy: { ...value, 'rule-providers': sets } }), ConfigError);
+  const tampered = structuredClone(result.config);
+  ((tampered['rule-providers'] as JsonObject)['coproxy-domestic-domain-v1'] as JsonObject).payload = ['+.attacker.invalid'];
+  assert.throws(() => expandCompilerRuleSets(tampered), ConfigError);
+  const changed = structuredClone(value);
+  (changed.rules as string[]).splice(150, 1);
+  assert.throws(() => compileConfig({ schemaVersion: 1, deployment, policy: changed }), ConfigError);
   assert.equal(value.dns, undefined);
   assert.ok(Buffer.byteLength(JSON.stringify(value)) < 1024 * 1024);
   const other = policy();

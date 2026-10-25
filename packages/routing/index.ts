@@ -119,5 +119,7 @@ export function buildLocalPolicy(options: LocalPolicyOptions): JsonObject {
     outputRules.push(...domesticIpRules.map((rule) => `${rule},Domestic`));
     outputRules.push('MATCH,Other');
   }
-  return { mode: 'rule', proxies: structuredClone(proxies), 'proxy-groups': groups, rules: outputRules };
+  return { mode: 'rule', proxies: structuredClone(proxies), 'proxy-groups': groups, rules: outputRules,
+    'tcp-concurrent': true, 'find-process-mode': 'off',
+    ...(mode === 'rule' ? { 'x-coproxy-rule-mode': 'domestic-v1' } : {}) };
 }

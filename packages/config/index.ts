@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
+import { compactCompilerRuleSets } from './compact-rules.ts';
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
@@ -428,8 +429,9 @@ export function compileConfig(input: unknown): Candidate {
       ...(nameserverPolicy ? { 'nameserver-policy': nameserverPolicy } : {}),
     },
   };
-  const sha256 = createHash('sha256').update(canonicalJson(config), 'utf8').digest('hex');
-  return { id: sha256, config, sha256 };
+  const compiled = compactCompilerRuleSets(config);
+  const sha256 = createHash('sha256').update(canonicalJson(compiled), 'utf8').digest('hex');
+  return { id: sha256, config: compiled, sha256 };
 }
 
 /** Reconstruct optional compiler-owned DNS inputs without changing legacy hashes. */

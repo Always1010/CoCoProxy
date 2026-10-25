@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { types } from 'node:util';
 import { canonicalJson, deploymentDnsOptions, type Candidate, type JsonObject, type JsonValue } from '../config/index.ts';
+import { expandCompilerRuleSets } from '../config/compact-rules.ts';
 import { parseRuntimeSettings } from '../runtime/settings.ts';
 import type { RuntimeSettings } from '../runtime/types.ts';
 import { inspectPrivateDirectory, privateRead } from '../storage/private-files.ts';
@@ -82,7 +83,7 @@ export function validateGatewayCandidate(input: unknown, expected: NetworkPlanIn
     const dns = object(config.dns);
     if (typeof controller !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(controller) ||
       typeof config.secret !== 'string') fail();
-    const policy = { ...config };
+    const policy = expandCompilerRuleSets(config);
     for (const key of ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret',
       'tun', 'ipv6', 'dns', 'sniffer', 'interface-name', 'routing-mark', 'x-coproxy-network']) delete policy[key];
     const preview = compileGatewayPreview({ schemaVersion: 1, network: metadata,

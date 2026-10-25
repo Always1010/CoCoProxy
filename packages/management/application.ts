@@ -1,4 +1,5 @@
 import { compileConfig, canonicalJson, ConfigError } from '../config/index.ts';
+import { expandCompilerRuleSets } from '../config/compact-rules.ts';
 import type { JsonObject } from '../config/index.ts';
 import { DraftStore, DraftError } from '../drafts/index.ts';
 import { FileTransactionStore, TransactionManager, TransactionError } from '../transaction/index.ts';
@@ -47,7 +48,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
       const active = (await store.status()).active;
       if (!active) return null;
       const candidate = JSON.parse(await privateRead(await store.readCandidate(active))) as JsonObject;
-      const policy = automaticGateway ? automaticGatewayPolicy(candidate) : { ...candidate };
+      const policy = automaticGateway ? automaticGatewayPolicy(candidate) : expandCompilerRuleSets(candidate);
       for (const key of protectedKeys) delete policy[key];
       return policy;
     } });
@@ -101,7 +102,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
         const body = exactRecord(await readJsonBody(request), ['generation', 'expectedActive']);
         if (!digest(body.generation) || !(body.expectedActive === null || digest(body.expectedActive))) throw new ManagementError('INVALID_GENERATION');
         const candidate = JSON.parse(await privateRead(await store.readCandidate(body.generation)));
-        const policy = automaticGateway ? automaticGatewayPolicy(candidate) : { ...candidate };
+        const policy = automaticGateway ? automaticGatewayPolicy(candidate) : expandCompilerRuleSets(candidate);
         for (const key of protectedKeys) delete policy[key];
         const expected = compile({ schemaVersion: 1, deployment, policy });
         if (expected.id !== body.generation) throw new ManagementError('DEPLOYMENT_MISMATCH', 409);
