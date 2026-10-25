@@ -33,9 +33,9 @@ function checkReferences(policy: JsonObject): void {
   for (const name of groupNames) visit(name);
 }
 
-function overridePolicy(input: JsonObject, edits: RoutingOverrides, runMode: Workspace['runMode']): JsonObject {
+function overridePolicy(input: JsonObject, edits: RoutingOverrides, runMode: Workspace['runMode'], managed = true): JsonObject {
   const policy = structuredClone(input);
-  policy.profile = { 'store-selected': false };
+  if (managed) policy.profile = { 'store-selected': false };
   const groups = asGroups(policy);
   for (const [name, selected] of Object.entries(edits.selections)) {
     const group = groups.find(group => group.name === name);
@@ -107,7 +107,7 @@ export function createWorkspaceApplication(options: {
           profile: { 'store-selected': false } };
       } else {
         if (!base) invalid('PROFILE_REQUIRED');
-        policy = overridePolicy({ ...base, proxies }, workspace.subscriptionOverrides.legacy ?? emptyOverrides(), workspace.runMode);
+        policy = overridePolicy({ ...base, proxies }, workspace.subscriptionOverrides.legacy ?? emptyOverrides(), workspace.runMode, workspace.revision > 0);
       }
     }
     return { workspace, policy, captures };
