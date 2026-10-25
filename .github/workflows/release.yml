@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify Linux payloads
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      NUXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tooling/package-lock.json
+      - name: Validate release tag and source commit
+        run: node scripts/build-github-release.mjs --validate
+      - name: Install locked build dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tooling --ignore-scripts --no-audit --no-fund
+      - name: Check release components
+        run: |
+          npm run typecheck
+          npm run test:git-tree
+          npm run test:overlay
+          npm run test:release-stage
+          npm run test:deployment
+      - name: Build UI, server and both reviewed Linux payloads
+        run: node scripts/build-github-release.mjs
+      - name: Preserve complete release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/cocoproxy-release/assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: assets
+      - name: Verify downloaded assets
+        working-directory: assets
+        run: sha256sum --check SHA256SUMS
+      - name: Publish release after all checks pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" assets/* \
+            --verify-tag --title "CoCoProxy $RELEASE_TAG" \
+            --notes-file assets/RELEASE-NOTES.md "${flags[@]}"

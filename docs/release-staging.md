@@ -2,6 +2,25 @@
 
 `scripts/stage-explicit-release.mjs` 将固定 HEAD 源码、已构建 Server/UI、运行依赖和审核 Mihomo 组合为新目录，支持显式及原生网关后续安装。脚本名称保留兼容；装配不安装依赖、构建上游、操作服务或改变网络。后续流程见[部署与维护](deployment.md)。
 
+## GitHub Actions 发布
+
+[Release 工作流](../.github/workflows/release.yml) 在推送 `v<package.json 版本>` 的 Tag 时运行，例如首版 `v0.1.0-preview.1`。Tag 必须符合 SemVer，且与根 package.json、package-lock.json 版本一致；带预发布后缀的版本自动标记为 GitHub Pre-release。
+
+GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游源码校验、overlay、发行装配及部署测试；随后核验固定上游源码与锁文件、构建 UI/Server，并复用现有装配器生成 ARM64 和 x86-64 载荷。构建入口为 `scripts/build-github-release.mjs`，完整构建只允许在 Actions Linux 环境执行。两个平台均不在构建中执行外来 Mihomo；构建成功不替代目标设备验收。
+
+全部检查成功后，独立发布任务用内置 `GITHUB_TOKEN` 的 `contents: write` 权限创建 Release，无须额外 PAT 或 SSH 密钥。构建任务只有仓库读取权限。发布附件包括两种架构的 `.tar.gz` 安装包、各自的 `.manifest.json`、CoCoProxy/MetaCubeXD/Mihomo 对应源码压缩包、`SOURCES.txt`、`RELEASE-NOTES.md` 和 `SHA256SUMS`。安装包由装配白名单生成，源码包使用 `git archive HEAD`，均不纳入 `.local/` 或跟随本地共享链接。
+
+后续发布先更新根包和锁文件版本及发行说明，提交并推送目标分支，再创建并推送对应 Tag：
+
+```sh
+git tag -a v0.1.0-preview.1 -m 'CoCoProxy 0.1.0-preview.1'
+git push origin refs/tags/v0.1.0-preview.1
+```
+
+上例版本仅用于首次发布；后续使用新版本号。不移动已经发布的 Tag，也不覆盖既有 Release。失败时查看 Actions 日志，临时下载故障可重跑失败任务；需要修正源码时应提交修复并发布新版本。
+
+下载后先按可信 Release 的 `SHA256SUMS` 核对附件，再解压所选架构安装包。校验对应 `.manifest.json` 与包内 `manifest.json` 一致，其 SHA-256 即安装入口需要的 `manifestSha256`；继续按部署说明核验文件集和安装前置条件。
+
 ## 输入与布局
 
 ```sh
