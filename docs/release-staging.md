@@ -48,6 +48,8 @@ bin/mihomo
 manifest.json
 ```
 
+载荷的 `source/docs/getting-started.md` 提供[从零部署与使用总指南](getting-started.md)，下载解压后可离线阅读，包含接线、参数准备、安装、路由器协作和后台使用路线。
+
 源码必须是干净 Git 工作树根，拒绝受跟踪修改和未忽略的新文件；固定启动HEAD，以 Git blob 读取并在完成前复核。symlink/gitlink 拒绝，不执行 Git hooks 或构建代码。
 
 选择 apps/packages、根包元数据及存在的 LICENSE/NOTICE、明确的文档／样本与来源记录，以及独立的请求时延基线工具。可信部署选项说明 `examples/deployment-options.md` 随载荷提供。排除 .local、.git、缓存、其他开发工具、测试、协议对端及上游完整源树；不遍历本地共享链接。文档白名单变更时须同步维护导航依赖。

@@ -1,5 +1,7 @@
 # 部署与维护
 
+第一次搭建请先阅读[从零部署与使用总指南](getting-started.md)，按接线、参数准备、软件与 HTTPS 安装、后台配置和路由器验收的顺序操作。本文提供安装器及维护步骤的详细约束。
+
 局域网网页的完整 nginx、证书与独立服务配方见[HTTPS 网页部署](management-https.md)。
 
 安装器部署独立的 CoCoProxy Linux 服务。透明代理还需协同路由器提供流量交付、DNS 和独立关闭，设备条件及两端参数见[路由器协作](cooperating-router-requirements.md)。
