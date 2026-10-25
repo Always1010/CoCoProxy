@@ -101,6 +101,20 @@ test('deployment separates routed HTTPS DNS from independent node and direct res
   }
 });
 
+test('deployment can recover domain rules without DNS mapping while excluding local destinations', () => {
+  const value = input();
+  assert.equal(compileConfig(value).config.sniffer, undefined);
+  (value.deployment as JsonObject).sniffing = true;
+  const sniffer = compileConfig(value).config.sniffer as JsonObject;
+  assert.equal(sniffer.enable, true);
+  assert.equal(sniffer['parse-pure-ip'], true);
+  assert.equal(sniffer['force-dns-mapping'], true);
+  assert.equal(sniffer['override-destination'], true);
+  assert.ok((sniffer['skip-dst-address'] as string[]).includes('192.168.0.0/16'));
+  (value.deployment as JsonObject).sniffing = 'true';
+  fails(value, 'INVALID_INPUT');
+});
+
 test('merges only in-memory source snapshots and preserves advanced JSON fields', () => {
   const value = input();
   (value.policy as JsonObject)['tcp-concurrent'] = true;

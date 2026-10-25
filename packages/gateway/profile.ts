@@ -162,7 +162,7 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
   } catch { return fail(); }
 }
 
-const overlayKeys = ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns',
+const overlayKeys = ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer',
   'interface-name', 'routing-mark', 'x-coproxy-gateway'];
 
 /** Extraction for trusted recompile, not proof that an arbitrary stored config is valid. */

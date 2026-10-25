@@ -33,7 +33,7 @@ const MAX_NAME_LENGTH = 256;
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const DEPLOYMENT_FIELDS = new Set([
-  'mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers', 'nameservers',
+  'mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers', 'nameservers', 'sniffing',
 ]);
 
 // These fields belong to deployment, even when the supplied value is disabled.
@@ -231,6 +231,7 @@ export function compileConfig(input: unknown): Candidate {
     if (typeof resolver !== 'string' || isIP(resolver) === 0) invalid();
   }
   const nameservers = deployment.nameservers === undefined ? undefined : array(deployment.nameservers);
+  if (deployment.sniffing !== undefined && typeof deployment.sniffing !== 'boolean') invalid();
   if (nameservers) {
     if (nameservers.length === 0 || nameservers.length > 16) invalid();
     for (const server of nameservers) {
@@ -308,6 +309,11 @@ export function compileConfig(input: unknown): Candidate {
     secret,
     tun: { enable: false },
     ipv6: false,
+    ...(deployment.sniffing === true ? { sniffer: { enable: true, 'force-dns-mapping': true,
+      'parse-pure-ip': true, 'override-destination': true,
+      sniff: { HTTP: { ports: [80, '8080-8880'] }, TLS: { ports: [443, 8443] }, QUIC: { ports: [443, 8443] } },
+      'skip-dst-address': ['0.0.0.0/8', '10.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16',
+        '172.16.0.0/12', '192.168.0.0/16', '224.0.0.0/4', '240.0.0.0/4'] } } : {}),
     dns: {
       enable: true,
       listen: `127.0.0.1:${dnsPort}`,
@@ -326,5 +332,6 @@ export function compileConfig(input: unknown): Candidate {
 /** Reconstruct optional compiler-owned DNS inputs without changing legacy hashes. */
 export function deploymentDnsOptions(config: JsonObject): JsonObject {
   const dns = object(config.dns);
-  return dns['respect-rules'] === true ? { nameservers: dns.nameserver } : {};
+  return { ...(dns['respect-rules'] === true ? { nameservers: dns.nameserver } : {}),
+    ...(config.sniffer === undefined ? {} : { sniffing: true }) };
 }

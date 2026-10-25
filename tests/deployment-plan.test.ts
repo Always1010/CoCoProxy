@@ -37,9 +37,11 @@ function automaticInput() {
 test('installer renders optional encrypted resolvers without altering bootstrap inputs', () => {
   const value = input();
   (value.management.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];
+  (value.management.deployment as JsonObject).sniffing = true;
   const settings = JSON.parse(renderDeploymentPlan(value).files.find(file => file.path === '/etc/coproxy/management.json')!.content);
   assert.deepEqual(settings.deployment.nameservers, ['https://192.0.2.54/dns-query']);
   assert.deepEqual(settings.deployment.bootstrapResolvers, ['192.0.2.53']);
+  assert.equal(settings.deployment.sniffing, true);
 });
 
 test('installed systemd parser accepts both generated unit definitions', {
