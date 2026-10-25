@@ -34,6 +34,17 @@ test('routed HTTPS DNS survives native candidate recompilation and preserves leg
   assert.deepEqual(recompileAutomaticGatewayConfig(encrypted.config, settings()), encrypted);
   assert.equal((encrypted.config.dns as JsonObject)['respect-rules'], true);
   assert.equal((encrypted.config.sniffer as JsonObject)['parse-pure-ip'], true);
+  Object.assign(source.deployment as JsonObject, { nameserverPolicy: { '+.example.com': ['198.51.100.53'] },
+    nodeResolvers: ['https://node-resolver.example/dns-query'], directResolvers: ['198.51.100.54'] });
+  const split = compileAutomaticGatewayConfig(source, settings());
+  assert.deepEqual(recompileAutomaticGatewayConfig(split.config, settings()), split);
+  for (const field of ['nodeResolvers', 'directResolvers']) {
+    for (const resolver of ['192.0.2.2', 'https://192.0.2.3/dns-query', '127.0.0.1', '::1']) {
+      const unsafe = structuredClone(source);
+      (unsafe.deployment as JsonObject)[field] = [resolver];
+      assert.throws(() => compileAutomaticGatewayConfig(unsafe, settings()), AutomaticGatewayConfigError);
+    }
+  }
 });
 const invalid = (run: () => unknown) => assert.throws(run, (error: unknown) =>
   error instanceof AutomaticGatewayConfigError && error.code === 'AUTOMATIC_GATEWAY_CONFIG_INVALID' && error.message === error.code);

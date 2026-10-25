@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { canonicalJson, compileConfig, ConfigError } from '../packages/config/index.ts';
+import { canonicalJson, compileConfig, ConfigError, deploymentDnsOptions } from '../packages/config/index.ts';
 import type { JsonObject } from '../packages/config/index.ts';
 
 function input(): JsonObject {
@@ -113,6 +113,30 @@ test('deployment can recover domain rules without DNS mapping while excluding lo
   assert.ok((sniffer['skip-dst-address'] as string[]).includes('192.168.0.0/16'));
   (value.deployment as JsonObject).sniffing = 'true';
   fails(value, 'INVALID_INPUT');
+});
+
+test('bounded deployment DNS policies preserve bootstrap and round trip independent resolvers', () => {
+  const value = input(), deployment = value.deployment as JsonObject;
+  Object.assign(deployment, { nameserverPolicy: { '+.example.com': ['192.0.2.54'], 'login.example.com': ['https://resolver.example/dns-query'] },
+    nodeResolvers: ['https://node-dns.example/dns-query'], directResolvers: ['198.51.100.53'] });
+  const candidate = compileConfig(value), dns = candidate.config.dns as JsonObject;
+  assert.deepEqual(dns['default-nameserver'], ['192.0.2.53']);
+  assert.deepEqual(dns['nameserver-policy'], deployment.nameserverPolicy);
+  assert.deepEqual(dns['proxy-server-nameserver'], deployment.nodeResolvers);
+  assert.deepEqual(dns['direct-nameserver'], deployment.directResolvers);
+  assert.equal(dns['respect-rules'], true);
+  assert.equal(compileConfig({ ...value, deployment: { ...deployment, ...deploymentDnsOptions(candidate.config) } }).id, candidate.id);
+  for (const nameserverPolicy of [{}, { 'rule-set:remote': ['192.0.2.54'] }, { 'geosite:cn': ['192.0.2.54'] },
+    { '*.example.com': ['192.0.2.54'] }, { 'example.com': ['https://resolver.example/dns-query#'] },
+    { 'example.com': ['https://user@resolver.example/dns-query'] }, { 'example.com': [] },
+    Object.fromEntries(Array.from({ length: 257 }, (_, index) => [`d${index}.example`, ['192.0.2.54']]))]) {
+    deployment.nameserverPolicy = nameserverPolicy;
+    fails(value, 'INVALID_INPUT');
+  }
+  delete deployment.nameserverPolicy;
+  for (const field of ['nodeResolvers', 'directResolvers']) {
+    deployment[field] = ['192.0.2.54#DIRECT']; fails(value, 'INVALID_INPUT'); delete deployment[field];
+  }
 });
 
 test('merges only in-memory source snapshots and preserves advanced JSON fields', () => {

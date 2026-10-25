@@ -34,6 +34,7 @@ const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const DEPLOYMENT_FIELDS = new Set([
   'mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers', 'nameservers', 'sniffing',
+  'nameserverPolicy', 'nodeResolvers', 'directResolvers',
 ]);
 
 // These fields belong to deployment, even when the supplied value is disabled.
@@ -210,6 +211,38 @@ function checkRules(value: JsonValue): void {
   }
 }
 
+/** Deliberately excludes core rule-set/geosite/regex/URL matching syntax. */
+function domainPattern(value: string): void {
+  const domain = value.startsWith('+.') ? value.slice(2) : value;
+  if (domain.length > 253 || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(domain) ||
+    isIP(domain) !== 0) invalid();
+}
+
+function dnsResolvers(value: JsonValue, allowIP: boolean): JsonValue[] {
+  const servers = array(value);
+  if (servers.length === 0 || servers.length > 16) invalid();
+  for (const server of servers) {
+    if (typeof server !== 'string' || server.length > 2048 || /[\s\\]/.test(server)) invalid();
+    if (allowIP && isIP(server)) continue;
+    let endpoint: URL;
+    try { endpoint = new URL(server); } catch { invalid(); }
+    // No credentials, proxy/interface fragments, queries or arbitrary core syntax.
+    if (endpoint.protocol !== 'https:' || !endpoint.hostname || endpoint.username || endpoint.password ||
+      server.includes('#') || server.includes('?') || endpoint.pathname === '/') invalid();
+  }
+  return servers;
+}
+
+function dnsPolicy(value: JsonValue): JsonObject {
+  const policies = object(value), entries = Object.entries(policies);
+  if (entries.length === 0 || entries.length > 256) invalid();
+  for (const [domain, servers] of entries) {
+    domainPattern(domain);
+    dnsResolvers(servers, true);
+  }
+  return policies;
+}
+
 /** Canonical JSON is the exact representation whose UTF-8 bytes are hashed. */
 export function canonicalJson(value: JsonValue): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -239,20 +272,11 @@ export function compileConfig(input: unknown): Candidate {
   for (const resolver of resolvers) {
     if (typeof resolver !== 'string' || isIP(resolver) === 0) invalid();
   }
-  const nameservers = deployment.nameservers === undefined ? undefined : array(deployment.nameservers);
+  const nameservers = deployment.nameservers === undefined ? undefined : dnsResolvers(deployment.nameservers, false);
+  const nameserverPolicy = deployment.nameserverPolicy === undefined ? undefined : dnsPolicy(deployment.nameserverPolicy);
+  const nodeResolvers = deployment.nodeResolvers === undefined ? undefined : dnsResolvers(deployment.nodeResolvers, true);
+  const directResolvers = deployment.directResolvers === undefined ? undefined : dnsResolvers(deployment.directResolvers, true);
   if (deployment.sniffing !== undefined && typeof deployment.sniffing !== 'boolean') invalid();
-  if (nameservers) {
-    if (nameservers.length === 0 || nameservers.length > 16) invalid();
-    for (const server of nameservers) {
-      if (typeof server !== 'string' || server.length > 2048 || /[\s\\]/.test(server)) invalid();
-      let endpoint: URL;
-      try { endpoint = new URL(server); } catch { invalid(); }
-      // Deployment owns DNS transport. Do not accept interface/proxy fragments,
-      // credentials, cleartext endpoints or arbitrary core resolver syntax.
-      if (endpoint.protocol !== 'https:' || !endpoint.hostname || endpoint.username || endpoint.password ||
-        endpoint.hash || endpoint.search || endpoint.pathname === '/') invalid();
-    }
-  }
 
   const policy = object(envelope.policy);
   for (const key of Object.keys(policy)) {
@@ -330,8 +354,13 @@ export function compileConfig(input: unknown): Candidate {
       ipv6: false,
       'default-nameserver': [...resolvers],
       nameserver: [...(nameservers ?? resolvers)],
-      ...(nameservers ? { 'respect-rules': true, 'proxy-server-nameserver': [...resolvers],
-        'direct-nameserver': [...resolvers] } : {}),
+      ...(nameservers || nameserverPolicy ? { 'respect-rules': true,
+        'proxy-server-nameserver': [...(nodeResolvers ?? resolvers)],
+        'direct-nameserver': [...(directResolvers ?? resolvers)] } : {
+        ...(nodeResolvers ? { 'proxy-server-nameserver': [...nodeResolvers] } : {}),
+        ...(directResolvers ? { 'direct-nameserver': [...directResolvers] } : {}),
+      }),
+      ...(nameserverPolicy ? { 'nameserver-policy': nameserverPolicy } : {}),
     },
   };
   const sha256 = createHash('sha256').update(canonicalJson(config), 'utf8').digest('hex');
@@ -341,6 +370,10 @@ export function compileConfig(input: unknown): Candidate {
 /** Reconstruct optional compiler-owned DNS inputs without changing legacy hashes. */
 export function deploymentDnsOptions(config: JsonObject): JsonObject {
   const dns = object(config.dns);
-  return { ...(dns['respect-rules'] === true ? { nameservers: dns.nameserver } : {}),
+  const routed = dns['respect-rules'] === true && array(dns.nameserver).some(server => typeof server === 'string' && isIP(server) === 0);
+  return { ...(routed ? { nameservers: dns.nameserver } : {}),
+    ...(dns['nameserver-policy'] === undefined ? {} : { nameserverPolicy: dns['nameserver-policy'] }),
+    ...(dns['proxy-server-nameserver'] === undefined ? {} : { nodeResolvers: dns['proxy-server-nameserver'] }),
+    ...(dns['direct-nameserver'] === undefined ? {} : { directResolvers: dns['direct-nameserver'] }),
     ...(config.sniffer === undefined ? {} : { sniffing: true }) };
 }
