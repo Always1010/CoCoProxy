@@ -4,7 +4,15 @@ export const serviceCatalog = [
     "id": "Proxy",
     "name": "代理",
     "default": true,
-    "description": "未命中业务组的常用境外网站",
+    "description": "业务组、国外代理与 Other 可跟随的公共代理出口",
+    "domains": [],
+    "exactDomains": []
+  },
+  {
+    "id": "Overseas",
+    "name": "国外代理",
+    "default": true,
+    "description": "常用境外网站与固定境外域名库；专用业务规则优先，初始跟随 Proxy。",
     "domains": [
       "github.com",
       "githubassets.com",

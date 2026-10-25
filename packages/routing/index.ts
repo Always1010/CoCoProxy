@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import { ConfigError } from '../config/index.ts';
 import type { JsonObject } from '../config/index.ts';
 import { serviceCatalog } from './service-catalog.ts';
-import { DOMESTIC_POLICY_VERSION, domesticReferenceRules } from '../config/compact-rules.ts';
+import { LOCAL_POLICY_VERSION, localReferenceRules } from '../config/compact-rules.ts';
 
 export { serviceCatalog } from './service-catalog.ts';
 export type LocalPolicyOptions = {
@@ -15,7 +15,7 @@ export type LocalPolicyOptions = {
 const ids = new Set<string>(serviceCatalog.map((service) => service.id));
 const reserved = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE', 'GLOBAL']);
 const aliases = new Set(['direct', 'block', 'reject']);
-const priority = ['OpenAI', 'Claude', 'YouTube', 'TikTok', 'Google', 'X', 'Telegram', 'Microsoft', 'Apple', 'Meta', 'Discord', 'Steam', 'Proxy', 'Domestic'];
+const priority = ['OpenAI', 'Claude', 'YouTube', 'TikTok', 'Google', 'X', 'Telegram', 'Microsoft', 'Apple', 'Meta', 'Discord', 'Steam', 'Overseas', 'Domestic'];
 const userRuleTypes = new Set(['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'IP-CIDR', 'IP-CIDR6', 'SRC-IP-CIDR', 'SRC-IP-CIDR6', 'DST-PORT', 'SRC-PORT', 'NETWORK']);
 
 function invalid(): never {
@@ -113,12 +113,12 @@ export function buildLocalPolicy(options: LocalPolicyOptions): JsonObject {
       outputRules.push(...service.exactDomains.map((domain) => `DOMAIN,${domain},${id}`));
       outputRules.push(...service.domains.map((domain) => `DOMAIN-SUFFIX,${domain},${id}`));
     }
-    // Keep the complete fixed domain set outside the bounded external policy.
-    // The IP provider retains native resolution at fallback.
-    outputRules.push(...domesticReferenceRules);
+    // Fixed domestic domains precede overseas fallback; both precede resolving
+    // domestic IP matching. Large sets enter only in the deployment compiler.
+    outputRules.push(...localReferenceRules);
     outputRules.push('MATCH,Other');
   }
   return { mode: 'rule', proxies: structuredClone(proxies), 'proxy-groups': groups, rules: outputRules,
     'tcp-concurrent': true, 'find-process-mode': 'off',
-    ...(mode === 'rule' ? { 'x-cocoproxy-rule-mode': DOMESTIC_POLICY_VERSION } : {}) };
+    ...(mode === 'rule' ? { 'x-cocoproxy-rule-mode': LOCAL_POLICY_VERSION } : {}) };
 }
