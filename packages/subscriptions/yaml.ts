@@ -191,14 +191,14 @@ function filterPattern(value: JsonValue | undefined): RegExp | undefined {
   try { return new RegExp(value); } catch { fail('SNAPSHOT_INVALID'); }
 }
 
-function filtered(nodes: JsonObject[], settings: JsonObject): JsonObject[] {
+function nodeFilter(settings: JsonObject): (node: JsonObject) => boolean {
   const include = filterPattern(settings.filter);
   const exclude = filterPattern(settings['exclude-filter']);
   const excluded = settings['exclude-type'];
   const excludedTypes = excluded === undefined ? [] : typeof excluded === 'string' && /^[A-Za-z0-9_|-]{1,256}$/.test(excluded)
     ? excluded.split('|') : strings(excluded);
-  return nodes.filter(node => typeof node.name === 'string' && (!include || include.test(node.name)) &&
-    (!exclude || !exclude.test(node.name)) && !excludedTypes.includes(String(node.type)));
+  return node => typeof node.name === 'string' && (!include || include.test(node.name)) &&
+    (!exclude || !exclude.test(node.name)) && !excludedTypes.includes(String(node.type));
 }
 
 function providerUrl(value: JsonValue | undefined): string {
@@ -217,6 +217,9 @@ export async function resolveSubscriptionProfile(text: string, fetch: ProviderFe
   const ruleDefinitions = root['rule-providers'] === undefined ? {} : object(root['rule-providers']);
   const count = Object.keys(proxyDefinitions).length + Object.keys(ruleDefinitions).length;
   if (count > 16) fail('SNAPSHOT_LIMIT');
+  const groups = root['proxy-groups'];
+  if (groups !== undefined && !Array.isArray(groups)) fail('SNAPSHOT_INVALID');
+  if (Array.isArray(groups) && groups.length > 1_000) fail('SNAPSHOT_LIMIT');
   if (!Object.hasOwn(root, 'proxy-providers') && !Object.hasOwn(root, 'rule-providers')) return { value: profileDocument(root), materializedProviders: false };
   let bytes = Buffer.byteLength(text, 'utf8');
   const download = async (definition: JsonObject): Promise<string> => {
@@ -238,7 +241,33 @@ export async function resolveSubscriptionProfile(text: string, fetch: ProviderFe
   };
   const inline = root.proxies === undefined ? [] : root.proxies;
   if (!Array.isArray(inline)) fail('SNAPSHOT_INVALID');
-  const nodes = inline.map(object);
+  // Charge retained expansion incrementally, before appending to output arrays.
+  // The final plainJson check also accounts for the unexpanded policy fields.
+  let expandedValues = 0;
+  let expandedBytes = 0;
+  const charge = (value: JsonValue): void => {
+    if (++expandedValues > MAX_VALUES) fail('SNAPSHOT_LIMIT');
+    if (typeof value === 'string') expandedBytes += Buffer.byteLength(value, 'utf8');
+    else if (typeof value === 'number') expandedBytes += 24;
+    else if (value === null || typeof value === 'boolean') expandedBytes += 5;
+    else if (Array.isArray(value)) { for (const item of value) charge(item); }
+    else {
+      for (const [key, item] of Object.entries(value)) {
+        expandedBytes += Buffer.byteLength(key, 'utf8');
+        if (expandedBytes > MAX_JSON_BYTES) fail('SNAPSHOT_LIMIT');
+        charge(item);
+      }
+    }
+    if (expandedBytes > MAX_JSON_BYTES) fail('SNAPSHOT_LIMIT');
+  };
+  const nodes: JsonObject[] = [];
+  const appendNode = (node: JsonObject, target?: JsonObject[]): void => {
+    if (nodes.length >= 5_000) fail('SNAPSHOT_LIMIT');
+    charge(node);
+    nodes.push(node);
+    target?.push(node);
+  };
+  for (const entry of inline) appendNode(object(entry));
   const providerNodes = new Map<string, JsonObject[]>();
   for (const [name, entry] of Object.entries(proxyDefinitions)) {
     const definition = object(entry);
@@ -266,37 +295,54 @@ export async function resolveSubscriptionProfile(text: string, fetch: ProviderFe
     if (typeof prefix !== 'string' || typeof suffix !== 'string') fail('SNAPSHOT_INVALID');
     const nodeOverrides = { ...overrides };
     delete nodeOverrides['additional-prefix']; delete nodeOverrides['additional-suffix'];
-    const imported = filtered(payload.map(value => {
+    const accepts = nodeFilter(definition);
+    const imported: JsonObject[] = [];
+    for (const value of payload) {
       const node = object(value);
       if (typeof node.name !== 'string') fail('SNAPSHOT_INVALID');
-      return { ...node, ...nodeOverrides, name: prefix + node.name + suffix };
-    }), definition);
-    nodes.push(...imported);
-    if (nodes.length > 5_000) fail('SNAPSHOT_LIMIT');
+      const candidate = { ...node, ...nodeOverrides, name: prefix + node.name + suffix };
+      if (accepts(candidate)) appendNode(candidate, imported);
+    }
     providerNodes.set(name, imported);
   }
   root.proxies = nodes;
-  if (root['proxy-groups'] !== undefined) {
-    if (!Array.isArray(root['proxy-groups'])) fail('SNAPSHOT_INVALID');
-    for (const entry of root['proxy-groups']) {
+  if (Array.isArray(groups)) {
+    for (const entry of groups) {
       const group = object(entry);
       const uses = group.use === undefined ? [] : strings(group.use);
       for (const flag of ['include-all', 'include-all-proxies', 'include-all-providers']) {
         if (group[flag] !== undefined && typeof group[flag] !== 'boolean') fail('SNAPSHOT_INVALID');
       }
-      const selected: JsonObject[] = [];
-      if (group['include-all'] === true || group['include-all-proxies'] === true) selected.push(...inline.map(object));
-      if (group['include-all'] === true || group['include-all-providers'] === true) selected.push(...[...providerNodes.values()].flat());
-      for (const name of uses) {
-        const provider = providerNodes.get(name);
-        if (!provider) fail('SNAPSHOT_UNSUPPORTED');
-        selected.push(...provider);
-      }
       const existing = group.proxies === undefined ? [] : strings(group.proxies);
       // Filters on an explicitly enumerated group have core-specific semantics.
       if (!uses.length && !['include-all', 'include-all-proxies', 'include-all-providers'].some(key => group[key] === true) &&
           ['filter', 'exclude-filter', 'exclude-type'].some(key => group[key] !== undefined)) fail('SNAPSHOT_UNSUPPORTED');
-      group.proxies = [...new Set([...existing, ...filtered(selected, group).map(node => node.name as string)])];
+      const accepts = nodeFilter(group);
+      const members: string[] = [];
+      const seen = new Set<string>();
+      const appendMember = (name: string): void => {
+        if (seen.has(name)) return;
+        charge(name);
+        seen.add(name);
+        members.push(name);
+      };
+      for (const name of existing) appendMember(name);
+      const select = (source: JsonObject[]): void => {
+        for (const node of source) if (accepts(node)) appendMember(node.name as string);
+      };
+      if (group['include-all'] === true || group['include-all-proxies'] === true) select(inline as JsonObject[]);
+      const selectedProviders = new Set<string>();
+      if (group['include-all'] === true || group['include-all-providers'] === true) {
+        for (const [name, provider] of providerNodes) { select(provider); selectedProviders.add(name); }
+      }
+      for (const name of uses) {
+        if (selectedProviders.has(name)) continue;
+        const provider = providerNodes.get(name);
+        if (!provider) fail('SNAPSHOT_UNSUPPORTED');
+        select(provider);
+        selectedProviders.add(name);
+      }
+      group.proxies = members;
       for (const key of ['use', 'include-all', 'include-all-proxies', 'include-all-providers', 'filter', 'exclude-filter', 'exclude-type']) delete group[key];
     }
   }
@@ -320,11 +366,8 @@ export async function resolveSubscriptionProfile(text: string, fetch: ProviderFe
     if (payload.length > 50_000) fail('SNAPSHOT_LIMIT');
     rulePayloads.set(name, { behavior: definition.behavior as string, payload });
   }
-  let expanded = 0;
-  let expandedBytes = 0;
   const chargeRule = (rule: string): string => {
-    expandedBytes += Buffer.byteLength(rule, 'utf8');
-    if (++expanded > 100_000 || expandedBytes > MAX_JSON_BYTES) fail('SNAPSHOT_LIMIT');
+    charge(rule);
     return rule;
   };
   const expand = (rules: JsonValue | undefined): string[] => strings(rules).flatMap(rule => {

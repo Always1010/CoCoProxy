@@ -155,3 +155,60 @@ test('provider count, total download bytes and expanded rule bytes are bounded',
     rules: Array(50).fill('RULE-SET,domains,DIRECT'),
   }), async () => { throw new Error('inline providers must not download'); }), { code: 'SNAPSHOT_LIMIT' });
 });
+
+test('group count and aggregate member expansion fail before fetching later providers', async () => {
+  const ruleProvider = { domains: { type: 'http', behavior: 'domain', url: 'https://provider.example/domains' } };
+  let calls = 0;
+  const fetch = async () => { calls++; return { status: 'modified', text: 'payload: [example.test]' }; };
+  // A compact input must not allocate the full million-member Cartesian result.
+  const proxies = Array.from({ length: 1_000 }, (_, index) => ({ ...node, name: `node-${index}` }));
+  const groups = Array.from({ length: 1_000 }, (_, index) => ({ name: `group-${index}`, type: 'select', 'include-all': true }));
+  for (const profile of [
+    { 'proxy-groups': [...groups, { name: 'extra', type: 'select' }] },
+    { proxies, 'proxy-groups': groups },
+    // The byte budget is independent of the number of expanded members.
+    { proxies: proxies.slice(0, 20).map((entry, index) => ({ ...entry, name: `${index}-` + '中'.repeat(80) })), 'proxy-groups': groups },
+  ]) {
+    await assert.rejects(resolveSubscriptionProfile(JSON.stringify({ ...profile, 'rule-providers': ruleProvider }), fetch),
+      { code: 'SNAPSHOT_LIMIT' });
+    assert.equal(calls, 0);
+  }
+});
+
+test('provider overrides are budgeted while materializing nodes', async () => {
+  let calls = 0;
+  await assert.rejects(resolveSubscriptionProfile(JSON.stringify({
+    'proxy-providers': {
+      inline: { type: 'inline', payload: Array.from({ length: 500 }, (_, index) => ({ ...node, name: `node-${index}` })),
+        override: { password: 'x'.repeat(10_000) } },
+      later: { type: 'http', url: 'https://provider.example/later' },
+    },
+  }), async () => { calls++; return { status: 'modified', text: 'proxies: []' }; }), { code: 'SNAPSHOT_LIMIT' });
+  assert.equal(calls, 0);
+});
+
+test('streamed group membership preserves ordering, filters and repeated provider references', async () => {
+  const profile = {
+    proxies: [{ ...node, name: 'local' }],
+    'proxy-providers': {
+      first: { type: 'inline', payload: [{ ...node, name: 'first' }, { ...node, name: 'excluded' }] },
+      second: { type: 'inline', payload: [{ ...node, name: 'second' }] },
+    },
+    'proxy-groups': [
+      { name: 'all', type: 'select', proxies: ['DIRECT', 'first', 'DIRECT'], 'include-all': true,
+        use: Array(10_000).fill('first'), 'exclude-filter': 'excluded' },
+      { name: 'ordered', type: 'select', use: ['second', 'first', 'second'], filter: 'first|second' },
+    ],
+  };
+  const result = await resolveSubscriptionProfile(JSON.stringify(profile), async () => { throw new Error('inline providers must not download'); });
+  assert.deepEqual(result, { materializedProviders: true, value: {
+    proxies: [profile.proxies[0], ...profile['proxy-providers'].first.payload, ...profile['proxy-providers'].second.payload],
+    policy: {
+      proxies: [profile.proxies[0], ...profile['proxy-providers'].first.payload, ...profile['proxy-providers'].second.payload],
+      'proxy-groups': [
+        { name: 'all', type: 'select', proxies: ['DIRECT', 'first', 'local', 'second'] },
+        { name: 'ordered', type: 'select', proxies: ['second', 'first'] },
+      ],
+    },
+  } });
+});
