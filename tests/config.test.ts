@@ -164,6 +164,39 @@ test('rejects recursive providers, scripts, file reads and egress overrides', ()
   fails(value, 'PROTECTED_FIELD');
 });
 
+test('rejects protected core field aliases regardless of case, separators or duplicate spelling', () => {
+  for (const key of ['interface_name', 'routing_mark', 'Private_Key', 'INTERFACE-NAME',
+    'private-\u212aey', '\u017fcript', 'ssh_PRIVATE_\u212aEY', 'CA_FILE', 'options_FileName']) {
+    for (const sourced of [false, true]) {
+      const value = input();
+      const proxy = { name: 'alias-node', type: 'socks5', server: '192.0.2.10', port: 1080,
+        options: { [key]: 'SENSITIVE_NODE_CONTENT' } };
+      if (sourced) value.sources = [{ id: 'snapshot', proxies: [proxy] }];
+      else (value.policy as JsonObject).proxies = [proxy];
+      fails(value, 'PROTECTED_FIELD');
+    }
+  }
+  for (const key of ['mixed_port', 'ALLOW_LAN', 'External_Controller_Routing_Mark', '\u017fecret']) {
+    const value = input();
+    (value.policy as JsonObject)[key] = false;
+    fails(value, 'PROTECTED_FIELD');
+  }
+  for (const keys of [['interface-name', 'Interface_Name'], ['Interface_Name', 'interface-name']]) {
+    const value = input();
+    const proxy = ((value.policy as JsonObject).proxies as JsonObject[])[0];
+    for (const key of keys) proxy[key] = 'synthetic-interface';
+    fails(value, 'PROTECTED_FIELD');
+  }
+});
+
+test('preserves ordinary protocol field spellings while checking protected aliases', () => {
+  const value = input();
+  const proxy = ((value.policy as JsonObject).proxies as JsonObject[])[0];
+  proxy['ws-opts'] = { Path: '/synthetic', headers: { 'X_Custom_Header': 'synthetic' } };
+  proxy['TLS_Options'] = { 'Server_Name': 'node.example', 'skip-cert-verify': false };
+  assert.deepEqual((compileConfig(value).config.proxies as JsonObject[])[0], proxy);
+});
+
 test('rejects source URLs, failed snapshots and incomplete envelopes without fetching', () => {
   const value = input();
   value.sources = [{ id: 'remote', url: 'https://example.invalid/subscription', proxies: [] }];

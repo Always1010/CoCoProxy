@@ -168,6 +168,14 @@ function name(value: JsonValue | undefined): string {
   return value;
 }
 
+/** Match core field aliases without rewriting protocol options in the output. */
+function protectedKey(key: string): string {
+  // The core normalizes underscores before its case-insensitive node decoding.
+  // Go EqualFold also equates ASCII S/K with long s/Kelvin sign. Lowercasing
+  // handles Kelvin sign; long s needs an explicit fold. All protected keys are ASCII.
+  return key.replaceAll('_', '-').toLowerCase().replaceAll('\u017f', 's');
+}
+
 function checkProtected(value: JsonValue): void {
   if (value === null || typeof value !== 'object') return;
   if (Array.isArray(value)) {
@@ -175,7 +183,8 @@ function checkProtected(value: JsonValue): void {
     return;
   }
   for (const [key, child] of Object.entries(value)) {
-    if (PROTECTED_RECURSIVE_KEYS.has(key) || /(?:^|[-_])(file|filename|filepath)$/.test(key)) protectedField();
+    const checkedKey = protectedKey(key);
+    if (PROTECTED_RECURSIVE_KEYS.has(checkedKey) || /(?:^|-)(file|filename|filepath)$/.test(checkedKey)) protectedField();
     checkProtected(child);
   }
 }
@@ -247,7 +256,7 @@ export function compileConfig(input: unknown): Candidate {
 
   const policy = object(envelope.policy);
   for (const key of Object.keys(policy)) {
-    if (PROTECTED_ROOT_KEYS.has(key)) protectedField();
+    if (PROTECTED_ROOT_KEYS.has(protectedKey(key))) protectedField();
   }
   checkProtected(policy);
   if (policy.profile !== undefined) {
