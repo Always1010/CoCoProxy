@@ -5,7 +5,7 @@ import { canonicalJson, compileConfig } from '../config/index.ts';
 import type { JsonObject } from '../config/index.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { PrivateFileError, privateDirectory, inspectPrivateDirectory, privateRead, atomicWrite } from '../storage/private-files.ts';
-import { decodeSubscriptionProfile, SnapshotDecodeError } from './yaml.ts';
+import { decodeSubscriptionProfile, resolveSubscriptionProfile, SnapshotDecodeError } from './yaml.ts';
 
 export type SubscriptionUsage = { upload?: number; download?: number; total?: number; expire?: number };
 
@@ -41,7 +41,7 @@ export class SubscriptionError extends Error {
   constructor(code: string) { super(code); this.name = 'SubscriptionError'; this.code = code; }
 }
 
-type StoredSnapshot = { proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[]; sha256: string; sourceRevision: number; definitionRevision: number };
+type StoredSnapshot = { proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[]; materializedProviders?: true; sha256: string; sourceRevision: number; definitionRevision: number };
 type SourceRecord = {
   version: 1;
   id: string;
@@ -56,7 +56,7 @@ type SourceRecord = {
   generation?: string;
   usage?: SubscriptionUsage;
 };
-type SnapshotData = { proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[] };
+type SnapshotData = { proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[]; materializedProviders?: true };
 type RefreshResult = ({ status: 'modified'; sha256: string; etag: string | null; usage?: SubscriptionUsage } & SnapshotData) |
   { status: 'not-modified'; usage?: SubscriptionUsage } | { status: 'failed'; code: SnapshotFailure };
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -72,7 +72,8 @@ const fail: (code: string) => never = code => { throw new TransactionError(code)
 const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 1;
 const hash = (data: SnapshotData): string => createHash('sha256').update(canonicalJson({ proxies: data.proxies,
-  ...(data.policy ? { policy: data.policy } : {}), ...(data.unsupportedFields ? { unsupportedFields: data.unsupportedFields } : {}) }), 'utf8').digest('hex');
+  ...(data.policy ? { policy: data.policy } : {}), ...(data.unsupportedFields ? { unsupportedFields: data.unsupportedFields } : {}),
+  ...(data.materializedProviders ? { materializedProviders: true } : {}) }), 'utf8').digest('hex');
 const timestamp = (value: unknown): value is string | null => value === null ||
   (typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)));
 
@@ -214,11 +215,12 @@ export class SubscriptionStore {
       if (record.usage !== undefined && !validUsage(record.usage)) fail('SOURCE_CORRUPT');
       if (record.snapshot !== null) {
         const snapshot = record.snapshot;
-        if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision'], ['policy', 'unsupportedFields']) ||
+        if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision'], ['policy', 'unsupportedFields', 'materializedProviders']) ||
             !Array.isArray(snapshot.proxies) || !digestPattern.test(snapshot.sha256) ||
             !revision(snapshot.sourceRevision) || snapshot.sourceRevision > record.revision ||
             !revision(snapshot.definitionRevision) || snapshot.definitionRevision > snapshot.sourceRevision ||
             snapshot.definitionRevision > record.definitionRevision || hash(snapshot) !== snapshot.sha256) fail('SOURCE_CORRUPT');
+        if (snapshot.materializedProviders !== undefined && snapshot.materializedProviders !== true) fail('SOURCE_CORRUPT');
         validateSnapshot({ proxies: snapshot.proxies, ...(snapshot.policy ? { policy: snapshot.policy } : {}),
           ...(snapshot.unsupportedFields ? { unsupportedFields: snapshot.unsupportedFields } : {}) }, true);
       }
@@ -327,11 +329,13 @@ export class SubscriptionStore {
 
   private async download(record: SourceRecord): Promise<RefreshResult> {
     let response: SnapshotResponse;
-    try { response = await this.client!.fetch(record.url, record.etag === null ? undefined : { etag: record.etag }); }
+    // A cached parent document cannot prove that its remote providers are current.
+    const conditional = record.etag !== null && !record.snapshot?.materializedProviders;
+    try { response = await this.client!.fetch(record.url, conditional ? { etag: record.etag! } : undefined); }
     catch { return { status: 'failed', code: 'SOURCE_FETCH_FAILED' }; }
     if (!response || typeof response !== 'object') return { status: 'failed', code: 'SOURCE_FETCH_FAILED' };
     if (response.status === 'not-modified') {
-      if (!record.snapshot || !metadata(record).snapshotCurrent || record.etag === null) {
+      if (!record.snapshot || !metadata(record).snapshotCurrent || !conditional) {
         return { status: 'failed', code: 'SOURCE_NOT_MODIFIED_WITHOUT_SNAPSHOT' };
       }
       return { status: 'not-modified', ...(validUsage(response.usage) ? { usage: { ...response.usage } } : {}) };
@@ -341,10 +345,22 @@ export class SubscriptionStore {
     }
     if (Buffer.byteLength(response.text, 'utf8') > MAX_BYTES) return { status: 'failed', code: 'SNAPSHOT_LIMIT' };
     let decoded: unknown;
-    try { decoded = this.decoder(response.text); }
-    catch (error) { return { status: 'failed', code: error instanceof SnapshotDecodeError ? error.code : 'SNAPSHOT_DECODE_FAILED' }; }
+    let materializedProviders = false;
+    try {
+      if (this.decoder === decodeSubscriptionProfile) {
+        const resolved = await resolveSubscriptionProfile(response.text, async url => {
+          try { return await this.client!.fetch(url); }
+          catch { throw new TransactionError('SOURCE_FETCH_FAILED'); }
+        });
+        decoded = resolved.value;
+        materializedProviders = resolved.materializedProviders;
+      } else decoded = this.decoder(response.text);
+    }
+    catch (error) { return { status: 'failed', code: error instanceof SnapshotDecodeError ? error.code :
+      error instanceof TransactionError && error.code === 'SOURCE_FETCH_FAILED' ? 'SOURCE_FETCH_FAILED' : 'SNAPSHOT_DECODE_FAILED' }; }
     try {
       const data = validateSnapshot(decoded, this.decoder === decodeSubscriptionProfile);
+      if (materializedProviders) data.materializedProviders = true;
       // An unusable cache validator must not discard an otherwise valid body.
       return { status: 'modified', ...data, sha256: hash(data), etag: validEtag(response.etag) ? response.etag : null,
         ...(validUsage(response.usage) ? { usage: { ...response.usage } } : {}) };
@@ -375,6 +391,7 @@ export class SubscriptionStore {
             snapshot: { proxies: result.proxies, sha256: result.sha256, sourceRevision: current.revision,
               ...(result.policy ? { policy: result.policy } : {}),
               ...(result.unsupportedFields ? { unsupportedFields: result.unsupportedFields } : {}),
+              ...(result.materializedProviders ? { materializedProviders: true as const } : {}),
               definitionRevision: current.definitionRevision },
             etag: result.etag,
           };
