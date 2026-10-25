@@ -35,6 +35,7 @@ const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const DEPLOYMENT_FIELDS = new Set([
   'mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers', 'nameservers', 'sniffing',
   'nameserverPolicy', 'nodeResolvers', 'directResolvers',
+  'performance',
 ]);
 
 // These fields belong to deployment, even when the supplied value is disabled.
@@ -243,6 +244,71 @@ function dnsPolicy(value: JsonValue): JsonObject {
   return policies;
 }
 
+const SNIFF_PORTS: Record<string, (number | string)[]> = { HTTP: [80, '8080-8880'], TLS: [443, 8443], QUIC: [443, 8443] };
+function portRange(value: JsonValue): [number, number] {
+  if (typeof value === 'number') return [port(value), port(value)];
+  if (typeof value !== 'string' || !/^[1-9]\d{0,4}-[1-9]\d{0,4}$/.test(value)) invalid();
+  const [start, end] = value.split('-').map(Number);
+  if (port(start) > port(end)) invalid();
+  return [start, end];
+}
+function subtractPorts(ports: (number | string)[], skipped: JsonValue[]): (number | string)[] {
+  let ranges = ports.map(portRange);
+  for (const entry of skipped) {
+    const [start, end] = portRange(entry);
+    ranges = ranges.flatMap(([first, last]) => end < first || start > last ? [[first, last] as [number, number]] :
+      [...(first < start ? [[first, start - 1] as [number, number]] : []), ...(last > end ? [[end + 1, last] as [number, number]] : [])]);
+  }
+  return ranges.map(([start, end]) => start === end ? start : `${start}-${end}`);
+}
+
+function snifferOptions(value: JsonValue | undefined): JsonObject | undefined {
+  if (value === undefined || value === false || value === 'off') return undefined;
+  const options = typeof value === 'object' && value !== null ? object(value) : { mode: value === true ? 'force' : value };
+  exactKeys(options, new Set(['mode', 'skipDomains', 'skipPorts']));
+  if (options.mode !== 'missing-only' && options.mode !== 'force' && options.mode !== 'off') invalid();
+  if (options.mode === 'off') {
+    if (Object.keys(options).length !== 1) invalid();
+    return undefined;
+  }
+  const domains = options.skipDomains === undefined ? undefined : array(options.skipDomains);
+  if (domains) {
+    if (domains.length > 256) invalid();
+    for (const domain of domains) { if (typeof domain !== 'string') invalid(); domainPattern(domain); }
+  }
+  const skipped = options.skipPorts === undefined ? [] : array(options.skipPorts);
+  if (skipped.length > 64) invalid();
+  for (const entry of skipped) portRange(entry);
+  const sniff: JsonObject = {};
+  for (const [protocol, ports] of Object.entries(SNIFF_PORTS)) {
+    const included = subtractPorts(ports, skipped);
+    if (included.length) sniff[protocol] = { ports: included };
+  }
+  // An empty sniff map makes the core restore its defaults; reject that case.
+  if (Object.keys(sniff).length === 0) invalid();
+  return { enable: true, 'force-dns-mapping': options.mode === 'force',
+    'parse-pure-ip': true, 'override-destination': true, sniff,
+    'skip-dst-address': ['0.0.0.0/8', '10.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16',
+      '172.16.0.0/12', '192.168.0.0/16', '224.0.0.0/4', '240.0.0.0/4'],
+    ...(domains?.length ? { 'skip-domain': domains } : {}) };
+}
+
+function performanceOptions(value: JsonValue | undefined): JsonObject {
+  if (value === undefined) return {};
+  const options = object(value);
+  exactKeys(options, new Set(['tcpConcurrent', 'findProcessMode']));
+  if (options.tcpConcurrent !== undefined && typeof options.tcpConcurrent !== 'boolean') invalid();
+  if (options.findProcessMode !== undefined && !['off', 'strict', 'always'].includes(String(options.findProcessMode))) invalid();
+  return { ...(options.tcpConcurrent === undefined ? {} : { 'tcp-concurrent': options.tcpConcurrent }),
+    ...(options.findProcessMode === undefined ? {} : { 'find-process-mode': options.findProcessMode }) };
+}
+
+function hasProcessRules(value: JsonValue | undefined): boolean {
+  if (typeof value === 'string') return /(?:^|[,\s(])PROCESS-(?:NAME|PATH)(?:-REGEX)?\s*,/i.test(value);
+  if (Array.isArray(value)) return value.some(hasProcessRules);
+  return value !== null && typeof value === 'object' && Object.values(value).some(hasProcessRules);
+}
+
 /** Canonical JSON is the exact representation whose UTF-8 bytes are hashed. */
 export function canonicalJson(value: JsonValue): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -276,7 +342,7 @@ export function compileConfig(input: unknown): Candidate {
   const nameserverPolicy = deployment.nameserverPolicy === undefined ? undefined : dnsPolicy(deployment.nameserverPolicy);
   const nodeResolvers = deployment.nodeResolvers === undefined ? undefined : dnsResolvers(deployment.nodeResolvers, true);
   const directResolvers = deployment.directResolvers === undefined ? undefined : dnsResolvers(deployment.directResolvers, true);
-  if (deployment.sniffing !== undefined && typeof deployment.sniffing !== 'boolean') invalid();
+  const sniffer = snifferOptions(deployment.sniffing), performance = performanceOptions(deployment.performance);
 
   const policy = object(envelope.policy);
   for (const key of Object.keys(policy)) {
@@ -296,6 +362,8 @@ export function compileConfig(input: unknown): Candidate {
     checkRules(policy.rules);
   }
   if (policy['sub-rules'] !== undefined) checkRules(policy['sub-rules']);
+  if (performance['find-process-mode'] === 'off' && policy['find-process-mode'] !== 'off' &&
+    (hasProcessRules(policy.rules) || hasProcessRules(policy['sub-rules']))) invalid();
 
   const usedNames = new Set(RESERVED_NAMES);
   const proxies: JsonObject[] = [];
@@ -333,6 +401,7 @@ export function compileConfig(input: unknown): Candidate {
 
   const config: JsonObject = {
     ...policy,
+    ...performance,
     mode: 'rule',
     proxies,
     'allow-lan': false,
@@ -342,11 +411,7 @@ export function compileConfig(input: unknown): Candidate {
     secret,
     tun: { enable: false },
     ipv6: false,
-    ...(deployment.sniffing === true ? { sniffer: { enable: true, 'force-dns-mapping': true,
-      'parse-pure-ip': true, 'override-destination': true,
-      sniff: { HTTP: { ports: [80, '8080-8880'] }, TLS: { ports: [443, 8443] }, QUIC: { ports: [443, 8443] } },
-      'skip-dst-address': ['0.0.0.0/8', '10.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16',
-        '172.16.0.0/12', '192.168.0.0/16', '224.0.0.0/4', '240.0.0.0/4'] } } : {}),
+    ...(sniffer ? { sniffer } : {}),
     dns: {
       enable: true,
       listen: `127.0.0.1:${dnsPort}`,
@@ -371,9 +436,35 @@ export function compileConfig(input: unknown): Candidate {
 export function deploymentDnsOptions(config: JsonObject): JsonObject {
   const dns = object(config.dns);
   const routed = dns['respect-rules'] === true && array(dns.nameserver).some(server => typeof server === 'string' && isIP(server) === 0);
+  const performance: JsonObject = {
+    ...(typeof config['tcp-concurrent'] === 'boolean' ? { tcpConcurrent: config['tcp-concurrent'] } : {}),
+    ...(['off', 'strict', 'always'].includes(String(config['find-process-mode'])) ? { findProcessMode: config['find-process-mode'] } : {}),
+  };
   return { ...(routed ? { nameservers: dns.nameserver } : {}),
     ...(dns['nameserver-policy'] === undefined ? {} : { nameserverPolicy: dns['nameserver-policy'] }),
     ...(dns['proxy-server-nameserver'] === undefined ? {} : { nodeResolvers: dns['proxy-server-nameserver'] }),
     ...(dns['direct-nameserver'] === undefined ? {} : { directResolvers: dns['direct-nameserver'] }),
-    ...(config.sniffer === undefined ? {} : { sniffing: true }) };
+    ...(Object.keys(performance).length ? { performance } : {}),
+    ...(config.sniffer === undefined ? {} : { sniffing: extractSniffing(object(config.sniffer)) }) };
+}
+
+function extractSniffing(sniffer: JsonObject): JsonObject {
+  const sniff = object(sniffer.sniff), skipped = new Set<number>();
+  for (const [protocol, defaults] of Object.entries(SNIFF_PORTS)) {
+    const options = sniff[protocol] === undefined ? undefined : object(sniff[protocol]);
+    const included = options === undefined ? [] : array(options.ports).map(portRange);
+    for (const entry of defaults) {
+      const [start, end] = portRange(entry);
+      for (let value = start; value <= end; value++) if (!included.some(([first, last]) => value >= first && value <= last)) skipped.add(value);
+    }
+  }
+  const ranges: (number | string)[] = [], ordered = [...skipped].sort((a, b) => a - b);
+  for (let index = 0; index < ordered.length; index++) {
+    const start = ordered[index]; let end = start;
+    while (ordered[index + 1] === end + 1) end = ordered[++index];
+    ranges.push(start === end ? start : `${start}-${end}`);
+  }
+  return { mode: sniffer['force-dns-mapping'] === true ? 'force' : 'missing-only',
+    ...(sniffer['skip-domain'] === undefined ? {} : { skipDomains: sniffer['skip-domain'] }),
+    ...(ranges.length ? { skipPorts: ranges } : {}) };
 }

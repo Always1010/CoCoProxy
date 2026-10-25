@@ -78,6 +78,20 @@ test('native profile binds policy and all normalized deployment inputs to a cano
   assert.equal(normalized.id, compileAutomaticGatewayConfig(source, { ...supplied, routerMAC: '02:aa:bb:cc:dd:01' }).id);
 });
 
+test('performance and selective sniffing survive trusted gateway recompilation', () => {
+  const source = base();
+  Object.assign(source.deployment as JsonObject, { performance: { tcpConcurrent: true, findProcessMode: 'off' },
+    sniffing: { mode: 'missing-only', skipDomains: ['+.example.com'], skipPorts: ['8080-8880'] } });
+  const candidate = compileAutomaticGatewayConfig(source, settings());
+  assert.deepEqual(recompileAutomaticGatewayConfig(candidate.config, settings()), candidate);
+  for (const processMode of ['off', 'strict', 'always', 'legacy-value']) {
+    const legacy = base();
+    Object.assign(legacy.policy as JsonObject, { 'find-process-mode': processMode, 'tcp-concurrent': 'legacy-value', rules: ['PROCESS-NAME,example,DIRECT', 'MATCH,REJECT'] });
+    const previous = compileAutomaticGatewayConfig(legacy, settings());
+    assert.deepEqual(recompileAutomaticGatewayConfig(previous.config, settings()), previous);
+  }
+});
+
 test('network settings reject malformed, overlapping, reserved and non-host values', () => {
   for (const change of [
     { schemaVersion: 2 }, { generation: 'a'.repeat(64) }, { command: '/synthetic' },
