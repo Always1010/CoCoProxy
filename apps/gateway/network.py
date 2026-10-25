@@ -3,11 +3,13 @@
 
 Trust contract: one trusted installer/operator, root-owned immutable installation,
 and one flock authority. This is deliberately not the legacy strong process-fence
-executor. Complete receipts authorize rebuilding only missing known resources.
-A crash or command failure leaves an incomplete receipt for operator inspection;
-it never infers ownership from partial effects or removes a surviving guard.
+executor. Complete receipts and explicit repair journals authorize rebuilding
+only missing known resources. Initial guard journals resume only when recorded
+ownership or a new boot with empty resources proves safety. Interrupted removes
+never auto-enable; no operation infers ownership from arbitrary partial effects.
 """
 import argparse
+import copy
 import fcntl
 import hashlib
 import ipaddress
@@ -270,87 +272,152 @@ def require_lan(n, wait_seconds=0):
         time.sleep(1)
 
 
-def prepare(value, receipt, existing, boot, digest, wait_seconds=35):
+def empty_resources():
+    return {'guard': None, 'egress': [], 'return': [], 'rule': [], 'capture': []}
+
+
+def complete_resources(resources, n):
+    return (isinstance(resources, dict) and set(resources) == set(empty_resources()) and
+            all(isinstance(resources[key], list) and all(isinstance(item, dict) for item in resources[key])
+                for key in resources) and resources['guard'] and len(resources['egress']) == 1 and
+            len(resources['return']) == 1 and len(resources['rule']) == 1 and
+            len(resources['capture']) == (3 if 'clientCIDR' in n else 2))
+
+
+def require_subset(current, expected, same_boot):
+    # A receipt authorizes only missing resources. Changed or extra live
+    # resources never authorize replacement, even after an interrupted repair.
+    for key in current:
+        if key == 'guard':
+            require(current[key] is None or normalized(current[key]) == normalized(expected[key]))
+            if same_boot and current[key] is not None:
+                require(current[key] == expected[key])
+        else:
+            remaining = normalized(expected[key])
+            for resource in normalized(current[key]):
+                require(resource in remaining)
+                remaining.remove(resource)
+
+
+def same_resources(current, expected):
+    return all((sorted(map(canonical, normalized(current[key]))) ==
+                sorted(map(canonical, normalized(expected[key])))) if key == 'capture' else
+               normalized(current[key]) == normalized(expected[key]) for key in current)
+
+
+def establish_guard(value, receipt, existing, boot, digest):
+    """No LAN/sysctl prerequisite: protect ingress before network-pre.target."""
     n = value['network']
-    require(Path('/proc/sys/net/ipv4/ip_forward').read_text().strip() == '1')
-    require_lan(n, wait_seconds)
     current = snapshot(n)
     if existing:
-        require(existing.get('status') in ('complete', 'removed'))
-        if existing['status'] == 'complete':
+        require(type(existing.get('schemaVersion')) is int and existing['schemaVersion'] == 1 and
+                isinstance(existing.get('bootID'), str) and bool(existing['bootID']) and
+                existing.get('status') in ('complete', 'removed', 'incomplete'))
+        if existing['status'] != 'removed':
             require(existing.get('inputHash') == digest)
+        if existing['status'] == 'complete' or (existing['status'] == 'incomplete' and existing.get('operation') == 'repair'):
             expected = existing.get('resources')
-            require(isinstance(expected, dict) and set(expected) == set(current) and
-                    all(isinstance(expected[key], list) and all(isinstance(item, dict) for item in expected[key])
-                        for key in expected) and
-                    expected['guard'] and len(expected['egress']) == 1 and len(expected['return']) == 1 and
-                    len(expected['rule']) == 1 and len(expected['capture']) == (3 if 'clientCIDR' in n else 2))
-            # A receipt authorizes only missing resources. Any live, changed or
-            # extra resource is a conflict and must never be replaced/deleted.
-            for key in current:
-                if key == 'guard':
-                    require(current[key] is None or normalized(current[key]) == normalized(expected[key]))
-                    if existing.get('bootID') == boot and current[key] is not None:
-                        require(current[key] == expected[key])
-                else:
-                    remaining = normalized(expected[key])
-                    for resource in normalized(current[key]):
-                        require(resource in remaining)
-                        remaining.remove(resource)
-            if normalized(current) == normalized(expected):
-                if existing.get('bootID') != boot:
-                    existing['bootID'] = boot
-                    existing['resources'] = current
-                    store(receipt, existing)
-                return
-            record = dict(existing, status='incomplete', bootID=boot)
-            run([NFT, '-c', '-f', '-'], value['guardRules'])
-            store(receipt, record)
+            require(complete_resources(expected, n))
+            require_subset(current, expected, existing.get('bootID') == boot)
+            record = copy.deepcopy(existing)
+            if same_resources(current, expected):
+                record.update(status='complete', bootID=boot, resources=current)
+                if record != existing:
+                    store(receipt, record)
+                return record, current
+            record.update(status='incomplete', operation='repair', bootID=boot)
+            if current['guard'] is not None:
+                record['resources']['guard'] = current['guard']
+            store(receipt, record)  # Full expected resources remain the repair authority.
             if current['guard'] is None:
+                run([NFT, '-c', '-f', '-'], value['guardRules'])
                 run([NFT, '-f', '-'], value['guardRules'])
-            for key, args in [('egress', route_args(n, 'add', True)), ('rule', rule_args(n, 'add')),
-                              ('return', route_args(n, 'add', False))]:
-                if not current[key]:
-                    run(args)
-            capture = normalized(current['capture'])
-            # Snapshot order follows ip rule priority/insertion order. Match
-            # missing entries by immutable selector identity, not list index.
-            for resource in expected['capture']:
-                if normalized(resource) not in capture:
-                    if resource.get('iif') == 'cocoproxy-tun':
-                        run(return_rule_args(n, 'add'))
-                    else:
-                        run(capture_args(n, 'add', resource.get('priority') == n['egressPriority']+1))
-            resources = snapshot(n)
-            for key in resources:
-                if key == 'capture':
-                    require(sorted(map(canonical, normalized(resources[key]))) ==
-                            sorted(map(canonical, normalized(expected[key]))))
-                else:
-                    require(normalized(resources[key]) == normalized(expected[key]))
-            record.update(status='complete', resources=resources)
-            store(receipt, record)
-            return
-    require(current == {'guard': None, 'egress': [], 'return': [], 'rule': [], 'capture': []})
+                current['guard'] = nft_snapshot()
+                require(normalized(current['guard']) == normalized(expected['guard']))
+                record['resources']['guard'] = current['guard']
+                store(receipt, record)  # Bind newly created handles before waiting for LAN.
+            return record, current
+        if existing['status'] == 'incomplete':
+            # A remove intent must never become an enable. Legacy ambiguous
+            # incomplete receipts likewise cannot prove a resumable prepare.
+            require(existing.get('operation') == 'prepare' and existing.get('stage') in ('guard-pending', 'guarded', 'resources'))
+            only_guard = empty_resources()
+            only_guard['guard'] = current['guard']
+            if existing.get('stage') == 'guarded':
+                known = existing.get('resources')
+                require(isinstance(known, dict) and set(known) == set(only_guard) and
+                        isinstance(known['guard'], list) and known['guard'] and
+                        all(isinstance(item, dict) for item in known['guard']) and
+                        all(known[key] == [] for key in known if key != 'guard'))
+                require(current == only_guard)
+                require_subset(current, known, existing.get('bootID') == boot)
+                require_upstream_stopped()
+                if current['guard'] is not None:
+                    record = copy.deepcopy(existing)
+                    record.update(bootID=boot, resources=current)
+                    if record != existing:
+                        store(receipt, record)
+                    return record, current
+            else:
+                # The initial resource mutation phase has no complete expected
+                # receipt. Only a new boot with empty own/upstream resources is
+                # proof that none of its partial effects remain.
+                require(existing.get('bootID') != boot or existing.get('stage') == 'guard-pending')
+                require(current == empty_resources())
+    require(current == empty_resources())
     require_upstream_stopped()
-    record = {'schemaVersion': 1, 'status': 'incomplete', 'bootID': boot, 'inputHash': digest}
+    record = {'schemaVersion': 1, 'status': 'incomplete', 'operation': 'prepare',
+              'stage': 'guard-pending', 'bootID': boot, 'inputHash': digest}
     run([NFT, '-c', '-f', '-'], value['guardRules'])
-    store(receipt, record)  # Durable intent before the first mutation; never auto-resume.
-    run([NFT, '-f', '-'], value['guardRules'])  # Guard is installed before either route.
-    run(route_args(n, 'add', True))
-    run(rule_args(n, 'add'))
-    run(route_args(n, 'add', False))
-    if 'clientCIDR' in n:
-        # TUN packets alone use the separate return table: host SSH remains on main.
-        run(return_rule_args(n, 'add'))
-    # Local UID exclusion must not bypass forwarded UDP. Keep this source's
-    # LAN destinations in main, then hand only its ingress traffic to TUN.
-    run(capture_args(n, 'add', True))
-    run(capture_args(n, 'add', False))
-    resources = snapshot(n)
-    require(resources['guard'] and len(resources['egress']) == 1 and len(resources['return']) == 1 and
-            len(resources['rule']) == 1 and len(resources['capture']) == (3 if 'clientCIDR' in n else 2))
+    store(receipt, record)  # Durable intent always precedes the first mutation.
+    run([NFT, '-f', '-'], value['guardRules'])
+    current = snapshot(n)
+    only_guard = empty_resources()
+    only_guard['guard'] = current['guard']
+    require(current['guard'] and current == only_guard)
+    record.update(stage='guarded', resources=current)
+    store(receipt, record)
+    return record, current
+
+
+def prepare(value, receipt, existing, boot, digest, wait_seconds=35):
+    n = value['network']
+    record, current = establish_guard(value, receipt, existing, boot, digest)
+    # The durable guard already protects ingress while these dependencies wait.
+    require(Path('/proc/sys/net/ipv4/ip_forward').read_text().strip() == '1')
+    require_lan(n, wait_seconds)
+    if record['status'] == 'complete':
+        return
+    if record['operation'] == 'repair':
+        expected = record['resources']
+        for key, args in [('egress', route_args(n, 'add', True)), ('rule', rule_args(n, 'add')),
+                          ('return', route_args(n, 'add', False))]:
+            if not current[key]:
+                run(args)
+        capture = normalized(current['capture'])
+        for resource in expected['capture']:
+            if normalized(resource) not in capture:
+                if resource.get('iif') == 'cocoproxy-tun':
+                    run(return_rule_args(n, 'add'))
+                else:
+                    run(capture_args(n, 'add', resource.get('priority') == n['egressPriority']+1))
+        resources = snapshot(n)
+        require(same_resources(resources, expected))
+    else:
+        require(record['operation'] == 'prepare' and record.get('stage') == 'guarded')
+        record['stage'] = 'resources'
+        store(receipt, record)
+        run(route_args(n, 'add', True))
+        run(rule_args(n, 'add'))
+        run(route_args(n, 'add', False))
+        if 'clientCIDR' in n:
+            run(return_rule_args(n, 'add'))
+        run(capture_args(n, 'add', True))
+        run(capture_args(n, 'add', False))
+        resources = snapshot(n)
+        require(complete_resources(resources, n))
     record.update(status='complete', resources=resources)
+    record.pop('stage', None)
     store(receipt, record)
 
 
@@ -360,6 +427,7 @@ def remove(value, receipt, existing, boot, digest):
     require(existing and existing.get('status') == 'complete' and existing.get('bootID') == boot and
             existing.get('inputHash') == digest and existing.get('resources') == snapshot(n))
     existing['status'] = 'incomplete'
+    existing['operation'] = 'remove'
     store(receipt, existing)
     run(capture_args(n, 'del', False))
     run(capture_args(n, 'del', True))
@@ -380,7 +448,7 @@ def main():
         def error(self, message):
             require(False)
     parser = FixedParser(add_help=False)
-    parser.add_argument('operation', choices=('prepare', 'reconcile', 'remove'))
+    parser.add_argument('operation', choices=('guard', 'prepare', 'reconcile', 'remove'))
     parser.add_argument('--settings', required=True)
     args = parser.parse_args()
     require(os.geteuid() == 0)
@@ -397,9 +465,9 @@ def main():
         existing = json.loads(checked_path(str(receipt), private=True).read_text()) if receipt.exists() else None
         boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
         digest = hashlib.sha256(canonical(value).encode()).hexdigest()
-        if args.operation in ('prepare', 'reconcile'):
-            if args.operation == 'reconcile':
-                require(existing and existing.get('status') == 'complete')
+        if args.operation == 'guard':
+            establish_guard(value, receipt, existing, boot, digest)
+        elif args.operation in ('prepare', 'reconcile'):
             prepare(value, receipt, existing, boot, digest, 35 if args.operation == 'prepare' else 0)
         else:
             remove(value, receipt, existing, boot, digest)

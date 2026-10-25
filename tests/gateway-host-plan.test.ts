@@ -21,6 +21,10 @@ test('native root oneshot retains an independent guard when the core or service 
   assert.match(plan.unit, /Type=oneshot\nRemainAfterExit=true\nUser=root/);
   assert.match(plan.unit, /ExecStart="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/network.py" "prepare" "--settings"/);
   assert.match(plan.unit, /ExecReload="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/network.py" "reconcile" "--settings"/);
+  assert.match(plan.earlyUnit, /DefaultDependencies=no\nAfter=local-fs.target\nBefore=network-pre.target\nWants=network-pre.target/);
+  assert.match(plan.earlyUnit, /ExecStart="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/network.py" "guard" "--settings"/);
+  assert.match(plan.earlyUnit, /WantedBy=multi-user.target/);
+  assert.doesNotMatch(plan.earlyUnit, /ExecStop|ExecReload|network-online|Restart=|CAP_SYS_ADMIN/);
   assert.doesNotMatch(plan.unit, /ExecStop|WantedBy|Restart=|CAP_SYS_ADMIN/);
   assert.equal(plan.settings.ipPath, '/usr/sbin/ip');
   assert.equal(plan.settings.nftPath, '/usr/sbin/nft');
@@ -92,7 +96,7 @@ test('native LAN gateway sends multiple clients through reviewed TUN and retains
       const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
       assert.equal(code, 0, `isolated native gateway fixture failed: ${output.slice(0, 2048)} ${diagnostics.slice(0, 1024)}`);
       const result = JSON.parse(output);
-      for (const key of ['multiClientTcpUdp', 'newClientAddress', 'routerOnlyDns', 'tunReturnViaRouter', 'hostRoutesPreserved', 'wrongMacRejected', 'coreStopBlocked', 'addressAndResourceRecovery', 'unknownResourceRejected']) assert.equal(result[key], true, key);
+      for (const key of ['multiClientTcpUdp', 'newClientAddress', 'routerOnlyDns', 'tunReturnViaRouter', 'hostRoutesPreserved', 'wrongMacRejected', 'coreStopBlocked', 'addressAndResourceRecovery', 'unknownResourceRejected', 'earlyGuardBeforeLan', 'initialPrepareBootRecovery', 'repairBootRecovery', 'interruptedRemoveRejected']) assert.equal(result[key], true, key);
     } finally {
       clearTimeout(timer);
       try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
