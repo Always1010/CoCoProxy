@@ -298,7 +298,7 @@ function performanceOptions(value: JsonValue | undefined): JsonObject {
   const options = object(value);
   exactKeys(options, new Set(['tcpConcurrent', 'findProcessMode']));
   if (options.tcpConcurrent !== undefined && typeof options.tcpConcurrent !== 'boolean') invalid();
-  if (options.findProcessMode !== undefined && !['off', 'strict', 'always'].includes(String(options.findProcessMode))) invalid();
+  if (options.findProcessMode !== undefined && (typeof options.findProcessMode !== 'string' || !['off', 'strict', 'always'].includes(options.findProcessMode))) invalid();
   return { ...(options.tcpConcurrent === undefined ? {} : { 'tcp-concurrent': options.tcpConcurrent }),
     ...(options.findProcessMode === undefined ? {} : { 'find-process-mode': options.findProcessMode }) };
 }
@@ -438,7 +438,7 @@ export function deploymentDnsOptions(config: JsonObject): JsonObject {
   const routed = dns['respect-rules'] === true && array(dns.nameserver).some(server => typeof server === 'string' && isIP(server) === 0);
   const performance: JsonObject = {
     ...(typeof config['tcp-concurrent'] === 'boolean' ? { tcpConcurrent: config['tcp-concurrent'] } : {}),
-    ...(['off', 'strict', 'always'].includes(String(config['find-process-mode'])) ? { findProcessMode: config['find-process-mode'] } : {}),
+    ...(typeof config['find-process-mode'] === 'string' && ['off', 'strict', 'always'].includes(config['find-process-mode']) ? { findProcessMode: config['find-process-mode'] } : {}),
   };
   return { ...(routed ? { nameservers: dns.nameserver } : {}),
     ...(dns['nameserver-policy'] === undefined ? {} : { nameserverPolicy: dns['nameserver-policy'] }),
