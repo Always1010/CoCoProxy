@@ -25,7 +25,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }> }): ManagementAction {
   // Compile before cloning so getters and non-JSON values cannot run here.
   compileConfig({ schemaVersion: 1, deployment: options.deployment, policy: { rules: ['MATCH,REJECT'] } });
-  const deployment = structuredClone(options.deployment);
+  const deployment = structuredClone(options.deployment) as JsonObject;
   const automaticGateway = options.automaticGateway === undefined ? undefined : parseAutomaticGatewaySettings(options.automaticGateway);
   const compile = (input: unknown) => automaticGateway ? compileAutomaticGatewayConfig(input, automaticGateway) : compileConfig(input);
   compile({ schemaVersion: 1, deployment, policy: { rules: ['MATCH,REJECT'] } });
@@ -41,7 +41,9 @@ export function createManagementApplication(options: { stateDirectory: string; d
   }
   const workspace = createWorkspaceApplication({ stateDirectory: options.stateDirectory, subscriptions, store, manager,
     observeSelections: options.observeSelections,
-    compile: policy => compile({ schemaVersion: 1, deployment, policy }),
+    compile: (policy, nodeDnsPolicy) => compile({ schemaVersion: 1, deployment: nodeDnsPolicy ? {
+      ...deployment, nodeNameserverPolicy: { ...nodeDnsPolicy, ...(deployment.nodeNameserverPolicy as JsonObject | undefined) },
+    } : deployment, policy }),
     legacyPolicy: async () => {
       const metadata = await drafts.metadata();
       if (metadata) return upgradeCompilerRulePolicy((await managedDraft(metadata.revision)).input.policy as JsonObject);

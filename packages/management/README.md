@@ -24,6 +24,8 @@ HTTPS 使用 `__Host-cocoproxy_session`，固定 `Secure; HttpOnly; SameSite=Str
 
 订阅页独立管理来源，支持 PUT `{expectedRevision, name?, url?}` 重命名或替换地址、POST `/sources/:id/refresh` 更新、DELETE `{expectedRevision}` 删除。完整订阅保留策略组与规则，本地方案只使用其节点；来源更新不自动覆盖用户规则或替换当前配置。订阅自带方案只选一份基础配置，各方案分别保留用户覆盖。页面只返回节点名称与组引用，不向概览接口附加节点凭据或订阅地址。
 
+工作区编译从同一份来源快照提取节点专用 DNS，仅对实际导入的节点主机生效，分别支持本地和订阅方案。专用解析策略参与快照摘要、编译缓存和应用时的版本校验；刷新后须重新应用。不同来源为同一主机指定不同解析器时返回 `NODE_DNS_POLICY_CONFLICT`，不任意选取；部署指定的同名精确主机策略优先。解析器端点可能包含私有路径，仅随私有快照与候选保存，不进入工作区概览和错误消息。
+
 工作区 GET 另返回 `tcpNodes`，每项仅含 `{name, fingerprint, applicable}`。POST `/api/cocoproxy/workspace/tcp-delay` 接收 `{expectedRevision, expectedActive, name, fingerprint}`，只探测已应用且版本匹配的工作区节点服务器，不接受浏览器提供 host、port 或 URL。结果含 `status`、`delay`（毫秒或 null）和 `checkedAt`，不返回端点或凭据。探测从管理服务所在网关进行，只建立 TCP 连接，DNS 不计入建连耗时；单次总预算 3 秒，每个管理实例最多同时处理 8 项。UDP／QUIC 专用、链式拨号或无明确 TCP 端点的条目返回 `not-applicable`。取消和配置冲突不写配置，TCP 结果不参与代理健康历史或自动选路。
 
 同一工作区的并行读取只合并尚未完成的来源构建；构建完成后重新读取来源。编译结果仅保留一个按完整策略内容匹配的不可变条目，来源内容变化即重新编译，不用 revision 单独替代内容身份。controller 并发只读请求共享在途完整运行核验，完成后不保留健康结果或错误；每个请求仍独立检查当前代次，写操作继续在共用锁内重新核验。每个管理实例最多同时接受 16 个 controller 测速请求，超额返回 `CONTROLLER_PROBE_BUSY`/429，普通状态读取仍可用；只读请求取消会传递给核心请求。核心组接口可能自行展开成员，网页全部组测速改为有界的去重单节点请求。

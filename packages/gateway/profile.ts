@@ -149,12 +149,13 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
     const resolvers = dns['default-nameserver'];
     if (!Array.isArray(resolvers) || resolvers.some(address => ipv4(address) === settings.gatewayIPv4 || automaticGatewayManagesIPv4(settings, address as string))) fail();
     // Node/direct resolution must remain independent of intercepted LAN clients.
-    for (const key of ['proxy-server-nameserver', 'direct-nameserver']) {
-      const servers = dns[key];
+    const resolverLists = [dns['proxy-server-nameserver'], dns['direct-nameserver'],
+      ...Object.values(dns['proxy-server-nameserver-policy'] as JsonObject ?? {})];
+    for (const servers of resolverLists) {
       if (!Array.isArray(servers)) continue;
       for (const server of servers) {
         if (typeof server !== 'string') fail();
-        const host = server.startsWith('https://') ? new URL(server).hostname.replace(/^\[|\]$/g, '') : server;
+        const host = /^https:\/\//i.test(server) ? new URL(server).hostname.replace(/^\[|\]$/g, '') : server;
         if (isIP(host) && (ipv4(host) === settings.gatewayIPv4 || automaticGatewayManagesIPv4(settings, host))) fail();
       }
     }

@@ -184,6 +184,38 @@ test('bounded deployment DNS policies preserve bootstrap and round trip independ
   }
 });
 
+test('node DNS policies compile independently with bootstrap fallback and stable reconstruction', () => {
+  const value = input(), deployment = value.deployment as JsonObject;
+  const legacy = compileConfig(value);
+  const endpoint = 'https://node-resolver.example:5443/synthetic-private-token/dns-query';
+  deployment.nodeNameserverPolicy = { 'node.example.test': [endpoint] };
+  const candidate = compileConfig(value), dns = candidate.config.dns as JsonObject;
+  assert.notEqual(candidate.id, legacy.id);
+  assert.deepEqual(dns['proxy-server-nameserver-policy'], deployment.nodeNameserverPolicy);
+  assert.deepEqual(dns['proxy-server-nameserver'], deployment.bootstrapResolvers);
+  assert.deepEqual(dns.nameserver, deployment.bootstrapResolvers);
+  assert.equal(dns['respect-rules'], undefined);
+  assert.equal(dns['nameserver-policy'], undefined);
+  const recovered = deploymentDnsOptions(candidate.config);
+  assert.deepEqual(recovered.nodeNameserverPolicy, deployment.nodeNameserverPolicy);
+  assert.equal(compileConfig({ ...value, deployment: { ...deployment, ...recovered } }).id, candidate.id);
+  deployment.nodeResolvers = ['1.1.1.1'];
+  deployment.nameserverPolicy = { '+.website.example': ['9.9.9.9'] };
+  const split = compileConfig(value), splitDns = split.config.dns as JsonObject;
+  assert.deepEqual(splitDns['proxy-server-nameserver'], ['1.1.1.1']);
+  assert.deepEqual(splitDns['proxy-server-nameserver-policy'], deployment.nodeNameserverPolicy);
+  assert.deepEqual(splitDns['nameserver-policy'], deployment.nameserverPolicy);
+  assert.equal(compileConfig({ ...value, deployment: { ...deployment, ...deploymentDnsOptions(split.config) } }).id, split.id);
+  for (const policy of [{}, { '*.example.test': ['1.1.1.1'] }, { 'geosite:private': ['1.1.1.1'] },
+    { 'node.example.test': [] }, { 'node.example.test': endpoint },
+    ...['https:resolver.example/dns-query', 'https://@resolver.example/dns-query',
+      'https://resolver.example:0/dns-query', endpoint + '?token=synthetic', endpoint + '#DIRECT']
+      .map(resolver => ({ 'node.example.test': [resolver] }))] as JsonValue[]) {
+    deployment.nodeNameserverPolicy = policy;
+    fails(value, 'INVALID_INPUT');
+  }
+});
+
 test('merges only in-memory source snapshots and preserves advanced JSON fields', () => {
   const value = input();
   (value.policy as JsonObject)['tcp-concurrent'] = true;
