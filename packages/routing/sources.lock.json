@@ -1,16 +1,23 @@
 {
   "schema": 1,
-  "reviewedOn": "2026-10-23",
+  "reviewedOn": "2026-10-25",
   "repository": "https://github.com/MetaCubeX/meta-rules-dat",
   "commit": "620722145f883fc5ef450e9a909011c0528c1424",
   "license": "GPL-3.0-only",
-  "domainRules": 5390,
+  "geographicDomainRules": 5390,
+  "aggregateDomainRules": 110446,
+  "domainRules": 111813,
   "ipv4Rules": 6525,
   "sources": [
     {
       "name": "domestic-domain",
       "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/620722145f883fc5ef450e9a909011c0528c1424/geo/geosite/geolocation-cn.json",
       "sha256": "3a53a9eec906fe038dc87f58cb71f96415a1a27a0881b6ecef6f4dba7de02128"
+    },
+    {
+      "name": "domestic-domain-aggregate",
+      "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/620722145f883fc5ef450e9a909011c0528c1424/geo/geosite/cn.json",
+      "sha256": "e6ffc9b4238e1e5add3840aa127d8b7cbd441ab8da4c239742a31f3c5cd58ed2"
     },
     {
       "name": "domestic-ip",

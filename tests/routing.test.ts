@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildLocalPolicy, localGroupChoices, serviceCatalog } from '../packages/routing/index.ts';
+import { domesticDomainRules, domesticIpRules } from '../packages/routing/domestic-data.ts';
+import { legacyDomesticDomainRules } from '../packages/routing/legacy-domestic-data.ts';
 import { compileConfig, ConfigError } from '../packages/config/index.ts';
-import { expandCompilerRuleSets } from '../packages/config/compact-rules.ts';
+import { DOMESTIC_DOMAIN_PROVIDER, DOMESTIC_IP_PROVIDER, domesticReferenceRules, expandCompilerRuleSets, upgradeCompilerRulePolicy } from '../packages/config/compact-rules.ts';
 import { compileAutomaticGatewayConfig, recompileAutomaticGatewayConfig } from '../packages/gateway/profile.ts';
 import type { JsonObject } from '../packages/config/index.ts';
 
@@ -13,10 +15,16 @@ const selected = (value: JsonObject, id: string) => (groups(value).find((group) 
 const rules = (value: JsonObject) => value.rules as string[];
 
 function domainTarget(value: JsonObject, domain: string): string {
+  const matches = (type: string, match: string) =>
+    (type === 'DOMAIN' && domain === match) || (type === 'DOMAIN-SUFFIX' && (domain === match || domain.endsWith(`.${match}`))) ||
+    (type === 'DOMAIN-REGEX' && new RegExp(match).test(domain));
   for (const rule of rules(value)) {
     const [type, match, target] = rule.split(',');
     if (type === 'MATCH') return match;
-    if ((type === 'DOMAIN' && domain === match) || (type === 'DOMAIN-SUFFIX' && (domain === match || domain.endsWith(`.${match}`))) || (type === 'DOMAIN-REGEX' && new RegExp(match).test(domain))) return target;
+    if (matches(type, match)) return target;
+    if (type === 'RULE-SET' && match === DOMESTIC_DOMAIN_PROVIDER && domesticDomainRules.some(entry => {
+      const [kind, pattern] = entry.split(','); return matches(kind, pattern);
+    })) return target;
   }
   return '';
 }
@@ -50,21 +58,29 @@ test('user overrides precede exact service rules, aggregates and domestic fallba
   assert.deepEqual(compiledRules.slice(0, 2), ['DOMAIN,youtubei.googleapis.com,REJECT', 'IP-CIDR,192.0.2.0/24,DIRECT']);
   assert.ok(compiledRules.indexOf('DOMAIN,yt3.googleusercontent.com,YouTube') < compiledRules.indexOf('DOMAIN-SUFFIX,googleusercontent.com,Google'));
   assert.ok(compiledRules.indexOf('DOMAIN-SUFFIX,github.com,Proxy') < compiledRules.indexOf('DOMAIN-SUFFIX,cn,Domestic'));
-  assert.ok(compiledRules.indexOf('DOMAIN-SUFFIX,cn,Domestic') < compiledRules.indexOf('IP-CIDR,1.0.1.0/24,Domestic'));
+  assert.ok(compiledRules.indexOf('DOMAIN-SUFFIX,cn,Domestic') < compiledRules.indexOf(`RULE-SET,${DOMESTIC_IP_PROVIDER},Domestic`));
   assert.equal(compiledRules.at(-1), 'MATCH,Other');
 });
 
 test('pinned domestic resources retain exact, suffix, regex and IPv4 semantics', () => {
   const value = policy();
-  assert.ok(rules(value).includes('DOMAIN,api.blipsandchitz.me,Domestic'));
-  assert.ok(!rules(value).includes('DOMAIN-SUFFIX,api.blipsandchitz.me,Domestic'));
+  assert.equal(domesticDomainRules.length, 111813);
+  for (const domain of ['qq.com', 'jd.com', 'taobao.com', 'bilibili.com', 'hdslb.com', 'www.baidu.com', 'v.qq.com', 'i1.hdslb.com', 'img.alicdn.com', 'img14.360buyimg.com']) {
+    assert.equal(domainTarget(value, domain), 'Domestic', domain);
+  }
+  for (const domain of ['www.google.com', 'www.github.com', 'www.youtube.com', 'example.com', 'hdslb.com.invalid', 'nothdslb.com']) {
+    assert.notEqual(domainTarget(value, domain), 'Domestic', domain);
+  }
+  assert.ok(domesticDomainRules.includes('DOMAIN,api.blipsandchitz.me'));
+  assert.ok(!domesticDomainRules.includes('DOMAIN-SUFFIX,api.blipsandchitz.me'));
   assert.equal(domainTarget(value, 'api.blipsandchitz.me'), 'Domestic');
   assert.equal(domainTarget(value, 'child.api.blipsandchitz.me'), 'Other');
   assert.equal(domainTarget(value, 'synthetic-mihayo.akamaized.net'), 'Domestic');
   assert.equal(domainTarget(value, 'synthetic-mihayo.akamaized.net.invalid'), 'Other');
-  assert.equal(rules(value).filter((rule) => rule.startsWith('IP-CIDR,')).length, 6525);
+  assert.equal(domesticIpRules.length, 6525);
   assert.equal(rules(value).filter((rule) => rule.startsWith('DOMAIN-REGEX,')).length, 3);
-  assert.ok(!rules(value).some((rule) => rule.includes('no-resolve') || rule.startsWith('IP-CIDR6,') || rule.startsWith('RULE-SET,')));
+  assert.ok(!rules(value).some((rule) => rule.includes('no-resolve') || rule.startsWith('IP-CIDR6,')));
+  assert.equal(rules(value).filter(rule => rule.startsWith('RULE-SET,')).length, 2);
 });
 
 test('empty nodes fail closed and explicit selections persist without cycles', () => {
@@ -127,14 +143,37 @@ test('offline template compacts only pinned blocks and round-trips without accep
   assert.equal(recompileAutomaticGatewayConfig(gateway.config, network).id, gateway.id);
   assert.throws(() => compileConfig({ schemaVersion: 1, deployment, policy: { ...value, 'rule-providers': sets } }), ConfigError);
   const tampered = structuredClone(result.config);
-  ((tampered['rule-providers'] as JsonObject)['cocoproxy-domestic-domain-v1'] as JsonObject).payload = ['+.attacker.invalid'];
+  ((tampered['rule-providers'] as JsonObject)[DOMESTIC_DOMAIN_PROVIDER] as JsonObject).payload = ['+.attacker.invalid'];
   assert.throws(() => expandCompilerRuleSets(tampered), ConfigError);
   const changed = structuredClone(value);
-  (changed.rules as string[]).splice(150, 1);
+  (changed.rules as string[]).splice((changed.rules as string[]).indexOf(domesticReferenceRules[0]), 1);
   assert.throws(() => compileConfig({ schemaVersion: 1, deployment, policy: changed }), ConfigError);
   assert.equal(value.dns, undefined);
   assert.ok(Buffer.byteLength(JSON.stringify(value)) < 1024 * 1024);
   const other = policy();
   (other.proxies as JsonObject[])[0].name = 'changed';
   assert.equal(nodes[0].name, 'example-node');
+  assert.ok(Buffer.byteLength(JSON.stringify(result.config)) < 4 * 1024 * 1024);
+  const dns = result.config.dns as JsonObject;
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)[`rule-set:${DOMESTIC_DOMAIN_PROVIDER}`], deployment.bootstrapResolvers);
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)['+.cn'], deployment.bootstrapResolvers);
+  const proxiedDomestic = compileConfig({ schemaVersion: 1, deployment, policy: policy({ selections: { Domestic: 'Proxy' } }) });
+  assert.equal((proxiedDomestic.config.dns as JsonObject)['nameserver-policy'], undefined);
+});
+
+test('old fixed providers remain verifiable while a new workspace explicitly upgrades their assets', () => {
+  const value = policy();
+  const start = (value.rules as string[]).indexOf(domesticReferenceRules[0]);
+  const legacy = { ...value, 'x-cocoproxy-rule-mode': 'domestic-v1', rules: [
+    ...(value.rules as string[]).slice(0, start), ...legacyDomesticDomainRules.map(rule => `${rule},Domestic`),
+    ...domesticIpRules.map(rule => `${rule},Domestic`), 'MATCH,Other',
+  ] };
+  const deployment = { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'EXAMPLE_ONLY', dnsPort: 15353, bootstrapResolvers: ['192.0.2.53'] };
+  const old = compileConfig({ schemaVersion: 1, deployment, policy: legacy });
+  const restored = expandCompilerRuleSets(old.config);
+  for (const key of ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns']) delete restored[key];
+  assert.equal(compileConfig({ schemaVersion: 1, deployment, policy: restored }).id, old.id);
+  const upgraded = compileConfig({ schemaVersion: 1, deployment, policy: upgradeCompilerRulePolicy(restored) });
+  assert.notEqual(upgraded.id, old.id);
+  assert.deepEqual(upgraded.config.rules, compileConfig({ schemaVersion: 1, deployment, policy: value }).config.rules);
 });

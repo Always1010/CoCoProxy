@@ -232,7 +232,7 @@ test('full subscription and local schemes preserve their own rules and selection
     local: { selections: { Other: 'DIRECT', OpenAI: 'REJECT' }, rules: ['DOMAIN,local.example,REJECT'] } };
   const local = await f.save(localSettings, full.revision);
   view = await f.view();
-  assert.ok(view.ruleCount > 11_000);
+  assert.ok(view.rules.some(rule => rule.value === 'RULE-SET,cocoproxy-domestic-domain-v2,Domestic'));
   assert.deepEqual(view.rules[0], { value: 'DOMAIN,local.example,REJECT', source: 'user', editable: true });
   assert.equal(view.groups.find(group => group.name === 'Other')!.selected, 'DIRECT');
   const localActive = await f.apply(local, fullActive.active);

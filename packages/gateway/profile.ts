@@ -40,7 +40,9 @@ function fail(): never { throw new AutomaticGatewayConfigError(); }
 
 /** Reflection never runs user accessors, proxy traps, toJSON or inherited code. */
 function dataOnly(input: unknown): void {
-  let remaining = 100_000, bytes = 0;
+  // Fixed compiled providers contain 112k domains. External input still passes
+  // compileConfig's independent 100k-value / 4MiB budget before injection.
+  let remaining = 200_000, bytes = 0;
   const ancestors = new Set<object>();
   function visit(value: unknown, depth: number): void {
     if (--remaining < 0 || depth > 48) fail();

@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import { ConfigError } from '../config/index.ts';
 import type { JsonObject } from '../config/index.ts';
 import { serviceCatalog } from './service-catalog.ts';
-import { domesticDomainRules, domesticIpRules } from './domestic-data.ts';
+import { DOMESTIC_POLICY_VERSION, domesticReferenceRules } from '../config/compact-rules.ts';
 
 export { serviceCatalog } from './service-catalog.ts';
 export type LocalPolicyOptions = {
@@ -113,13 +113,12 @@ export function buildLocalPolicy(options: LocalPolicyOptions): JsonObject {
       outputRules.push(...service.exactDomains.map((domain) => `DOMAIN,${domain},${id}`));
       outputRules.push(...service.domains.map((domain) => `DOMAIN-SUFFIX,${domain},${id}`));
     }
-    outputRules.push(...domesticDomainRules.map((rule) => `${rule},Domestic`));
-    // Resolve domain destinations at IP fallback. Earlier user IP rules use the
-    // same native Mihomo resolution semantics; never force no-resolve here.
-    outputRules.push(...domesticIpRules.map((rule) => `${rule},Domestic`));
+    // Keep the complete fixed domain set outside the bounded external policy.
+    // The IP provider retains native resolution at fallback.
+    outputRules.push(...domesticReferenceRules);
     outputRules.push('MATCH,Other');
   }
   return { mode: 'rule', proxies: structuredClone(proxies), 'proxy-groups': groups, rules: outputRules,
     'tcp-concurrent': true, 'find-process-mode': 'off',
-    ...(mode === 'rule' ? { 'x-cocoproxy-rule-mode': 'domestic-v1' } : {}) };
+    ...(mode === 'rule' ? { 'x-cocoproxy-rule-mode': DOMESTIC_POLICY_VERSION } : {}) };
 }
