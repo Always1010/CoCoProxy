@@ -29,8 +29,9 @@ async function resolveAddresses(host: string, signal: AbortSignal): Promise<stri
   signal.addEventListener('abort', cancel, { once: true });
   try {
     signal.throwIfAborted();
-    const results = await Promise.allSettled([resolver.resolve4(host), resolver.resolve6(host)]);
-    return results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    // The generated core configuration disables IPv6. Do not wait for an AAAA
+    // lookup that the core cannot use (and that may take the entire deadline).
+    return await resolver.resolve4(host);
   } finally { signal.removeEventListener('abort', cancel); }
 }
 
@@ -56,23 +57,70 @@ function connect(address: string, port: number, signal: AbortSignal): Promise<Tc
 
 /** Raw TCP from the gateway; DNS is outside the measured connect interval. No HTTP, TLS or proxy credentials are sent. */
 export async function probeTcpEndpoint(target: TcpEndpoint, signal?: AbortSignal, timeoutMs = 3000,
-  resolveHost = resolveAddresses): Promise<TcpDelayResult> {
-  const deadline = AbortSignal.timeout(timeoutMs);
-  const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  resolveHost = resolveAddresses, connectAddress = connect): Promise<TcpDelayResult> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  const cancel = () => controller.abort();
+  signal?.addEventListener('abort', cancel, { once: true });
+  if (signal?.aborted) cancel();
+  const combined = controller.signal;
   let result: TcpDelayResult = { status: 'unreachable', delay: null };
   try {
     combined.throwIfAborted();
-    const addresses = await resolveHost(target.host, combined);
+    // Enforce the overall budget even for an injected resolver that ignores
+    // cancellation. The production resolver also cancels its DNS work.
+    const addresses = await new Promise<string[]>((resolve, reject) => {
+      const abort = () => reject(combined.reason);
+      combined.addEventListener('abort', abort, { once: true });
+      Promise.resolve().then(() => resolveHost(target.host, combined)).then(resolve, reject)
+        .finally(() => combined.removeEventListener('abort', abort));
+    });
     if (!addresses.length) result = { status: 'dns-failed', delay: null };
-    for (const address of addresses) {
-      combined.throwIfAborted();
-      result = await connect(address, target.port, combined);
-      if (result.status === 'success') break;
-    }
+    else result = await new Promise<TcpDelayResult>(resolve => {
+      const candidates = [...new Set(addresses.filter(address => isIP(address)))].slice(0, 4);
+      let next = 0;
+      let active = 0;
+      let settled = false;
+      let stagger: ReturnType<typeof setTimeout> | undefined;
+      let last: TcpDelayResult = { status: 'unreachable', delay: null };
+      const finish = (value: TcpDelayResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(stagger);
+        combined.removeEventListener('abort', abort);
+        resolve(value);
+      };
+      const abort = () => finish({ status: 'cancelled', delay: null });
+      const launch = () => {
+        if (settled || combined.aborted) return;
+        clearTimeout(stagger);
+        if (next < candidates.length && active < 2) {
+          const address = candidates[next++]!;
+          active++;
+          Promise.resolve().then(() => connectAddress(address, target.port, combined)).then(value => {
+            active--;
+            last = value;
+            if (value.status === 'success') finish(value);
+            else if (!settled) launch();
+          }, () => { active--; last = { status: 'unreachable', delay: null }; launch(); });
+        }
+        if (!active && next >= candidates.length) finish(last);
+        else if (active < 2 && next < candidates.length) stagger = setTimeout(launch, 150);
+      };
+      combined.addEventListener('abort', abort, { once: true });
+      if (combined.aborted) abort();
+      else launch();
+    });
   } catch {
     result = { status: 'dns-failed', delay: null };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
+    // Close losing sockets and stop residual DNS as soon as one address wins.
+    controller.abort();
   }
   if (signal?.aborted) return { status: 'cancelled', delay: null };
-  if (deadline.aborted) return { status: 'timeout', delay: null };
+  if (timedOut) return { status: 'timeout', delay: null };
   return result;
 }
