@@ -392,7 +392,7 @@ const ProxyGroupTitle = defineComponent({
                 Button,
                 {
                   class:
-                    'hidden sm:flex items-center justify-center w-9 h-9 rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/60 transition-all duration-200 hover:bg-primary/15 hover:border-primary/30 hover:text-primary hover:-translate-y-px hover:shadow-lg hover:shadow-primary/15 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-40',
+                    'hidden sm:flex items-center justify-center gap-1 px-2 h-9 text-xs rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/60 transition-all duration-200 hover:bg-primary/15 hover:border-primary/30 hover:text-primary hover:-translate-y-px hover:shadow-lg hover:shadow-primary/15 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-40',
                   disabled: !hasVisibleCurrentProxy.value,
                   title: t('jumpToCurrent'),
                   'aria-label': `${t('jumpToCurrent')}: ${props.proxyGroup.name}`,
@@ -404,7 +404,7 @@ const ProxyGroupTitle = defineComponent({
                   },
                 },
                 {
-                  default: () => h(IconTarget, { size: 18 }),
+                  default: () => [h(IconTarget, { size: 18 }), h('span', '定位')],
                 },
               ),
               // Switch to Recommended button
@@ -413,7 +413,7 @@ const ProxyGroupTitle = defineComponent({
                   Button,
                   {
                     class:
-                      'flex items-center justify-center w-9 h-9 rounded-lg bg-warning/10 border border-warning/20 text-warning transition-all duration-200 hover:bg-warning/20 hover:border-warning/40 hover:-translate-y-px hover:shadow-lg hover:shadow-warning/15 active:translate-y-0',
+                      'flex items-center justify-center gap-1 px-2 h-9 text-xs rounded-lg bg-warning/10 border border-warning/20 text-warning transition-all duration-200 hover:bg-warning/20 hover:border-warning/40 hover:-translate-y-px hover:shadow-lg hover:shadow-warning/15 active:translate-y-0',
                     title:
                       t(
                         'recommendation.switchToRecommended',
@@ -425,7 +425,7 @@ const ProxyGroupTitle = defineComponent({
                     },
                   },
                   {
-                    default: () => h(IconWand, { size: 18 }),
+                    default: () => [h(IconWand, { size: 18 }), h('span', '推荐')],
                   },
                 ),
               // Unfix button — only shown when this automatic group has a manual
@@ -435,7 +435,7 @@ const ProxyGroupTitle = defineComponent({
                   Button,
                   {
                     class:
-                      'flex items-center justify-center w-9 h-9 rounded-lg bg-warning/10 border border-warning/20 text-warning transition-all duration-200 hover:bg-warning/20 hover:border-warning/40 hover:-translate-y-px hover:shadow-lg hover:shadow-warning/15 active:translate-y-0',
+                      'flex items-center justify-center gap-1 px-2 h-9 text-xs rounded-lg bg-warning/10 border border-warning/20 text-warning transition-all duration-200 hover:bg-warning/20 hover:border-warning/40 hover:-translate-y-px hover:shadow-lg hover:shadow-warning/15 active:translate-y-0',
                     title: t('unfixProxy'),
                     onClick: (e: MouseEvent) => {
                       e.stopPropagation()
@@ -443,14 +443,14 @@ const ProxyGroupTitle = defineComponent({
                     },
                   },
                   {
-                    default: () => h(IconPinnedOff, { size: 18 }),
+                    default: () => [h(IconPinnedOff, { size: 18 }), h('span', '自动')],
                   },
                 ),
               h(
                 Button,
                 {
                   class:
-                    'flex items-center justify-center w-9 h-9 rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/60 transition-all duration-200 hover:bg-primary/15 hover:border-primary/30 hover:text-primary hover:-translate-y-px hover:shadow-lg hover:shadow-primary/15 active:translate-y-0 disabled:bg-success/15 disabled:border-success/30 disabled:cursor-not-allowed disabled:opacity-100',
+                    'flex items-center justify-center gap-1 px-2 h-9 text-xs rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/60 transition-all duration-200 hover:bg-primary/15 hover:border-primary/30 hover:text-primary hover:-translate-y-px hover:shadow-lg hover:shadow-primary/15 active:translate-y-0 disabled:bg-success/15 disabled:border-success/30 disabled:cursor-not-allowed disabled:opacity-100',
                   disabled:
                     proxiesStore.proxyGroupLatencyTestingMap[
                       props.proxyGroup.name
@@ -464,7 +464,7 @@ const ProxyGroupTitle = defineComponent({
                   },
                 },
                 {
-                  default: () =>
+                  default: () => [
                     h(IconBrandSpeedtest, {
                       size: 18,
                       class: {
@@ -474,6 +474,8 @@ const ProxyGroupTitle = defineComponent({
                           ],
                       },
                     }),
+                    h('span', '测速'),
+                  ],
                 },
               ),
             ]),
@@ -674,7 +676,7 @@ const ProxyProviderTitle = defineComponent({
                 Button,
                 {
                   class:
-                    'flex items-center justify-center w-9 h-9 rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/60 transition-all duration-200 hover:bg-primary/15 hover:border-primary/30 hover:text-primary hover:-translate-y-px hover:shadow-lg hover:shadow-primary/15 active:translate-y-0 disabled:bg-success/15 disabled:border-success/30 disabled:cursor-not-allowed disabled:opacity-100',
+                    'flex items-center justify-center gap-1 px-2 h-9 text-xs rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/60 transition-all duration-200 hover:bg-primary/15 hover:border-primary/30 hover:text-primary hover:-translate-y-px hover:shadow-lg hover:shadow-primary/15 active:translate-y-0 disabled:bg-success/15 disabled:border-success/30 disabled:cursor-not-allowed disabled:opacity-100',
                   disabled: proxiesStore.updatingMap[props.provider.name],
                   onClick: (e: MouseEvent) => {
                     e.stopPropagation()
@@ -684,7 +686,7 @@ const ProxyProviderTitle = defineComponent({
                   },
                 },
                 {
-                  default: () =>
+                  default: () => [
                     h(IconReload, {
                       size: 18,
                       class: {
@@ -692,13 +694,15 @@ const ProxyProviderTitle = defineComponent({
                           proxiesStore.updatingMap[props.provider.name],
                       },
                     }),
+                    h('span', '更新'),
+                  ],
                 },
               ),
               h(
                 Button,
                 {
                   class:
-                    'flex items-center justify-center w-9 h-9 rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/60 transition-all duration-200 hover:bg-primary/15 hover:border-primary/30 hover:text-primary hover:-translate-y-px hover:shadow-lg hover:shadow-primary/15 active:translate-y-0 disabled:bg-success/15 disabled:border-success/30 disabled:cursor-not-allowed disabled:opacity-100',
+                    'flex items-center justify-center gap-1 px-2 h-9 text-xs rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/60 transition-all duration-200 hover:bg-primary/15 hover:border-primary/30 hover:text-primary hover:-translate-y-px hover:shadow-lg hover:shadow-primary/15 active:translate-y-0 disabled:bg-success/15 disabled:border-success/30 disabled:cursor-not-allowed disabled:opacity-100',
                   disabled:
                     proxiesStore.proxyProviderLatencyTestingMap[
                       props.provider.name
@@ -709,7 +713,7 @@ const ProxyProviderTitle = defineComponent({
                   },
                 },
                 {
-                  default: () =>
+                  default: () => [
                     h(IconBrandSpeedtest, {
                       size: 18,
                       class: {
@@ -719,6 +723,8 @@ const ProxyProviderTitle = defineComponent({
                           ],
                       },
                     }),
+                    h('span', '测速'),
+                  ],
                 },
               ),
             ]),
@@ -850,7 +856,7 @@ const ProviderProxyNodes = defineComponent({
       </div>
 
       <!-- Action Buttons -->
-      <div class="flex items-center gap-2">
+      <div class="flex max-w-full flex-wrap items-center gap-2">
         <ProxiesDisplayModeSwitcher />
         <ProxiesSortSelect />
         <ProxiesCardSizeSelect
@@ -861,7 +867,7 @@ const ProviderProxyNodes = defineComponent({
              collapsible group panels, so the toggle is meaningless there. -->
         <Button
           v-if="activeTab === 'proxies' && !isMasterMode"
-          class="flex h-9 w-9 items-center justify-center rounded-[0.625rem] border border-base-content/10 bg-base-200/80 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
+          class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-base-content/10 bg-base-200/80 px-2 text-sm transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
           :title="
             anyGroupExpanded
               ? t('collapseAll', 'Collapse All')
@@ -871,6 +877,7 @@ const ProviderProxyNodes = defineComponent({
         >
           <IconChevronsUp v-if="anyGroupExpanded" :size="18" />
           <IconChevronsDown v-else :size="18" />
+          <span>{{ anyGroupExpanded ? '收起' : '展开' }}</span>
         </Button>
 
 
@@ -878,7 +885,7 @@ const ProviderProxyNodes = defineComponent({
         <!-- Test All Groups Button -->
         <Button
           v-if="activeTab === 'proxies'"
-          class="flex h-9 w-9 items-center justify-center rounded-[0.625rem] border border-base-content/10 bg-base-200/80 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
+          class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-base-content/10 bg-base-200/80 px-2 text-sm transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
           :disabled="isBatchTesting"
           :title="t('recommendation.testAllGroups', 'Test All Groups')"
           @click="testAllGroups"
@@ -887,6 +894,7 @@ const ProviderProxyNodes = defineComponent({
             :size="18"
             :class="{ 'animate-pulse text-success': isBatchTesting }"
           />
+          <span>测速</span>
         </Button>
 
         <!-- Batch Test Progress Indicator -->
@@ -911,7 +919,7 @@ const ProviderProxyNodes = defineComponent({
         <!-- Health-check All Providers Button -->
         <Button
           v-if="activeTab === 'proxyProviders'"
-          class="flex h-9 w-9 items-center justify-center rounded-[0.625rem] border border-base-content/10 bg-base-200/80 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
+          class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-base-content/10 bg-base-200/80 px-2 text-sm transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
           :disabled="isBatchTesting"
           :title="t('healthCheckAllProviders')"
           @click="healthCheckAllProviders"
@@ -920,11 +928,12 @@ const ProviderProxyNodes = defineComponent({
             :size="18"
             :class="{ 'animate-pulse text-success': isBatchTesting }"
           />
+          <span>检测</span>
         </Button>
 
         <Button
           v-if="activeTab === 'proxyProviders'"
-          class="flex h-9 w-9 items-center justify-center rounded-[0.625rem] border border-base-content/10 bg-base-200/80 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
+          class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-base-content/10 bg-base-200/80 px-2 text-sm transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
           :disabled="proxiesStore.isAllProviderUpdating"
           @click="proxiesStore.updateAllProvider"
         >
@@ -934,6 +943,7 @@ const ProviderProxyNodes = defineComponent({
               'animate-spin text-success': proxiesStore.isAllProviderUpdating,
             }"
           />
+          <span>更新</span>
         </Button>
       </div>
 
@@ -961,21 +971,23 @@ const ProviderProxyNodes = defineComponent({
       <!-- Connectivity Board Button -->
       <div>
         <Button
-          class="flex h-9 w-9 items-center justify-center rounded-[0.625rem] border border-base-content/10 bg-base-200/80 text-base-content/70 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
+          class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-base-content/10 bg-base-200/80 px-2 text-sm text-base-content/70 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
           :title="t('connectivityBoard')"
           @click="connectivityModal?.open()"
         >
           <IconActivity :size="18" />
+          <span>连通性</span>
         </Button>
       </div>
 
       <!-- Settings Button -->
       <div>
         <Button
-          class="flex h-9 w-9 items-center justify-center rounded-[0.625rem] border border-base-content/10 bg-primary/10 text-primary transition-all duration-200 hover:border-primary/30 hover:bg-primary/15"
+          class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-base-content/10 bg-primary/10 px-2 text-sm text-primary transition-all duration-200 hover:border-primary/30 hover:bg-primary/15"
           @click="settingsModal?.open()"
         >
           <IconSettings :size="18" />
+          <span>显示设置</span>
         </Button>
       </div>
     </div>

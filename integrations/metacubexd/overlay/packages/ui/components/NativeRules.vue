@@ -272,7 +272,7 @@ const providersTotalSize = computed(() =>
 
           <Button
             v-if="activeTab === 'ruleProviders'"
-            class="flex h-9 w-9 items-center justify-center rounded-[0.625rem] border border-primary/20 bg-primary/10 text-primary transition-all duration-200 hover:bg-primary/20"
+            class="flex h-9 items-center justify-center gap-1 rounded-[0.625rem] border border-primary/20 bg-primary/10 px-2 text-sm text-primary transition-all duration-200 hover:bg-primary/20"
             :disabled="allProviderIsUpdating"
             @click="onUpdateAllProvider"
           >
@@ -280,6 +280,7 @@ const providersTotalSize = computed(() =>
               :size="18"
               :class="{ 'animate-spin text-success': allProviderIsUpdating }"
             />
+            <span>更新</span>
           </Button>
         </div>
       </div>
@@ -572,7 +573,7 @@ const providersTotalSize = computed(() =>
                       {{ item.data.ruleCount }}
                     </div>
                     <Button
-                      class="flex h-7 w-7 items-center justify-center rounded-lg border border-base-content/8 bg-base-content/5 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
+                      class="flex h-7 items-center justify-center gap-1 rounded-lg border border-base-content/8 bg-base-content/5 px-2 text-xs transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary"
                       :disabled="updatingMap[item.data.name]"
                       @click="onUpdateProvider(item.data.name)"
                     >
@@ -583,6 +584,7 @@ const providersTotalSize = computed(() =>
                             updatingMap[item.data.name],
                         }"
                       />
+                      <span>更新</span>
                     </Button>
                   </div>
                 </div>

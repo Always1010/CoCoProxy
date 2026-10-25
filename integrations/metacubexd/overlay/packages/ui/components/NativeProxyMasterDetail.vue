@@ -224,13 +224,14 @@ function aliveCount(group: ProxyType) {
           </span>
           <button
             type="button"
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-base-content/10 bg-base-100/60 text-base-content/70 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+            class="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-base-content/10 bg-base-100/60 px-2 text-xs text-base-content/70 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
             :disabled="!selectedVisible"
             :title="t('jumpToCurrent')"
             :aria-label="t('jumpToCurrent')"
             @click="scrollSelectedIntoView()"
           >
             <IconTarget :size="18" />
+            <span>定位</span>
           </button>
         </div>
 

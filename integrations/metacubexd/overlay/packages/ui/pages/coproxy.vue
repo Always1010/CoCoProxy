@@ -27,7 +27,7 @@ onMounted(() => run(refresh))
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-    <div class="flex items-center justify-between"><h1 class="text-xl font-semibold">设置</h1><button class="btn btn-ghost btn-square btn-sm" title="刷新状态" aria-label="刷新状态" :disabled="busy" @click="run(refresh)"><IconRefresh :size="18" :class="{ 'animate-spin': busy }" /></button></div>
+    <div class="flex items-center justify-between"><h1 class="text-xl font-semibold">设置</h1><button class="btn btn-ghost btn-sm" title="刷新状态" aria-label="刷新状态" :disabled="busy" @click="run(refresh)"><IconRefresh :size="18" :class="{ 'animate-spin': busy }" />刷新</button></div>
     <div v-if="error" role="alert" class="alert alert-error text-sm">{{ error }}</div>
     <div class="max-w-2xl rounded-xl border border-base-content/10 bg-base-200/60">
       <div class="flex items-center justify-between border-b border-base-content/8 p-4"><span class="text-sm">当前账户</span><span class="text-sm text-base-content/60">{{ api.session.value?.username }}</span></div>

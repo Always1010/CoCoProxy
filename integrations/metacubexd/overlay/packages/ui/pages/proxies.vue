@@ -50,12 +50,12 @@ onMounted(() => run(load))
     <div v-if="tab === 'groups'" class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
       <div v-if="workspace" class="flex items-center gap-2 px-1 text-sm text-base-content/60"><span>{{ selectedName }}</span><IconChevronRight :size="15" /><span class="truncate">{{ workspace.mode !== 'local' ? '保留原有策略组' : sourceNames.join('、') || '未选择订阅' }}</span></div>
       <div class="flex items-center gap-2">
-        <label class="input input-sm flex w-full items-center gap-2 sm:max-w-xs"><IconSearch :size="16" class="opacity-50" /><input v-model="search" type="search" class="grow" placeholder="搜索策略组" aria-label="搜索策略组" /></label>
+        <label class="input input-sm flex min-w-0 flex-1 items-center gap-2 sm:max-w-xs"><IconSearch :size="16" class="shrink-0 opacity-50" /><input v-model="search" type="search" class="min-w-0 grow" placeholder="搜索策略组" aria-label="搜索策略组" /></label>
         <details v-if="workspace?.mode === 'local'" ref="addMenu" class="dropdown dropdown-end ml-auto">
-          <summary class="btn btn-ghost btn-square btn-sm" title="添加策略组" aria-label="添加策略组"><IconPlus :size="18" /></summary>
+          <summary class="btn btn-ghost btn-sm" title="添加策略组" aria-label="添加策略组"><IconPlus :size="18" />添加策略组</summary>
           <div class="dropdown-content z-10 mt-2 w-64 rounded-box border border-base-content/10 bg-base-200 p-2 shadow-lg">
             <ul v-if="availableServices.length" class="menu w-full p-0"><li v-for="service in availableServices" :key="service.id"><button :disabled="busy" @click="addGroup(service.id)">{{ service.name }}</button></li></ul>
-            <form class="mt-2 flex gap-1 border-t border-base-content/10 pt-2" @submit.prevent="addGroup(customGroup)"><input v-model="customGroup" class="input input-sm min-w-0 flex-1" aria-label="自定义策略组名称" placeholder="自定义组名" maxlength="80" required /><button class="btn btn-primary btn-square btn-sm" type="submit" title="添加自定义策略组" aria-label="添加自定义策略组" :disabled="busy || !customGroup.trim() || !!view?.groups.some(group => group.name === customGroup.trim())"><IconPlus :size="16" /></button></form>
+            <form class="mt-2 flex gap-1 border-t border-base-content/10 pt-2" @submit.prevent="addGroup(customGroup)"><input v-model="customGroup" class="input input-sm min-w-0 flex-1" aria-label="自定义策略组名称" placeholder="自定义组名" maxlength="80" required /><button class="btn btn-primary btn-sm" type="submit" title="添加自定义策略组" aria-label="添加自定义策略组" :disabled="busy || !customGroup.trim() || !!view?.groups.some(group => group.name === customGroup.trim())"><IconPlus :size="16" />添加</button></form>
           </div>
         </details>
       </div>
@@ -66,7 +66,7 @@ onMounted(() => run(load))
           <IconGlobe :size="22" class="shrink-0 text-primary" />
           <div class="min-w-0 flex-1"><div class="truncate text-sm font-medium">{{ displayName(group.name) }}</div><div class="mt-0.5 text-xs text-base-content/45">{{ group.type }} · {{ group.options.length }} 个选项</div></div>
           <select class="select select-sm w-44 max-w-[50%] truncate" :aria-label="`${displayName(group.name)} 策略`" :value="overrides.selections[group.name] ?? group.selected" :disabled="busy || group.type !== 'select'" :title="group.type !== 'select' ? '由自动策略选择节点' : undefined" @change="select(group.name, $event)"><option v-for="option in group.options" :key="option" :value="option">{{ displayName(option) }}</option></select>
-          <button v-if="removable(group.name)" class="btn btn-ghost btn-square btn-xs text-error" :title="referenced(group.name) ? '请先移除引用此组的规则' : '移除策略组'" :aria-label="`移除 ${displayName(group.name)}`" :disabled="busy || referenced(group.name)" @click="removeGroup(group.name)"><IconTrash :size="16" /></button>
+          <button v-if="removable(group.name)" class="btn btn-ghost btn-xs text-error" :title="referenced(group.name) ? '请先移除引用此组的规则' : '移除策略组'" :aria-label="`移除 ${displayName(group.name)}`" :disabled="busy || referenced(group.name)" @click="removeGroup(group.name)"><IconTrash :size="16" />移除</button>
         </div>
       </div>
     </div>
