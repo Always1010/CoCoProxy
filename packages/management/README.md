@@ -26,6 +26,8 @@ HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Stric
 
 工作区 GET 另返回 `tcpNodes`，每项仅含 `{name, fingerprint, applicable}`。POST `/api/coproxy/workspace/tcp-delay` 接收 `{expectedRevision, expectedActive, name, fingerprint}`，只探测已应用且版本匹配的工作区节点服务器，不接受浏览器提供 host、port 或 URL。结果含 `status`、`delay`（毫秒或 null）和 `checkedAt`，不返回端点或凭据。探测从管理服务所在网关进行，只建立 TCP 连接，DNS 不计入建连耗时；单次总预算 3 秒，每个管理实例最多同时处理 8 项。UDP／QUIC 专用、链式拨号或无明确 TCP 端点的条目返回 `not-applicable`。取消和配置冲突不写配置，TCP 结果不参与代理健康历史或自动选路。
 
+同一工作区的并行读取只合并尚未完成的来源构建；构建完成后重新读取来源。编译结果仅保留一个按完整策略内容匹配的不可变条目，来源内容变化即重新编译，不用 revision 单独替代内容身份。controller 并发只读请求共享在途完整运行核验，完成后不保留健康结果或错误；每个请求仍独立检查当前代次，写操作继续在共用锁内重新核验。每个管理实例最多同时接受 16 个 controller 测速请求，超额返回 `CONTROLLER_PROBE_BUSY`/429，普通状态读取仍可用；只读请求取消会传递给核心请求。核心组接口可能自行展开成员，网页全部组测速改为有界的去重单节点请求。
+
 日常页面使用上述工作区入口；以下还列出会话、状态及兼容草稿接口。旧草稿接口仍可供 CLI／受控集成使用，不要求网页用户手动捕获候选。
 
 | 方法与路径 | 请求或结果 |

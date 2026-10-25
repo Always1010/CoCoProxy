@@ -9,6 +9,8 @@ import type { TestContext } from 'node:test';
 import type { JsonObject } from '../packages/config/index.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
 import { WorkspaceStore, parseWorkspaceSettings } from '../packages/management/workspace.ts';
+import { memoizePolicyCompiler } from '../packages/management/shared-work.ts';
+import { compileConfig } from '../packages/config/index.ts';
 import type { Workspace, WorkspaceSettings } from '../packages/management/workspace.ts';
 
 const deployment = { mixedPort: 17890, controllerPort: 19090, dnsPort: 15353,
@@ -19,6 +21,24 @@ const profile: JsonObject = { proxies: [node],
     { name: 'Provider', type: 'select', proxies: ['Auto', 'synthetic-node', 'DIRECT', 'REJECT'] },
     { name: 'Auto', type: 'url-test', proxies: ['synthetic-node'], url: 'https://probe.example/generate_204', interval: 300, tolerance: 50 },
   ], rules: ['DOMAIN-SUFFIX,provider.example,Provider', 'MATCH,Provider'], 'tcp-concurrent': true };
+
+test('compiled policy reuse is immutable and invalidates on content even at the same workspace revision', () => {
+  let compilations = 0;
+  const compile = memoizePolicyCompiler(policy => {
+    compilations++;
+    return compileConfig({ schemaVersion: 1, deployment, policy });
+  });
+  const policy: JsonObject = { rules: ['MATCH,DIRECT'] };
+  const first = compile(policy);
+  assert.equal(compile(structuredClone(policy)), first);
+  assert.throws(() => (first.config.rules as string[]).push('MATCH,REJECT'), TypeError);
+  policy.rules = ['MATCH,REJECT'];
+  assert.notEqual(compile(policy).id, first.id);
+  assert.equal(compilations, 2);
+  assert.throws(() => compile({ dns: {} }));
+  assert.equal(compile(policy).id, compile(policy).id);
+  assert.equal(compilations, 3); // Failed compilations never replace the last verified entry.
+});
 
 function settings(changes: Partial<WorkspaceSettings> = {}): WorkspaceSettings {
   return { mode: 'local', subscriptionId: null, sourceIds: [], runMode: 'rule',

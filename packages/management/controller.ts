@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { ManagementError, exactRecord, readJsonBody } from './http.ts';
+import { singleFlight } from './shared-work.ts';
 
 export type ControllerTarget = { generation: string; port: number; secret: string };
 export type ControllerClient = { send: (text: string) => void; close: (code: number, reason: string) => void };
@@ -93,11 +94,11 @@ function httpRoute(request: Request, origins: ReadonlySet<string>): { path: stri
   return { path: '/' + p.map(part => encodeURIComponent(part)).join('/') + url.search, mutation, deadlineMs, probe: delay };
 }
 
-async function upstream(target: ControllerTarget, path: string, method: string, deadlineMs: number, probe: boolean, body?: string): Promise<Response> {
+async function upstream(target: ControllerTarget, path: string, method: string, deadlineMs: number, probe: boolean, body?: string, signal?: AbortSignal): Promise<Response> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), deadlineMs);
   try {
-    const result = await fetch(`http://127.0.0.1:${target.port}${path}`, { method, redirect: 'manual', signal: abort.signal,
+    const result = await fetch(`http://127.0.0.1:${target.port}${path}`, { method, redirect: 'manual', signal: signal ? AbortSignal.any([abort.signal, signal]) : abort.signal,
       headers: { authorization: `Bearer ${target.secret}`, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body }) });
     if (result.status >= 300 || result.status < 200) {
@@ -136,6 +137,8 @@ export function createControllerProxy(options: ControllerProxyOptions): {
   fetch: (request: Request) => Promise<Response>;
   relay: (request: Request, client: ControllerClient, authorized: () => boolean) => Promise<() => void>;
 } {
+  const readTarget = singleFlight(options.target);
+  let probing = 0;
   const origins = new Set((options.allowedProbeOrigins ?? []).map(input => {
     const url = new URL(input);
     if (url.protocol !== 'https:' || url.origin !== input || url.username || url.password) throw new ManagementError('CONTROLLER_PROBE_ORIGIN_INVALID');
@@ -144,17 +147,26 @@ export function createControllerProxy(options: ControllerProxyOptions): {
   return {
     async fetch(request) {
       let generation: string | undefined;
+      let probeSlot = false;
       try {
         const route = httpRoute(request, origins);
+        if (route.probe) {
+          if (probing >= 16) throw new ManagementError('CONTROLLER_PROBE_BUSY', 429);
+          probing++; probeSlot = true;
+        }
         let body: string | undefined;
         if (request.method === 'PUT') {
           const record = exactRecord(await readJsonBody(request, 8192), ['name']);
           if (typeof record.name !== 'string' || !record.name || record.name.length > 1024 || /[\x00-\x1f\x7f]/.test(record.name)) throw new ManagementError('CONTROLLER_REQUEST_DENIED');
           body = JSON.stringify(record);
         }
-        const current = validateTarget(await options.target());
+        const current = validateTarget(await (route.mutation ? options.target() : readTarget()));
         generation = current.generation;
-        if (!route.mutation) return await upstream(current, route.path, request.method, route.deadlineMs, route.probe, body);
+        if (!route.mutation) {
+          request.signal.throwIfAborted();
+          if (!await options.isCurrent(current.generation)) throw new ManagementError('CONTROLLER_GENERATION_CONFLICT', 409);
+          return await upstream(current, route.path, request.method, route.deadlineMs, route.probe, body, request.signal);
+        }
         const expected = request.headers.get('if-match');
         if (!expected || expected !== current.generation) throw new ManagementError('CONTROLLER_GENERATION_CONFLICT', 409);
         return await options.mutate(async () => {
@@ -165,7 +177,7 @@ export function createControllerProxy(options: ControllerProxyOptions): {
         });
       } catch (error) {
         return response({ error: { code: error instanceof ManagementError ? error.code : 'CONTROLLER_UNAVAILABLE' } }, error instanceof ManagementError ? error.status : 503, generation);
-      }
+      } finally { if (probeSlot) probing--; }
     },
     async relay(request, client, authorized) {
       let socket: WebSocket | undefined;
@@ -195,7 +207,7 @@ export function createControllerProxy(options: ControllerProxyOptions): {
         if (interval !== null && (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(interval) || Number(interval) < 0.1 || Number(interval) > 10)) throw new ManagementError('CONTROLLER_QUERY_DENIED');
         const level = url.searchParams.get('level');
         if (level !== null && !['debug', 'info', 'warning', 'error', 'silent'].includes(level)) throw new ManagementError('CONTROLLER_QUERY_DENIED');
-        const target = validateTarget(await options.target());
+        const target = validateTarget(await readTarget());
         if (!permitted() || !await options.isCurrent(target.generation)) throw new ManagementError('CONTROLLER_GENERATION_CONFLICT', 409);
         socket = new WebSocket(`ws://127.0.0.1:${target.port}/${parts[0]}${url.search}`, { headers: { authorization: `Bearer ${target.secret}` },
           handshakeTimeout: 5000, maxPayload: FRAME_LIMIT, followRedirects: false, perMessageDeflate: false });
