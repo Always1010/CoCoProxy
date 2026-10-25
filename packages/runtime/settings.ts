@@ -7,20 +7,21 @@ import type { Candidate, JsonObject } from '../config/index.ts';
 import { inspectPrivateDirectory, privateRead } from '../storage/private-files.ts';
 import { FileTransactionStore } from '../transaction/index.ts';
 import { RuntimeError } from './types.ts';
+import { parseAutomaticGatewaySettings, recompileAutomaticGatewayConfig, AUTOMATIC_GATEWAY_CORE_SHA256 } from '../gateway/profile.ts';
 import type { RuntimeSettings } from './types.ts';
 
 const digest = /^[a-f0-9]{64}$/;
 const settingKeys = ['schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256', 'systemctlPath', 'unitPath', 'unitSha256', 'serviceUid'];
 const fail: (code: string) => never = code => { throw new RuntimeError(code); };
 
-function plainRecord(input: unknown, keys: string[]): Record<string, unknown> {
+function plainRecord(input: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input) ||
       (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)) fail('INVALID_RUNTIME_SETTINGS');
   const properties = Object.getOwnPropertyDescriptors(input);
   const names = Reflect.ownKeys(properties);
-  if (names.length !== keys.length || names.some(name => typeof name !== 'string' || !keys.includes(name))) fail('INVALID_RUNTIME_SETTINGS');
+  if (keys.some(key => !names.includes(key)) || names.some(name => typeof name !== 'string' || ![...keys, ...optional].includes(name))) fail('INVALID_RUNTIME_SETTINGS');
   const result: Record<string, unknown> = {};
-  for (const name of keys) {
+  for (const name of names as string[]) {
     const descriptor = properties[name];
     if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) fail('INVALID_RUNTIME_SETTINGS');
     result[name] = descriptor.value;
@@ -37,7 +38,7 @@ function absolutePath(input: unknown): string {
 /** Only deployment-owned JSON is accepted; no property getters are evaluated. */
 export function parseRuntimeSettings(input: unknown): RuntimeSettings {
   try {
-    const value = plainRecord(input, settingKeys);
+    const value = plainRecord(input, settingKeys, ['automaticGateway']);
     if (value.schemaVersion !== 1 || typeof value.binarySha256 !== 'string' || !digest.test(value.binarySha256) ||
         typeof value.unitSha256 !== 'string' || !digest.test(value.unitSha256) ||
         typeof value.serviceUid !== 'number' || !Number.isSafeInteger(value.serviceUid) || value.serviceUid <= 0 || value.serviceUid > 4_294_967_294) fail('INVALID_RUNTIME_SETTINGS');
@@ -46,8 +47,11 @@ export function parseRuntimeSettings(input: unknown): RuntimeSettings {
     const systemctlPath = absolutePath(value.systemctlPath);
     const unitPath = absolutePath(value.unitPath);
     if (posix.basename(unitPath) !== 'coproxy-mihomo.service') fail('INVALID_RUNTIME_SETTINGS');
+    const automaticGateway = value.automaticGateway === undefined ? undefined : parseAutomaticGatewaySettings(value.automaticGateway);
+    if (automaticGateway && value.binarySha256 !== AUTOMATIC_GATEWAY_CORE_SHA256) fail('INVALID_RUNTIME_SETTINGS');
     return { schemaVersion: 1, stateDirectory, binaryPath, binarySha256: value.binarySha256,
-      systemctlPath, unitPath, unitSha256: value.unitSha256, serviceUid: value.serviceUid };
+      systemctlPath, unitPath, unitSha256: value.unitSha256, serviceUid: value.serviceUid,
+      ...(automaticGateway ? { automaticGateway } : {}) };
   } catch { return fail('INVALID_RUNTIME_SETTINGS'); }
 }
 
@@ -107,6 +111,12 @@ export async function loadRuntimeCandidate(input: RuntimeSettings, generation: s
     const config = JSON.parse(bytes) as JsonObject;
     const controller = config['external-controller'];
     const dns = config.dns;
+    if (settings.automaticGateway) {
+      const compiled = recompileAutomaticGatewayConfig(config, settings.automaticGateway);
+      if (compiled.id !== generation || typeof controller !== 'string' || typeof config.secret !== 'string') fail('CANDIDATE_UNTRUSTED');
+      return { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret },
+        home: posix.join(settings.stateDirectory, 'core-home') };
+    }
     if (typeof controller !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(controller) ||
         !dns || typeof dns !== 'object' || Array.isArray(dns) ||
         typeof dns.listen !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(dns.listen) ||

@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, basename } from 'node:path';
 import { DeploymentPlanError, renderDeploymentPlan } from '../packages/deployment/plan.ts';
+import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
 
 function input() {
   return { schemaVersion: 1, runtime: {
@@ -24,6 +25,14 @@ function input() {
   } };
 }
 
+function automaticInput() {
+  const value = input();
+  return { ...value, runtime: { ...value.runtime, binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256,
+    automaticGateway: { schemaVersion: 1, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', routerIPv4: '192.0.2.1',
+      routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24, dnsPort: 15353,
+      egressMark: 65536, egressTable: 2024, egressPriority: 8000, tunMtu: 1500 } } };
+}
+
 test('installed systemd parser accepts both generated unit definitions', {
   skip: process.platform !== 'linux' || !process.env.COPROXY_TEST_SYSTEMD_ANALYZE,
 }, async t => {
@@ -31,14 +40,39 @@ test('installed systemd parser accepts both generated unit definitions', {
   assert.ok(isAbsolute(binary));
   const root = await mkdtemp(join(tmpdir(), 'coproxy-unit-syntax-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const units: string[] = [];
-  for (const file of renderDeploymentPlan(input()).files.filter(file => file.path.endsWith('.service'))) {
-    const path = join(root, basename(file.path));
-    await writeFile(path, file.content, { mode: 0o600 }); units.push(path);
+  for (const value of [input(), automaticInput()]) {
+    const directory = await mkdtemp(join(root, 'profile-'));
+    const units: string[] = [];
+    for (const file of renderDeploymentPlan(value).files.filter(file => file.path.endsWith('.service'))) {
+      const path = join(directory, basename(file.path));
+      await writeFile(path, file.content, { mode: 0o600 }); units.push(path);
+    }
+    await new Promise<void>((resolve, reject) => execFile(binary, ['verify', '--man=no', ...units], {
+      timeout: 15_000, maxBuffer: 65_536, windowsHide: true,
+    }, error => error ? reject(new Error('SYSTEMD_UNIT_SYNTAX_REJECTED')) : resolve()));
   }
-  await new Promise<void>((resolve, reject) => execFile(binary, ['verify', '--man=no', ...units], {
-    timeout: 15_000, maxBuffer: 65_536, windowsHide: true,
-  }, error => error ? reject(new Error('SYSTEMD_UNIT_SYNTAX_REJECTED')) : resolve()));
+});
+
+test('native deployment adds one root oneshot without granting management network privileges', () => {
+  const plan = renderDeploymentPlan(automaticInput());
+  assert.equal(plan.files.length, 7);
+  const core = plan.files.find(file => file.path.endsWith('/coproxy-mihomo.service'))!;
+  const manager = plan.files.find(file => file.path.endsWith('/coproxy-management.service'))!;
+  const network = plan.files.find(file => file.path.endsWith('/coproxy-gateway-network.service'))!;
+  assert.match(core.content, /^Requires=coproxy-gateway-network.service$/m);
+  assert.match(core.content, /^BindsTo=coproxy-gateway-network.service$/m);
+  assert.match(core.content, /^AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW$/m);
+  assert.match(manager.content, /^CapabilityBoundingSet=$/m);
+  assert.doesNotMatch(manager.content, /AmbientCapabilities/);
+  assert.equal(network.owner, 'root');
+  assert.doesNotMatch(network.content, /ExecStop|Restart=|WantedBy/);
+  const rootSettings = plan.files.find(file => file.path.endsWith('/gateway-network.json'))!;
+  assert.equal(rootSettings.owner, 'root'); assert.equal(rootSettings.mode, '0600');
+  assert.ok(plan.directories.some(dir => dir.path === '/var/lib/coproxy-gateway-network' && dir.owner === 'root' && dir.mode === '0700'));
+  for (const dependency of ['/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft', '/usr/bin/ip', '/usr/bin/nft']) {
+    const collision = automaticInput(); collision.management.settingsPath = dependency;
+    assert.throws(() => renderDeploymentPlan(collision), DeploymentPlanError);
+  }
 });
 
 test('deployment proposal shares the private runtime identity and pins core bytes without starting anything', () => {

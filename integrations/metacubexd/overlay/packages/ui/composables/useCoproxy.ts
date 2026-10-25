@@ -40,7 +40,7 @@ export interface CoproxyStatus {
   checkedAt: string | null
   draft: Omit<CoproxyDraft, 'policy'> | null
   core: { ready: boolean; generation: string; checkedAt: string; reason?: string } | null
-  gateway: { ready: false; reason: string }
+  gateway: { ready: false; reason: string; profile?: 'mihomo-automatic'; terminalPath?: 'unverified' }
 }
 
 const messages: Record<string, string> = {
@@ -63,7 +63,8 @@ const messages: Record<string, string> = {
   BODY_LIMIT: '请求内容过大。',
   SOURCE_PENDING: '选中的来源尚无当前版本快照，请先刷新。',
   INVALID_SOURCE_ID: '来源标识须以字母开头，仅含字母、数字、下划线或连字符，最长 64 位。',
-  INVALID_SOURCE_URL: '请输入有效的 HTTPS 订阅地址。',
+  INVALID_SOURCE_URL: '请输入有效的 HTTP 或 HTTPS 订阅地址。',
+  AUTOMATIC_GATEWAY_CONFIG_INVALID: '网关部署与当前配置不匹配，请核对部署设置。',
   SOURCE_CLIENT_REQUIRED: '部署尚未配置订阅获取许可。',
   SOURCE_FETCH_FAILED: '获取订阅失败，已有快照已保留。',
   SNAPSHOT_DECODE_FAILED: '订阅内容无法解析。',

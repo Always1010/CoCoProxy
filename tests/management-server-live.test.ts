@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,7 @@ import { isAbsolute, join } from 'node:path';
 import test from 'node:test';
 import WebSocket from 'ws';
 import { createAdminCredential } from '../packages/management/auth.ts';
+import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
 
 const entry = process.env.COPROXY_TEST_SERVER;
 const playwrightModule = process.env.COPROXY_TEST_PLAYWRIGHT;
@@ -38,7 +39,7 @@ function rejectedSocket(url: string, expectedStatus: number, headers: Record<str
   });
 }
 
-test('built management server gates HTTP and all WS upgrades, and browser preserves explicit candidate receipts',
+for (const automatic of [false, true]) test(`built management server gates ${automatic ? 'automatic' : 'explicit'} HTTP/WS and preserves candidate receipts`,
   { skip: !entry || process.platform !== 'linux', timeout: 120_000 }, async t => {
     assert.ok(isAbsolute(entry!));
     const root = await mkdtemp(join(tmpdir(), 'coproxy-server-live-'));
@@ -49,8 +50,11 @@ test('built management server gates HTTP and all WS upgrades, and browser preser
     const settingsPath = join(root, 'management.json');
     await writeFile(credentialPath, JSON.stringify(await createAdminCredential({ username, password })), { mode: 0o600 });
     await writeFile(runtimeSettingsPath, JSON.stringify({ schemaVersion: 1, stateDirectory: join(root, 'state'),
-      binaryPath: '/synthetic/not-installed', binarySha256: 'a'.repeat(64), systemctlPath: '/synthetic/not-systemctl',
-      unitPath: '/synthetic/coproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 }), { mode: 0o600 });
+      binaryPath: '/synthetic/not-installed', binarySha256: automatic ? AUTOMATIC_GATEWAY_CORE_SHA256 : 'a'.repeat(64), systemctlPath: '/synthetic/not-systemctl',
+      unitPath: '/synthetic/coproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345,
+      ...(automatic ? { automaticGateway: { schemaVersion: 1, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2',
+        routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24,
+        dnsPort: 15353, egressMark: 65536, egressTable: 2024, egressPriority: 8000, tunMtu: 1500 } } : {}) }), { mode: 0o600 });
     await writeFile(settingsPath, JSON.stringify({ schemaVersion: 1, origin, credentialPath, runtimeSettingsPath,
       deployment: { mixedPort: 17890, controllerPort: 19090, dnsPort: 15353, controllerSecret: secret, bootstrapResolvers: ['192.0.2.53'] } }), { mode: 0o600 });
     const child = spawn(process.execPath, [entry!], { env: { ...process.env, NITRO_HOST: '127.0.0.1', NITRO_PORT: new URL(origin).port,
@@ -95,6 +99,11 @@ test('built management server gates HTTP and all WS upgrades, and browser preser
     assert.equal((await call('/api/coproxy/draft', 'PUT', { expectedRevision: 0, policy }, cookie)).status, 200);
     const receipt = await (await call('/api/coproxy/stage', 'POST', { expectedRevision: 1 }, cookie)).json();
     assert.match(receipt.generation, /^[a-f0-9]{64}$/);
+    const captured = JSON.parse(await readFile(join(root, 'state/candidates', receipt.generation + '.json'), 'utf8'));
+    assert.equal(captured.tun.enable, automatic);
+    const status = await (await call('/api/coproxy/status', 'GET', undefined, cookie)).json();
+    assert.equal(status.gateway.ready, false);
+    if (automatic) assert.equal(status.gateway.profile, 'mihomo-automatic');
     assert.ok(!(await (await call('/api/coproxy/draft', 'GET', undefined, cookie)).text()).includes(secret));
 
     await t.test('browser login, save, stage, stale capture, conflict retention and logout',

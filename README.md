@@ -2,7 +2,7 @@
 
 Coproxy 面向 Linux 网关，提供可通过浏览器管理的局域网代理、DNS 与分流能力。终端通过接入路由器统一使用服务，无需逐台安装代理客户端；软件不绑定个人设备或当前调试网络。
 
-当前已实现配置编译、版本化草稿、受限订阅快照、不可变候选、持久化应用事务、systemd 运行适配源码和 CLI。MetaCubeXD 的适配界面已接入独立登录、策略编辑、来源管理和明确的捕获／应用操作，并通过回环 Server 与浏览器验证；核心 HTTP／WebSocket 统一经过会话鉴权和受限代理。网页来源支持 JSON 与 Clash YAML 的节点导入。固定 Mihomo 已通过语法、回环代理、UDP/TCP localhost DNS，以及受限控制器查询与流量流检查；真实 systemd 安装、协议节点、WAN DNS、网关接管和发行包仍未验收，不能将此阶段当作完整网关交付。
+当前配置、草稿、订阅、候选、事务和管理界面已经实现，固定显式发行已通过实际 Linux/systemd 安装与事务验收。MetaCubeXD 的界面复用独立登录、策略和来源管理；核心 HTTP／WebSocket 统一经过会话鉴权。来源接受 JSON／Clash YAML 节点，HTTP 订阅须由私有部署单独许可。首轮网关收敛为 Mihomo 原生 TUN 自动路由／重定向，加必要的独立 guard、出口和回程集成；已经接入现有管理与运行链路并通过隔离开发验证，真实网关安装与设备联调另行验收。
 
 开发基线为 Node.js 22.18 或更高版本。运行依赖及类型声明由根 package-lock.json 固定，开发工具另由 tooling 锁文件固定；在获准的项目环境执行相应 `npm ci --ignore-scripts --no-audit --no-fund`。运行 `npm run cli -- help` 查看入口，构建管理界面和针对性检查见[开发与验证](docs/development.md)及[适配记录](integrations/metacubexd/README.md)。原生类型擦除与静态类型检查分别执行。
 
@@ -10,6 +10,7 @@ Coproxy 面向 Linux 网关，提供可通过浏览器管理的局域网代理�
 
 - [项目目标与技术方案](docs/project-plan.md)：范围、开源选型、架构、实施阶段与验收要求。
 - [软件架构](docs/architecture.md)：模块归属、配置事务和网关协作边界。
+- [原生网关](packages/gateway/README.md)：上游自动接管、最小外部集成及首轮部署样本。
 - [首批开发与验证](docs/development.md)：已实现范围、CLI、针对性检查和后续关卡。
 - [配置模块](packages/config/README.md)与[事务模块](packages/transaction/README.md)：内部 API、保护边界和恢复约束。
 - [草稿模块](packages/drafts/README.md)与[订阅模块](packages/subscriptions/README.md)：修订号、私有快照、刷新和候选捕获。

@@ -80,7 +80,7 @@ export async function loadManagementGateway(path: string) {
       },
     });
     const action = createManagementApplication({ stateDirectory: runtimeSettings.stateDirectory, deployment: settings.deployment,
-      runtime, sourceClient, sourceDecoder: decodeNodeSnapshot });
+      runtime, sourceClient, sourceDecoder: decodeNodeSnapshot, automaticGateway: runtimeSettings.automaticGateway });
     const gateway = createManagementGateway({ origin: settings.origin, credential }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime) };
