@@ -8,6 +8,7 @@ CoCoProxy 是部署在 Linux 外接设备上的局域网代理方案，使用 Mi
 
 | 需要做什么 | 阅读入口 |
 | --- | --- |
+| 第一次搭建，从接线到日常使用 | [从零部署与使用总指南](docs/getting-started.md) |
 | 判断设备和路由器是否适用 | [设备条件与路由器协作](docs/cooperating-router-requirements.md) |
 | 安装、升级或卸载 | [部署与维护](docs/deployment.md)，[HTTPS 配置](docs/management-https.md)，[可信部署与性能选项](examples/deployment-options.md) |
 | 管理订阅、方案、节点和规则 | [使用说明](docs/usage.md) |
