@@ -226,7 +226,12 @@ function render(input: unknown): DeploymentPlan {
     '    if (action.id !== "org.freedesktop.systemd1.manage-units") return;',
     '    var verb = action.lookup("verb");',
     '    if (action.lookup("unit") === "cocoproxy-mihomo.service" && (verb === "start" || verb === "stop")) {',
-    '        return polkit.Result.YES;', '    }', '    return polkit.Result.NO;', '});', '',
+    '        return polkit.Result.YES;', '    }',
+    ...(networkPlan ? [
+      '    if (action.lookup("unit") === "cocoproxy-gateway-network.service" && (verb === "start" || verb === "reload")) {',
+      '        return polkit.Result.YES;', '    }',
+    ] : []),
+    '    return polkit.Result.NO;', '});', '',
   ].join('\n');
   const files: DeploymentFile[] = [
     { path: coreUnitPath, mode: '0644', owner: 'root', sensitive: false, content: core.unit },
@@ -259,15 +264,15 @@ function render(input: unknown): DeploymentPlan {
       'Node、systemctl、核心、全部运行源码和构建产物及其祖先、符号链接最终目标必须由 root 控制，禁止服务 UID、组或其他用户写入；核心摘要应为解压后的真实可执行文件摘要。',
       'unit、polkit 和设置路径的全部祖先必须由 root 控制且不可由服务 UID、组或其他用户替换；安装前检查真实路径和挂载，纯计划无法核验符号链接、ACL、SELinux/AppArmor 或实际所有权。',
       '两个设置文件及既有管理员 credential 文件须为服务 UID 所有、0600 普通文件；状态目录须为同一 UID 所有、0700，不能放宽私有权限。设置通过 ProtectSystem=strict 在服务内只读。',
-      '复核既有全部 polkit/sudo 授权及规则排序，禁止更早规则向该服务身份授予任意单元、manage-unit-files 或 root shell；本规则仅为固定核心单元的 start/stop 返回 YES，show 为只读查询。',
-      '两个 unit 不得含额外 drop-in 或待 daemon-reload 修改。管理 unit 无核心依赖，不建立新 selection；空状态或已完成事务启动不操作核心，有未完成事务时等待同一持久锁下的一次恢复，必要时恢复上一核心。首次应用仍须显式 expectedActive CAS。',
+      '复核既有全部 polkit/sudo 授权及规则排序，禁止更早规则向该服务身份授予任意单元、manage-unit-files 或 root shell；本规则仅允许固定核心 start/stop，原生网关另允许固定网络单元 start/reload，show 为只读查询。',
+      'unit 不得含额外 drop-in 或待 daemon-reload 修改。管理启动恢复未完成事务；显式启用 lifecycle 后串行恢复已提交 active，维护前必须先持久 pause 并等待共同锁。空状态不自动建立 selection，首次应用仍须显式 expectedActive CAS。',
       '后端固定 IPv4 loopback，远程管理 origin 使用专用 HTTPS 反向代理并覆盖 Host/协议头，拒绝不可信转发头；本计划不安装代理、不申请证书、不开放端口、不修改 DNS/路由/防火墙。',
     ],
     steps: [
       '先审阅全部文件、路径、UID、私有凭据引用和权限要求；此阶段不向系统目录写文件，也不执行服务操作。',
       '另行取得目标系统安装与账户/授权变更许可后，逐项核验既有软件、账户和可信目录；仅创建缺失的专用目录，不对现有共享目录递归 chmod/chown。',
       '在获准目标上按清单逐文件安装，保持 UTF-8、LF 和末尾换行；不覆盖未审阅文件，不复制管理员密码、整个源码工作区或 .local/。',
-      '在独立批准的安装步骤中验证 systemd unit 与 polkit 规则、重新加载服务定义；分别验证固定身份只可 show/start/stop 固定核心单元，拒绝 restart、reload、其他单元和 enable。',
+      '在独立批准的安装步骤中验证 systemd unit 与 polkit 规则、重新加载服务定义；固定身份只可 start/stop 固定核心，原生模式另可 start/reload 固定网络单元；拒绝 restart、其他单元和 enable。',
       '安装验收后由操作者另行决定是否启动或启用管理服务；不自动启用或启动核心，保持无 active 的初始事务状态。',
       '通过私有管理员登录、草稿 revision、捕获 generation、expectedActive CAS、实际核心观察及恢复流程验收；管理 health 只证明管理端响应，不证明网关就绪。',
     ],

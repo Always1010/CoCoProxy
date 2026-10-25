@@ -21,6 +21,14 @@ export class InstallError extends Error {
   readonly code: string;
   constructor(code: string) { super(code); this.name = 'InstallError'; this.code = code; }
 }
+/** Installation must not race the opt-in background runtime reconciler. */
+export function assertMaintenanceLifecycle(value: unknown): void {
+  require(value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).sort().join(',') === 'enabled,paused,schemaVersion' &&
+    (value as any).schemaVersion === 1 && typeof (value as any).enabled === 'boolean' &&
+    typeof (value as any).paused === 'boolean', 'INSTALL_LIFECYCLE_INVALID');
+  require(!(value as any).enabled || (value as any).paused, 'INSTALL_LIFECYCLE_MUST_BE_PAUSED');
+}
 function require(value: unknown, code: string): asserts value { if (!value) throw new InstallError(code); }
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 export type ConfigurationReview = {
@@ -290,6 +298,14 @@ export async function deployRelease(options: InstallOptions) {
     accounts.some(a => a[0] === input.management.serviceUser && Number(a[2]) === input.runtime.serviceUid &&
       ['/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false'].includes(a[6])), 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
   const units = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service'];
+  const lifecyclePath = posix.join(input.runtime.stateDirectory, 'lifecycle.json');
+  if (await info(lifecyclePath)) {
+    await privateFile(lifecyclePath, input.runtime.serviceUid);
+    let lifecycle: unknown;
+    try { lifecycle = JSON.parse((await regular(lifecyclePath, 4096)).toString('utf8')); }
+    catch { throw new InstallError('INSTALL_LIFECYCLE_INVALID'); }
+    assertMaintenanceLifecycle(lifecycle);
+  }
   await stopped(input.runtime.systemctlPath, units);
   await trusted(posix.dirname(target)); await trusted(STORE, true);
   if (await info(STORE)) require(((await lstat(STORE)).mode & 0o7777) === 0o700, 'INSTALL_RECEIPT_DIRECTORY_PRIVATE_REQUIRED');

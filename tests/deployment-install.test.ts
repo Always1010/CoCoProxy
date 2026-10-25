@@ -4,11 +4,20 @@ import { createHash } from 'node:crypto';
 import { link, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertReviewedUpgradeConfiguration, configurationReviewDigest, deployRelease, releaseTarget, verifyRelease } from '../packages/deployment/install.ts';
+import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, configurationReviewDigest, deployRelease, releaseTarget, verifyRelease } from '../packages/deployment/install.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
+
+test('maintenance refuses enabled automatic recovery until it has been explicitly paused', () => {
+  assertMaintenanceLifecycle({ schemaVersion: 1, enabled: true, paused: true });
+  assertMaintenanceLifecycle({ schemaVersion: 1, enabled: false, paused: false });
+  assert.throws(() => assertMaintenanceLifecycle({ schemaVersion: 1, enabled: true, paused: false }), code('INSTALL_LIFECYCLE_MUST_BE_PAUSED'));
+  for (const value of [null, {}, { schemaVersion: 1, enabled: false }, { schemaVersion: 1, enabled: 'false', paused: true }]) {
+    assert.throws(() => assertMaintenanceLifecycle(value), code('INSTALL_LIFECYCLE_INVALID'));
+  }
+});
 async function fixture(t: any) {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-install-'));
   t.after(() => rm(root, { recursive: true, force: true }));

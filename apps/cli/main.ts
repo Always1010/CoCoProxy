@@ -13,6 +13,7 @@ import type { HttpsClientOptions } from '../../packages/subscriptions/http.ts';
 import { renderRuntimePlan } from '../../packages/runtime/plan.ts';
 import { loadRuntimeSettings } from '../../packages/runtime/settings.ts';
 import { SystemdMihomoRuntime } from '../../packages/runtime/systemd.ts';
+import { readRuntimeLifecycle, setRuntimeLifecycle } from '../../packages/runtime/lifecycle.ts';
 import { RuntimeError } from '../../packages/runtime/types.ts';
 import { createAdminCredential, AuthError } from '../../packages/management/auth.ts';
 import { privateRead } from '../../packages/storage/private-files.ts';
@@ -39,6 +40,11 @@ const HELP = [
   'runtime-recover --state-dir <绝对路径> --runtime-settings <私有JSON>  恢复中断事务',
   'runtime-recover-target --state-dir <绝对路径> --runtime-settings <私有JSON> --generation <目标摘要> --expected-transaction <故障事务ID>  显式校验并恢复故障事务目标',
   'runtime-status --state-dir <绝对路径> --runtime-settings <私有JSON>  核验当前核心进程',
+  'runtime-enable --state-dir <绝对路径> --runtime-settings <私有JSON>  启用已提交配置的持久自动恢复',
+  'runtime-pause --state-dir <绝对路径> --runtime-settings <私有JSON>  暂停自动恢复并等待在途协调结束，供维护使用',
+  'runtime-resume --state-dir <绝对路径> --runtime-settings <私有JSON>  结束维护，恢复已启用的自动恢复',
+  'runtime-disable --state-dir <绝对路径> --runtime-settings <私有JSON>  关闭自动恢复；不代替路由器关闭交付',
+  'runtime-lifecycle-status --state-dir <绝对路径> --runtime-settings <私有JSON>  只读查询持久恢复意图',
   'admin-init --input <私有登录JSON> --output <绝对路径>  创建私有管理员凭据，不覆盖',
   '',
   '输入/配置可能包含凭据；正常输出仅包含摘要和状态。',
@@ -75,6 +81,11 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     'runtime-recover': ['--state-dir', '--runtime-settings'],
     'runtime-recover-target': ['--state-dir', '--runtime-settings', '--generation', '--expected-transaction'],
     'runtime-status': ['--state-dir', '--runtime-settings'],
+    'runtime-enable': ['--state-dir', '--runtime-settings'],
+    'runtime-pause': ['--state-dir', '--runtime-settings'],
+    'runtime-resume': ['--state-dir', '--runtime-settings'],
+    'runtime-disable': ['--state-dir', '--runtime-settings'],
+    'runtime-lifecycle-status': ['--state-dir', '--runtime-settings'],
     'admin-init': ['--input', '--output'],
   };
   const command = args[0];
@@ -185,6 +196,22 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
   if (command.startsWith('runtime-')) {
     const settings = await loadRuntimeSettings(flags.get('--runtime-settings')!);
     if (flags.get('--state-dir') !== settings.stateDirectory) throw new CliError('RUNTIME_STATE_MISMATCH');
+    if (['runtime-enable', 'runtime-pause', 'runtime-resume', 'runtime-disable', 'runtime-lifecycle-status'].includes(command)) {
+      let lifecycle = await readRuntimeLifecycle(settings.stateDirectory);
+      if (command === 'runtime-enable') {
+        const status = await new FileTransactionStore(settings.stateDirectory).status();
+        if (status.active === null || status.transaction !== null || status.fault !== null) throw new CliError('RUNTIME_RECOVERY_REQUIRED');
+        lifecycle = await setRuntimeLifecycle(settings.stateDirectory, { enabled: true, paused: false });
+      } else if (command === 'runtime-pause') {
+        lifecycle = await setRuntimeLifecycle(settings.stateDirectory, { enabled: lifecycle.enabled, paused: true });
+      } else if (command === 'runtime-resume') {
+        if (!lifecycle.enabled) throw new CliError('RUNTIME_LIFECYCLE_NOT_ENABLED');
+        lifecycle = await setRuntimeLifecycle(settings.stateDirectory, { enabled: true, paused: false });
+      } else if (command === 'runtime-disable') {
+        lifecycle = await setRuntimeLifecycle(settings.stateDirectory, { enabled: false, paused: true });
+      }
+      return { lifecycle, scope: 'runtime_intent', servicesChanged: false, routerChanged: false };
+    }
     const runtime = new SystemdMihomoRuntime(settings);
     const store = new FileTransactionStore(settings.stateDirectory);
     const manager = new TransactionManager(store, runtime);

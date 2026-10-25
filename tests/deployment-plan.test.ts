@@ -147,6 +147,22 @@ test('generated polkit code grants exactly start/stop for one account and one un
   assert.doesNotMatch(code, /polkit\.spawn|AUTH_ADMIN|YES_KEEP|sudo/);
 });
 
+test('native reconciliation grants only fixed network start/reload without broader unit control', () => {
+  const code = renderDeploymentPlan(automaticInput()).files.find(file => file.path.endsWith('.rules'))!.content;
+  let rule: (action: { id: string; lookup: (key: string) => unknown }, subject: { user: string }) => unknown = () => assert.fail();
+  runInNewContext(code, { polkit: { Result: { YES: 'yes', NO: 'no' }, addRule(value: typeof rule) { rule = value; } } });
+  const check = (unit: string, verb: string, user = 'cocoproxy') => rule({
+    id: 'org.freedesktop.systemd1.manage-units', lookup: key => key === 'unit' ? unit : key === 'verb' ? verb : undefined,
+  }, { user });
+  for (const verb of ['start', 'reload']) assert.equal(check('cocoproxy-gateway-network.service', verb), 'yes');
+  for (const verb of ['stop', 'restart', 'reload-or-restart', 'enable', 'reload\n']) assert.equal(check('cocoproxy-gateway-network.service', verb), 'no');
+  for (const unit of ['network.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network@x.service']) {
+    assert.equal(check(unit, 'reload'), 'no');
+  }
+  assert.equal(check('cocoproxy-gateway-network.service', 'reload', 'other'), undefined);
+  assert.equal(check('cocoproxy-mihomo.service', 'reload'), 'no');
+});
+
 test('systemd arguments and environments escape words without allowing unit or shell injection', () => {
   const value = input();
   value.management.serverEntry = '/opt/server "quoted"\\$HOME%instance/index.mjs';
