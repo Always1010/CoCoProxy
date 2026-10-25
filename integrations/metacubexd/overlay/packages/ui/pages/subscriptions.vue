@@ -101,7 +101,7 @@ onMounted(() => run(load))
       <article v-for="source in view.sources" :key="source.id" class="card border bg-base-200/60" :class="selected(source) ? 'border-primary/40' : 'border-base-content/10'">
         <div class="card-body gap-3 p-4">
           <div class="flex items-start gap-3">
-            <button class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="selected(source) ? 'border-primary bg-primary text-primary-content' : 'border-base-content/30'" :title="workspace?.mode === 'subscription' ? '使用此订阅配置' : '用于本地规则模板'" :aria-label="`选择 ${source.name || source.host}`" :aria-pressed="selected(source)" :disabled="busy || (!source.snapshotCurrent && !selected(source)) || (workspace?.mode === 'subscription' && source.kind !== 'profile')" @click="choose(source)"><IconCheck v-if="selected(source)" :size="14" /></button>
+            <button class="btn btn-xs shrink-0" :class="selected(source) ? 'btn-primary' : 'btn-ghost'" :title="workspace?.mode === 'subscription' ? '使用此订阅配置' : '用于本地规则模板'" :aria-label="`选择 ${source.name || source.host}`" :aria-pressed="selected(source)" :disabled="busy || (!source.snapshotCurrent && !selected(source)) || (workspace?.mode === 'subscription' && source.kind !== 'profile')" @click="choose(source)"><IconCheck v-if="selected(source)" :size="14" />{{ selected(source) ? '已选' : '选用' }}</button>
             <div class="min-w-0 flex-1">
               <h2 class="truncate font-semibold">{{ source.name || source.host || '未命名订阅' }}</h2>
               <div class="mt-1 truncate text-xs text-base-content/50">{{ source.host }}</div>
@@ -120,9 +120,9 @@ onMounted(() => run(load))
           <div v-else-if="!source.snapshotCurrent" class="text-xs text-warning">需要更新</div>
           <span v-if="source.unsupportedFields?.length" class="badge badge-warning badge-sm" :title="source.unsupportedFields.join('、')" tabindex="0">部分字段未采用</span>
           <div class="flex items-center justify-end gap-1 border-t border-base-content/8 pt-2">
-            <button class="btn btn-ghost btn-square btn-sm" title="更新订阅" :aria-label="`更新 ${source.name || source.host}`" :disabled="busy" @click="refresh(source)"><IconRefresh :size="18" /></button>
-            <button class="btn btn-ghost btn-square btn-sm" title="编辑订阅" :aria-label="`编辑 ${source.name || source.host}`" :disabled="busy" @click="openEditor(source)"><IconEdit :size="18" /></button>
-            <button class="btn btn-ghost btn-square btn-sm text-error" title="删除订阅" :aria-label="`删除 ${source.name || source.host}`" :disabled="busy" @click="deleting = source"><IconTrash :size="18" /></button>
+            <button class="btn btn-ghost btn-sm" title="更新订阅" :aria-label="`更新 ${source.name || source.host}`" :disabled="busy" @click="refresh(source)"><IconRefresh :size="18" />更新</button>
+            <button class="btn btn-ghost btn-sm" title="编辑订阅" :aria-label="`编辑 ${source.name || source.host}`" :disabled="busy" @click="openEditor(source)"><IconEdit :size="18" />编辑</button>
+            <button class="btn btn-ghost btn-sm text-error" title="删除订阅" :aria-label="`删除 ${source.name || source.host}`" :disabled="busy" @click="deleting = source"><IconTrash :size="18" />删除</button>
           </div>
         </div>
       </article>

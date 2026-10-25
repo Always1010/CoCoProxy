@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {
-  IconChartAreaLine, IconChevronsLeft, IconChevronsRight, IconFileStack,
+  IconChartAreaLine, IconFileStack,
   IconGlobe, IconHome, IconMenu2, IconNetwork, IconRuler, IconServerCog, IconSettings,
 } from '@tabler/icons-vue'
 
@@ -30,11 +30,6 @@ watch(
   },
 )
 
-// Toggle sidebar expanded state
-const toggleSidebar = () => {
-  configStore.sidebarExpanded = !configStore.sidebarExpanded
-}
-
 </script>
 
 <template>
@@ -58,10 +53,11 @@ const toggleSidebar = () => {
         <label
           v-if="route.path !== '/setup' && !configStore.useMobileBottomNav"
           for="main-drawer"
-          class="press-tactile flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg bg-transparent text-base-content hover:bg-[var(--sidebar-hover)]"
+          class="press-tactile flex h-9 cursor-pointer items-center justify-center gap-1 rounded-lg bg-transparent px-2 text-base-content hover:bg-[var(--sidebar-hover)]"
           aria-label="open sidebar"
         >
           <IconMenu2 class="h-5 w-5" />
+          <span class="text-xs">菜单</span>
         </label>
 
         <!-- Logo -->
@@ -103,7 +99,6 @@ const toggleSidebar = () => {
       <!-- Sidebar container - collapsible on desktop -->
       <div
         class="flex h-full w-52 flex-col border-r border-[var(--sidebar-border)] bg-[linear-gradient(180deg,color-mix(in_oklab,var(--color-base-200)_98%,transparent)_0%,var(--color-base-200)_100%)] backdrop-blur-[12px] transition-[width] duration-300 ease-[var(--ease-spring-soft)]"
-        :class="configStore.sidebarExpanded ? '' : 'lg:w-16'"
       >
         <!-- Sidebar header -->
         <div
@@ -112,36 +107,12 @@ const toggleSidebar = () => {
           <!-- Logo row -->
           <div
             class="flex items-center lg:min-h-7"
-            :class="configStore.sidebarExpanded ? '' : 'lg:justify-center'"
           >
             <LogoText
-              v-show="configStore.sidebarExpanded"
               class="hidden lg:block"
             />
             <LogoText class="block lg:hidden" />
           </div>
-          <!-- Expand/Collapse button (desktop only) -->
-          <button
-            class="press-tactile hidden cursor-pointer items-center justify-center gap-2 rounded-lg border border-[var(--sidebar-border)] bg-transparent p-2 text-sm text-base-content hover:border-[color-mix(in_oklab,var(--color-base-content)_20%,transparent)] hover:bg-[var(--sidebar-hover)] lg:flex"
-            :class="
-              configStore.sidebarExpanded
-                ? 'w-full'
-                : 'aspect-square w-9 self-center'
-            "
-            :title="t('collapse')"
-            :aria-label="t('collapse')"
-            @click="toggleSidebar"
-          >
-            <IconChevronsRight
-              v-if="!configStore.sidebarExpanded"
-              class="h-5 w-5"
-            />
-            <IconChevronsLeft v-else class="h-5 w-5" />
-            <span :class="configStore.sidebarExpanded ? '' : 'lg:hidden'">
-              {{ t('collapse') }}
-            </span>
-          </button>
-
         </div>
 
         <!-- Navigation menu -->
@@ -156,13 +127,8 @@ const toggleSidebar = () => {
               <NuxtLink
                 :to="nav.href"
                 class="nav-link group relative flex w-full items-center gap-3 overflow-hidden rounded-lg px-3 py-2.5 text-sm font-medium text-[color-mix(in_oklab,var(--color-base-content)_70%,transparent)] no-underline hover:text-base-content"
-                :class="[
-                  isActive(nav.href) ? 'is-active' : '',
-                  configStore.sidebarExpanded
-                    ? ''
-                    : 'lg:justify-center lg:px-0',
-                ]"
-                :title="configStore.sidebarExpanded ? undefined : nav.name"
+                :class="isActive(nav.href) ? 'is-active' : ''"
+                :title="nav.name"
               >
                 <!-- Active glow surface (sits behind content) -->
                 <span
@@ -182,7 +148,6 @@ const toggleSidebar = () => {
                 </div>
                 <span
                   class="relative z-1 flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
-                  :class="configStore.sidebarExpanded ? '' : 'lg:hidden'"
                 >
                   {{ nav.name }}
                 </span>
@@ -194,33 +159,25 @@ const toggleSidebar = () => {
         <!-- Sidebar footer -->
         <div
           class="shrink-0 border-t border-[var(--sidebar-border)] p-2"
-          :class="
-            configStore.sidebarExpanded
-              ? ''
-              : 'lg:flex lg:flex-col lg:items-center'
-          "
         >
           <!-- Traffic indicator target for PC (expanded sidebar with chart) -->
           <div
             id="sidebar-traffic-expanded"
-            class="mb-2 hidden w-full"
-            :class="configStore.sidebarExpanded ? 'lg:block' : ''"
+            class="mb-2 hidden w-full lg:block"
           />
           <!-- Traffic indicator target for PC (collapsed sidebar) -->
           <div
             id="sidebar-traffic-indicator"
             class="mb-2 hidden w-full lg:block"
-            :class="configStore.sidebarExpanded ? 'lg:!hidden' : ''"
           />
           <!-- Theme/Lang switchers (desktop only) -->
           <div
-            class="mb-2 hidden items-center gap-1 lg:flex"
-            :class="configStore.sidebarExpanded ? 'flex-row' : 'flex-col'"
+            class="mb-2 hidden flex-row items-center gap-1 lg:flex"
           >
             <LangSwitcher />
             <ThemeSwitcher />
           </div>
-          <Versions :collapsed="!configStore.sidebarExpanded" />
+          <Versions :collapsed="false" />
         </div>
       </div>
     </div>

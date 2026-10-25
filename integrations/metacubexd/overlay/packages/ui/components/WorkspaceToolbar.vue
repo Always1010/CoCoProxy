@@ -21,6 +21,7 @@ async function applyCurrent() {
     await apply()
   })
 }
+
 </script>
 
 <template>
@@ -42,8 +43,8 @@ async function applyCurrent() {
       <span v-if="view?.pending || dirty" class="badge badge-warning badge-sm">待应用</span>
       <div class="ml-auto flex items-center gap-1">
         <NuxtLink to="/subscriptions" class="btn btn-ghost btn-sm" title="管理订阅">订阅</NuxtLink>
-        <button class="btn btn-ghost btn-square btn-sm" title="刷新" aria-label="刷新" :disabled="busy" @click="run(load)"><IconRefresh :size="18" :class="{ 'animate-spin': busy }" /></button>
-        <NuxtLink to="/coproxy" class="btn btn-ghost btn-square btn-sm" title="设置" aria-label="设置"><IconSettings :size="18" /></NuxtLink>
+        <button class="btn btn-ghost btn-sm" title="刷新" aria-label="刷新" :disabled="busy" @click="run(load)"><IconRefresh :size="18" :class="{ 'animate-spin': busy }" />刷新</button>
+        <NuxtLink to="/coproxy" class="btn btn-ghost btn-sm" title="设置" aria-label="设置"><IconSettings :size="18" />设置</NuxtLink>
         <button class="btn btn-primary btn-sm" :disabled="busy || (!view?.pending && !dirty)" @click="applyCurrent"><IconCheck :size="16" />应用</button>
       </div>
     </div>

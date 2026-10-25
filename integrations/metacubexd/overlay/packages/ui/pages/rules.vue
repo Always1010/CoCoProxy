@@ -45,21 +45,23 @@ onMounted(() => run(load))
     </div>
     <NativeRules v-if="tab === 'effective'" :key="view?.active ?? 'initial'" class="min-h-0 flex-1" />
     <div v-else class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-      <div class="flex items-center justify-between gap-2 px-1"><span class="text-xs text-base-content/50">优先匹配 · {{ workspace?.mode === 'local' ? '本地规则' : '仅覆盖当前配置' }}</span><button class="btn btn-ghost btn-square btn-sm" title="保存规则" aria-label="保存规则" :disabled="!dirty || busy" @click="run(saveRules)"><IconDeviceFloppy :size="18" /></button></div>
+      <div class="flex items-center justify-between gap-2 px-1"><span class="text-xs text-base-content/50">优先匹配 · {{ workspace?.mode === 'local' ? '本地规则' : '仅覆盖当前配置' }}</span><button class="btn btn-ghost btn-sm" title="保存规则" aria-label="保存规则" :disabled="!dirty || busy" @click="run(saveRules)"><IconDeviceFloppy :size="18" />保存</button></div>
       <template v-if="workspace">
         <form class="flex flex-wrap items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/60 p-3" @submit.prevent="add">
           <select v-model="type" class="select select-sm w-44" aria-label="规则类型"><option v-for="value in ruleTypes" :key="value">{{ value }}</option></select>
           <input v-model="payload" class="input input-sm min-w-36 flex-1" aria-label="匹配内容" :placeholder="payloadHint" required />
           <select v-model="target" class="select select-sm max-w-52 flex-1" aria-label="目标策略"><option v-for="value in targets" :key="value" :value="value">{{ targetName(value) }}</option></select>
-          <button class="btn btn-primary btn-square btn-sm" type="submit" title="添加规则" aria-label="添加规则" :disabled="busy"><IconPlus :size="18" /></button>
+          <button class="btn btn-primary btn-sm" type="submit" title="添加规则" aria-label="添加规则" :disabled="busy"><IconPlus :size="18" />添加</button>
         </form>
         <div v-if="!entries.length" class="py-16 text-center text-sm text-base-content/45">暂无自定义规则</div>
-        <div v-for="(entry, index) in entries" :key="index" class="flex items-center gap-1 rounded-xl border border-base-content/8 bg-base-200/60 p-2">
+        <div v-for="(entry, index) in entries" :key="index" class="flex flex-wrap items-center gap-1 rounded-xl border border-base-content/8 bg-base-200/60 p-2">
           <span class="w-7 shrink-0 text-center text-xs text-base-content/35">{{ index + 1 }}</span>
           <input v-model="entries[index]" class="input input-ghost input-sm min-w-0 flex-1 font-mono text-xs" :aria-label="`规则 ${index + 1}`" :disabled="busy" spellcheck="false" />
-          <button class="btn btn-ghost btn-square btn-xs" title="上移" :aria-label="`上移规则 ${index + 1}`" :disabled="busy || index === 0" @click="move(index, -1)"><IconChevronUp :size="16" /></button>
-          <button class="btn btn-ghost btn-square btn-xs" title="下移" :aria-label="`下移规则 ${index + 1}`" :disabled="busy || index === entries.length - 1" @click="move(index, 1)"><IconChevronDown :size="16" /></button>
-          <button class="btn btn-ghost btn-square btn-xs text-error" title="删除" :aria-label="`删除规则 ${index + 1}`" :disabled="busy" @click="entries.splice(index, 1)"><IconTrash :size="16" /></button>
+          <div class="ml-auto flex items-center gap-1">
+            <button class="btn btn-ghost btn-xs" title="上移" :aria-label="`上移规则 ${index + 1}`" :disabled="busy || index === 0" @click="move(index, -1)"><IconChevronUp :size="16" />上移</button>
+            <button class="btn btn-ghost btn-xs" title="下移" :aria-label="`下移规则 ${index + 1}`" :disabled="busy || index === entries.length - 1" @click="move(index, 1)"><IconChevronDown :size="16" />下移</button>
+            <button class="btn btn-ghost btn-xs text-error" title="删除" :aria-label="`删除规则 ${index + 1}`" :disabled="busy" @click="entries.splice(index, 1)"><IconTrash :size="16" />删除</button>
+          </div>
         </div>
       </template>
     </div>
