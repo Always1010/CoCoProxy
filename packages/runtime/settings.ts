@@ -7,7 +7,7 @@ import type { Candidate, JsonObject } from '../config/index.ts';
 import { inspectPrivateDirectory, privateRead } from '../storage/private-files.ts';
 import { FileTransactionStore } from '../transaction/index.ts';
 import { RuntimeError } from './types.ts';
-import { parseAutomaticGatewaySettings, recompileAutomaticGatewayConfig, AUTOMATIC_GATEWAY_CORE_SHA256 } from '../gateway/profile.ts';
+import { parseAutomaticGatewaySettings, recompileAutomaticGatewayConfig, AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM } from '../gateway/profile.ts';
 import type { RuntimeSettings } from './types.ts';
 
 const digest = /^[a-f0-9]{64}$/;
@@ -48,7 +48,7 @@ export function parseRuntimeSettings(input: unknown): RuntimeSettings {
     const unitPath = absolutePath(value.unitPath);
     if (posix.basename(unitPath) !== 'coproxy-mihomo.service') fail('INVALID_RUNTIME_SETTINGS');
     const automaticGateway = value.automaticGateway === undefined ? undefined : parseAutomaticGatewaySettings(value.automaticGateway);
-    if (automaticGateway && value.binarySha256 !== AUTOMATIC_GATEWAY_CORE_SHA256) fail('INVALID_RUNTIME_SETTINGS');
+    if (automaticGateway && !Object.values(AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM).includes(value.binarySha256)) fail('INVALID_RUNTIME_SETTINGS');
     return { schemaVersion: 1, stateDirectory, binaryPath, binarySha256: value.binarySha256,
       systemctlPath, unitPath, unitSha256: value.unitSha256, serviceUid: value.serviceUid,
       ...(automaticGateway ? { automaticGateway } : {}) };
