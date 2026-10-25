@@ -1,6 +1,6 @@
 # 管理与核心的部署计划
 
-`renderDeploymentPlan(input: unknown)` 是纯函数，组合既有 `renderRuntimePlan`，返回可审阅的文件清单、必要目录、部署前提和操作步骤。它不读取凭据、不访问网络、不写系统目录、不创建账户，不调用 systemctl，也不启动或启用任何服务。计划适用于当前回环显式代理实现；完整网关 DNS、接管、路由、防火墙与终端出口仍需独立实现和验收。
+`renderDeploymentPlan(input: unknown)` 是纯函数，组合 `renderRuntimePlan`，返回文件清单、目录、部署前提和操作步骤。它不读取凭据、不访问网络、不写系统目录或控制服务。默认生成回环显式代理计划；`runtime.automaticGateway` 显式启用原生网关时，另生成独立网络单元和 root 设置。终端路径须在实际部署后验收。
 
 输入只接受有界的普通 JSON 数据。根字段固定为 `schemaVersion: 1`、`runtime`、`management`；未知字段、访问器、函数、非数据原型、循环引用和过大内容均被拒绝。无效输入统一抛出 `DeploymentPlanError`，错误码和消息均为 `DEPLOYMENT_PLAN_INVALID`，不包含路径或 secret。
 
@@ -54,12 +54,12 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| `files` | 五份 `{path, mode, owner, sensitive, content}` 文件；mode 为字符串 `0600` 或 `0644`，owner 为 `root` 或数字服务 UID |
+| `files` | 显式模式五份、原生网关七份 `{path, mode, owner, sensitive, content}` 文件；mode 为 `0600` 或 `0644`，owner 为 `root` 或数字服务 UID |
 | `directories` | `{path, mode, owner}`；私有状态目录为服务 UID 的 `0700`，配置及系统文件父目录为 root 的 `0755` |
 | `requirements` | 真实目标上的所有权、祖先、链接、挂载、构建、账户映射与授权审阅条件 |
 | `steps` | 仅说明独立批准后如何安装和验收，不包含可直接执行的任意 shell 或服务命令 |
 
-五份文件为核心 unit、核心 runtime 设置、管理 unit、管理设置和 polkit 规则。两份设置必须由服务 UID 所有且为 `0600` 普通文件，与 `privateRead` 的身份检查保持一致；路径祖先须为 root 控制。两个服务的 `ProtectSystem=strict` 使设置在服务内只读，仅共享状态目录可写。管理员凭据须符合相同私有文件要求，但不在生成文件清单中。
+基础五份文件为核心 unit、核心 runtime 设置、管理 unit、管理设置和 polkit 规则；原生模式另含 `coproxy-gateway-network.service` 与 root 所有的 `gateway-network.json`，并列出独立网络回执目录。运行和管理设置由服务 UID 所有，网络设置由 root 所有，均为 `0600` 普通文件；路径祖先由 root 控制。管理员凭据不在生成文件清单中。完整原生输入见[合成样本](../../examples/automatic-gateway-deployment.json)。
 
 **整个输入和计划均为敏感资料**：管理设置包含固定的 controller secret。CLI 或调用方须将计划保存为显式指定的私有文件，不能向公开标准输出打印内容、提交到 Git 或纳入发行附件；公开回执只应包含成功状态。错误消息不会回显输入。管理 origin、订阅许可和探测许可只接受无凭据、无查询和无片段的精确 origin，不能在其中携带 token。
 

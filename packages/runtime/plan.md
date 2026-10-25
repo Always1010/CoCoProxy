@@ -3,7 +3,7 @@
 `renderRuntimePlan(input)` 是纯函数，返回 `{ unit, settings }`，不写系统文件，不调用
 `systemctl`，也不安装、启动或启用服务。输入必须完整给出 `schemaVersion: 1`、
 `stateDirectory`、`binaryPath`、`binarySha256`、`systemctlPath`、`nodePath`、
-`sourceDirectory`、`settingsPath`、`unitPath` 和非零数字 `serviceUid`，不接受额外字段。
+`sourceDirectory`、`settingsPath`、`unitPath` 和非零数字 `serviceUid`；可选 `automaticGateway`，不接受其他字段。
 路径必须是规范的 POSIX 绝对路径。`unitPath` 的文件名固定为
 `coproxy-mihomo.service`。核心二进制 SHA-256 固定到部署配置；返回的
 `unitSha256` 覆盖完整服务文件的 UTF-8 字节，包括末尾换行。
@@ -25,8 +25,9 @@ TypeScript 类型剥离。输入中的换行、回车、NUL 和其他控制字�
 部署者需预先创建可供服务 UID 使用的私有状态目录，设置文件仅允许该身份读取，
 并保证服务能读取不可写的源码和二进制。当前计划不创建账户、不调整目录权限、
 不修改机器依赖。`[Install]` 的 `WantedBy=multi-user.target` 仅描述显式启用时的
-目标，不代表已经授权或执行 `enable`。本服务不授予 `NET_ADMIN`，不配置
-DNS、路由或防火墙，也不提供绕过事务流程的 `ExecReload`。
+目标，不代表已经执行 `enable`。显式模式不授予网络 capability；原生模式仅授予
+`CAP_NET_ADMIN/CAP_NET_RAW`、开放 TUN，并以 Requires/After/BindsTo 依赖独立网络单元。
+网络单元准备 guard、出口和回程，Mihomo 管理自动接管；两种模式均无 `ExecReload`。
 
 `runCore(settingsPath)` 仅在 Linux 且 Node 提供 `process.execve` 时运行。它核对
 当前有效 UID、持久故障与恢复阶段、已持久化的选择、固定核心摘要和候选配置安全边界，创建私有核心

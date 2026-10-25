@@ -100,33 +100,31 @@ DNS 与图中的业务访问分开：终端先查询路由器，本地域名由�
 
 ## 4. 一次“保存并应用配置”怎样经过模块
 
-配置有四类输入和状态：**受保护部署参数、用户策略草稿、订阅节点快照、实际运行代次**。保存、刷新、捕获、应用是不同操作。订阅仅提取 JSON／Clash YAML 中的节点，不导入来源的规则、部署参数或脚本。
+配置包括**受保护部署参数、工作区设置、订阅快照和实际运行代次**。日常网页使用互斥的本地模板或订阅自带方案：本地模板取来源节点，订阅方案保留可接受的策略组和规则，并可在刷新时受限展开 provider。来源不能覆盖部署参数或启用脚本。保存和刷新不会自动应用；候选捕获由工作区应用流程在内部完成。旧草稿与 CLI 接口继续保留。
 
 ```mermaid
 sequenceDiagram
     actor User as 管理员
     participant UI as 浏览器界面
     participant M as management / Nitro
-    participant Inputs as drafts + subscriptions
+    participant Inputs as workspace + subscriptions
     participant C as config + gateway
     participant T as transaction / 私有存储
     participant R as runtime
     participant S as systemd / Mihomo
     User->>UI: 编辑策略、刷新来源
     UI->>M: Cookie 会话 + 修订号
-    M->>Inputs: 保存草稿 / 更新节点快照
+    M->>Inputs: 保存工作区 / 更新订阅快照
     Inputs-->>UI: 新修订号，尚未应用
-    User->>UI: 捕获候选
-    UI->>M: 指定草稿与来源修订号
+    User->>UI: 应用设置
+    UI->>M: 工作区修订号 + expectedActive
     M->>Inputs: 读取指定版本的输入
     M->>C: 可信部署 + 策略 + 节点快照
     C-->>M: 完整配置 + SHA-256 generation
     M->>T: 暂存不可变候选
-    T-->>UI: 候选 generation，核心尚未切换
-    User->>UI: 应用候选
-    UI->>M: generation + expectedActive
+    Note over M,T: 内部捕获候选，不要求用户手动操作
     M->>C: 按可信部署重编译并核对代次
-    M->>T: apply，取得共同文件锁并核对 active
+    M->>T: apply，取得共同文件锁并复核工作区、来源和 active
     T->>R: validate
     R->>S: 核验 unit / 二进制，执行 Mihomo -t
     T->>T: 重新读取并核对不可变候选字节
@@ -160,7 +158,7 @@ sequenceDiagram
 | `integrations/metacubexd/overlay/` | 适配 UI、Nitro 路由、启动插件和同源连接 | 将请求挂到 management；见[适配记录](../integrations/metacubexd/README.md) |
 | `packages/management` | 认证、会话、管理 API、受限 controller HTTP／WS、启动恢复 | service.ts 组装草稿、订阅、编译、事务及真实 runtime；见[管理模块](../packages/management/README.md) |
 | `packages/drafts` | 策略草稿、修订号 CAS、捕获私有输入 | 为管理／CLI 提供草稿；见[草稿模块](../packages/drafts/README.md) |
-| `packages/subscriptions` | 来源配置、受限获取、节点解码、快照与刷新失败保留 | 为候选提供离线节点，不直接应用；见[订阅模块](../packages/subscriptions/README.md) |
+| `packages/subscriptions` | 来源配置、受限获取、节点／完整方案解码、provider 展开与快照保留 | 为候选提供离线策略与节点，不直接应用；见[订阅模块](../packages/subscriptions/README.md) |
 | `packages/config` | 纯离线编译，合并部署、策略与节点，产生内容代次 | 输出 Mihomo 可读 JSON；见[配置模块](../packages/config/README.md) |
 | `packages/transaction` | 候选存储、文件锁、运行 CAS、持久提交点与恢复 | 经 RuntimeAdapter 调用 validate/activate/confirm/restore；见[事务模块](../packages/transaction/README.md) |
 | `packages/storage` | 私有目录／文件检查、原子写入及同步 | 为文件存储提供底层能力；见[实现](../packages/storage/private-files.ts) |

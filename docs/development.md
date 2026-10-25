@@ -63,7 +63,7 @@ npm run cli -- source-stage --source-id example-feed --input /absolute/private/b
 
 来源操作返回 revision。成功刷新、304 和持久化的刷新失败都会递增它；后续操作必须使用实际返回/重新读取的 revision。失败保留上次接受的快照；更换 URL 后旧快照暂不可用于新定义。source-stage 捕获指定来源版本，将节点加入基础配置的 sources 后编译并暂存，返回捕获的来源 revision 和快照 revision。基础策略需引用所需节点，重复来源或节点名由编译器拒绝。该命令不应用配置，也不把其他同时发生的草稿保存视为已应用。
 
-CLI 的 source-refresh 沿用严格 JSON `{proxies:[...]}` 解码；管理服务显式注入 `decodeNodeSnapshot`，接受 JSON 或单份 Clash YAML 1.2，仅导入 proxies。来源的策略、规则、provider 和脚本不会导入，不支持 URI/base64 订阅转换。两者共享节点安全校验和版本存储。详见[订阅模块](../packages/subscriptions/README.md)与[HTTP 客户端](../packages/subscriptions/http.md)。
+CLI 的 source-refresh 沿用严格 JSON `{proxies:[...]}` 解码；管理服务显式注入 `decodeSubscriptionProfile`，接受 JSON 或单份 Clash YAML 1.2，保留安全边界允许的完整策略，并受限展开 provider。部署根字段被剥离，脚本及文件读取仍拒绝，不支持 URI/base64 订阅转换。两者共享节点安全校验和版本存储。详见[订阅模块](../packages/subscriptions/README.md)与[HTTP 客户端](../packages/subscriptions/http.md)。
 
 ## 针对性检查
 
@@ -160,9 +160,10 @@ COPROXY_TEST_MIHOMO=/absolute/private/reviewed/mihomo COPROXY_TEST_SING_BOX=/abs
 
 ## 后续实施顺序
 
-1. 在获准的项目目录准备固定上游源码、包管理器和锁定依赖，补静态类型检查。审查固定核心资产并记录摘要，不跟随浮动版本。
-2. 依据上游适配记录接入配置编辑、订阅和唯一生命周期管理者，所有应用进入本仓库事务入口。先完成仅回环的显式代理闭环。
-3. 实现受限网络执行服务与独立就绪检查；网络改动先做隔离测试，再按单终端协作范围进入设备验证。
-4. 故障恢复和独立关闭通过后，才扩大接管范围与测量性能。
+1. 完成开启意图下冷启动、防火墙重载／清空的连续阻断验证与必要修复。
+2. 完成外接服务开机启用、整机重启、启动顺序和持续负载验收。
+3. 在目标设备验证 x86-64 运行及新的路由器组合；扩展多终端、跨网段或 IPv6 前先完善两端模型。
+
+当前未验收范围以[发行说明](release-notes.md)为准。旧 `packages/network` 框架暂停扩建，不列为当前原生网关的待接入主路径。
 
 依赖安装、服务部署和系统网络变更分别列出实际操作与影响，遵守项目授权边界。源码同步先预览，显式排除 .git、.local、凭据、缓存和产物，不跟随本地共享链接。设备与当前环境的原始证据仅保存在本地资料区。
