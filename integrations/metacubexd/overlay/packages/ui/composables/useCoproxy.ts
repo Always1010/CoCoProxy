@@ -119,6 +119,7 @@ export function useCoproxy() {
     capture.value = null
     useState('coproxy-workspace').value = null
     useState('coproxy-workspace-error').value = ''
+    useState('coproxy-proxy-read-error').value = ''
   }
 
   async function request<T>(path: string, options: {
