@@ -136,6 +136,71 @@ test('profile decoder preserves complete inline policy and discloses deployment 
   assert.throws(() => decodeSubscriptionProfile('proxies: []\nproxies: []'), { code: 'SNAPSHOT_DECODE_FAILED' });
 });
 
+test('node DNS policies retain only exact imported hosts and dedicated resolver precedence', () => {
+  const proxies = [
+    { ...node, name: 'one', server: 'Node.Example.test' },
+    { ...node, name: 'two', server: 'other.example.test' },
+    { ...node, name: 'three', server: 'unrelated.test' }, node,
+  ];
+  const endpoint = 'https://resolver.example:8443/private/synthetic-token/dns-query';
+  const document = { proxies, hosts: { 'node.example.test': '192.0.2.9' }, dns: {
+    listen: '0.0.0.0:53', 'enhanced-mode': 'fake-ip', 'fake-ip-range': '198.18.0.1/16',
+    nameserver: ['https://unrelated.example/dns-query'],
+    'nameserver-policy': { '+.example.test': '1.1.1.1', 'node.example.test': '8.8.8.8',
+      '+.test': 'http://ignored.example/invalid', 'geosite:private': 'invalid', 'unused.test': 'invalid' },
+    'proxy-server-nameserver-policy': { '+.example.test': endpoint, 'other.example.test': ['9.9.9.9'] },
+  } };
+  const nodeDnsPolicy = { 'node.example.test': [endpoint], 'other.example.test': ['9.9.9.9'] };
+  assert.deepEqual(decodeNodeSnapshot(JSON.stringify(document)), { proxies, nodeDnsPolicy });
+  assert.deepEqual(decodeSubscriptionProfile(JSON.stringify(document)), {
+    proxies, policy: { proxies }, nodeDnsPolicy, unsupportedFields: ['dns', 'hosts'],
+  });
+  // More specific suffixes win independently of upstream key order.
+  assert.deepEqual((decodeNodeSnapshot(JSON.stringify({ proxies,
+    dns: { 'nameserver-policy': { '+.node.example.test': '9.9.9.9', '+.example.test': '1.1.1.1' } },
+  })) as { nodeDnsPolicy: unknown }).nodeDnsPolicy,
+  { 'node.example.test': ['9.9.9.9'], 'other.example.test': ['1.1.1.1'] });
+});
+
+test('matching node DNS resolver errors are fixed and cannot silently change node resolution', () => {
+  const proxies = [{ ...node, server: 'node.example.test' }];
+  for (const resolver of [
+    'https://user:synthetic-token@resolver.example/dns-query', 'https://resolver.example/dns-query?synthetic-token',
+    'https://resolver.example/dns-query#synthetic-token', 'http://resolver.example/synthetic-token',
+    'https://resolver.example:0/synthetic-token', 'https://resolver.example/', '127.0.0.1', '192.168.1.1',
+    '::1', '2001:db8::1', 'https://resolver.example\\synthetic-token', 'system', [], ['1.1.1.1', 'invalid'],
+    'https://resolver.example/' + 'x'.repeat(2048), Array(17).fill('1.1.1.1'),
+  ]) {
+    for (const decode of [decodeNodeSnapshot, decodeSubscriptionProfile]) {
+      assert.throws(() => decode(JSON.stringify({ proxies, dns: { 'nameserver-policy': { 'node.example.test': resolver },
+        'proxy-server-nameserver-policy': { 'node.example.test': '1.1.1.1' } } })), (error: unknown) => {
+        assert.ok(error instanceof SnapshotDecodeError);
+        assert.match(error.code, /^SNAPSHOT_(INVALID|LIMIT)$/);
+        assert.equal(error.message, error.code);
+        assert.ok(!JSON.stringify(error).includes('synthetic-token'));
+        return true;
+      });
+    }
+  }
+});
+
+test('provider DNS policies follow retained nodes and parent policies cover expanded nodes', async () => {
+  const endpoint = 'https://resolver.example:5443/synthetic-private-token/dns-query';
+  const root = { 'proxy-providers': { remote: { type: 'http', url: 'https://provider.example/nodes', filter: '^keep' } },
+    'proxy-groups': [{ name: 'Choose', type: 'select', use: ['remote'] }],
+    dns: { 'proxy-server-nameserver-policy': { 'keep.example.test': '9.9.9.9' } } };
+  const response = { proxies: [{ ...node, name: 'keep', server: 'keep.example.test' },
+    { ...node, name: 'drop', server: 'drop.example.test' }],
+    dns: { listen: '0.0.0.0:53', 'nameserver-policy': { 'keep.example.test': endpoint, 'drop.example.test': 'invalid' } } };
+  const resolve = () => resolveSubscriptionProfile(JSON.stringify(root), async () => ({ status: 'modified', text: JSON.stringify(response) }));
+  const result = await resolve();
+  assert.deepEqual((result.value as { nodeDnsPolicy: unknown }).nodeDnsPolicy, { 'keep.example.test': ['9.9.9.9'] });
+  delete (root as { dns?: unknown }).dns;
+  assert.deepEqual(((await resolve()).value as { nodeDnsPolicy: unknown }).nodeDnsPolicy, { 'keep.example.test': [endpoint] });
+  response.dns['nameserver-policy']['keep.example.test'] = 'https://resolver.example/dns-query#synthetic-private-token';
+  await assert.rejects(resolve(), { code: 'SNAPSHOT_INVALID' });
+});
+
 test('provider count, total download bytes and expanded rule bytes are bounded', async () => {
   let calls = 0;
   const providers = Object.fromEntries(Array.from({ length: 17 }, (_, index) => ['source' + index,

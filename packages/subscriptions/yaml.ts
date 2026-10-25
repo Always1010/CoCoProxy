@@ -1,6 +1,7 @@
 import { isIP } from 'node:net';
 import { isAlias, isMap, isScalar, isSeq, parseDocument } from 'yaml';
 import type { JsonObject, JsonValue } from '../config/index.ts';
+import { extractNodeDnsPolicy, validateNodeDnsPolicy, NodeDnsPolicyError } from './node-dns.ts';
 
 export type SnapshotDecodeCode = 'SNAPSHOT_DECODE_FAILED' | 'SNAPSHOT_UNSUPPORTED' | 'SNAPSHOT_INVALID' | 'SNAPSHOT_LIMIT';
 
@@ -126,7 +127,8 @@ export function decodeNodeSnapshot(text: string): unknown {
     const value = decodeDocument(text);
     if (value === null || typeof value !== 'object' || Array.isArray(value) || !Object.hasOwn(value, 'proxies')) fail('SNAPSHOT_UNSUPPORTED');
     if (!Array.isArray(value.proxies) || value.proxies.some(node => node === null || typeof node !== 'object' || Array.isArray(node))) fail('SNAPSHOT_INVALID');
-    return { proxies: value.proxies };
+    const nodeDnsPolicy = nodePolicy(value.dns, value.proxies as JsonObject[]);
+    return { proxies: value.proxies, ...(nodeDnsPolicy ? { nodeDnsPolicy } : {}) };
   } catch (error) {
     if (error instanceof SnapshotDecodeError) throw error;
     throw new SnapshotDecodeError('SNAPSHOT_DECODE_FAILED');
@@ -142,14 +144,25 @@ export function decodeSubscriptionProfile(text: string): unknown {
   return profileDocument(decodeDocument(text));
 }
 
-function profileDocument(value: JsonValue): unknown {
+function nodePolicy(dns: unknown, proxies: JsonObject[]): JsonObject | undefined {
+  try { return extractNodeDnsPolicy(dns, proxies); }
+  catch (error) { fail(error instanceof NodeDnsPolicyError ? error.code : 'SNAPSHOT_INVALID'); }
+}
+
+function profileDocument(value: JsonValue, providerPolicy?: JsonObject): unknown {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('SNAPSHOT_UNSUPPORTED');
   if (Object.hasOwn(value, 'proxy-providers') || Object.hasOwn(value, 'rule-providers')) fail('SNAPSHOT_UNSUPPORTED');
   if (!['proxies', 'proxy-groups', 'rules', 'sub-rules'].some(key => Object.hasOwn(value, key))) fail('SNAPSHOT_UNSUPPORTED');
   const proxies = value.proxies ?? [];
   if (!Array.isArray(proxies) || proxies.some(node => node === null || typeof node !== 'object' || Array.isArray(node))) fail('SNAPSHOT_INVALID');
+  const nodeDnsPolicy = { ...providerPolicy, ...nodePolicy(value.dns, proxies as JsonObject[]) };
+  if (Object.keys(nodeDnsPolicy).length) {
+    try { validateNodeDnsPolicy(nodeDnsPolicy, proxies as JsonObject[]); }
+    catch (error) { fail(error instanceof NodeDnsPolicyError ? error.code : 'SNAPSHOT_INVALID'); }
+  }
+  const nodeDns = Object.keys(nodeDnsPolicy).length ? { nodeDnsPolicy } : {};
   // Node-only input keeps the legacy digest and representation.
-  if (Object.keys(value).every(key => key === 'proxies')) return { proxies };
+  if (Object.keys(value).every(key => key === 'proxies')) return { proxies, ...nodeDns };
   const deployment = new Set([
     'port', 'socks-port', 'redir-port', 'tproxy-port', 'mixed-port',
     'allow-lan', 'bind-address', 'lan-allowed-ips', 'lan-disallowed-ips',
@@ -170,7 +183,7 @@ function profileDocument(value: JsonValue): unknown {
     if (deployment.has(key)) unsupportedFields.push(key);
     else policy[key] = entry;
   }
-  return { proxies, policy, ...(unsupportedFields.length ? { unsupportedFields: unsupportedFields.sort() } : {}) };
+  return { proxies, policy, ...nodeDns, ...(unsupportedFields.length ? { unsupportedFields: unsupportedFields.sort() } : {}) };
 }
 
 type ProviderFetcher = (url: string) => Promise<{ status: string; text?: string }>;
@@ -269,6 +282,7 @@ export async function resolveSubscriptionProfile(text: string, fetch: ProviderFe
   };
   for (const entry of inline) appendNode(object(entry));
   const providerNodes = new Map<string, JsonObject[]>();
+  const providerPolicy: JsonObject = {};
   for (const [name, entry] of Object.entries(proxyDefinitions)) {
     const definition = object(entry);
     checkDefinition(definition, ['type', 'url', 'path', 'interval', 'payload', 'filter', 'exclude-filter', 'exclude-type', 'override', 'health-check']);
@@ -282,10 +296,12 @@ export async function resolveSubscriptionProfile(text: string, fetch: ProviderFe
       }
     }
     let payload: JsonValue | undefined = definition.payload;
+    let providerDns: JsonValue | undefined;
     if (definition.type !== 'inline') {
       const document = object(decodeDocument(await download(definition)));
-      if (Object.keys(document).some(key => key !== 'proxies')) fail('SNAPSHOT_UNSUPPORTED');
+      if (Object.keys(document).some(key => key !== 'proxies' && key !== 'dns')) fail('SNAPSHOT_UNSUPPORTED');
       payload = document.proxies;
+      providerDns = document.dns;
     }
     if (!Array.isArray(payload)) fail('SNAPSHOT_INVALID');
     const overrides = definition.override === undefined ? {} : object(definition.override);
@@ -304,6 +320,10 @@ export async function resolveSubscriptionProfile(text: string, fetch: ProviderFe
       if (accepts(candidate)) appendNode(candidate, imported);
     }
     providerNodes.set(name, imported);
+    for (const [host, servers] of Object.entries(nodePolicy(providerDns, imported) ?? {})) {
+      if (providerPolicy[host] !== undefined && JSON.stringify(providerPolicy[host]) !== JSON.stringify(servers)) fail('SNAPSHOT_INVALID');
+      providerPolicy[host] = servers;
+    }
   }
   root.proxies = nodes;
   if (Array.isArray(groups)) {
@@ -389,7 +409,7 @@ export async function resolveSubscriptionProfile(text: string, fetch: ProviderFe
   delete root['proxy-providers']; delete root['rule-providers'];
   // Recheck aggregate expanded JSON values and bytes after Cartesian expansion.
   const result = plainJson(root);
-  return { value: profileDocument(result), materializedProviders: true };
+  return { value: profileDocument(result, providerPolicy), materializedProviders: true };
 }
 
 function providerRule(behavior: string, raw: string, target: string, noResolve: boolean): string {

@@ -6,6 +6,7 @@ import type { JsonObject } from '../config/index.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { PrivateFileError, privateDirectory, inspectPrivateDirectory, privateRead, atomicWrite } from '../storage/private-files.ts';
 import { decodeSubscriptionProfile, resolveSubscriptionProfile, SnapshotDecodeError } from './yaml.ts';
+import { validateNodeDnsPolicy } from './node-dns.ts';
 
 export type SubscriptionUsage = { upload?: number; download?: number; total?: number; expire?: number };
 
@@ -33,7 +34,7 @@ export type SourceMetadata = {
   usage?: SubscriptionUsage;
   unsupportedFields?: string[];
 };
-export type SourceSnapshot = { id: string; proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[]; sha256: string; sourceRevision: number };
+export type SourceSnapshot = { id: string; proxies: JsonObject[]; policy?: JsonObject; nodeDnsPolicy?: JsonObject; unsupportedFields?: string[]; sha256: string; sourceRevision: number };
 
 /** Public errors deliberately omit URLs, upstream diagnostics and node fields. */
 export class SubscriptionError extends Error {
@@ -41,7 +42,7 @@ export class SubscriptionError extends Error {
   constructor(code: string) { super(code); this.name = 'SubscriptionError'; this.code = code; }
 }
 
-type StoredSnapshot = { proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[]; materializedProviders?: true; sha256: string; sourceRevision: number; definitionRevision: number };
+type StoredSnapshot = { proxies: JsonObject[]; policy?: JsonObject; nodeDnsPolicy?: JsonObject; unsupportedFields?: string[]; materializedProviders?: true; sha256: string; sourceRevision: number; definitionRevision: number };
 type SourceRecord = {
   version: 1;
   id: string;
@@ -56,7 +57,7 @@ type SourceRecord = {
   generation?: string;
   usage?: SubscriptionUsage;
 };
-type SnapshotData = { proxies: JsonObject[]; policy?: JsonObject; unsupportedFields?: string[]; materializedProviders?: true };
+type SnapshotData = { proxies: JsonObject[]; policy?: JsonObject; nodeDnsPolicy?: JsonObject; unsupportedFields?: string[]; materializedProviders?: true };
 type RefreshResult = ({ status: 'modified'; sha256: string; etag: string | null; usage?: SubscriptionUsage } & SnapshotData) |
   { status: 'not-modified'; usage?: SubscriptionUsage } | { status: 'failed'; code: SnapshotFailure };
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -73,6 +74,7 @@ const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoExce
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 1;
 const hash = (data: SnapshotData): string => createHash('sha256').update(canonicalJson({ proxies: data.proxies,
   ...(data.policy ? { policy: data.policy } : {}), ...(data.unsupportedFields ? { unsupportedFields: data.unsupportedFields } : {}),
+  ...(data.nodeDnsPolicy ? { nodeDnsPolicy: data.nodeDnsPolicy } : {}),
   ...(data.materializedProviders ? { materializedProviders: true } : {}) }), 'utf8').digest('hex');
 const timestamp = (value: unknown): value is string | null => value === null ||
   (typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)));
@@ -138,17 +140,19 @@ function validateSnapshot(value: unknown, allowProfile = false): SnapshotData {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) fail('SNAPSHOT_INVALID');
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Reflect.ownKeys(descriptors).some(key => key !== 'proxies' && !(allowProfile && ['policy', 'unsupportedFields'].includes(key as string)))) fail('SNAPSHOT_UNSUPPORTED');
+  if (Reflect.ownKeys(descriptors).some(key => key !== 'proxies' && key !== 'nodeDnsPolicy' && !(allowProfile && ['policy', 'unsupportedFields'].includes(key as string)))) fail('SNAPSHOT_UNSUPPORTED');
   const entry = descriptors.proxies;
   if (!entry || !entry.enumerable || !('value' in entry) || !Array.isArray(entry.value)) fail('SNAPSHOT_INVALID');
   try {
     // This offline safety candidate is neither staged nor applied.
     const profile = descriptors.policy;
+    const nodeDns = descriptors.nodeDnsPolicy;
     const unsupported = descriptors.unsupportedFields;
     if (profile && (!profile.enumerable || !('value' in profile) || !profile.value || typeof profile.value !== 'object' || Array.isArray(profile.value))) fail('SNAPSHOT_INVALID');
     if (unsupported && (!unsupported.enumerable || !('value' in unsupported) || !Array.isArray(unsupported.value) ||
         unsupported.value.some((key: unknown) => typeof key !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(key)))) fail('SNAPSHOT_INVALID');
     if (profile && canonicalJson(profile.value.proxies) !== canonicalJson(entry.value)) fail('SNAPSHOT_INVALID');
+    if (nodeDns && (!nodeDns.enumerable || !('value' in nodeDns))) fail('SNAPSHOT_INVALID');
     const candidate = compileConfig({
       schemaVersion: 1,
       deployment: { mixedPort: 18080, controllerPort: 18081, dnsPort: 18053,
@@ -158,6 +162,7 @@ function validateSnapshot(value: unknown, allowProfile = false): SnapshotData {
     });
     return { proxies: candidate.config.proxies as JsonObject[],
       ...(profile ? { policy: JSON.parse(canonicalJson(profile.value)) as JsonObject } : {}),
+      ...(nodeDns ? { nodeDnsPolicy: validateNodeDnsPolicy(nodeDns.value, candidate.config.proxies as JsonObject[]) } : {}),
       ...(unsupported ? { unsupportedFields: [...unsupported.value] as string[] } : {}) };
   } catch { fail('SNAPSHOT_INVALID'); }
 }
@@ -215,13 +220,14 @@ export class SubscriptionStore {
       if (record.usage !== undefined && !validUsage(record.usage)) fail('SOURCE_CORRUPT');
       if (record.snapshot !== null) {
         const snapshot = record.snapshot;
-        if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision'], ['policy', 'unsupportedFields', 'materializedProviders']) ||
+        if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision'], ['policy', 'nodeDnsPolicy', 'unsupportedFields', 'materializedProviders']) ||
             !Array.isArray(snapshot.proxies) || !digestPattern.test(snapshot.sha256) ||
             !revision(snapshot.sourceRevision) || snapshot.sourceRevision > record.revision ||
             !revision(snapshot.definitionRevision) || snapshot.definitionRevision > snapshot.sourceRevision ||
             snapshot.definitionRevision > record.definitionRevision || hash(snapshot) !== snapshot.sha256) fail('SOURCE_CORRUPT');
         if (snapshot.materializedProviders !== undefined && snapshot.materializedProviders !== true) fail('SOURCE_CORRUPT');
         validateSnapshot({ proxies: snapshot.proxies, ...(snapshot.policy ? { policy: snapshot.policy } : {}),
+          ...(Object.hasOwn(snapshot, 'nodeDnsPolicy') ? { nodeDnsPolicy: snapshot.nodeDnsPolicy } : {}),
           ...(snapshot.unsupportedFields ? { unsupportedFields: snapshot.unsupportedFields } : {}) }, true);
       }
       if (record.etag !== null && !metadata(record).snapshotCurrent) fail('SOURCE_CORRUPT');
@@ -325,6 +331,7 @@ export class SubscriptionStore {
       if (!record.snapshot || !metadata(record).snapshotCurrent) fail('SOURCE_PENDING');
       return { id, proxies: record.snapshot.proxies,
         ...(record.snapshot.policy ? { policy: record.snapshot.policy } : {}),
+        ...(record.snapshot.nodeDnsPolicy ? { nodeDnsPolicy: record.snapshot.nodeDnsPolicy } : {}),
         ...(record.snapshot.unsupportedFields ? { unsupportedFields: record.snapshot.unsupportedFields } : {}),
         sha256: record.snapshot.sha256, sourceRevision: record.snapshot.sourceRevision };
     });
@@ -393,6 +400,7 @@ export class SubscriptionStore {
             ...current,
             snapshot: { proxies: result.proxies, sha256: result.sha256, sourceRevision: current.revision,
               ...(result.policy ? { policy: result.policy } : {}),
+              ...(result.nodeDnsPolicy ? { nodeDnsPolicy: result.nodeDnsPolicy } : {}),
               ...(result.unsupportedFields ? { unsupportedFields: result.unsupportedFields } : {}),
               ...(result.materializedProviders ? { materializedProviders: true as const } : {}),
               definitionRevision: current.definitionRevision },

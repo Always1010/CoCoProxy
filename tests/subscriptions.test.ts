@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm, readFile, writeFile, stat, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SubscriptionStore, SubscriptionError } from '../packages/subscriptions/index.ts';
 import type { SnapshotClient, SnapshotResponse, SnapshotDecoder } from '../packages/subscriptions/index.ts';
 import { decodeSubscriptionProfile } from '../packages/subscriptions/yaml.ts';
+import { canonicalJson } from '../packages/config/index.ts';
 
 const privateValue = 'synthetic-private-value';
 const sourceUrl = `https://subscription.example/snapshot?token=${privateValue}`;
@@ -355,11 +357,49 @@ test('pre-profile version-one records remain readable and retain their original 
   const accepted = await store.refresh('primary', 1);
   const path = join(root, 'subscriptions', 'primary.json');
   const legacy = JSON.parse(await readFile(path, 'utf8'));
+  assert.equal(legacy.snapshot.nodeDnsPolicy, undefined);
+  assert.equal(accepted.snapshotDigest, createHash('sha256').update(canonicalJson({ proxies: JSON.parse(text).proxies })).digest('hex'));
   delete legacy.generation;
   await writeFile(path, JSON.stringify(legacy));
   assert.equal((await store.status('primary'))!.snapshotDigest, accepted.snapshotDigest);
   await store.configure({ id: 'primary', name: 'Legacy renamed' }, 2);
   assert.equal((await store.snapshot('primary')).sha256, accepted.snapshotDigest);
+});
+
+test('private node DNS survives refresh and storage, changes digest and stays out of metadata', async t => {
+  const { root, client, store } = await fixture(t, decodeSubscriptionProfile);
+  const proxies = JSON.parse(text).proxies.map((node: object) => ({ ...node, server: 'node.example.test' }));
+  const endpoint = `https://resolver.example:5443/${privateValue}/dns-query`;
+  const profile = { proxies, dns: { listen: '0.0.0.0:53',
+    'nameserver-policy': { 'node.example.test': endpoint, 'unrelated.test': 'invalid' } } };
+  await store.configure({ id: 'primary', url: sourceUrl }, 0);
+  client.response = { status: 'modified', text: JSON.stringify(profile), etag: '"dns"' };
+  const metadata = await store.refresh('primary', 1);
+  const expected = { 'node.example.test': [endpoint] };
+  assert.deepEqual((await store.snapshot('primary')).nodeDnsPolicy, expected);
+  assert.deepEqual((await new SubscriptionStore(root).snapshot('primary')).nodeDnsPolicy, expected);
+  assert.ok(!JSON.stringify([metadata, await store.list()]).includes(privateValue));
+  assert.ok(!JSON.stringify(metadata).includes('resolver.example'));
+  client.response = { status: 'not-modified' };
+  await store.refresh('primary', 2);
+  assert.equal((await store.snapshot('primary')).sha256, metadata.snapshotDigest);
+  profile.dns['nameserver-policy']['node.example.test'] = endpoint.replace('5443', '8443');
+  client.response = { status: 'modified', text: JSON.stringify(profile) };
+  const changed = await store.refresh('primary', 3);
+  assert.notEqual(changed.snapshotDigest, metadata.snapshotDigest);
+  const accepted = await store.snapshot('primary');
+  profile.dns['nameserver-policy']['node.example.test'] = endpoint + '#synthetic-fragment';
+  client.response = { status: 'modified', text: JSON.stringify(profile) };
+  await assert.rejects(store.refresh('primary', 4), code('SNAPSHOT_INVALID'));
+  assert.deepEqual(await store.snapshot('primary'), accepted);
+  // Even a recomputed digest must not admit arbitrary host policies from disk.
+  const path = join(root, 'subscriptions', 'primary.json');
+  const record = JSON.parse(await readFile(path, 'utf8'));
+  record.snapshot.nodeDnsPolicy = { 'unrelated.test': [endpoint] };
+  const { sha256: _digest, sourceRevision: _source, definitionRevision: _definition, ...data } = record.snapshot;
+  record.snapshot.sha256 = createHash('sha256').update(canonicalJson(data)).digest('hex');
+  await writeFile(path, JSON.stringify(record));
+  await assert.rejects(store.snapshot('primary'), code('SOURCE_CORRUPT'));
 });
 
 test('restricted provider downloads materialize group membership and rule order into one offline profile', async t => {
