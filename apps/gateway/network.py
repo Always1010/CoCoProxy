@@ -118,7 +118,7 @@ def load_settings(path):
             'egressTable', 'egressPriority', 'tunMtu'} and type(n['schemaVersion']) is int and n['schemaVersion'] == 1)
     for key, low, high in [('prefixLength', 1, 29), ('dnsPort', 1024, 65535),
                            ('egressMark', 1, 0xffffffff), ('egressTable', 2000, 19999),
-                           ('egressPriority', 1000, 8999), ('tunMtu', 1280, 9000)]:
+                           ('egressPriority', 1000, 8997), ('tunMtu', 1280, 9000)]:
         require(type(n[key]) is int and low <= n[key] <= high)
     require(n['egressMark'] not in (2023, 2024) and n['egressTable'] != 2022)
     require(isinstance(n['ingressInterface'], str) and
@@ -154,7 +154,9 @@ def snapshot(n):
             'egress': [r for r in run([IP, '-N', '-j', '-4', 'route', 'show', 'table', 'all'])
                        if str(r.get('table')) == str(n['egressTable'])],
             'return': run([IP, '-j', '-4', 'route', 'show', 'table', 'main', 'exact', n['clientIPv4'] + '/32']),
-            'rule': [r for r in run([IP, '-j', '-4', 'rule', 'show']) if r.get('priority') == n['egressPriority']]}
+            'rule': [r for r in run([IP, '-j', '-4', 'rule', 'show']) if r.get('priority') == n['egressPriority']],
+            'capture': [r for r in run([IP, '-j', '-4', 'rule', 'show'])
+                        if r.get('priority') in (n['egressPriority']+1, n['egressPriority']+2)]}
 
 
 def store(path, value):
@@ -186,6 +188,16 @@ def rule_args(n, operation):
             'fwmark', hex(n['egressMark']) + '/0xffffffff', 'table', str(n['egressTable'])]
 
 
+def capture_args(n, operation, local):
+    args = [IP, '-4', 'rule', operation, 'priority', str(n['egressPriority']+(1 if local else 2)),
+            'from', n['clientIPv4']+'/32', 'iif', n['ingressInterface']]
+    if local:
+        args += ['to', str(ipaddress.ip_network(f"{n['gatewayIPv4']}/{n['prefixLength']}", strict=False)), 'table', 'main']
+    else:
+        args += ['table', '2022']
+    return args
+
+
 def require_upstream_stopped():
     require(not any(link.get('ifname') == 'coproxy-tun' for link in run([IP, '-j', 'link', 'show'])))
     require(not any(9000 <= rule.get('priority', -1) <= 9010 for rule in run([IP, '-j', '-4', 'rule', 'show'])))
@@ -206,7 +218,7 @@ def prepare(value, receipt, existing, boot, digest):
         a.get('local') == n['gatewayIPv4'] and a.get('prefixlen') == n['prefixLength']
         for a in links[0].get('addr_info', [])))
     current = snapshot(n)
-    require(current == {'guard': None, 'egress': [], 'return': [], 'rule': []})
+    require(current == {'guard': None, 'egress': [], 'return': [], 'rule': [], 'capture': []})
     require_upstream_stopped()
     record = {'schemaVersion': 1, 'status': 'incomplete', 'bootID': boot, 'inputHash': digest}
     run([NFT, '-c', '-f', '-'], value['guardRules'])
@@ -215,9 +227,13 @@ def prepare(value, receipt, existing, boot, digest):
     run(route_args(n, 'add', True))
     run(rule_args(n, 'add'))
     run(route_args(n, 'add', False))
+    # Local UID exclusion must not bypass forwarded UDP. Keep this source's
+    # LAN destinations in main, then hand only its ingress traffic to TUN.
+    run(capture_args(n, 'add', True))
+    run(capture_args(n, 'add', False))
     resources = snapshot(n)
     require(resources['guard'] and len(resources['egress']) == 1 and len(resources['return']) == 1 and
-            len(resources['rule']) == 1)
+            len(resources['rule']) == 1 and len(resources['capture']) == 2)
     record.update(status='complete', resources=resources)
     store(receipt, record)
 
@@ -229,12 +245,14 @@ def remove(value, receipt, existing, boot, digest):
             existing.get('inputHash') == digest and existing.get('resources') == snapshot(n))
     existing['status'] = 'incomplete'
     store(receipt, existing)
+    run(capture_args(n, 'del', False))
+    run(capture_args(n, 'del', True))
     run(rule_args(n, 'del'))
     run(route_args(n, 'del', True))
     run(route_args(n, 'del', False))
-    require(snapshot(n) == {'guard': existing['resources']['guard'], 'egress': [], 'return': [], 'rule': []})
+    require(snapshot(n) == {'guard': existing['resources']['guard'], 'egress': [], 'return': [], 'rule': [], 'capture': []})
     run([NFT, 'delete', 'table', 'inet', TABLE])  # Guard is always the last removed resource.
-    require(snapshot(n) == {'guard': None, 'egress': [], 'return': [], 'rule': []})
+    require(snapshot(n) == {'guard': None, 'egress': [], 'return': [], 'rule': [], 'capture': []})
     existing['status'] = 'removed'
     store(receipt, existing)
 
