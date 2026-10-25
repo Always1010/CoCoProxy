@@ -70,6 +70,26 @@ COPROXY_TEST_MIHOMO=/absolute/reviewed/mihomo COPROXY_TEST_SING_BOX=/absolute/re
 
 Server 检查使用临时合成凭据和 loopback 端口，不替代 systemd 应用。浏览器截图仅在显式 `COPROXY_TEST_ARTIFACTS` 私有目录保存。隔离内核测试与原生网关局部实验各自有范围，不能合并推导生产服务、物理网络或重启可靠性。
 
+## 请求时延基线
+
+`scripts/measure-latency.mjs` 仅使用 Node 内置模块。每次必须显式提供已授权的测量 URL；默认仅允许 HTTPS，禁止 URL 用户名和口令。它不会自动发现设备、读取订阅或设备配置、安装软件或启动负载。目标路径及查询可能包含私有信息，使用时按本机凭据规范处理命令历史。输出只含样本序号、测量参数、阶段时间和固定失败码，不含目标 URL、查询、端点、响应正文或原始异常。
+
+```sh
+node scripts/measure-latency.mjs --url 'https://probe.example/latency' --samples 100 --warmup 5 --concurrency 1 --timeout-ms 10000 --mode cold
+node scripts/measure-latency.mjs --url 'https://probe.example/latency' --samples 100 --warmup 5 --concurrency 1 --timeout-ms 10000 --mode reuse --interval-ms 100
+npm run test:latency-baseline
+```
+
+`cold` 只保证每次请求新建 TCP/TLS 连接，使用单次请求的独立 Agent，不共享工具内的 TLS 会话缓存；它不清空操作系统、核心、路由器或递归 DNS 缓存，也不修改路由、代理或主机配置。真正冷 DNS 需要经授权后在对应解析器环境安排独立条件，本工具不主动清缓存。`reuse` 使用有界 keep-alive 连接池，预热请求不计入统计；预热失败、服务端关闭连接或池未充分预热时，正式样本仍可能建立新连接，因此以每条样本的 `reusedSocket` 为准。复用样本没有发生的 DNS/TCP/TLS 阶段记为 `null`，不记为零，汇总同时给出冷连接和复用连接分组。
+
+DNS 是本次系统 `lookup` 的耗时，字面 IP 不产生该阶段；TCP 从 DNS 完成或套接字分配至连接成功，包含 Node 多地址或地址族竞速时的尝试与等待；TLS 从 TCP 完成至安全连接成功；TTFB 从请求开始至收到响应头，total 至响应体结束。阶段时间单位为毫秒。HTTP 响应只接受 2xx，不跟随重定向；超过 8 MiB 的正文记为 `RESPONSE_LIMIT`，整体请求截止时间覆盖 DNS、建连和响应传输。失败仅记录固定分类，不把失败样本混入成功时延分位数。P50/P95/P99 使用成功且实际发生该阶段的样本，按最近秩取值，并报告样本数量；成功率范围为 0–1，失败非零时命令退出码为 1，参数错误为 2。
+
+默认 20 个正式样本、2 个预热、1 个并发、10 秒截止时间、零间隔。参数上限分别为 10000 个样本、1000 个预热、32 个并发、120 秒截止时间和 60 秒间隔；间隔作用于每个 worker 的相邻请求，不是全局请求速率限制。`--allow-http` 是显式允许明文 HTTP 的开关，主要用于本机合成服务验证。并发与样本数量会产生实际请求，应在目标授权范围内选择。
+
+先在空闲条件下用相同目标、参数和核心版本分别保存冷连接与复用连接基线，再在已获授权的外部负载持续运行时原样复测。逐项调整一个配置变量，比较成功率、失败分布、TTFB 和 total 的分位数及样本数，同时在现场读取 CPU、重传、队列、丢包等指标；本工具不提供这些系统读数，也不自动执行 iperf 或改动 qdisc。DNS/TCP/TLS 的变化需要结合是否复用连接判断，低样本量的高分位数不能当作稳定结论。
+
+结果默认只写标准输出；需要留存时重定向到仓库根目录被忽略的 `.local/reports/` 中，并先显式创建所需目录。该结果包含实际性能与运行记录，遵循本地资料边界，不提交到仓库、不随源码或发行包同步。
+
 ## 待完成的验收
 
 当前主要缺口是冷启动／规则清空期间的连续阻断、开机启动与整机重启、持续负载，以及 x86-64 和新路由器组合；具体状态以发行说明为准。扩大到多终端、跨网段或 IPv6 前须先完善两端配置与故障模型。
