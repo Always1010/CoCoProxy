@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { link, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deployRelease, releaseTarget, verifyRelease } from '../packages/deployment/install.ts';
+import { assertReviewedUpgradeConfiguration, configurationReviewDigest, deployRelease, releaseTarget, verifyRelease } from '../packages/deployment/install.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
@@ -79,4 +79,22 @@ test('deployment target is explicit, versioned by manifest, and cannot replace s
 test('unsupported host never creates installation storage even when apply is requested', { skip: process.platform === 'linux' }, async () => {
   await assert.rejects(deployRelease({ payload: '/missing', input: '/missing', manifestSha256: '0'.repeat(64),
     operation: 'install', apply: true }), code('INSTALL_LINUX_ROOT_REQUIRED'));
+});
+
+
+test('configuration migration requires an explicit review bound to both manifests, old owned settings and exact new input bytes', () => {
+  const review = { previousManifestSha256: 'a'.repeat(64), manifestSha256: 'b'.repeat(64), inputSha256: digest('synthetic new input'),
+    previousConfiguration: [{ path: '/etc/coproxy/runtime.json', sha256: 'c'.repeat(64) },
+      { path: '/etc/coproxy/management.json', sha256: 'd'.repeat(64) }] };
+  assert.throws(() => assertReviewedUpgradeConfiguration(review, undefined, false), code('INSTALL_CONFIGURATION_CHANGE_REQUIRES_REVIEW'));
+  assert.equal(assertReviewedUpgradeConfiguration(review, undefined, true), false);
+  const approved = configurationReviewDigest(review);
+  assert.equal(configurationReviewDigest({ ...review, previousConfiguration: [...review.previousConfiguration].reverse() }), approved);
+  assert.equal(assertReviewedUpgradeConfiguration(review, approved, false), true);
+  for (const changed of [{ ...review, inputSha256: digest('different new input') },
+    { ...review, previousManifestSha256: 'e'.repeat(64) }, { ...review, manifestSha256: 'f'.repeat(64) },
+    { ...review, previousConfiguration: [{ ...review.previousConfiguration[0], sha256: 'e'.repeat(64) }, review.previousConfiguration[1]] }]) {
+    assert.throws(() => assertReviewedUpgradeConfiguration(changed, approved, false), code('INSTALL_CONFIGURATION_REVIEW_MISMATCH'));
+  }
+  assert.throws(() => assertReviewedUpgradeConfiguration(review, 'invalid', true), code('INSTALL_CONFIGURATION_REVIEW_MISMATCH'));
 });
