@@ -4,7 +4,7 @@
 
 ## 1. 通用协作要求与本机联调资料
 
-本文保存 Coproxy 侧的通用协作要求。最小语义与 AlwayRoute `contracts/external-v1.md` 对齐；字段和实现属于各自项目。
+本文保存 Coproxy 侧的通用协作要求。Coproxy 独立安装和运行，AlwayRoute 是可选路由器实现，不是必需组件；其 `contracts/external-v1.md` 是当前适配器的契约映射。其他原厂固件或组件按[协同路由器要求与说明](cooperating-router-requirements.md)实现同等网络职责，不要求复用该适配器的 RPC、revision 或配置字段。字段和实现属于各自项目。
 
 目录链接只提供资料入口，不会自动迁移旧内容、运行脚本或替换现有工具配置。链接缺失、失效或共同环境信息未核验时应明确提示，不猜测替代。
 
