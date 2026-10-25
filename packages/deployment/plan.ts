@@ -178,7 +178,7 @@ function render(input: unknown): DeploymentPlan {
   // Never describe making a standard shared installation directory service-private.
   if (['/etc', '/usr', '/usr/local', '/opt', '/run', '/var', '/var/lib', '/var/cache', '/srv'].includes(stateDirectory)) fail();
 
-  const deployment = record(management.deployment, ['mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers'], ['nameservers']);
+  const deployment = record(management.deployment, ['mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers'], ['nameservers', 'sniffing']);
   compileConfig({ schemaVersion: 1, deployment, policy: { rules: ['MATCH,REJECT'] } });
   const ports = [deployment.mixedPort, deployment.controllerPort, deployment.dnsPort];
   if (ports.some(port => typeof port !== 'number' || port < 1024 || port === management.listenPort) ||

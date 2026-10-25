@@ -72,7 +72,10 @@ test('native LAN gateway sends multiple clients through reviewed TUN and retains
     const plan = renderAutomaticGatewayHostPlan({ ...input, network: lan });
     const config = compileAutomaticGatewayConfig({ schemaVersion: 1, deployment: {
       mixedPort: 17890, controllerPort: 19090, controllerSecret: 'synthetic-test-secret', dnsPort: 15353,
-      bootstrapResolvers: ['198.51.100.2'] }, policy: { 'log-level': 'error', rules: ['MATCH,DIRECT'] } }, lan).config;
+      bootstrapResolvers: ['198.51.100.2'], sniffing: true }, policy: { 'log-level': 'error',
+      // Clients connect to an IP without querying core DNS. HTTP must recover
+      // fixture.invalid from Host; an unrecovered TCP connection is rejected.
+      rules: ['DOMAIN,fixture.invalid,DIRECT', 'NETWORK,udp,DIRECT', 'MATCH,REJECT'] } }, lan).config;
     const root = await mkdtemp(join(tmpdir(), 'coproxy-auto-lan-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     await writeFile(join(root, 'input.json'), JSON.stringify({ core, config, network: lan, guardRules: plan.guardRules }));

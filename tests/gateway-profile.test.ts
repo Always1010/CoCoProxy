@@ -28,10 +28,12 @@ test('routed HTTPS DNS survives native candidate recompilation and preserves leg
   assert.deepEqual(recompileAutomaticGatewayConfig(original.config, settings()), original);
   const source = base();
   (source.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];
+  (source.deployment as JsonObject).sniffing = true;
   const encrypted = compileAutomaticGatewayConfig(source, settings());
   assert.notEqual(encrypted.id, original.id);
   assert.deepEqual(recompileAutomaticGatewayConfig(encrypted.config, settings()), encrypted);
   assert.equal((encrypted.config.dns as JsonObject)['respect-rules'], true);
+  assert.equal((encrypted.config.sniffer as JsonObject)['parse-pure-ip'], true);
 });
 const invalid = (run: () => unknown) => assert.throws(run, (error: unknown) =>
   error instanceof AutomaticGatewayConfigError && error.code === 'AUTOMATIC_GATEWAY_CONFIG_INVALID' && error.message === error.code);
@@ -166,6 +168,9 @@ test('pinned reviewed core parses native profile without starting listeners or T
     assert.equal(AUTOMATIC_GATEWAY_CORE_SHA256, review.coreCandidate.binarySha256);
     assert.equal(createHash('sha256').update(await readFile(binaryPath)).digest('hex'), AUTOMATIC_GATEWAY_CORE_SHA256);
     await validateWithMihomo(compileAutomaticGatewayConfig(base(), settings()), { binaryPath });
+    const source = base();
+    Object.assign(source.deployment as JsonObject, { nameservers: ['https://192.0.2.54/dns-query'], sniffing: true });
+    await validateWithMihomo(compileAutomaticGatewayConfig(source, settings()), { binaryPath });
   });
 
 

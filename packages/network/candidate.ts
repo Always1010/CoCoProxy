@@ -84,7 +84,7 @@ export function validateGatewayCandidate(input: unknown, expected: NetworkPlanIn
       typeof config.secret !== 'string') fail();
     const policy = { ...config };
     for (const key of ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret',
-      'tun', 'ipv6', 'dns', 'interface-name', 'routing-mark', 'x-coproxy-network']) delete policy[key];
+      'tun', 'ipv6', 'dns', 'sniffer', 'interface-name', 'routing-mark', 'x-coproxy-network']) delete policy[key];
     const preview = compileGatewayPreview({ schemaVersion: 1, network: metadata,
       base: { schemaVersion: 1, deployment: { mixedPort: config['mixed-port'],
         controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,

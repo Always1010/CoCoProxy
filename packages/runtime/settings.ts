@@ -122,7 +122,7 @@ export async function loadRuntimeCandidate(input: RuntimeSettings, generation: s
         typeof dns.listen !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(dns.listen) ||
         typeof config.secret !== 'string') fail('CANDIDATE_UNTRUSTED');
     const policy = { ...config };
-    for (const key of ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns']) delete policy[key];
+    for (const key of ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer']) delete policy[key];
     const compiled = compileConfig({ schemaVersion: 1, deployment: {
       mixedPort: config['mixed-port'], controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,
       dnsPort: Number(dns.listen.slice(10)), bootstrapResolvers: dns['default-nameserver'], ...deploymentDnsOptions(config),

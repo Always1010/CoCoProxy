@@ -15,7 +15,7 @@ import { createWorkspaceApplication } from './workspace-application.ts';
 import { WorkspaceError, WorkspaceStore, initialWorkspace } from './workspace.ts';
 
 export interface ManagementRuntime extends RuntimeAdapter { observe(generation: string): Promise<CoreObservation> }
-const protectedKeys = ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns'];
+const protectedKeys = ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer'];
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
