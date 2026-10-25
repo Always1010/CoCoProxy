@@ -11,11 +11,12 @@ export type ControllerProxyOptions = {
 };
 
 const HTTP_LIMIT = 2 * 1024 * 1024;
+const RULES_LIMIT = 4 * 1024 * 1024;
 const FRAME_LIMIT = 1024 * 1024;
 const sensitiveKey = /secret|password|token|private[-_]?key/i;
 
-function redact(value: unknown, secret: string): unknown {
-  let remaining = 100_000;
+function redact(value: unknown, secret: string, maximumValues = 100_000): unknown {
+  let remaining = maximumValues;
   const visit = (input: unknown, depth: number): unknown => {
     // Bound recursion and total work before constructing the browser response.
     if (depth > 64 || --remaining < 0) throw new Error('JSON complexity limit');
@@ -95,6 +96,7 @@ async function upstream(target: ControllerTarget, path: string, method: string, 
       await result.body?.cancel();
       return response({ error: { code: 'CONTROLLER_UPSTREAM_FAILED' } }, 502, target.generation);
     }
+    const rules = method === 'GET' && path === '/rules';
     const reader = result.body?.getReader();
     let size = 0;
     const chunks: Uint8Array[] = [];
@@ -104,14 +106,14 @@ async function upstream(target: ControllerTarget, path: string, method: string, 
           const next = await reader.read();
           if (next.done) break;
           size += next.value.byteLength;
-          if (size > HTTP_LIMIT) { await reader.cancel(); throw new Error('limit'); }
+          if (size > (rules ? RULES_LIMIT : HTTP_LIMIT)) { await reader.cancel(); throw new Error('limit'); }
           chunks.push(next.value);
         }
       } finally { reader.releaseLock(); }
     }
     if (result.status === 204 || result.status === 205) return response(null, result.status, target.generation);
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
-    return response(redact(value, target.secret), result.status, target.generation);
+    return response(redact(value, target.secret, rules ? 250_000 : 100_000), result.status, target.generation);
   } catch { return response({ error: { code: 'CONTROLLER_UNAVAILABLE' } }, 502, target.generation); }
   finally { clearTimeout(timer); }
 }
