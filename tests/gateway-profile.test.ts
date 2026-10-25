@@ -22,6 +22,17 @@ function settings() {
     routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24, dnsPort: 15353,
     egressMark: 0x200, egressTable: 10002, egressPriority: 8000, tunMtu: 1500 };
 }
+
+test('routed HTTPS DNS survives native candidate recompilation and preserves legacy generations', () => {
+  const original = compileAutomaticGatewayConfig(base(), settings());
+  assert.deepEqual(recompileAutomaticGatewayConfig(original.config, settings()), original);
+  const source = base();
+  (source.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];
+  const encrypted = compileAutomaticGatewayConfig(source, settings());
+  assert.notEqual(encrypted.id, original.id);
+  assert.deepEqual(recompileAutomaticGatewayConfig(encrypted.config, settings()), encrypted);
+  assert.equal((encrypted.config.dns as JsonObject)['respect-rules'], true);
+});
 const invalid = (run: () => unknown) => assert.throws(run, (error: unknown) =>
   error instanceof AutomaticGatewayConfigError && error.code === 'AUTOMATIC_GATEWAY_CONFIG_INVALID' && error.message === error.code);
 

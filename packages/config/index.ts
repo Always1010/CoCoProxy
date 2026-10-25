@@ -33,7 +33,7 @@ const MAX_NAME_LENGTH = 256;
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const DEPLOYMENT_FIELDS = new Set([
-  'mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers',
+  'mixedPort', 'controllerPort', 'controllerSecret', 'dnsPort', 'bootstrapResolvers', 'nameservers',
 ]);
 
 // These fields belong to deployment, even when the supplied value is disabled.
@@ -230,6 +230,19 @@ export function compileConfig(input: unknown): Candidate {
   for (const resolver of resolvers) {
     if (typeof resolver !== 'string' || isIP(resolver) === 0) invalid();
   }
+  const nameservers = deployment.nameservers === undefined ? undefined : array(deployment.nameservers);
+  if (nameservers) {
+    if (nameservers.length === 0 || nameservers.length > 16) invalid();
+    for (const server of nameservers) {
+      if (typeof server !== 'string' || server.length > 2048 || /[\s\\]/.test(server)) invalid();
+      let endpoint: URL;
+      try { endpoint = new URL(server); } catch { invalid(); }
+      // Deployment owns DNS transport. Do not accept interface/proxy fragments,
+      // credentials, cleartext endpoints or arbitrary core resolver syntax.
+      if (endpoint.protocol !== 'https:' || !endpoint.hostname || endpoint.username || endpoint.password ||
+        endpoint.hash || endpoint.search || endpoint.pathname === '/') invalid();
+    }
+  }
 
   const policy = object(envelope.policy);
   for (const key of Object.keys(policy)) {
@@ -301,9 +314,17 @@ export function compileConfig(input: unknown): Candidate {
       'enhanced-mode': 'redir-host',
       ipv6: false,
       'default-nameserver': [...resolvers],
-      nameserver: [...resolvers],
+      nameserver: [...(nameservers ?? resolvers)],
+      ...(nameservers ? { 'respect-rules': true, 'proxy-server-nameserver': [...resolvers],
+        'direct-nameserver': [...resolvers] } : {}),
     },
   };
   const sha256 = createHash('sha256').update(canonicalJson(config), 'utf8').digest('hex');
   return { id: sha256, config, sha256 };
+}
+
+/** Reconstruct optional compiler-owned DNS inputs without changing legacy hashes. */
+export function deploymentDnsOptions(config: JsonObject): JsonObject {
+  const dns = object(config.dns);
+  return dns['respect-rules'] === true ? { nameservers: dns.nameserver } : {};
 }

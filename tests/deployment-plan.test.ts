@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, basename } from 'node:path';
 import { DeploymentPlanError, renderDeploymentPlan } from '../packages/deployment/plan.ts';
 import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
+import type { JsonObject } from '../packages/config/index.ts';
 
 function input() {
   return { schemaVersion: 1, runtime: {
@@ -32,6 +33,14 @@ function automaticInput() {
       routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24, dnsPort: 15353,
       egressMark: 65536, egressTable: 2024, egressPriority: 8000, tunMtu: 1500 } } };
 }
+
+test('installer renders optional encrypted resolvers without altering bootstrap inputs', () => {
+  const value = input();
+  (value.management.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];
+  const settings = JSON.parse(renderDeploymentPlan(value).files.find(file => file.path === '/etc/coproxy/management.json')!.content);
+  assert.deepEqual(settings.deployment.nameservers, ['https://192.0.2.54/dns-query']);
+  assert.deepEqual(settings.deployment.bootstrapResolvers, ['192.0.2.53']);
+});
 
 test('installed systemd parser accepts both generated unit definitions', {
   skip: process.platform !== 'linux' || !process.env.COPROXY_TEST_SYSTEMD_ANALYZE,

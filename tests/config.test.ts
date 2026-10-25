@@ -83,6 +83,24 @@ test('canonical hash ignores object-key order and changes with actual content', 
   assert.notEqual(compileConfig(first).sha256, a.sha256);
 });
 
+test('deployment separates routed HTTPS DNS from independent node and direct resolvers', () => {
+  const value = input();
+  (value.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];
+  const candidate = compileConfig(value), dns = candidate.config.dns as JsonObject;
+  assert.deepEqual(dns.nameserver, ['https://192.0.2.54/dns-query']);
+  assert.equal(dns['respect-rules'], true);
+  assert.deepEqual(dns['proxy-server-nameserver'], ['192.0.2.53']);
+  assert.deepEqual(dns['direct-nameserver'], ['192.0.2.53']);
+  assert.deepEqual(dns['default-nameserver'], ['192.0.2.53']);
+  assert.notEqual(candidate.id, compileConfig(input()).id);
+  for (const nameservers of [[], ['http://192.0.2.54/dns-query'], ['192.0.2.54'],
+    ['https://user:pass@resolver.invalid/dns-query'], ['https://resolver.invalid/dns-query#eth0'],
+    ['https://resolver.invalid/dns-query?name=example.com'], ['https://resolver.invalid/'], ['https://resolver.invalid/dns query']]) {
+    (value.deployment as JsonObject).nameservers = nameservers;
+    fails(value, 'INVALID_INPUT');
+  }
+});
+
 test('merges only in-memory source snapshots and preserves advanced JSON fields', () => {
   const value = input();
   (value.policy as JsonObject)['tcp-concurrent'] = true;
