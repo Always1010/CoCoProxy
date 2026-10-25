@@ -74,13 +74,23 @@ test('empty nodes fail closed and explicit selections persist without cycles', (
   assert.equal(selected(policy({ selections: { Proxy: 'DIRECT', OpenAI: 'block' } }), 'Proxy'), 'DIRECT');
   assert.equal(selected(policy({ selections: { OpenAI: 'block' } }), 'OpenAI'), 'REJECT');
   assert.deepEqual(localGroupChoices(nodes, 'OpenAI'), ['Proxy', 'example-node', 'DIRECT', 'REJECT']);
-  const invalidSelections: Record<string, string>[] = [{ Unknown: 'Proxy' }, { OpenAI: 'missing-node' }, { Proxy: 'OpenAI' }, { OpenAI: 'Claude', Claude: 'OpenAI' }, { Proxy: 'Proxy' }];
+  const invalidSelections: Record<string, string>[] = [{ OpenAI: 'missing-node' }, { Proxy: 'OpenAI' }, { OpenAI: 'Claude', Claude: 'OpenAI' }, { Proxy: 'Proxy' }];
   for (const selections of invalidSelections) {
     assert.throws(() => policy({ selections }), ConfigError);
   }
   assert.throws(() => policy({ proxies: [{ ...nodes[0], name: 'Proxy' }] }), ConfigError);
   assert.throws(() => policy({ proxies: [{ ...nodes[0], name: 'direct' }] }), ConfigError);
   assert.throws(() => policy({ selections: { Proxy: null } as unknown as Record<string, string> }), ConfigError);
+});
+
+test('custom local groups route manual rules and reject node-name collisions or chained references', () => {
+  const value = policy({ selections: { 'Custom service': 'Proxy' }, rules: ['DOMAIN,custom.example,Custom service'] });
+  assert.equal(selected(value, 'Custom service'), 'Proxy');
+  assert.equal(domainTarget(value, 'custom.example'), 'Custom service');
+  assert.deepEqual(localGroupChoices(nodes, 'Custom service'), ['Proxy', 'example-node', 'DIRECT', 'REJECT']);
+  assert.throws(() => policy({ selections: { 'example-node': 'Proxy' } }), ConfigError);
+  assert.throws(() => policy({ selections: { Custom: 'OpenAI' } }), ConfigError);
+  assert.throws(() => policy({ selections: { First: 'Second', Second: 'First' } }), ConfigError);
 });
 
 test('logical global/direct modes exclude service and domestic matching', () => {

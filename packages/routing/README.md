@@ -2,7 +2,7 @@
 
 `buildLocalPolicy({ proxies, selections, rules, mode })` 返回可交给配置编译器的 Mihomo 策略。无运行时下载或外部规则文件；部署、监听和 DNS 仍归编译器管理。逻辑全局和直连模式分别只生成 `MATCH,Proxy`、`MATCH,DIRECT`，核心使用规则模式执行，因此不会应用业务或国内补漏。
 
-`serviceCatalog` 保留 AlwayRoute 的服务 id、显示名、说明、默认标记及精确／后缀匹配字段。默认创建十个组；`selections` 出现可选服务的 id 时启用该组。`localGroupChoices(proxies, groupId)` 返回 UI 可选目标。Proxy 初始选择第一个节点，无节点时选择 REJECT；其他业务及 Other 跟随 Proxy，Domestic 初始 DIRECT。显式 DIRECT／REJECT 可用于每个组，亦接受旧模型的 direct／block 别名。引用只允许业务组跟随 Proxy；拒绝其他组间引用、未知目标、名称冲突与重复节点，避免选择器选项形成循环。
+`serviceCatalog` 保留 AlwayRoute 的服务 id、显示名、说明、默认标记及精确／后缀匹配字段。默认创建十个组；`selections` 出现可选服务的 id 时启用该组，出现其他合法名称时创建自定义组，供手工规则引用。`localGroupChoices(proxies, groupId)` 返回 UI 可选目标。Proxy 初始选择第一个节点，无节点时选择 REJECT；其他业务及 Other 跟随 Proxy，Domestic 初始 DIRECT。显式 DIRECT／REJECT 可用于每个组，亦接受旧模型的 direct／block 别名。引用只允许业务或自定义组跟随 Proxy；拒绝其他组间引用、未知目标、组与节点名称冲突及重复节点，避免选择器选项形成循环。
 
 手工规则先于业务规则。YouTube 的精确主机先于 Google 后缀；明确业务先于 Proxy 境外聚合，再依次匹配国内顶级域、社区域名、国内目的 IPv4，最终 MATCH 到 Other。IP 规则不自动添加 `no-resolve`，让 Mihomo 对域名目标使用既有 DNS 解析后匹配地址。此模块不更改 DNS 出口或解析器，也不宣称完成 IPv6 接管。
 

@@ -37,7 +37,7 @@ function normalizedTarget(value: string): string {
  * every group option acyclic, including options not currently selected.
  */
 export function localGroupChoices(proxies: JsonObject[], groupId: string): string[] {
-  if (!ids.has(groupId) || !Array.isArray(proxies) || proxies.length > 5000) invalid();
+  if (!validName(groupId) || reserved.has(groupId) || aliases.has(groupId) || !Array.isArray(proxies) || proxies.length > 5000) invalid();
   const nodes = proxies.map((proxy) => {
     if (!proxy || typeof proxy !== 'object' || Array.isArray(proxy) || !validName(proxy.name) || ids.has(proxy.name) || reserved.has(proxy.name) || aliases.has(proxy.name)) invalid();
     return proxy.name;
@@ -84,10 +84,14 @@ function userRules(rules: string[], targets: Set<string>): string[] {
 export function buildLocalPolicy(options: LocalPolicyOptions): JsonObject {
   const { proxies, selections, rules, mode } = options;
   if (!Array.isArray(proxies) || proxies.length > 5000 || !selections || typeof selections !== 'object' || Array.isArray(selections) || !['rule', 'global', 'direct'].includes(mode)) invalid();
-  if (Object.entries(selections).some(([id, target]) => !ids.has(id) || typeof target !== 'string' || !target)) invalid();
+  if (Object.keys(selections).length > 100 || Object.entries(selections).some(([id, target]) => !validName(id) || reserved.has(id) || aliases.has(id) || ['__proto__', 'constructor', 'prototype'].includes(id) || typeof target !== 'string' || !target)) invalid();
   // Validate nodes once before constructing references, including the empty case.
   localGroupChoices(proxies, 'Proxy');
-  const enabled = serviceCatalog.filter((service) => service.default || Object.hasOwn(selections, service.id));
+  const enabled = serviceCatalog.filter((service) => service.default || Object.hasOwn(selections, service.id)).map(service => ({ ...service }));
+  for (const id of Object.keys(selections)) if (!ids.has(id)) {
+    if (proxies.some(proxy => proxy.name === id)) invalid();
+    enabled.push({ id, name: id, default: false, description: '', domains: [], exactDomains: [] } as unknown as typeof enabled[number]);
+  }
   const targets = new Set(['DIRECT', 'REJECT', ...enabled.map((service) => service.id), ...proxies.map((proxy) => proxy.name as string)]);
   const groups: JsonObject[] = enabled.map((service) => {
     const choices = localGroupChoices(proxies, service.id);
