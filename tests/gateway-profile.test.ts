@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { canonicalJson, compileConfig, type JsonObject } from '../packages/config/index.ts';
-import { AUTOMATIC_GATEWAY_CORE_SHA256, AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM, AutomaticGatewayConfigError, automaticGatewayPolicy,
+import { AUTOMATIC_GATEWAY_CORE_SHA256, AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM, AutomaticGatewayConfigError, automaticGatewayManagesIPv4, automaticGatewayPolicy,
   compileAutomaticGatewayConfig, parseAutomaticGatewaySettings, recompileAutomaticGatewayConfig } from '../packages/gateway/profile.ts';
 import { validateWithMihomo } from '../packages/mihomo/validator.ts';
 import { loadRuntimeCandidate, parseRuntimeSettings } from '../packages/runtime/settings.ts';
@@ -156,3 +156,27 @@ test('pinned reviewed core parses native profile without starting listeners or T
     assert.equal(createHash('sha256').update(await readFile(binaryPath)).digest('hex'), AUTOMATIC_GATEWAY_CORE_SHA256);
     await validateWithMihomo(compileAutomaticGatewayConfig(base(), settings()), { binaryPath });
   });
+
+
+test('LAN scope covers changing ordinary clients, binds the generation, and excludes control identities', async () => {
+  const { clientIPv4: _, ...common } = settings();
+  const lan = { ...common, clientCIDR: '192.0.2.0/24' };
+  const parsed = parseAutomaticGatewaySettings(lan);
+  assert.deepEqual(parsed, lan);
+  for (const address of ['192.0.2.3', '192.0.2.99', '192.0.2.254']) assert.equal(automaticGatewayManagesIPv4(parsed, address), true);
+  for (const address of ['192.0.2.0', '192.0.2.1', '192.0.2.2', '192.0.2.255', '192.0.3.3']) assert.equal(automaticGatewayManagesIPv4(parsed, address), false);
+  for (const clientCIDR of ['192.0.2.3/24', '192.0.2.0/25', '192.0.3.0/24', '0.0.0.0/0', '::/0']) {
+    invalid(() => parseAutomaticGatewaySettings({ ...lan, clientCIDR }));
+  }
+  invalid(() => parseAutomaticGatewaySettings({ ...lan, clientIPv4: '192.0.2.3' }));
+  const source = base(); (source.deployment as JsonObject).bootstrapResolvers = ['198.51.100.2'];
+  const candidate = compileAutomaticGatewayConfig(source, lan);
+  assert.equal(recompileAutomaticGatewayConfig(candidate.config, lan).id, candidate.id);
+  assert.notEqual(compileAutomaticGatewayConfig(source, settings()).id, candidate.id);
+  (source.deployment as JsonObject).bootstrapResolvers = ['192.0.2.99'];
+  invalid(() => compileAutomaticGatewayConfig(source, lan));
+  const example = JSON.parse(await readFile(new URL('../examples/automatic-gateway-deployment.json', import.meta.url), 'utf8'));
+  const exampleCandidate = compileAutomaticGatewayConfig({ schemaVersion: 1, deployment: example.management.deployment,
+    policy: { rules: ['MATCH,REJECT'] } }, example.runtime.automaticGateway);
+  assert.equal(recompileAutomaticGatewayConfig(exampleCandidate.config, example.runtime.automaticGateway).id, exampleCandidate.id);
+});

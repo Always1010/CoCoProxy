@@ -17,7 +17,7 @@
       "gatewayIPv4": "192.0.2.2",
       "routerIPv4": "192.0.2.1",
       "routerMAC": "02:00:00:00:00:01",
-      "clientIPv4": "192.0.2.3",
+      "clientCIDR": "192.0.2.0/24",
       "prefixLength": 24,
       "dnsPort": 15353,
       "egressMark": 65536,
@@ -40,7 +40,7 @@
       "controllerPort": 19090,
       "controllerSecret": "synthetic-controller-secret-replace-before-install",
       "dnsPort": 15353,
-      "bootstrapResolvers": ["192.0.2.53"]
+      "bootstrapResolvers": ["198.51.100.53"]
     },
     "subscriptionPolicy": { "allowedOrigins": ["https://subscription.example"] },
     "controllerPolicy": { "allowedProbeOrigins": ["https://www.gstatic.com"] }

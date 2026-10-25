@@ -18,7 +18,9 @@ export type AutomaticGatewaySettings = {
   gatewayIPv4: string;
   routerIPv4: string;
   routerMAC: string;
-  clientIPv4: string;
+  /** Exactly one source form; CIDR covers every ordinary host in the connected LAN. */
+  clientIPv4?: string;
+  clientCIDR?: string;
   prefixLength: number;
   dnsPort: number;
   egressMark: number;
@@ -82,7 +84,7 @@ function ipv4(input: unknown): string {
   return input;
 }
 const ipv4Number = (address: string) => address.split('.').reduce((value, octet) => value * 256 + Number(octet), 0);
-const settingsKeys = ['schemaVersion', 'ingressInterface', 'gatewayIPv4', 'routerIPv4', 'routerMAC', 'clientIPv4',
+const settingsKeys = ['schemaVersion', 'ingressInterface', 'gatewayIPv4', 'routerIPv4', 'routerMAC',
   'prefixLength', 'dnsPort', 'egressMark', 'egressTable', 'egressPriority', 'tunMtu'];
 
 /** Deployment input only: no generation, executable hooks or implicit defaults. */
@@ -90,17 +92,22 @@ export function parseAutomaticGatewaySettings(input: unknown): AutomaticGatewayS
   try {
     dataOnly(input);
     const value = object(input);
-    if (Object.keys(value).length !== settingsKeys.length || Object.keys(value).some(key => !settingsKeys.includes(key)) || value.schemaVersion !== 1) fail();
+    const sourceKey = Object.hasOwn(value, 'clientCIDR') ? 'clientCIDR' : 'clientIPv4';
+    if (Object.keys(value).length !== settingsKeys.length + 1 ||
+      Object.keys(value).some(key => !settingsKeys.includes(key) && key !== sourceKey) || value.schemaVersion !== 1) fail();
     const iface = value.ingressInterface;
     if (typeof iface !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$/.test(iface) || iface === 'lo' || /tun/i.test(iface)) fail();
-    const gatewayIPv4 = ipv4(value.gatewayIPv4), routerIPv4 = ipv4(value.routerIPv4), clientIPv4 = ipv4(value.clientIPv4);
-    if (new Set([gatewayIPv4, routerIPv4, clientIPv4]).size !== 3) fail();
+    const gatewayIPv4 = ipv4(value.gatewayIPv4), routerIPv4 = ipv4(value.routerIPv4);
+    const clientIPv4 = sourceKey === 'clientIPv4' ? ipv4(value.clientIPv4) : undefined;
+    if (gatewayIPv4 === routerIPv4 || clientIPv4 === gatewayIPv4 || clientIPv4 === routerIPv4) fail();
     const prefixLength = integer(value.prefixLength, 1, 29), size = 2 ** (32 - prefixLength);
     const network = Math.floor(ipv4Number(gatewayIPv4) / size) * size;
-    if ([gatewayIPv4, routerIPv4, clientIPv4].some(address => {
+    if ([gatewayIPv4, routerIPv4, ...(clientIPv4 ? [clientIPv4] : [])].some(address => {
       const number = ipv4Number(address);
       return number <= network || number >= network + size - 1;
     })) fail();
+    const connected = [24, 16, 8, 0].map(shift => Math.floor(network / 2 ** shift) % 256).join('.') + `/${prefixLength}`;
+    if (sourceKey === 'clientCIDR' && value.clientCIDR !== connected) fail();
     const tun = ipv4Number(AUTOMATIC_GATEWAY_TUN_ADDRESS.split('/')[0]);
     if (network <= tun + 2 && network + size - 1 >= tun - 1) fail();
     if (typeof value.routerMAC !== 'string' || !/^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/.test(value.routerMAC) ||
@@ -108,9 +115,17 @@ export function parseAutomaticGatewaySettings(input: unknown): AutomaticGatewayS
     const egressMark = integer(value.egressMark, 1, 0xffffffff), egressTable = integer(value.egressTable, 2000, 19999);
     if ([2023, 2024].includes(egressMark) || egressTable === 2022) fail();
     return { schemaVersion: 1, ingressInterface: iface, gatewayIPv4, routerIPv4, routerMAC: value.routerMAC.toLowerCase(),
-      clientIPv4, prefixLength, dnsPort: integer(value.dnsPort, 1024, 65535), egressMark, egressTable,
+      ...(clientIPv4 ? { clientIPv4 } : { clientCIDR: connected }), prefixLength, dnsPort: integer(value.dnsPort, 1024, 65535), egressMark, egressTable,
       egressPriority: integer(value.egressPriority, 1000, 8997), tunMtu: integer(value.tunMtu, 1280, 9000) };
   } catch { return fail(); }
+}
+
+/** Called only with parsed settings; router/gateway and LAN control addresses are excluded. */
+export function automaticGatewayManagesIPv4(n: AutomaticGatewaySettings, address: string): boolean {
+  if (n.clientIPv4) return address === n.clientIPv4;
+  const size = 2 ** (32 - n.prefixLength), network = Math.floor(ipv4Number(n.gatewayIPv4) / size) * size;
+  const number = ipv4Number(address);
+  return number > network && number < network + size - 1 && address !== n.gatewayIPv4 && address !== n.routerIPv4;
 }
 
 /** Reuse the existing offline policy compiler, then install the fixed native profile. */
@@ -122,7 +137,7 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
     if (dns.listen !== `127.0.0.1:${settings.dnsPort}` || Number(compiled.config['mixed-port']) < 1024 ||
       Number(String(compiled.config['external-controller']).split(':')[1]) < 1024) fail();
     const resolvers = dns['default-nameserver'];
-    if (!Array.isArray(resolvers) || resolvers.some(address => ipv4(address) === settings.gatewayIPv4 || address === settings.clientIPv4)) fail();
+    if (!Array.isArray(resolvers) || resolvers.some(address => ipv4(address) === settings.gatewayIPv4 || automaticGatewayManagesIPv4(settings, address as string))) fail();
     const size = 2 ** (32 - settings.prefixLength), network = Math.floor(ipv4Number(settings.gatewayIPv4) / size) * size;
     const connected = [24, 16, 8, 0].map(shift => Math.floor(network / 2 ** shift) % 256).join('.') + `/${settings.prefixLength}`;
     const config: JsonObject = {
