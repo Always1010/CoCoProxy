@@ -6,6 +6,8 @@ Coproxy 面向 Linux 网关，提供可通过浏览器管理的局域网代理�
 
 开发基线为 Node.js 22.18 或更高版本。运行依赖及类型声明由根 package-lock.json 固定，开发工具另由 tooling 锁文件固定；在获准的项目环境执行相应 `npm ci --ignore-scripts --no-audit --no-fund`。运行 `npm run cli -- help` 查看入口，构建管理界面和针对性检查见[开发与验证](docs/development.md)及[适配记录](integrations/metacubexd/README.md)。原生类型擦除与静态类型检查分别执行。
 
+当前自动网关仅支持一台明确的 IPv4 终端，受管公网 IPv6 阻断。通用部署按 Linux 架构和接入路由器能力选择，当前不承诺任意封闭固件、多终端或整个 LAN 接管；详见部署与协作说明。
+
 ## 项目文档
 
 - [项目目标与技术方案](docs/project-plan.md)：范围、开源选型、架构、实施阶段与验收要求。

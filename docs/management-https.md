@@ -15,6 +15,8 @@
 
 使用域名时，由实际局域网 DNS 解析到网关地址；使用 IP 时，把域名 authority 全部改为同一 IP 和端口，证书须含该 IP SAN。样本只监听明确的局域网地址。跨网段管理需要接入网络提供相应路由。
 
+HTTPS 样本额外要求服务组存在：`getent group coproxy` 应成功，且服务账号有权使用该组。主安装器只验证账号及 UID，不会创建或保证同名组。若目标使用不同服务组，必须同时替换 unit 的 `Group`、下述 `-g` 参数和私钥／临时目录的组，不把账号存在当作组已准备完成。
+
 后端继续绑定回环；反代覆盖 Host/协议头并移除客户端自带的 Forwarded/IP 转发头。后端检查完整 origin、请求 Origin 和会话，HTTPS 会话使用 Secure、HttpOnly、SameSite=Strict 的 `__Host-` Cookie。核心 secret 留在服务端，WebSocket 经过同一认证入口。
 
 ## 证书与安装
