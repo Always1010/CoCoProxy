@@ -55,11 +55,13 @@ policy 可能包含管理员编辑的节点凭据，因此仍是敏感的已认�
 
 ## 服务构造与启动恢复
 
-`loadManagementService(absolutePrivateSettingsPath)` 返回 Fetch 处理器；`loadManagementGateway` 额外提供共享 `authorize`、`controller` 与 `recoverStartup` 给 Server 适配层。schemaVersion 1 私有配置包含 `origin`、`credentialPath`、`runtimeSettingsPath`、`deployment`，可选 `subscriptionPolicy`、`controllerPolicy`，合成格式见 examples/management-settings.json。运行设置沿用 runtime 模块；订阅策略沿用受限 HTTPS 许可字段，不接受可执行 resolver。工厂使用真实 `SystemdMihomoRuntime`，仅加载配置不会创建状态目录、监听网络或操作服务。
+`loadManagementService(absolutePrivateSettingsPath)` 返回 Fetch 处理器；`loadManagementGateway` 额外提供共享 `authorize`、`controller`、单次 `recoverStartup` 及 `startLifecycle`/`closeLifecycle` 给 Server 适配层。schemaVersion 1 私有配置包含 `origin`、`credentialPath`、`runtimeSettingsPath`、`deployment`，可选 `subscriptionPolicy`、`controllerPolicy`，合成格式见 examples/management-settings.json。运行设置沿用 runtime 模块；订阅策略沿用受限 HTTPS 许可字段，不接受可执行 resolver。工厂使用真实 `SystemdMihomoRuntime`，仅加载配置不会创建状态目录、监听网络或操作服务。
 
-Server 的异步启动插件等待 `recoverStartup()` 完成一次检查。空状态或已完成事务只读返回；未完成事务或持久故障交由既有 `TransactionManager.recover()` 在共同文件锁下恢复，可能停止未提交核心或重新启动上一确认核心。它不捕获新草稿、不提交新代次、不添加周期重试或第二个监管器。恢复失败保留事务／故障，管理端仍可检查并显式重试；日志只输出固定错误码。锁冲突不触发并行恢复。`tests/management-startup.test.ts` 验证这些分支，真实 Server 检查另验证从 `/` 工作目录启动，所有配置和入口必须为绝对路径。
+Server 的异步启动插件通过 `startLifecycle()` 先等待一次 pending 恢复。空状态或已完成事务只读返回；未完成事务或持久故障交由既有 `TransactionManager.recover()` 在共同文件锁下恢复，可能停止未提交核心或重新启动上一确认核心。恢复失败保留事务／故障，管理端仍可检查；日志只输出固定错误码。缺失持久运行标记时保持原有行为，已完成 active 不隐式启动。
 
-Server overlay 替换了上游原控制 router、自动启动、刷新调度和 token 注入；桌面 endpoint/sync 插件也已禁用。客户端固定同源 `/api/clash`，不会获取核心密钥或选择任意控制器。部署必须使用专用可信 origin，后端只绑定 loopback；HTTPS 终止代理须覆盖 Host/转发协议头并拒绝不可信转发头。管理与核心的私有状态要求相容的服务身份和权限，systemctl 授权仅针对审阅的核心单元，具体安装另行实施。
+明确启用 `lifecycle.json` 后，既有管理进程每 5 秒串行协调：优先恢复 pending，再在共同锁内重读启用/暂停标记及 committed active，核验并修复网关前置资源、保留健康核心或请求 systemd 恢复 active。不会捕获新草稿、应用 desired 或新提交代次，也不创建第二个核心进程监管器。暂时网络不可用、活锁竞争及启动失败持续稍后重试；配置损坏、资源冲突保留固定失败状态。持久维护暂停阻止自动 pending 恢复和 active 协调，核心启动器也拒绝 paused 状态，跨 boot 仍有效。退出时 `closeLifecycle()` 清定时器并等待在途协调完成。`tests/management-startup.test.ts` 验证草稿隔离、暂停、锁竞争、持续重试与关闭排空，启动器测试验证暂停和损坏标记拒绝 exec；真实 Server 检查另验证从 `/` 工作目录启动，所有配置和入口必须为绝对路径。
+
+Server overlay 替换了上游原控制 router、自动启动、刷新调度和 token 注入；桌面 endpoint/sync 插件也已禁用。客户端固定同源 `/api/clash`，不会获取核心密钥或选择任意控制器。部署必须使用专用可信 origin，后端只绑定 loopback；HTTPS 终止代理须覆盖 Host/转发协议头并拒绝不可信转发头。管理与核心的私有状态要求相容的服务身份和权限，systemctl 授权只针对审阅的核心单元及原生模式的固定网络 unit start/reload，具体安装另行实施。
 
 ## 核心代理
 

@@ -27,6 +27,10 @@ ReadWritePaths 只允许状态目录；Install 段仅描述显式 enable 的目�
 
 启动器以 `process.execve` 替换自身，保留 MainPID/cgroup，不创建第二个监管进程；只传固定 PATH/LANG 和私有 HOME。Node 22.x 的 execve 为实验 API，不支持时拒绝。稳定状态及已持久提交的事务只允许启动 active；未提交事务必须以 ownerToken 绑定仍存活的共同锁持有者，并核对 Linux boot ID、PID 启动时间及非僵尸状态。activating/confirming 只允许 target，restoring 只允许 previous，显式 recovering-target 只允许对应 target；validating/fault 拒绝启动。候选加载前和 exec 前分别复核，exec 前还复核 selection。旧未提交记录缺少 ownerToken 或原操作者已退出时必须先 recover，不能凭残留 selection 自动重启。
 
+持久运行由服务身份私有的 `stateDirectory/lifecycle.json` 明确启用，格式为 `{ "schemaVersion": 1, "enabled": true, "paused": false }`。缺失标记保持原有行为，不自行启用；损坏标记拒绝启动。`setRuntimeLifecycle` 与应用、恢复及控制变更共用事务锁，遇到活锁最多等待 60 秒，成功暂停后在途协调已经结束。管理进程只在 `enabled && !paused` 时每 5 秒串行协调已提交 active：先恢复 pending，再核验网关前置资源，保留健康核心，让 systemd 完成已有 job，必要时通过固定 unit 恢复 active。依赖暂时不可用时持续重试，不应用 desired 或工作区草稿。systemd 仍是唯一持有和监管核心进程的组件。
+
+维护前执行 `runtime-pause`，再按部署流程停止服务；暂停持久化并由启动器在候选加载前及 exec 前核验，重启主机也不能绕过。`runtime-disable` 写入 `enabled:false, paused:true`，不会立即停止现有核心或撤销路由器交付；此后再次启动须先 `runtime-enable`，或在仍已启用时 `runtime-resume`。`runtime-lifecycle-status` 只读标记。持久部署只 enable 管理与网页入口，由管理恢复核心，不需要单独 enable 核心；路由器明确关闭交付后，网关核心继续运行也不会替路由器重新开启交付。
+
 手动节点热切换仍经过不可变候选、共同锁、active CAS、`-t`、激活、观察及持久提交。只有现有 `select` 组的同一成员集合重新排序，且其他配置完全相同、`profile.store-selected=false` 时才可跳过 stop/start；第一成员表示持久选择。修改节点、规则、DNS、组属性或成员集合仍走完整重启。先核验旧进程，再以认证 loopback PUT 更新变化组，使用一次认证 `GET /proxies` 核对目标全部手动组的真实 `now`。
 
 热切换将目标 generation 与一个固定物理进程的 base generation、PID、Linux boot ID、启动时间原子写入私有 selection。回执不累积历史链；观察仍检查可信二进制、unit、UID、argv、controller 归属与认证及前后进程身份。只有身份严格匹配且 base/目标配置仍只差选择时，才允许 argv 保持 base 候选。核心正常重启会按 selection 启动目标候选，旧回执不能授权其他进程使用旧 argv。部分 PUT 失败、进程中途重启或目标回读不符，均通过既有恢复流程 stop/start 上一代；未提交时管理进程崩溃同样恢复上一代。已持久提交后崩溃保留目标，启动授权规则不变。
@@ -51,7 +55,7 @@ npm run cli -- runtime-recover --state-dir /var/lib/cocoproxy --runtime-settings
 
 ## 操作边界与验证
 
-unit、systemctl 及路径祖先须受可信身份控制；unit 无 drop-in、无待重载，FragmentPath/User 匹配。设置和状态为服务身份私有。核心只可由 root 或服务 UID 持有且不可被组／其他用户写入，流式核验摘要并复核文件身份。管理身份只获固定核心 show/start/stop，不接受通用提权。
+unit、systemctl 及路径祖先须受可信身份控制；unit 无 drop-in、无待重载，FragmentPath/User 匹配。设置和状态为服务身份私有。核心只可由 root 或服务 UID 持有且不可被组／其他用户写入，流式核验摘要并复核文件身份。管理身份只获固定核心 show/start/stop；原生网关额外仅获固定网络 unit 的 start/reload，不接受通用提权。
 
 systemctl 限时 15 秒、输出 16 KiB；客户端结束不代表 manager job 结束，适配器 stop 后最多两次核验，未收敛前不启动后继。controller `/version` 限时 1 秒、4 KiB；组回读为一次限时 1 秒、最大 16 MiB／6016 个代理的请求，均无重定向。热切换 PUT 最多四个并发，启动新批次的预算为 3 秒，当前批次最多再耗时 1 秒；失败等待本批请求全部结束才恢复，防止迟到写入覆盖恢复结果。确认目标 10 秒，但等待在途有界观察后总耗时可能更长；激活与恢复不通过 Promise.race 并行。
 
