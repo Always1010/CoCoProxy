@@ -22,7 +22,9 @@
 
 `renderAutomaticGatewayHostPlan` 生成 `cocoproxy-gateway-network.service` 与 root 设置；`apps/gateway/network.py` 使用系统 Python 标准库执行固定 `ip`／`nft` 参数，不提供 HTTP 监听或通用命令接口。核心 unit 通过 Requires/After/BindsTo 依赖网络 unit，管理 unit 不获得网络 capability。核心自动资源使用上游表 2022、规则 9000 起及重定向 mark；本组件管理不同名称的 `cocoproxy_auto_guard`、一张显式部署的出口表、客户端回程，以及两条同时限定来源范围和入口接口的规则：LAN 目的地址先查主表，其余交给上游 TUN 表。这两条规则先于 UID 排除，避免被转交的 UDP 绕过 TUN；本机应用不匹配该入口。兼容单终端保留主表 `/32` 回程；LAN 模式使用 `egressTable + 20000` 的独立回程表和 `iif cocoproxy-tun to clientCIDR` 规则，回程下一跳仍是路由器。该表范围为 22000–39999，部署前必须预留；prepare 会拒绝已有资源。LAN 模式不替换主表的已连接路由，不把主机自身的 SSH/管理应答送回路由器。
 
-root 源码、设置及其祖先不可由普通用户写入；自有源码／设置／状态路径拒绝链接。系统可执行路径可经过受 root 保护的发行版链接，逐段检查链接和目标。网络回执目录独立于管理状态，要求 root:0700。单一 flock 串行执行，回执绑定 boot、设置摘要、完整 guard AST/handle 和实际路由／规则。TUN 命名入口规则的 `iif_detached` 是核心启停的内核生命周期标记，回执只规范化该标记，其余选择器、接口名和表仍完整比较。同 boot 的重复 prepare 只核验，不重复添加；预检拒绝冲突和旧自动资源。部分执行留下不完整回执，普通 prepare/remove 都拒绝自动猜测归属；当前版本需要操作者检查并处理。
+root 源码、设置及其祖先不可由普通用户写入；自有源码／设置／状态路径拒绝链接。系统可执行路径可经过受 root 保护的发行版链接，逐段检查链接和目标。网络回执目录独立于管理状态，要求 root:0700。单一 flock 串行执行，回执绑定 boot、设置摘要、完整 guard AST/handle 和实际路由／规则。完整回执授权同 boot 或跨 boot 重建缺失的已知资源：仍存在的每个资源必须匹配回执，未知或改变的资源一律拒绝覆盖。同 boot 仍存在的 guard 连同 handle 完整比较；跨 boot 或重建后允许 handle 变化并保存新实际回执。路由临时 linkdown 标记及 TUN 命名入口规则的 iif_detached 予以规范化，其余表达式、选择器、接口名和表保持严格比较。修复前持久写 incomplete，先恢复 guard 再恢复路由和规则，完成后保存实际资源。部分执行留下不完整回执，prepare/reconcile/remove 都拒绝自动猜测归属，须操作者核查处理。
+
+`prepare` 等待实际指定入口的 UP、LOWER_UP、网关 IPv4 和精确前缀，最多 35 秒，不把其他接口或 Wi-Fi 就绪当作 LAN 已就绪；已有路由器邻居记录的 MAC 必须匹配设置。固定 `ExecReload` 执行 `reconcile`，立即核验同一条件并修复已登记的缺失资源，不停止核心或移除现有 guard。持久运行的管理协调器只获该网络 unit 的 start/reload 权限，在首次 prepare 因网络晚到失败时重新 start，之后 reload 核验。接口按实际 L3 接口名绑定，不按同桥物理口绑定；更换接口名、LAN 地址前缀或路由器身份需要重新审阅配置。
 
 prepare 要求已有 `ip_forward=1`，不修改 sysctl、默认路由、系统 DNS 或其他网络资源。它先装独立 guard，再添加标记出口、回程和两条终端接管规则；回执核验及移除覆盖这些规则。guard 限定交付入口、受管 IPv4 范围和路由器 MAC，DNS 仅接受路由器或本机请求，阻止受管公网流量原样转发，丢弃经此入口转发的 IPv6。接入路由器仍须阻断受管终端未交付的公网 IPv6；此 guard 不能控制从未到达网关的流量。
 
@@ -44,6 +46,6 @@ npm run cli -- deployment-plan --input /absolute/private/deployment.json --outpu
 
 路由器与网关必须配置相同的接入 LAN 范围；例如网关使用 `clientCIDR: "192.0.2.0/24"` 时，不再携带 `clientIPv4`。路由器仍负责保留原来源、排除本地控制和网关出站、阻断未交付的公网 IPv6，不能用放宽网关来源范围代替这些行为。
 
-`tests/gateway-host-plan.test.ts` 的可选内核验证使用审核核心和五个独立网络命名空间，检查两个客户端 TCP/UDP、新加入地址、路由器专用 DNS、实际回包经过路由器的计数、主机路由、错误来源 MAC 及核心停止后的阻断。显式设置 `COCOPROXY_TEST_GATEWAY_KERNEL=1` 与 `COCOPROXY_TEST_MIHOMO` 后运行该测试；它需要已有的免交互 `sudo`，只在全 UID/GID 映射的子 user namespace 和独立 net namespace 中配置合成网络，不安装依赖或修改主机网络。全 UID 映射用于真实运行生产的全 UID 排除规则，单 UID 映射无法表示该内核规则。该验证不替代真实接入路由器、多终端硬件、重启或持续运行验收。
+`tests/gateway-host-plan.test.ts` 的可选内核验证使用审核核心和五个独立网络命名空间，检查两个客户端 TCP/UDP、新加入地址、路由器专用 DNS、实际回包经过路由器的计数、主机路由、错误来源 MAC、地址丢失后恢复及已知 guard/路由缺失修复、未知资源冲突拒绝和核心停止后的阻断。显式设置 `COCOPROXY_TEST_GATEWAY_KERNEL=1` 与 `COCOPROXY_TEST_MIHOMO` 后运行该测试；它需要已有的免交互 `sudo`，只在全 UID/GID 映射的子 user namespace 和独立 net namespace 中配置合成网络，不安装依赖或修改主机网络。全 UID 映射用于真实运行生产的全 UID 排除规则，单 UID 映射无法表示该内核规则。该验证不替代真实接入路由器、多终端硬件、重启或持续运行验收。
 
 变更受管范围会改变候选代次。迁移前先独立关闭路由器交付并停止核心，再用**旧版本 helper 与旧设置**显式 remove 完整旧网络回执，保留其他资源；否则新设置摘要与旧回执不符会拒绝 prepare。随后安装新设置与软件，先启动管理及 HTTPS，经工作区应用重新编译并激活新范围的候选，确认成功后再开启路由器 LAN 交付。不能只更改 runtime 设置后启动仍指向旧代次的 selection，也不能手工伪造 active/selection。已完成且无 fault 的管理状态可在旧候选尚未迁移时启动；新应用失败后的回滚可能因旧候选范围不匹配而进入 fault，应保持交付关闭，恢复匹配旧设置后走显式事务恢复。

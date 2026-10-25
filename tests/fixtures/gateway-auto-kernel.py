@@ -155,6 +155,43 @@ def driver(root):
         second.ip('addr', 'add', '192.0.2.99/24', 'dev', 'lan-test')
         second.ip('route', 'replace', 'default', 'via', '192.0.2.1')
         f.check(second.call('http') and second.call('udp'), 'NEW_CLIENT_ADDRESS_FAILED')
+        # Exercise the real helper inside the gateway namespace while the core
+        # remains live. Only its durable receipt writer is replaced in this
+        # disposable fixture; every ip/nft operation is the production command.
+        receipt = {'schemaVersion': 1, 'status': 'complete', 'bootID': 'fixture-boot',
+                   'inputHash': 'fixture-input', 'resources': json.loads(snapshot_before)}
+        recovery_prefix = ("import json,importlib.util; s=importlib.util.spec_from_file_location('gateway',"
+                           + repr(str(Path(network.__file__))) + "); h=importlib.util.module_from_spec(s); s.loader.exec_module(h); "
+                           + "n=json.load(open(" + repr(str(root / 'input.json')) + "))['network']; "
+                           + "h.store=lambda *args:None; ")
+        recovery_call = ("h.prepare({'network':n,'guardRules':h.guard(n)},None," + repr(receipt)
+                         + ",'fixture-boot','fixture-input',0)")
+        recovery_code = recovery_prefix + recovery_call
+        gateway.ip('link', 'set', 'lan-test', 'down')
+        gateway.ip('addr', 'del', '192.0.2.2/24', 'dev', 'lan-test')
+        gateway.ip('link', 'set', 'lan-test', 'up')
+        gateway.ip('addr', 'add', '192.0.2.2/24', 'dev', 'lan-test')
+        # A DHCP/address cycle can lose host-specific routes. Remove a known
+        # route and guard as well to verify precise missing-resource repair.
+        present = json.loads(gateway.call('exec', args=['python3', '-c', snapshot_code]))
+        if present['egress']:
+            gateway.call('exec', args=network.route_args(n, 'del', True))
+        gateway.nft('delete table inet cocoproxy_auto_guard')
+        gateway.call('exec', args=['python3', '-c', recovery_code])
+        f.check(first.call('http') and second.call('udp'), 'ADDRESS_AND_RESOURCE_RECOVERY_FAILED')
+        receipt['resources'] = json.loads(gateway.call('exec', args=['python3', '-c', snapshot_code]))
+        recovery_call = ("h.prepare({'network':n,'guardRules':h.guard(n)},None," + repr(receipt)
+                         + ",'fixture-boot','fixture-input',0)")
+        # Unknown resources are rejected before any mutation, even with an
+        # otherwise valid complete receipt and live core.
+        gateway.ip('route', 'add', '203.0.113.0/24', 'table', str(n['egressTable']), 'dev', 'lan-test')
+        conflict_before = gateway.call('exec', args=['python3', '-c', snapshot_code])
+        reject_code = (recovery_prefix + "\ntry:\n " + recovery_call
+                       + "\nexcept RuntimeError:\n print('rejected')\nelse:\n raise RuntimeError('CONFLICT_ACCEPTED')")
+        f.check(gateway.call('exec', args=['python3', '-c', reject_code]).strip() == 'rejected', 'UNKNOWN_RESOURCE_NOT_REJECTED')
+        f.check(gateway.call('exec', args=['python3', '-c', snapshot_code]) == conflict_before, 'CONFLICT_MUTATED_RESOURCES')
+        gateway.ip('route', 'del', '203.0.113.0/24', 'table', str(n['egressTable']), 'dev', 'lan-test')
+        snapshot_before = gateway.call('exec', args=['python3', '-c', snapshot_code])
         gateway.call('stop', label='core')
         f.check(gateway.call('exec', args=['python3', '-c', snapshot_code]) == snapshot_before, 'RESOURCE_RECEIPT_CHANGED_ON_TUN_REMOVAL')
         before = origin.call('stats')
@@ -162,7 +199,8 @@ def driver(root):
             f.check(not client.call('http') and not client.call('udp'), 'CORE_STOP_LEAKED')
         f.check(origin.call('stats') == before, 'STOPPED_CORE_TOUCHED_ORIGIN')
         return {'multiClientTcpUdp': True, 'newClientAddress': True, 'routerOnlyDns': True,
-                'tunReturnViaRouter': True, 'hostRoutesPreserved': True, 'wrongMacRejected': True, 'coreStopBlocked': True}
+                'tunReturnViaRouter': True, 'hostRoutesPreserved': True, 'wrongMacRejected': True, 'coreStopBlocked': True,
+                'addressAndResourceRecovery': True, 'unknownResourceRejected': True}
     finally:
         for role in reversed(list(roles.values())):
             role.close()
