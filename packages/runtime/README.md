@@ -1,6 +1,6 @@
 # systemd 核心运行适配
 
-本模块把持久化配置事务接到固定的 `coproxy-mihomo.service`。它只支持当前编译器的回环显式代理配置，不授予网络管理能力，也不证明网关 DNS、接管或终端出口健康。生产默认实现没有模拟成功路径；测试通过显式代码注入替身，部署 JSON 不能替换这些函数。
+本模块把持久化配置事务接到固定的 `coproxy-mihomo.service`。它支持当前编译器的回环显式代理配置，以及部署设置显式启用的原生网关配置；管理进程不因此获得网络管理能力，核心就绪也不证明网关 DNS、接管或终端出口健康。生产默认实现没有模拟成功路径；测试通过显式代码注入替身，部署 JSON 不能替换这些函数。
 
 ## 部署输入与信任边界
 
@@ -19,6 +19,12 @@
 3. 逐项确认 selection、systemd 的 PID/状态、`/proc` 的 exe/EUID/starttime/命令行后缀，以及该 PID 对所有匹配 IPv4 回环 controller LISTEN socket inode 的归属。只有随后带认证的 `/version` 返回合法版本且身份复核通过，才报告核心就绪。
 4. 事务仅在确认后提交 active。启动或确认失败先停止，再选择上一代并重新确认；首次应用失败只确认停止并清除 selection。无法确认停止或恢复时，保留故障事务，禁止新 apply。
 
+原生核心的 `CAP_NET_ADMIN/CAP_NET_RAW` 与无特权管理进程之间存在 Linux `/proc` 权限边界：`exe` 和 `fd` 链接受 `PTRACE_MODE_READ_FSCREDS` 检查；即使 UID 相同，观察者能力不覆盖目标 permitted capabilities 也可被拒绝，目标不可 dump 时同样可能被拒绝。机制见 [proc_pid_exe](https://man7.org/linux/man-pages/man5/proc_pid_exe.5.html)、[proc_pid_fd](https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html) 和 [ptrace 权限检查](https://man7.org/linux/man-pages/man2/ptrace.2.html)。这不通过修改全局 ptrace/dumpable 或授予管理服务 `CAP_SYS_PTRACE` 解决。
+
+仅在受信任部署设置启用原生模式，且 `exe`、`fd` 目录或其链接返回明确 `EACCES/EPERM` 时，允许受限替代观察。该路径仍在前后核验 root 所有且摘要匹配、无 drop-in/待重载的单元；绑定 systemd 提供的 MainPID，核验 `/proc` 的 PID、四个 UID、稳定启动时刻、完整精确 argv 和固定 `/system.slice/coproxy-mihomo.service` cgroup。目标 permitted capabilities 必须精确为 NET_ADMIN/NET_RAW，候选与磁盘核心摘要均须可信，认证 `/version` 必须通过，之后复核身份、单元与核心摘要。只有明确的 FD 权限拒绝可替代 FD 归属；可读却不匹配的 socket 仍拒绝，网络表读取失败及其他未知错误不进入替代路径。显式代理模式继续要求完整 exe 与 FD 归属证据。
+
+完整观察返回 `evidence: proc-exe-and-fd`；受限观察返回 `evidence: native-unit-and-controller`，只表示可信原生服务身份与认证 controller 响应，不声明已验证实际 `/proc/exe` 或 controller FD 归属。两者均只用于核心就绪，不构成 DNS、捕获、网络放行或终端出口验收。失败不返回成功证据字段。`observeCoreFixture` 的合成结果额外带 `scope: fixture`，生产入口不能从部署 JSON 接收此测试 reader。
+
 systemctl 客户端限时 15 秒、输出合计 16 KiB；超时终止客户端进程组并完成清理，但不能将客户端退出当作 systemd job 已取消。适配器显式 stop，并最多两次核验实际状态；不在未收敛的 job 上启动后继。controller 请求总时限 1 秒、响应上限 4 KiB，无重定向；确认循环目标 10 秒，当前在途的有界 systemctl/观察步骤先结束，因此整个调用可能超过 10 秒。没有用 Promise.race 令激活与恢复并发。
 
 启动器通过 `process.execve` 替换自身，保留 systemd 的 MainPID/cgroup；systemd 是唯一失败重启者，不启动第二个 watchdog。它只向核心传递固定 PATH/LANG 和私有 HOME，不继承调用者的代理或加载器环境。持久 fault 阻止普通启动；显式 recover 已写入 restoring 时，仅允许选择该事务的 previous 代次，以免故障保护同时堵死恢复路径。进程崩溃留下的其他 pending 事务仍须执行 recover；网关层不得据核心启动就放行流量。
@@ -35,6 +41,8 @@ node --experimental-strip-types apps/cli/main.ts runtime-recover --state-dir /va
 ## 验证范围
 
 `tests/runtime-evidence.test.ts` 使用真实 Linux `/proc` 和 Node HTTP child 验证进程/端口归属、错代次、私有文件、超时和脱敏。`tests/runtime-plan.test.ts` 验证生成计划、exec 保持 PID、输入拒绝和 fault 恢复启动边界。`tests/runtime-systemd.test.ts` 用真实事务存储和显式假的 systemctl 验证提交、超时后残留 job、停止未收敛与拒绝不可信单元，命令包装器另用真实 Node 子进程验证限额。
+
+`tests/runtime-native-observer.test.ts` 使用合成 reader 覆盖原生 capability 权限拒绝、受限证据标记、显式模式与未知错误拒绝、错误 unit/PID/UID/argv/cgroup、认证失败和观察期间身份变化；测试不会启动真实核心或修改服务、ptrace、dumpable、capability 配置。
 
 这些夹具测试不安装或控制真实系统服务，不构成节点协议、WAN DNS 或网关验收。另有显式的 mihomo-live 测试，已验证固定核心的 `/version`、回环 HTTP 代理和 localhost DNS；实际 systemd 沙箱、服务授权与服务重启恢复仍待验证。Node `process.execve` 在所用 22.x 文档中仍为实验 API；不支持时启动器明确拒绝，不能退回第二个子进程监管器。
 
