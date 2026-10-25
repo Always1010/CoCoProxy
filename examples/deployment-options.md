@@ -37,3 +37,9 @@
 `performance` 只在明确配置时覆盖同名核心策略字段。`tcpConcurrent` 接受布尔值；新建网关部署可启用，并测量多地址目标的连接延迟及资源消耗。`findProcessMode` 仅接受 `off`、`strict`、`always`；纯转发网关可选择 `off`，含 `PROCESS-NAME`、`PROCESS-PATH` 及其正则规则的策略应使用 `strict` 或 `always`。编译器拒绝通过部署配置把原有进程规则切到 `off`，旧策略显式使用 `off` 的语义继续保留。参见 [Mihomo 全局配置](https://wiki.metacubex.one/config/general/)。
 
 `sniffing` 保留布尔兼容：`true` 等同旧的强制模式，配置与哈希保持一致；`false`、`"off"` 均关闭。新增 `"missing-only"` 只对未获得域名的流量嗅探，关闭 `force-dns-mapping`；`"force"` 同时强制嗅探已有 DNS 映射的流量。三种字符串也可写为上述对象的 `mode`。`skipDomains` 使用同样的精确域名或 `+.` 形式，最多 256 条；`skipPorts` 最多 64 个整数或闭区间，范围为 1–65535，编译时从 HTTP/TLS/QUIC 的既有嗅探端口集合扣除。不能排除全部嗅探端口；需完全关闭时使用 `off`。本地和保留目的地址继续排除。参见 [Mihomo 嗅探文档](https://wiki.metacubex.one/config/sniff/)。
+
+## 网关 TUN 参数
+
+`automaticGateway` 保留必填的 `tunMtu`（整数 1280–9000），增加可选 `tunStack`（`mips`、`system`、`mixed`、`gvisor`）和 `tunGso`（布尔值）。省略新字段时维持 `mips`、关闭 GSO，旧设置、候选哈希和重编译行为不变。显式提供的值会进入候选的规范化部署设置，并参与哈希和运行时设置一致性校验。它们属于可信运行时配置，不能由订阅或普通路由规则修改。
+
+MTU、协议栈与 GSO 没有适用于所有设备的最佳定值；应在同一目标设备、内核、核心版本和流量样本下逐项做 A/B 验证，比较吞吐、连接延迟、CPU、内存、丢包和业务兼容性，再选择实际参数。修改配置后仍需核心预检及部署验收，参数可选不代表目标内核和核心一定支持。参见 [Mihomo TUN 文档](https://wiki.metacubex.one/config/inbound/tun/)。

@@ -27,6 +27,8 @@ export type AutomaticGatewaySettings = {
   egressTable: number;
   egressPriority: number;
   tunMtu: number;
+  tunStack?: 'mips' | 'system' | 'mixed' | 'gvisor';
+  tunGso?: boolean;
 };
 
 export class AutomaticGatewayConfigError extends Error {
@@ -86,6 +88,7 @@ function ipv4(input: unknown): string {
 const ipv4Number = (address: string) => address.split('.').reduce((value, octet) => value * 256 + Number(octet), 0);
 const settingsKeys = ['schemaVersion', 'ingressInterface', 'gatewayIPv4', 'routerIPv4', 'routerMAC',
   'prefixLength', 'dnsPort', 'egressMark', 'egressTable', 'egressPriority', 'tunMtu'];
+const optionalSettingsKeys = ['tunStack', 'tunGso'];
 
 /** Deployment input only: no generation, executable hooks or implicit defaults. */
 export function parseAutomaticGatewaySettings(input: unknown): AutomaticGatewaySettings {
@@ -93,8 +96,11 @@ export function parseAutomaticGatewaySettings(input: unknown): AutomaticGatewayS
     dataOnly(input);
     const value = object(input);
     const sourceKey = Object.hasOwn(value, 'clientCIDR') ? 'clientCIDR' : 'clientIPv4';
-    if (Object.keys(value).length !== settingsKeys.length + 1 ||
-      Object.keys(value).some(key => !settingsKeys.includes(key) && key !== sourceKey) || value.schemaVersion !== 1) fail();
+    if (settingsKeys.some(key => !Object.hasOwn(value, key)) || !Object.hasOwn(value, sourceKey) ||
+      Object.keys(value).some(key => !settingsKeys.includes(key) && !optionalSettingsKeys.includes(key) && key !== sourceKey) || value.schemaVersion !== 1) fail();
+    const tunStack = value.tunStack, tunGso = value.tunGso;
+    if (tunStack !== undefined && tunStack !== 'mips' && tunStack !== 'system' && tunStack !== 'mixed' && tunStack !== 'gvisor') fail();
+    if (tunGso !== undefined && typeof tunGso !== 'boolean') fail();
     const iface = value.ingressInterface;
     if (typeof iface !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$/.test(iface) || iface === 'lo' || /tun/i.test(iface)) fail();
     const gatewayIPv4 = ipv4(value.gatewayIPv4), routerIPv4 = ipv4(value.routerIPv4);
@@ -116,7 +122,8 @@ export function parseAutomaticGatewaySettings(input: unknown): AutomaticGatewayS
     if ([2023, 2024].includes(egressMark) || egressTable === 2022) fail();
     return { schemaVersion: 1, ingressInterface: iface, gatewayIPv4, routerIPv4, routerMAC: value.routerMAC.toLowerCase(),
       ...(clientIPv4 ? { clientIPv4 } : { clientCIDR: connected }), prefixLength, dnsPort: integer(value.dnsPort, 1024, 65535), egressMark, egressTable,
-      egressPriority: integer(value.egressPriority, 1000, 8997), tunMtu: integer(value.tunMtu, 1280, 9000) };
+      egressPriority: integer(value.egressPriority, 1000, 8997), tunMtu: integer(value.tunMtu, 1280, 9000),
+      ...(tunStack === undefined ? {} : { tunStack }), ...(tunGso === undefined ? {} : { tunGso }) };
   } catch { return fail(); }
 }
 
@@ -155,7 +162,7 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
       'interface-name': settings.ingressInterface,
       'routing-mark': settings.egressMark,
       'x-coproxy-gateway': { ...settings },
-      tun: { enable: true, device: 'coproxy-tun', stack: 'mips', mtu: settings.tunMtu,
+      tun: { enable: true, device: 'coproxy-tun', stack: settings.tunStack ?? 'mips', mtu: settings.tunMtu,
         'auto-route': true, 'auto-redirect': true, 'auto-detect-interface': false, 'strict-route': true,
         'include-interface': [settings.ingressInterface], 'route-exclude-address': [connected],
         // Forwarded clients belong to the gateway; local applications retain
@@ -163,7 +170,7 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
         'exclude-uid-range': ['0:4294967294'],
         'iproute2-table-index': 2022, 'iproute2-rule-index': 9000,
         'auto-redirect-input-mark': 2023, 'auto-redirect-output-mark': 2024,
-        'dns-mode': 'disabled', 'dns-hijack': [], gso: false, 'disable-icmp-forwarding': true },
+        'dns-mode': 'disabled', 'dns-hijack': [], gso: settings.tunGso ?? false, 'disable-icmp-forwarding': true },
       dns: { ...dns, listen: `${settings.gatewayIPv4}:${settings.dnsPort}`, 'listen-routing-mark': settings.egressMark,
         'fake-ip-range': AUTOMATIC_GATEWAY_TUN_ADDRESS },
     };
