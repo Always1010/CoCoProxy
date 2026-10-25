@@ -45,7 +45,14 @@ Nitro `.output` 只选择 `server/` 和 `public/`，忽略顶层构建元数据�
 
 Server 入口必须包含 `server/index.mjs`。所有区域均拒绝特殊文件、硬链接、目录链接、私有配置常见文件名、密钥文件和另一个主要运行核心；协议测试中的 sing-box 不进入安装载荷。`.map` 文件始终省略，避免将 sourcemap 中的真实构建路径带入载荷。文件名筛查不能替代对构建产物内容和构建输入的审阅。
 
-Mihomo 解压后可执行文件的 SHA-256 必须与 HEAD 内 `integrations/metacubexd/review.json` 的 `coreCandidate.binarySha256` 相同，复制目标固定为 `bin/mihomo`，模式为 `0755`。版本、固定提交和摘要来自同一审阅记录。CLI 不接受更换摘要的参数；库函数的 `reviewedCoreSha256` 仅供合成测试在代码中显式注入，不属于部署配置接口。
+Mihomo 解压后可执行文件的 SHA-256 必须匹配 HEAD 内 `integrations/metacubexd/review.json` 的 `coreCandidate.platforms` 中唯一一个已审阅平台。工具同时核验 64 位小端 ELF 和机器类型，将平台写入 `components.mihomo.platform`；复制目标固定为 `bin/mihomo`，模式为 `0755`。版本、固定提交和摘要来自同一审阅记录。CLI 不接受更换摘要的参数；库函数的 `reviewedCoreSha256` 仅供合成测试在代码中显式注入，不属于部署配置接口。旧审阅记录没有平台目录时，继续使用其固定 `coreCandidate.binarySha256`。
+
+| 平台 | 固定上游产物 | 验证边界 |
+| --- | --- | --- |
+| `linux-arm64` | `mihomo-linux-arm64-v1.19.33.gz` | 官方下载摘要、ELF、实际核心运行已验证；具体部署仍须检查内核与网络能力 |
+| `linux-amd64-v1` | `mihomo-linux-amd64-v1-v1.19.33.gz` | 官方下载摘要与 ELF 已核验；尚无本项目 x86-64 真机运行验收 |
+
+两者来自同一[固定官方发行](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33)，平台目录并不表示支持任意操作系统、内核或设备型号。打包可在另一处理器架构上完成，不执行外来核心；目标机部署预检必须再核验实际 ELF 与主机架构一致。
 
 MetaCubeXD 使用固定提交 `8bbc8f58fef71148a94fb5c0ff808f79b057337d` 的 [MIT LICENSE](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/LICENSE)，载荷保留该通知、审阅记录和源码树来源。Mihomo 使用固定提交 `3f27ef39f8c96bbfbc8b0b9bb10f5c9ef60149d8` 的 [GNU GPL v3 LICENSE](https://github.com/MetaCubeX/mihomo/blob/3f27ef39f8c96bbfbc8b0b9bb10f5c9ef60149d8/LICENSE)，工具要求此文本已经作为 `integrations/mihomo/LICENSE` 进入源提交。ws 的 MIT 许可和 yaml 的 ISC 许可随完整生产模块保留。这份载荷只是内部安装审阅产物，尚未发布；仅保留许可证与固定源码提交链接不能自行证明 GPLv3 对外分发合规。实际分发前须另行准备对应源码与适用的提供方式，并按分发方式审查通知等要求；此事不阻塞内部装配，也不构成已经合规的结论。
 

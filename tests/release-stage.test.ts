@@ -115,6 +115,43 @@ test('rejects wrong reviewed binary and cleans only its temporary staging direct
   assert.equal(await readFile(options.core, 'utf8'), 'unapproved core');
 });
 
+test('fixed platform catalog selects both reviewed ELF architectures and refuses a mislabeled binary', async t => {
+  for (const [platform, architecture, machine] of [['linux-arm64', 'arm64', 183], ['linux-amd64-v1', 'x64', 62]] as const) {
+    await t.test(platform, async t => {
+      const options = await fixture(t);
+      delete options.reviewedCoreSha256;
+      const core = Buffer.alloc(20); Buffer.from([127, 69, 76, 70, 2, 1]).copy(core); core.writeUInt16LE(machine, 18);
+      await writeFile(options.core, core);
+      const path = join(options.sourceDir, 'integrations/metacubexd/review.json');
+      const review = JSON.parse(await readFile(path, 'utf8'));
+      review.coreCandidate.platforms = { [platform]: { architecture, elfMachine: machine,
+        binarySha256: digest(core), downloadedAssetVerified: true, runtimeVerified: false } };
+      await writeFile(path, JSON.stringify(review));
+      await execute('git', ['-C', options.sourceDir, 'add', 'integrations/metacubexd/review.json']);
+      await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'platform fixture']);
+      await stageExplicitRelease(options);
+      const manifest = JSON.parse(await readFile(join(options.output, 'manifest.json'), 'utf8'));
+      assert.equal(manifest.components.mihomo.platform, platform);
+      assert.equal(manifest.components.mihomo.binarySha256, digest(core));
+      assert.equal(manifest.components.mihomo.commit, '2'.repeat(40));
+    });
+  }
+  await t.test('ELF machine must match the fixed reviewed platform', async t => {
+    const options = await fixture(t); delete options.reviewedCoreSha256;
+    const core = Buffer.alloc(20); Buffer.from([127, 69, 76, 70, 2, 1]).copy(core); core.writeUInt16LE(62, 18);
+    await writeFile(options.core, core);
+    const path = join(options.sourceDir, 'integrations/metacubexd/review.json');
+    const review = JSON.parse(await readFile(path, 'utf8'));
+    review.coreCandidate.platforms = { 'linux-arm64': { architecture: 'arm64', elfMachine: 183,
+      binarySha256: digest(core), downloadedAssetVerified: true } };
+    await writeFile(path, JSON.stringify(review));
+    await execute('git', ['-C', options.sourceDir, 'add', 'integrations/metacubexd/review.json']);
+    await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'mislabeled platform fixture']);
+    await rejects(stageExplicitRelease(options), 'CORE_ARCH_MISMATCH');
+    await assert.rejects(lstat(options.output), { code: 'ENOENT' });
+  });
+});
+
 test('rejects lock drift, unknown runtime modules and changed or unknown Nitro trace files', async t => {
   for (const variant of ['lock', 'unknown', 'server-extra', 'server-drift', 'server-unknown-file', 'server-metadata'] as const) {
     await t.test(variant, async t => {
