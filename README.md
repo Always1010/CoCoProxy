@@ -18,6 +18,7 @@ Coproxy 面向 Linux 网关，提供可通过浏览器管理的局域网代理�
 - [管理模块](packages/management/README.md)：私有凭据、cookie 会话、策略编辑、来源捕获与统一应用入口。
 - [MetaCubeXD 适配记录](integrations/metacubexd/README.md)：固定源码引用、待接入入口和候选版本差异。
 - [与接入路由器的协作](docs/router-cooperation.md)：通用职责、流量和解析边界，以及本机联调资料的范围说明。
+- [可重复部署](docs/deployment.md)：角色与系统边界、只读预检、七文件安装、终端验收及升级和保留数据卸载。
 - [协作规则](AGENTS.md)：源码归属、本地资料和提交约定。
 
 路由器端运行方式控制和相关恢复机制不纳入本仓库。路由器协作文档仅表达 Coproxy 的通用边界，不代表对方项目已经接受或实现。本机联调的共同资料保存在仓库外，通过被忽略的目录链接 `.local/lab/shared/` 直接访问；项目独有资料仍留在自己的 `.local/`。
