@@ -222,12 +222,32 @@ test('failed selection apply restores the active generation while keeping review
   assert.equal((await new FileTransactionStore(f.state).status()).transaction, null);
 });
 
+test('available subscriptions require one current local source and reject cancellation without changing preferences', async t => {
+  const f = await fixture(t);
+  await f.source('provider', profile);
+  await f.source('replacement', profile);
+  await f.call('/draft', 'PUT', { expectedRevision: 0, policy: profile });
+  const initial = await f.view();
+  assert.equal(initial.workspace.mode, 'legacy');
+  assert.deepEqual(initial.workspace.sourceIds, ['provider']);
+  await assert.rejects(f.save(settings(), initial.workspace.revision), { code: 'SOURCE_REQUIRED', status: 400 });
+  assert.deepEqual((await f.view()).workspace.sourceIds, ['provider']);
+  const saved = await f.save(settings({ sourceIds: ['provider'] }), initial.workspace.revision);
+  const next = await f.save(settings({ sourceIds: ['replacement'] }), saved.revision);
+  assert.deepEqual(next.sourceIds, ['replacement']);
+  const activeSource = await f.call<{ source: { revision: number } }>('/sources/replacement');
+  await assert.rejects(f.call('/sources/replacement', 'DELETE', { expectedRevision: activeSource.source.revision }), { code: 'SOURCE_IN_USE', status: 409 });
+  const previousSource = await f.call<{ source: { revision: number } }>('/sources/provider');
+  await f.call('/sources/provider', 'DELETE', { expectedRevision: previousSource.source.revision });
+  assert.deepEqual((await f.view()).workspace.sourceIds, ['replacement']);
+});
+
 test('workspace and source changes between capture and transaction entry reject stale activation', async t => {
   const f = await fixture(t);
   const metadata = await f.source('provider', profile);
   const saved = await f.save(settings({ mode: 'subscription', subscriptionId: 'provider' }), 0);
   const stage = FileTransactionStore.prototype.stage;
-  let mutation: (() => Promise<unknown>) | null = () => f.save(settings(), saved.revision);
+  let mutation: (() => Promise<unknown>) | null = () => f.save(settings({ sourceIds: ['provider'] }), saved.revision);
   FileTransactionStore.prototype.stage = async function(candidate) {
     const result = await stage.call(this, candidate);
     if (this.root === f.state && mutation) { const mutate = mutation; mutation = null; await mutate(); }
@@ -237,8 +257,8 @@ test('workspace and source changes between capture and transaction entry reject 
     await assert.rejects(f.apply(saved, null), { code: 'WORKSPACE_CONFLICT', status: 409 });
     const current = (await f.view()).workspace;
     const reset = await f.save(settings({ mode: 'subscription', subscriptionId: 'provider' }), current.revision);
-    mutation = () => f.call('/sources/provider', 'DELETE', { expectedRevision: metadata.revision });
-    await assert.rejects(f.apply(reset, null), { code: 'SOURCE_NOT_FOUND', status: 404 });
+    mutation = () => f.call('/sources/provider', 'PUT', { expectedRevision: metadata.revision, name: 'renamed-provider' });
+    await assert.rejects(f.apply(reset, null), { code: 'SOURCE_CONFLICT', status: 409 });
     assert.deepEqual(f.events, []);
     const status = await new FileTransactionStore(f.state).status();
     assert.equal(status.active, null);
@@ -284,7 +304,7 @@ test('full profiles reject unknown group members, cycles and overrides of automa
   assert.deepEqual(f.events, []);
 });
 
-test('refresh detects stale selection overrides and source deletion leaves the active generation intact', async t => {
+test('refresh detects stale selections and protects the current source without replacing the active generation', async t => {
   const f = await fixture(t);
   const metadata = await f.source('provider', profile);
   const saved = await f.save(settings({ mode: 'subscription', subscriptionId: 'provider',
@@ -298,9 +318,9 @@ test('refresh detects stale selection overrides and source deletion leaves the a
   assert.deepEqual(repair.groups.find(group => group.name === 'Provider')!.options, ['DIRECT', 'REJECT']);
   assert.deepEqual(repair.invalidSelections, ['Provider']);
   await assert.rejects(f.apply(saved, active.active), { code: 'GROUP_SELECTION_CONFLICT', status: 409 });
-  await f.call('/sources/provider', 'DELETE', { expectedRevision: refreshed.revision });
+  await assert.rejects(f.call('/sources/provider', 'DELETE', { expectedRevision: refreshed.revision }), { code: 'SOURCE_IN_USE', status: 409 });
   const view = await f.view();
-  assert.equal(view.error, 'SOURCE_NOT_FOUND');
+  assert.equal(view.error, 'GROUP_SELECTION_CONFLICT');
   assert.equal(view.active, active.active);
   assert.equal(view.pending, true);
   assert.equal(view.workspace.subscriptionOverrides.provider.selections.Provider, 'synthetic-node');

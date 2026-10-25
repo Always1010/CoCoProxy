@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconRefresh, IconSettings } from '@tabler/icons-vue'
+import { IconRefresh } from '@tabler/icons-vue'
 import { CoproxyError } from '~/composables/useCoproxy'
 defineProps<{ dirty?: boolean }>()
 const { view, workspace, busy, error, feedback, operation, run, load, save, editOverrides } = useWorkspace()
@@ -12,6 +12,12 @@ async function changeMode(event: Event) {
     settings.mode = value === 'local' ? 'local' : 'subscription'
     if (settings.mode === 'subscription' && !settings.subscriptionId)
       settings.subscriptionId = profiles.value[0]?.id ?? null
+    if (settings.mode === 'local' && (settings.sourceIds.length !== 1 ||
+      !view.value?.sources.some(source => source.snapshotCurrent && settings.sourceIds.includes(source.id)))) {
+      const source = view.value?.sources.find(source => source.snapshotCurrent && source.id === settings.subscriptionId)
+        ?? view.value?.sources.find(source => source.snapshotCurrent)
+      if (source) settings.sourceIds = [source.id]
+    }
   }))
 }
 
@@ -32,9 +38,6 @@ async function resetInvalidSelections() {
         <option value="local">本地规则模板</option>
         <option value="subscription" :disabled="!profiles.length">订阅配置</option>
       </select>
-      <select v-if="workspace?.mode === 'subscription'" class="select select-sm max-w-52" aria-label="基础订阅" :value="workspace.subscriptionId" :disabled="busy || dirty" @change="run(() => save(settings => { settings.subscriptionId = ($event.target as HTMLSelectElement).value }))">
-        <option v-for="source in profiles" :key="source.id" :value="source.id">{{ source.name || source.host }}</option>
-      </select>
       <select class="select select-sm w-28" aria-label="运行模式" :value="workspace?.runMode ?? 'rule'" :disabled="busy || !workspace || dirty" @change="run(() => save(settings => { settings.runMode = ($event.target as HTMLSelectElement).value as 'rule' | 'global' | 'direct' }))">
         <option value="rule">规则</option>
         <option value="global">全局</option>
@@ -44,9 +47,7 @@ async function resetInvalidSelections() {
       <span v-else-if="dirty" class="badge badge-warning badge-sm">规则尚未保存</span>
       <span v-else-if="view?.pending" class="badge badge-warning badge-sm">设置未生效</span>
       <div class="ml-auto flex items-center gap-1">
-        <NuxtLink to="/subscriptions" class="btn btn-ghost btn-sm" title="管理订阅">订阅</NuxtLink>
         <button class="btn btn-ghost btn-sm" title="刷新" aria-label="刷新" :disabled="busy" @click="run(load)"><IconRefresh :size="18" :class="{ 'animate-spin': busy }" />刷新</button>
-        <NuxtLink to="/coproxy" class="btn btn-ghost btn-sm" title="设置" aria-label="设置"><IconSettings :size="18" />设置</NuxtLink>
       </div>
     </div>
     <div v-if="visibleError" role="alert" class="alert alert-error flex flex-wrap gap-2 py-2 text-sm"><span class="flex-1">{{ visibleError }}</span><button v-if="view?.invalidSelections?.length" class="btn btn-warning btn-sm" :disabled="busy" @click="resetInvalidSelections">重置失效选择</button></div>

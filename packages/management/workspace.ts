@@ -112,6 +112,6 @@ export class WorkspaceStore {
 
 /** Preserve an existing draft until the user explicitly chooses another scheme. */
 export function initialWorkspace(policy: JsonObject | null, sourceIds: string[]): Workspace {
-  return { revision: 0, mode: policy ? 'legacy' : 'local', subscriptionId: null, sourceIds, runMode: 'rule',
+  return { revision: 0, mode: policy ? 'legacy' : 'local', subscriptionId: null, sourceIds: sourceIds.slice(0, 1), runMode: 'rule',
     local: { selections: {}, rules: [] }, subscriptionOverrides: { legacy: { selections: {}, rules: [] } } };
 }

@@ -14,6 +14,10 @@ const sourcePath = (id: string) => `/api/coproxy/sources/${encodeURIComponent(id
 const selected = (source: WorkspaceSource) => workspace.value?.mode === 'subscription'
   ? workspace.value.subscriptionId === source.id
   : workspace.value?.sourceIds.includes(source.id)
+const replacement = (source: WorkspaceSource) => view.value?.sources.find(item =>
+  item.id !== source.id && item.snapshotCurrent && (workspace.value?.mode !== 'subscription' || item.kind === 'profile'))
+  ?? view.value?.sources.find(item => item.id !== source.id && item.snapshotCurrent)
+const canRemove = (source: WorkspaceSource) => !selected(source) || !!replacement(source)
 const formatBytes = (bytes: number) => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
   const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 4)
@@ -33,6 +37,9 @@ function openEditor(source: WorkspaceSource | null = null) {
 async function submit() {
   const source = editing.value
   const id = source?.id ?? `sub-${crypto.randomUUID().replaceAll('-', '')}`
+  const hadCurrent = workspace.value?.mode === 'subscription'
+    ? !!workspace.value.subscriptionId
+    : !!view.value?.sources.some(source => source.snapshotCurrent && workspace.value?.sourceIds.includes(source.id))
   await run(async () => {
     await api.request(sourcePath(id), {
       method: 'PUT', body: { expectedRevision: source?.revision ?? 0, name: name.value.trim(), ...(url.value.trim() ? { url: url.value.trim() } : {}) },
@@ -46,6 +53,8 @@ async function submit() {
       if (created) {
         await api.request(`${sourcePath(id)}/refresh`, { method: 'POST', body: { expectedRevision: created.revision } })
         await load()
+        if (!hadCurrent)
+          await save(settings => { settings.mode = 'local'; settings.sourceIds = [id] }, '订阅已启用')
       }
     }
   })
@@ -62,27 +71,28 @@ async function refresh(source: WorkspaceSource) {
 }
 
 async function choose(source: WorkspaceSource) {
+  if (selected(source) && (workspace.value?.mode === 'subscription' || workspace.value?.sourceIds.length === 1)) return
   await run(() => save(settings => {
     if (settings.mode === 'subscription') settings.subscriptionId = source.id
     else {
       settings.mode = 'local'
-      settings.sourceIds = settings.sourceIds.includes(source.id)
-        ? settings.sourceIds.filter(id => id !== source.id)
-        : [...settings.sourceIds, source.id]
+      settings.sourceIds = [source.id]
     }
-  }))
+  }, `已切换到订阅：${source.name || source.host}`))
 }
 
 async function remove() {
   const source = deleting.value
   if (!source) return
+  if (!canRemove(source)) return
   await run(async () => {
     if (workspace.value?.sourceIds.includes(source.id) || workspace.value?.subscriptionId === source.id) {
+      const next = replacement(source)!
       await save(settings => {
-        settings.sourceIds = settings.sourceIds.filter(id => id !== source.id)
+        settings.sourceIds = [next.id]
         if (settings.subscriptionId === source.id) {
-          settings.subscriptionId = null
-          settings.mode = 'local'
+          settings.subscriptionId = next.kind === 'profile' ? next.id : null
+          settings.mode = next.kind === 'profile' ? 'subscription' : 'local'
         }
       })
     }
@@ -108,11 +118,12 @@ onMounted(() => run(load))
       <span>暂无订阅</span>
       <button class="btn btn-outline btn-sm" @click="openEditor()">导入订阅</button>
     </div>
-    <div v-else class="grid grid-cols-1 items-start gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-      <article v-for="source in view.sources" :key="source.id" class="card border bg-base-200/60" :class="selected(source) ? 'border-primary/40' : 'border-base-content/10'">
-        <div class="card-body gap-3 p-4">
+    <div v-else role="radiogroup" aria-label="当前订阅" class="grid grid-cols-1 items-start gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+      <article v-for="source in view.sources" :key="source.id" class="card relative border transition-colors" :class="selected(source) ? 'border-primary bg-primary/8 ring-1 ring-primary/25' : 'border-base-content/10 bg-base-200/60 hover:border-primary/40'">
+        <button type="button" role="radio" class="absolute inset-0 rounded-[inherit] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" :aria-label="`切换到 ${source.name || source.host}`" :aria-checked="selected(source)" :aria-disabled="selected(source) || undefined" :disabled="busy || (!source.snapshotCurrent && !selected(source)) || (workspace?.mode === 'subscription' && source.kind !== 'profile')" @click="choose(source)" />
+        <div class="card-body pointer-events-none relative gap-3 p-4">
           <div class="flex items-start gap-3">
-            <button class="btn btn-xs shrink-0" :class="selected(source) ? 'btn-primary' : 'btn-ghost'" :title="workspace?.mode === 'subscription' ? '使用此订阅配置' : '用于本地规则模板'" :aria-label="`选择 ${source.name || source.host}`" :aria-pressed="selected(source)" :disabled="busy || (!source.snapshotCurrent && !selected(source)) || (workspace?.mode === 'subscription' && source.kind !== 'profile')" @click="choose(source)"><IconCheck v-if="selected(source)" :size="14" />{{ selected(source) ? '已选' : '选用' }}</button>
+            <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border" :class="selected(source) ? 'border-primary bg-primary text-primary-content' : 'border-base-content/20'"><IconCheck v-if="selected(source)" :size="15" /></span>
             <div class="min-w-0 flex-1">
               <h2 class="truncate font-semibold">{{ source.name || source.host || '未命名订阅' }}</h2>
               <div class="mt-1 truncate text-xs text-base-content/50">{{ source.host }}</div>
@@ -130,10 +141,10 @@ onMounted(() => run(load))
           <div v-if="source.lastError" class="text-xs text-error" role="status">{{ new CoproxyError(source.lastError).message }}</div>
           <div v-else-if="!source.snapshotCurrent" class="text-xs text-warning">需要更新</div>
           <span v-if="source.unsupportedFields?.length" class="badge badge-warning badge-sm" :title="source.unsupportedFields.join('、')" tabindex="0">部分字段未采用</span>
-          <div class="flex items-center justify-end gap-1 border-t border-base-content/8 pt-2">
+          <div class="pointer-events-auto relative z-10 flex items-center justify-end gap-1 border-t border-base-content/8 pt-2">
             <button class="btn btn-ghost btn-sm" title="更新订阅" :aria-label="`更新 ${source.name || source.host}`" :disabled="busy" @click="refresh(source)"><IconRefresh :size="18" />更新</button>
             <button class="btn btn-ghost btn-sm" title="编辑订阅" :aria-label="`编辑 ${source.name || source.host}`" :disabled="busy" @click="openEditor(source)"><IconEdit :size="18" />编辑</button>
-            <button class="btn btn-ghost btn-sm text-error" title="删除订阅" :aria-label="`删除 ${source.name || source.host}`" :disabled="busy" @click="deleting = source"><IconTrash :size="18" />删除</button>
+            <button class="btn btn-ghost btn-sm text-error" :title="canRemove(source) ? '删除订阅' : '请先导入另一个可用订阅，至少保留一个当前订阅'" :aria-label="`删除 ${source.name || source.host}`" :disabled="busy || !canRemove(source)" @click="deleting = source"><IconTrash :size="18" />删除</button>
           </div>
         </div>
       </article>
