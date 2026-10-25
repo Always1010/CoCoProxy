@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useProxyRefresh } from '~/composables/useProxyRefresh'
 import type { MobileNavReselectDetail } from '~/constants'
 import type {
   ProxyNodeWithProvider,
@@ -51,6 +52,7 @@ const { t, locale } = useI18n()
 
 useHead({ title: computed(() => t('proxies')) })
 const proxiesStore = useProxiesStore()
+const proxyRefresh = useProxyRefresh()
 const connectionsStore = useConnectionsStore()
 const configStore = useConfigStore()
 const nodeRecommendationStore = useNodeRecommendationStore()
@@ -288,7 +290,7 @@ const sortedNamesByProvider = computed(() => {
 
 // Fetch proxies on mount
 onMounted(() => {
-  proxiesStore.fetchProxies()
+  void proxyRefresh.refresh()
   window.addEventListener(MOBILE_NAV_RESELECT_EVENT, onMobileNavReselect)
 })
 
@@ -301,7 +303,7 @@ watch(
   useWindowFocus(),
   useThrottleFn(
     (focused) => {
-      if (focused) proxiesStore.fetchProxies()
+      if (focused) void proxyRefresh.refresh()
     },
     30000,
     true,
