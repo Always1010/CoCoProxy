@@ -237,6 +237,17 @@ test('browser source updates expose metadata and capture exact snapshots without
   assert.equal((await f.handler(request('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 2 }, cookie,
     { origin: 'https://other.example' }))).status, 403);
   assert.equal((await call('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 1 })).status, 409);
+  const inUse = await call('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 2 });
+  assert.equal(inUse.status, 409);
+  assert.equal((await inUse.json()).error.code, 'SOURCE_IN_USE');
+  assert.equal((await call('/api/coproxy/sources/secondary', 'PUT', {
+    expectedRevision: 0, url: 'https://subscription.example/secondary',
+  })).status, 200);
+  assert.equal((await call('/api/coproxy/sources/secondary/refresh', 'POST', { expectedRevision: 1 })).status, 200);
+  const { revision, ...settings } = (await (await call('/api/coproxy/workspace')).json()).workspace;
+  assert.equal((await call('/api/coproxy/workspace', 'PUT', {
+    expectedRevision: revision, settings: { ...settings, sourceIds: ['secondary'] },
+  })).status, 200);
   assert.equal((await call('/api/coproxy/sources/primary', 'DELETE', { expectedRevision: 2 })).status, 200);
   assert.equal(await new SubscriptionStore(f.state).status('primary'), null);
   assert.equal((await call('/api/coproxy/status', 'DELETE', {})).status, 405);
@@ -262,7 +273,9 @@ test('failed runtime application is restored and never leaks diagnostics or enab
   }
 });
 
-test('production factory reads private deployment settings and never creates state or controls a service on load', async t => {
+test('production factory reads private deployment settings and never creates state or controls a service on load', {
+  skip: process.platform !== 'linux' ? 'Production runtime settings require Linux and canonical POSIX paths' : false,
+}, async t => {
   const root = await mkdtemp(join(tmpdir(), 'coproxy-management-load-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const state = join(root, 'absent');
