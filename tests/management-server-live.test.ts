@@ -204,17 +204,73 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           assert.deepEqual((await workspace()).workspace.local.rules, ['IP-CIDR,192.0.2.0/24,Domestic', 'DOMAIN,edited.example,REJECT']);
           assert.equal(await page.getByRole('button', { name: '保存规则', exact: true }).isDisabled(), true);
           await screenshot('rules-desktop');
-          // The synthetic runtime is intentionally absent: the UI must show the
-          // validation error and retain the saved plan without claiming success.
-          const [failedApply] = await Promise.all([
-            page.waitForResponse((response: any) => new URL(response.url()).pathname === '/api/coproxy/workspace/apply'),
-            page.getByRole('button', { name: '应用', exact: true }).click(),
-          ]);
-          assert.equal(failedApply.status(), 503);
+          // Saving already attempts activation. The absent synthetic runtime
+          // must report failure without an extra Apply click or false success.
+          assert.equal(await page.getByRole('button', { name: '应用', exact: true }).count(), 0);
           await page.getByRole('alert').filter({ hasText: '配置校验失败' }).waitFor();
+          assert.equal(await page.getByRole('status').filter({ hasText: /已生效|已切换/ }).count(), 0);
           const status = await (await call('/api/coproxy/status', 'GET', undefined, cookie)).json();
           assert.equal(status.active, null); assert.match(status.desired, /^[a-f0-9]{64}$/);
           assert.equal(status.gateway.ready, false);
+          // A controlled core receipt exercises the successful browser path:
+          // a single dropdown action must save, activate, verify, and refresh.
+          let effectiveRevision = -1;
+          let effectiveGroups: { name: string; selected: string; options: string[] }[] = [];
+          let rejectNextActivation = false;
+          let interruptNextActivation = false;
+          let activations = 0;
+          const observedActive = 'c'.repeat(64);
+          await context.route('**/api/coproxy/workspace/apply', async (route: any) => {
+            activations++;
+            const current = await workspace();
+            assert.equal(route.request().postDataJSON().expectedRevision, current.workspace.revision);
+            assert.equal(route.request().postDataJSON().expectedActive, observedActive);
+            if (rejectNextActivation) {
+              rejectNextActivation = false;
+              await route.fulfill({ status: 503, json: { error: { code: 'ACTIVATION_FAILED' } } });
+              return;
+            }
+            effectiveRevision = current.workspace.revision;
+            effectiveGroups = current.groups;
+            if (interruptNextActivation) {
+              interruptNextActivation = false;
+              await route.abort('connectionreset');
+              return;
+            }
+            await route.fulfill({ json: { active: observedActive, workspaceRevision: effectiveRevision } });
+          });
+          await context.route('**/api/coproxy/workspace', async (route: any) => {
+            if (route.request().method() !== 'GET') { await route.continue(); return; }
+            const response = await route.fetch();
+            const body = await response.json();
+            body.active = observedActive;
+            body.pending = body.workspace.revision !== effectiveRevision;
+            for (const group of body.groups) group.activeSelected = effectiveGroups.find(item => item.name === group.name)?.selected ?? null;
+            await route.fulfill({ response, json: body });
+          });
+          await context.route('**/api/clash/proxies', (route: any) => route.fulfill({
+            headers: { 'x-coproxy-generation': observedActive },
+            json: { proxies: Object.fromEntries(effectiveGroups.map(group => [group.name, {
+              name: group.name, type: 'Selector', now: group.selected, all: group.options,
+            }])) },
+          }));
+          await navigate('proxies');
+          await savedChange(() => page.getByLabel('国内直连 策略', { exact: true }).selectOption('DIRECT'));
+          await page.getByRole('status').filter({ hasText: '已切换：Domestic → DIRECT' }).waitFor();
+          assert.equal(activations, 1);
+          await page.getByText('当前生效：DIRECT', { exact: true }).first().waitFor();
+          rejectNextActivation = true;
+          await savedChange(() => page.getByLabel('国内直连 策略', { exact: true }).selectOption('REJECT'));
+          await page.getByRole('alert').filter({ hasText: '核心激活失败' }).waitFor();
+          await page.getByText('当前生效：DIRECT', { exact: true }).first().waitFor();
+          assert.equal(await page.getByRole('status').filter({ hasText: '已切换' }).count(), 0);
+          assert.equal(activations, 2);
+          interruptNextActivation = true;
+          await savedChange(() => page.getByLabel('国内直连 策略', { exact: true }).selectOption('REJECT'));
+          await page.getByRole('alert').filter({ hasText: '操作结果未知' }).waitFor();
+          await page.getByText('当前生效：REJECT', { exact: true }).first().waitFor();
+          assert.equal(await page.getByRole('status').filter({ hasText: /已切换|已生效/ }).count(), 0);
+          assert.equal(activations, 3);
           for (const viewport of [
             { name: 'tablet-portrait', width: 768, height: 1024 },
             { name: 'tablet-landscape', width: 1024, height: 768 },

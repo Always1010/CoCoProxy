@@ -54,7 +54,9 @@ async function submit() {
 async function refresh(source: WorkspaceSource) {
   await run(async () => {
     try {
-      await api.request(`${sourcePath(source.id)}/refresh`, { method: 'POST', body: { expectedRevision: source.revision } })
+      const refreshed = await api.request<WorkspaceSource>(`${sourcePath(source.id)}/refresh`, { method: 'POST', body: { expectedRevision: source.revision } })
+      if (selected(source) && (refreshed.snapshotDigest !== source.snapshotDigest || view.value?.pending))
+        await save(() => {}, '订阅已更新并生效')
     } finally { await load() }
   })
 }

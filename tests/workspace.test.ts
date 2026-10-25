@@ -24,7 +24,7 @@ function settings(changes: Partial<WorkspaceSettings> = {}): WorkspaceSettings {
 }
 function withoutRevision({ revision: _revision, ...value }: Workspace): WorkspaceSettings { return value; }
 type View = { workspace: Workspace; active: string | null; pending: boolean; error?: string;
-  groups: { name: string; type: string; selected: string; options: string[] }[];
+  groups: { name: string; type: string; selected: string; activeSelected: string | null; options: string[] }[];
   nodes: string[]; rules: { value: string; source: string; editable: boolean }[]; ruleCount: number; invalidSelections: string[] };
 
 async function directory(t: TestContext) {
@@ -208,6 +208,7 @@ test('failed selection apply restores the active generation while keeping review
   const f = await fixture(t);
   const saved = await f.save(settings(), 0);
   const active = await f.apply(saved, null);
+  f.observe({ Proxy: 'REJECT' });
   f.fail();
   await assert.rejects(f.call('/workspace/select', 'POST', { expectedRevision: saved.revision, expectedActive: active.active, group: 'Proxy', name: 'DIRECT' }), { code: 'ACTIVATION_FAILED', status: 503 });
   const view = await f.view();
@@ -215,6 +216,8 @@ test('failed selection apply restores the active generation while keeping review
   assert.equal(view.pending, true);
   assert.equal(view.workspace.revision, saved.revision + 1);
   assert.equal(view.workspace.local.selections.Proxy, 'DIRECT');
+  assert.equal(view.groups.find(group => group.name === 'Proxy')!.activeSelected, 'REJECT');
+  assert.equal(view.groups.find(group => group.name === 'Proxy')!.selected, 'DIRECT');
   assert.equal(f.events.at(-1), 'restore');
   assert.equal((await new FileTransactionStore(f.state).status()).transaction, null);
 });

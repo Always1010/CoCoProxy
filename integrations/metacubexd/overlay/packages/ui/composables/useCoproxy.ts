@@ -56,6 +56,7 @@ const messages: Record<string, string> = {
   WORKSPACE_INVALID: '配置内容无效，请检查策略组和规则。',
   WORKSPACE_CORRUPT: '配置无法读取，请检查服务存储。',
   WORKSPACE_UNAVAILABLE: '配置暂时无法读取，请稍后刷新。',
+  SELECTION_UNCONFIRMED: '尚未确认核心已切换，请刷新查看当前出口。',
   GROUP_REFERENCE_INVALID: '策略组引用无效，请检查组间关联。',
   GROUP_SELECTION_CONFLICT: '策略选项已变化，请刷新后重新选择。',
   GROUP_SELECTION_UNSUPPORTED: '此策略组自动选择节点。',
@@ -119,6 +120,9 @@ export function useCoproxy() {
     capture.value = null
     useState('coproxy-workspace').value = null
     useState('coproxy-workspace-error').value = ''
+    useState('coproxy-workspace-feedback').value = ''
+    useState('coproxy-workspace-operation').value = ''
+    useState('coproxy-latency-feedback').value = {}
     useState('coproxy-proxy-read-error').value = ''
   }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { IconChevronRight, IconGlobe, IconPlus, IconSearch, IconTrash } from '@tabler/icons-vue'
 useHead({ title: '代理 · Coproxy' })
-const { view, workspace, overrides, busy, load, run, save, editOverrides } = useWorkspace()
+const { view, workspace, overrides, busy, load, run, save, select: selectGroup } = useWorkspace()
 const tab = ref<'groups' | 'nodes'>('groups')
 const search = ref('')
 const addMenu = ref<HTMLDetailsElement | null>(null)
@@ -18,7 +18,8 @@ const selectedName = computed(() => workspace.value?.mode === 'subscription'
 
 function select(name: string, event: Event) {
   const value = (event.target as HTMLSelectElement).value
-  return run(() => save(settings => { editOverrides(settings).selections[name] = value }))
+  // selectGroup owns the shared busy/error state and verifies the core choice.
+  return selectGroup(name, value).catch(() => {})
 }
 
 function addGroup(id: string) {
@@ -64,7 +65,7 @@ onMounted(() => run(load))
       <div v-else class="grid grid-cols-1 gap-2 xl:grid-cols-2">
         <div v-for="group in groups" :key="group.name" class="flex min-w-0 items-center gap-3 rounded-xl border border-base-content/8 bg-base-200/60 px-3 py-3">
           <IconGlobe :size="22" class="shrink-0 text-primary" />
-          <div class="min-w-0 flex-1"><div class="truncate text-sm font-medium">{{ displayName(group.name) }}</div><div class="mt-0.5 text-xs text-base-content/45">{{ group.type }} · {{ group.options.length }} 个选项</div></div>
+          <div class="min-w-0 flex-1"><div class="truncate text-sm font-medium">{{ displayName(group.name) }}</div><div class="mt-0.5 text-xs text-base-content/45">{{ group.type === 'select' ? '手动选择' : '自动选择' }} · {{ group.options.length }} 个选项</div><div class="mt-1 truncate text-xs" :class="group.activeSelected ? 'text-success' : 'text-warning'" :title="group.activeSelected ?? '核心选择尚未确认'">当前生效：{{ group.activeSelected ? displayName(group.activeSelected) : '尚未确认' }}</div></div>
           <select class="select select-sm w-44 max-w-[50%] truncate" :aria-label="`${displayName(group.name)} 策略`" :value="overrides.selections[group.name] ?? group.selected" :disabled="busy || group.type !== 'select'" :title="group.type !== 'select' ? '由自动策略选择节点' : undefined" @change="select(group.name, $event)"><option v-for="option in group.options" :key="option" :value="option">{{ displayName(option) }}</option></select>
           <button v-if="removable(group.name)" class="btn btn-ghost btn-xs text-error" :title="referenced(group.name) ? '请先移除引用此组的规则' : '移除策略组'" :aria-label="`移除 ${displayName(group.name)}`" :disabled="busy || referenced(group.name)" @click="removeGroup(group.name)"><IconTrash :size="16" />移除</button>
         </div>

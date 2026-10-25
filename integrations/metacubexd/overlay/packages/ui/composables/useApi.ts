@@ -372,17 +372,7 @@ export function proxyProviderHealthCheckAPI(providerName: string) {
 }
 
 export async function selectProxyInGroupAPI(groupName: string, proxyName: string) {
-  const workspace = useWorkspace()
-  const current = workspace.workspace.value
-  if (!current) throw new Error('请重新读取代理配置。')
-  try {
-    await useCoproxy().request('/api/coproxy/workspace/select', {
-      method: 'POST', body: { expectedRevision: current.revision, expectedActive: workspace.view.value?.active,
-        group: groupName, name: proxyName },
-    })
-  } finally {
-    await workspace.load()
-  }
+  return useWorkspace().select(groupName, proxyName)
 }
 
 export function unfixProxyInGroupAPI(groupName: string) {

@@ -185,13 +185,15 @@ export function createWorkspaceApplication(options: {
     const policy = plan?.policy;
     const user = workspace.mode === 'local' ? workspace.local : workspace.subscriptionOverrides[workspace.mode === 'legacy' ? 'legacy' : workspace.subscriptionId ?? ''] ?? emptyOverrides();
     const groups = policy ? asGroups(policy).map(group => ({ name: String(group.name), type: String(group.type),
-      selected: String(Array.isArray(group.proxies) ? group.proxies[0] ?? '' : ''), options: Array.isArray(group.proxies) ? group.proxies as string[] : [] })) : [];
-    if (candidate?.id === status.active && options.observeSelections) {
+      selected: String(Array.isArray(group.proxies) ? group.proxies[0] ?? '' : ''), activeSelected: null as string | null,
+      options: Array.isArray(group.proxies) ? group.proxies as string[] : [] })) : [];
+    if (status.active && options.observeSelections) {
       try {
         const observed = await options.observeSelections();
         if (observed.generation === status.active) for (const group of groups) {
           const selected = observed.selections[group.name];
-          if (group.options.includes(selected)) group.selected = selected;
+          if (typeof selected === 'string') group.activeSelected = selected;
+          if (candidate?.id === status.active && group.options.includes(selected)) group.selected = selected;
         }
       } catch { /* Core availability is represented separately from persisted intent. */ }
     }
