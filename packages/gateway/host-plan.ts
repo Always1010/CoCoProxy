@@ -75,9 +75,11 @@ export function renderAutomaticGatewayHostPlan(input: {
   const guardRules = automaticGatewayGuardRules(network);
   const command = [python, '-I', posix.join(source, 'apps/gateway/network.py'), 'prepare', '--settings', settingsPath]
     .map(value => quote(value, true)).join(' ');
+  const reload = [python, '-I', posix.join(source, 'apps/gateway/network.py'), 'reconcile', '--settings', settingsPath]
+    .map(value => quote(value, true)).join(' ');
   const unit = ['[Unit]', 'Description=CoCoProxy automatic gateway network prerequisites',
     'After=network-online.target', 'Wants=network-online.target', '', '[Service]', 'Type=oneshot',
-    'RemainAfterExit=true', 'User=root', `ExecStart=${command}`, 'UMask=0077',
+    'RemainAfterExit=true', 'User=root', `ExecStart=${command}`, `ExecReload=${reload}`, 'UMask=0077',
     'TimeoutStartSec=60', 'TimeoutStopSec=10', 'NoNewPrivileges=true',
     'CapabilityBoundingSet=CAP_NET_ADMIN', 'ProtectSystem=strict', 'ProtectHome=true',
     'PrivateTmp=true', `ReadWritePaths=${quote(stateDirectory)}`, '',

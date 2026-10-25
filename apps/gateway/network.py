@@ -3,8 +3,9 @@
 
 Trust contract: one trusted installer/operator, root-owned immutable installation,
 and one flock authority. This is deliberately not the legacy strong process-fence
-executor. A crash or command failure leaves an incomplete receipt for operator
-inspection; it never infers ownership from partial effects or removes the guard.
+executor. Complete receipts authorize rebuilding only missing known resources.
+A crash or command failure leaves an incomplete receipt for operator inspection;
+it never infers ownership from partial effects or removes a surviving guard.
 """
 import argparse
 import fcntl
@@ -18,6 +19,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 TABLE = 'cocoproxy_auto_guard'
 IP, NFT = '/usr/sbin/ip', '/usr/sbin/nft'
@@ -235,19 +237,100 @@ def require_upstream_stopped():
     require(not any(item.get('table', {}).get('name') == 'mihomo' for item in run([NFT, '-j', 'list', 'tables'])['nftables']))
 
 
-def prepare(value, receipt, existing, boot, digest):
+def normalized(value):
+    """Only kernel handles and transient carrier flags vary across restoration."""
+    if isinstance(value, list):
+        return [normalized(item) for item in value]
+    if isinstance(value, dict):
+        result = {key: normalized(item) for key, item in value.items() if key != 'handle'}
+        if 'flags' in result:
+            result['flags'] = [flag for flag in result['flags'] if flag != 'linkdown']
+            if not result['flags']:
+                del result['flags']
+        return result
+    return value
+
+
+def require_lan(n, wait_seconds=0):
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        # network-online can mean a different interface, including Wi-Fi.
+        links = run([IP, '-j', '-4', 'address', 'show'])
+        selected = [link for link in links if link.get('ifname') == n['ingressInterface']]
+        ready = len(selected) == 1 and 'UP' in selected[0]['flags'] and 'LOWER_UP' in selected[0]['flags'] and any(
+            a.get('local') == n['gatewayIPv4'] and a.get('prefixlen') == n['prefixLength']
+            for a in selected[0].get('addr_info', []))
+        if ready:
+            neighbors = run([IP, '-j', '-4', 'neigh', 'show', 'dev', n['ingressInterface']])
+            require(all(neighbor.get('lladdr', n['routerMAC']).lower() == n['routerMAC']
+                        for neighbor in neighbors if neighbor.get('dst') == n['routerIPv4']))
+            return
+        if time.monotonic() >= deadline:
+            require(False)
+        time.sleep(1)
+
+
+def prepare(value, receipt, existing, boot, digest, wait_seconds=35):
     n = value['network']
     require(Path('/proc/sys/net/ipv4/ip_forward').read_text().strip() == '1')
+    require_lan(n, wait_seconds)
+    current = snapshot(n)
     if existing:
         require(existing.get('status') in ('complete', 'removed'))
-        if existing['status'] == 'complete' and existing.get('bootID') == boot:
-            require(existing.get('inputHash') == digest and existing.get('resources') == snapshot(n))
+        if existing['status'] == 'complete':
+            require(existing.get('inputHash') == digest)
+            expected = existing.get('resources')
+            require(isinstance(expected, dict) and set(expected) == set(current) and
+                    all(isinstance(expected[key], list) and all(isinstance(item, dict) for item in expected[key])
+                        for key in expected) and
+                    expected['guard'] and len(expected['egress']) == 1 and len(expected['return']) == 1 and
+                    len(expected['rule']) == 1 and len(expected['capture']) == (3 if 'clientCIDR' in n else 2))
+            # A receipt authorizes only missing resources. Any live, changed or
+            # extra resource is a conflict and must never be replaced/deleted.
+            for key in current:
+                if key == 'guard':
+                    require(current[key] is None or normalized(current[key]) == normalized(expected[key]))
+                    if existing.get('bootID') == boot and current[key] is not None:
+                        require(current[key] == expected[key])
+                else:
+                    remaining = normalized(expected[key])
+                    for resource in normalized(current[key]):
+                        require(resource in remaining)
+                        remaining.remove(resource)
+            if normalized(current) == normalized(expected):
+                if existing.get('bootID') != boot:
+                    existing['bootID'] = boot
+                    existing['resources'] = current
+                    store(receipt, existing)
+                return
+            record = dict(existing, status='incomplete', bootID=boot)
+            run([NFT, '-c', '-f', '-'], value['guardRules'])
+            store(receipt, record)
+            if current['guard'] is None:
+                run([NFT, '-f', '-'], value['guardRules'])
+            for key, args in [('egress', route_args(n, 'add', True)), ('rule', rule_args(n, 'add')),
+                              ('return', route_args(n, 'add', False))]:
+                if not current[key]:
+                    run(args)
+            capture = normalized(current['capture'])
+            # Snapshot order follows ip rule priority/insertion order. Match
+            # missing entries by immutable selector identity, not list index.
+            for resource in expected['capture']:
+                if normalized(resource) not in capture:
+                    if resource.get('iif') == 'cocoproxy-tun':
+                        run(return_rule_args(n, 'add'))
+                    else:
+                        run(capture_args(n, 'add', resource.get('priority') == n['egressPriority']+1))
+            resources = snapshot(n)
+            for key in resources:
+                if key == 'capture':
+                    require(sorted(map(canonical, normalized(resources[key]))) ==
+                            sorted(map(canonical, normalized(expected[key]))))
+                else:
+                    require(normalized(resources[key]) == normalized(expected[key]))
+            record.update(status='complete', resources=resources)
+            store(receipt, record)
             return
-    links = run([IP, '-j', '-4', 'address', 'show', 'dev', n['ingressInterface']])
-    require(len(links) == 1 and 'UP' in links[0]['flags'] and any(
-        a.get('local') == n['gatewayIPv4'] and a.get('prefixlen') == n['prefixLength']
-        for a in links[0].get('addr_info', [])))
-    current = snapshot(n)
     require(current == {'guard': None, 'egress': [], 'return': [], 'rule': [], 'capture': []})
     require_upstream_stopped()
     record = {'schemaVersion': 1, 'status': 'incomplete', 'bootID': boot, 'inputHash': digest}
@@ -297,7 +380,7 @@ def main():
         def error(self, message):
             require(False)
     parser = FixedParser(add_help=False)
-    parser.add_argument('operation', choices=('prepare', 'remove'))
+    parser.add_argument('operation', choices=('prepare', 'reconcile', 'remove'))
     parser.add_argument('--settings', required=True)
     args = parser.parse_args()
     require(os.geteuid() == 0)
@@ -314,8 +397,10 @@ def main():
         existing = json.loads(checked_path(str(receipt), private=True).read_text()) if receipt.exists() else None
         boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
         digest = hashlib.sha256(canonical(value).encode()).hexdigest()
-        if args.operation == 'prepare':
-            prepare(value, receipt, existing, boot, digest)
+        if args.operation in ('prepare', 'reconcile'):
+            if args.operation == 'reconcile':
+                require(existing and existing.get('status') == 'complete')
+            prepare(value, receipt, existing, boot, digest, 35 if args.operation == 'prepare' else 0)
         else:
             remove(value, receipt, existing, boot, digest)
     print('{"ok":true}')
