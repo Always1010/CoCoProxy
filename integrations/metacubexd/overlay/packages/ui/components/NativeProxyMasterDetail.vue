@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Proxy as ProxyType } from '~/types'
 import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
+import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
 import {
   IconBolt,
@@ -178,6 +179,7 @@ function aliveCount(group: ProxyType) {
     <div
       class="flex shrink-0 gap-1 overflow-x-auto pb-1 sm:w-48 sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0"
     >
+      <WorkspaceGroupsMenu :active-group="activeName" />
       <button
         v-for="group in groups"
         :key="group.name"
