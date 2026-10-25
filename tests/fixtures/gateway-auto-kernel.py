@@ -111,12 +111,14 @@ def driver(root):
  }
 }
 """)
+        snapshot_code = ("import json, runpy; h=runpy.run_path(" + repr(str(Path(network.__file__))) + " ); "
+                         + "n=json.load(open(" + repr(str(root / 'input.json')) + "))['network']; print(json.dumps(h['snapshot'](n),sort_keys=True))")
+        empty_snapshot = json.loads(gateway.call('exec', args=['python3', '-c', snapshot_code]))
+        f.check(empty_snapshot == {'guard': None, 'egress': [], 'return': [], 'rule': [], 'capture': []}, 'EMPTY_NETWORK_SNAPSHOT_FAILED')
         gateway.nft(data['guardRules'])
         for args in [network.route_args(n, 'add', True), network.rule_args(n, 'add'), network.route_args(n, 'add', False),
                 network.return_rule_args(n, 'add'), network.capture_args(n, 'add', True), network.capture_args(n, 'add', False)]:
             gateway.call('exec', args=args)
-        snapshot_code = ("import json, runpy; h=runpy.run_path(" + repr(str(Path(network.__file__))) + " ); "
-                         + "n=json.load(open(" + repr(str(root / 'input.json')) + "))['network']; print(json.dumps(h['snapshot'](n),sort_keys=True))")
         snapshot_before = gateway.call('exec', args=['python3', '-c', snapshot_code])
         main_before = gateway.ip('-j', '-4', 'route', 'show', 'table', 'main', 'dev', 'lan-test')
         origin.call('origin')

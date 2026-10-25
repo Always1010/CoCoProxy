@@ -172,10 +172,12 @@ def return_rule_args(n, operation):
 
 
 def snapshot(n):
+    # Listing all tables succeeds even when our dedicated table has no routes.
+    # iproute2 versions differ in exit code/stdout for a nonexistent exact table.
+    routes = run([IP, '-N', '-j', '-4', 'route', 'show', 'table', 'all'])
     return {'guard': nft_snapshot(),
-            'egress': [r for r in run([IP, '-N', '-j', '-4', 'route', 'show', 'table', 'all'])
-                       if str(r.get('table')) == str(n['egressTable'])],
-            'return': (run([IP, '-N', '-j', '-4', 'route', 'show', 'table', return_table(n)], absent=True)
+            'egress': [r for r in routes if str(r.get('table')) == str(n['egressTable'])],
+            'return': ([r for r in routes if str(r.get('table')) == return_table(n)]
                        if 'clientCIDR' in n else
                        run([IP, '-j', '-4', 'route', 'show', 'table', 'main', 'exact', n['clientIPv4'] + '/32'])),
             'rule': [r for r in run([IP, '-j', '-4', 'rule', 'show']) if r.get('priority') == n['egressPriority']],
