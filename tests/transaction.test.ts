@@ -249,6 +249,33 @@ test('different managers serialize mutations with an exclusive store lock', asyn
   await applying;
 });
 
+test('transaction intents bind apply and recovery to the current exclusive owner', async t => {
+  const { store, manager, runtime } = await fixture(t);
+  const target = candidate('owner-binding');
+  await manager.stage(target);
+  let applyingToken: string | undefined;
+  runtime.activate = async () => {
+    applyingToken = (await store.readState()).pending!.ownerToken;
+    assert.match(applyingToken!, /^[a-f0-9-]{36}$/);
+    if (process.platform === 'linux') assert.equal(await store.hasLiveLockOwner(applyingToken), true);
+    throw new Error('synthetic activation interruption');
+  };
+  runtime.restoreFails = true;
+  await assert.rejects(manager.apply(target.id, null), code('RESTORE_FAILED'));
+  assert.equal(await store.hasLiveLockOwner(applyingToken), false);
+  runtime.restore = async () => {
+    const recoveringToken = (await store.readState()).pending!.ownerToken;
+    assert.notEqual(recoveringToken, applyingToken);
+    if (process.platform === 'linux') assert.equal(await store.hasLiveLockOwner(recoveringToken), true);
+  };
+  await manager.recover();
+  await store.exclusive(async unrelatedToken => {
+    assert.notEqual(unrelatedToken, applyingToken);
+    assert.equal(await store.hasLiveLockOwner(applyingToken), false);
+    assert.equal(await store.hasLiveLockOwner(unrelatedToken), process.platform === 'linux');
+  });
+});
+
 test('an incomplete lock owner fails closed instead of guessing staleness', async t => {
   const { root, store } = await fixture(t);
   await store.status();
@@ -301,7 +328,7 @@ test('Linux recovers a lock left by a killed process', { skip: process.platform 
     const stat=await readFile('/proc/'+process.pid+'/stat','utf8');
     const startTime=stat.slice(stat.lastIndexOf(')')+2).split(' ')[19];
     await mkdir(join(root,'.lock'),{mode:0o700});
-    await writeFile(join(root,'.lock','owner.json'),JSON.stringify({pid:process.pid,token:'synthetic-child',bootId,startTime}),{mode:0o600});
+    await writeFile(join(root,'.lock','owner.json'),JSON.stringify({pid:process.pid,token:'00000000-0000-4000-8000-000000000001',bootId,startTime}),{mode:0o600});
     process.send('ready');
     setInterval(()=>{},1000);
   `;
@@ -309,9 +336,12 @@ test('Linux recovers a lock left by a killed process', { skip: process.platform 
   t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
   const [message] = await once(child, 'message');
   assert.equal(message, 'ready');
+  const token = '00000000-0000-4000-8000-000000000001';
+  assert.equal(await store.hasLiveLockOwner(token), true);
   const exited = once(child, 'exit');
   child.kill('SIGKILL');
   await exited;
+  assert.equal(await store.hasLiveLockOwner(token), false);
   const target = candidate('after-kill');
   assert.equal((await store.stage(target)).id, target.id);
 });

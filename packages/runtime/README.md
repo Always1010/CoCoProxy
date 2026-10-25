@@ -25,7 +25,7 @@ ReadWritePaths 只允许状态目录；Install 段仅描述显式 enable 的目�
 3. 核对 selection、systemd PID、/proc 身份、argv、controller 监听归属与认证 /version，前后复核身份后确认。
 4. 事务确认后持久提交 active。失败先停核，再恢复上一确认配置；首次应用则保持停止。停止或恢复无法确认时保留 fault，拒绝新 apply。
 
-启动器以 `process.execve` 替换自身，保留 MainPID/cgroup，不创建第二个监管进程；只传固定 PATH/LANG 和私有 HOME。Node 22.x 的 execve 为实验 API，不支持时拒绝。持久 fault 阻止普通启动；仅 restoring 阶段允许启动该事务 previous，其他 pending 先 recover。
+启动器以 `process.execve` 替换自身，保留 MainPID/cgroup，不创建第二个监管进程；只传固定 PATH/LANG 和私有 HOME。Node 22.x 的 execve 为实验 API，不支持时拒绝。稳定状态及已持久提交的事务只允许启动 active；未提交事务必须以 ownerToken 绑定仍存活的共同锁持有者，并核对 Linux boot ID、PID 启动时间及非僵尸状态。activating/confirming 只允许 target，restoring 只允许 previous，显式 recovering-target 只允许对应 target；validating/fault 拒绝启动。候选加载前和 exec 前分别复核，exec 前还复核 selection。旧未提交记录缺少 ownerToken 或原操作者已退出时必须先 recover，不能凭残留 selection 自动重启。
 
 ```sh
 npm run cli -- runtime-status --state-dir /var/lib/coproxy --runtime-settings /etc/coproxy/runtime.json

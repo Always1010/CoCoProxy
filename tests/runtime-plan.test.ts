@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderRuntimePlan } from '../packages/runtime/plan.ts';
+import { assertRuntimeLaunch } from '../packages/runtime/launch-authorization.ts';
 import { RuntimeError } from '../packages/runtime/types.ts';
 import { compileConfig } from '../packages/config/index.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
@@ -82,6 +83,58 @@ const linuxExec = process.platform === 'linux' && typeof process.execve === 'fun
 const launcher = fileURLToPath(new URL('../apps/runtime/launch-core.ts', import.meta.url));
 const secret = 'SYNTHETIC_LAUNCHER_PRIVATE_SECRET';
 
+test('launch authorization binds stable state and every in-flight start to its live transaction', async () => {
+  const previous = 'a'.repeat(64), target = 'b'.repeat(64), ownerToken = '00000000-0000-4000-8000-000000000001';
+  const state: Awaited<ReturnType<FileTransactionStore['readState']>> = {
+    version: 1, desired: target, active: previous, fault: null, checkedAt: null, pending: null,
+  };
+  let live = false;
+  const reader = { readState: async () => structuredClone(state),
+    hasLiveLockOwner: async (token: string | undefined) => live && token === ownerToken };
+  const denied = { code: 'RUNTIME_RECOVERY_REQUIRED' };
+  await assertRuntimeLaunch(reader, previous);
+  await assert.rejects(assertRuntimeLaunch(reader, target), denied);
+  for (const phase of ['activating', 'confirming', 'restoring', 'recovering-target'] as const) {
+    state.active = phase === 'recovering-target' ? null : previous;
+    state.fault = phase === 'recovering-target' ? 'RESTORE_FAILED' : null;
+    state.pending = { id: ownerToken, previous, target, phase, ownerToken };
+    const generation = phase === 'restoring' ? previous : target;
+    const other = phase === 'restoring' ? target : previous;
+    live = false;
+    await assert.rejects(assertRuntimeLaunch(reader, generation), denied);
+    live = true;
+    await assertRuntimeLaunch(reader, generation);
+    await assert.rejects(assertRuntimeLaunch(reader, other), denied);
+    // Missing legacy bindings and unrelated current locks cannot authorize a start.
+    delete state.pending.ownerToken;
+    await assert.rejects(assertRuntimeLaunch(reader, generation), denied);
+    state.pending.ownerToken = '00000000-0000-4000-8000-000000000002';
+    await assert.rejects(assertRuntimeLaunch(reader, generation), denied);
+  }
+  for (const phase of ['validating', 'fault'] as const) {
+    state.active = phase === 'fault' ? null : previous;
+    state.fault = phase === 'fault' ? 'RESTORE_FAILED' : null;
+    state.pending = { id: ownerToken, previous, target, phase, ownerToken };
+    await assert.rejects(assertRuntimeLaunch(reader, target), denied);
+    await assert.rejects(assertRuntimeLaunch(reader, previous), denied);
+  }
+  // The durable commit point survives writer exit, including pending cleanup crashes.
+  state.active = target;
+  state.fault = null;
+  state.pending = { id: ownerToken, previous, target, phase: 'committed', ownerToken };
+  live = false;
+  await assertRuntimeLaunch(reader, target);
+  await assert.rejects(assertRuntimeLaunch(reader, previous), denied);
+  state.active = previous;
+  state.pending = { id: ownerToken, previous, target, phase: 'restoring', ownerToken };
+  live = true;
+  const racing = { ...reader, hasLiveLockOwner: async () => { state.pending!.phase = 'fault'; return true; } };
+  await assert.rejects(assertRuntimeLaunch(racing, previous), denied);
+  state.pending = { id: ownerToken, previous, target, phase: 'activating', ownerToken };
+  const advancing = { ...reader, hasLiveLockOwner: async () => { state.pending!.phase = 'confirming'; return true; } };
+  await assertRuntimeLaunch(advancing, target);
+});
+
 function candidate(): Candidate {
   return compileConfig({ schemaVersion: 1, deployment: {
     mixedPort: 17890, controllerPort: 19090, controllerSecret: secret,
@@ -89,7 +142,8 @@ function candidate(): Candidate {
   }, policy: { rules: ['MATCH,DIRECT'] } });
 }
 
-async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash' | 'tun' | 'fault' | 'recovering' | 'recovering-target' | 'wrong-target' = 'good') {
+async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash' | 'tun' | 'fault' | 'recovering' |
+  'recovering-target' | 'wrong-target' | 'applying' | 'confirming' | 'abandoned-restore' | 'abandoned-confirm' | 'wrong-active' = 'good') {
   const root = await mkdtemp(join(tmpdir(), 'coproxy-launcher-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const stateDirectory = join(root, 'state');
@@ -118,6 +172,16 @@ async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash'
   if (variant === 'fault' || variant === 'recovering' || forward) await writeFile(statePath, JSON.stringify({ version: 1, desired: variant === 'recovering-target' ? target.id : 'b'.repeat(64), active: null,
     pending: { id: '00000000-0000-4000-8000-000000000001', previous: forward ? 'c'.repeat(64) : target.id, target: variant === 'recovering-target' ? target.id : 'b'.repeat(64), phase: forward ? 'recovering-target' : variant === 'fault' ? 'fault' : 'restoring' },
     fault: 'RESTORE_FAILED', checkedAt: new Date().toISOString() }), { mode: 0o600 });
+  else if (['applying', 'confirming', 'abandoned-restore', 'abandoned-confirm'].includes(variant)) {
+    const previous = variant.startsWith('abandoned-') ? 'c'.repeat(64) : null;
+    await writeFile(statePath, JSON.stringify({ version: 1, desired: target.id, active: previous,
+      pending: { id: '00000000-0000-4000-8000-000000000001', previous, target: target.id,
+        phase: variant === 'abandoned-restore' ? 'restoring' : variant === 'applying' ? 'activating' : 'confirming',
+        ownerToken: '00000000-0000-4000-8000-000000000002' },
+      fault: null, checkedAt: null }), { mode: 0o600 });
+  } else await writeFile(statePath, JSON.stringify({ version: 1, desired: target.id,
+    active: variant === 'wrong-active' ? 'c'.repeat(64) : target.id,
+    pending: null, fault: null, checkedAt: null }), { mode: 0o600 });
   const selectionPath = join(stateDirectory, 'selection.json');
   if (variant !== 'missing') await writeFile(selectionPath, JSON.stringify({ schemaVersion: 1, generation: target.id }), { mode: 0o600 });
   await writeFile(settingsPath, JSON.stringify(settings), { mode: 0o600 });
@@ -125,15 +189,26 @@ async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash'
     // Only disposable fixture files change ownership; the child proves non-root execution.
     const paths = [root, stateDirectory, join(stateDirectory, 'candidates'), staged.path, binaryPath, settingsPath];
     if (variant !== 'missing') paths.push(selectionPath);
-    if (variant === 'fault' || variant === 'recovering' || forward) paths.push(statePath);
+    paths.push(statePath);
     for (const path of paths) await chown(path, uid, uid);
   }
   await chmod(root, 0o700);
   return { root, settings, settingsPath, output, staged, uid };
 }
 
-async function launch(f: Awaited<ReturnType<typeof fixture>>) {
-  const child = spawn(process.execPath, ['--experimental-strip-types', launcher, '--settings', f.settingsPath], {
+async function launch(f: Awaited<ReturnType<typeof fixture>>, holdTransaction = false) {
+  // This child owns the private store under the service UID, including when the
+  // test runner is root. execve preserves the lock holder's PID in this fixture.
+  const script = `import {FileTransactionStore} from ${JSON.stringify(new URL('../packages/transaction/index.ts', import.meta.url).href)};
+    import {runCore} from ${JSON.stringify(new URL('../apps/runtime/launch-core.ts', import.meta.url).href)};
+    const store = new FileTransactionStore(${JSON.stringify(f.settings.stateDirectory)});
+    await store.exclusive(async ownerToken => {
+      const state = await store.readState(); state.pending.ownerToken = ownerToken;
+      await store.writeState(state); await runCore(${JSON.stringify(f.settingsPath)});
+    });`;
+  const args = holdTransaction ? ['--experimental-strip-types', '--input-type=module', '--eval', script] :
+    ['--experimental-strip-types', launcher, '--settings', f.settingsPath];
+  const child = spawn(process.execPath, args, {
     env: { ...process.env, COPROXY_FIXTURE_OUTPUT: f.output },
     ...(process.geteuid!() === 0 ? { uid: f.uid, gid: f.uid } : {}),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -152,9 +227,9 @@ async function launch(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 test('launcher exec replaces its child PID and passes only pinned core arguments', { skip: !linuxExec }, async t => {
-  for (const variant of ['good', 'recovering', 'recovering-target'] as const) {
+  for (const variant of ['good', 'applying', 'confirming', 'recovering', 'recovering-target'] as const) {
     const f = await fixture(t, variant);
-    const result = await launch(f);
+    const result = await launch(f, variant !== 'good');
     assert.equal(result.exit, 0, result.stderr);
     assert.equal(result.stdout, '');
     const record = JSON.parse(await readFile(f.output, 'utf8'));
@@ -165,7 +240,7 @@ test('launcher exec replaces its child PID and passes only pinned core arguments
 });
 
 test('launcher refuses missing selection, hash mismatch, enabled TUN and persistent fault before exec', { skip: !linuxExec }, async t => {
-  for (const [variant, code] of [['missing', 'RUNTIME_SELECTION_MISSING'], ['hash', 'BINARY_UNTRUSTED'], ['tun', 'CANDIDATE_UNTRUSTED'], ['fault', 'RUNTIME_RECOVERY_REQUIRED'], ['wrong-target', 'RUNTIME_RECOVERY_REQUIRED']] as const) {
+  for (const [variant, code] of [['missing', 'RUNTIME_SELECTION_MISSING'], ['hash', 'BINARY_UNTRUSTED'], ['tun', 'CANDIDATE_UNTRUSTED'], ['fault', 'RUNTIME_RECOVERY_REQUIRED'], ['wrong-target', 'RUNTIME_RECOVERY_REQUIRED'], ['recovering', 'RUNTIME_RECOVERY_REQUIRED'], ['recovering-target', 'RUNTIME_RECOVERY_REQUIRED'], ['abandoned-restore', 'RUNTIME_RECOVERY_REQUIRED'], ['abandoned-confirm', 'RUNTIME_RECOVERY_REQUIRED'], ['wrong-active', 'RUNTIME_RECOVERY_REQUIRED']] as const) {
     const f = await fixture(t, variant);
     const result = await launch(f);
     assert.equal(result.exit, 1);

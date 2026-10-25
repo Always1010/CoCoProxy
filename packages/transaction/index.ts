@@ -32,7 +32,7 @@ export class TransactionError extends Error {
   }
 }
 
-type Pending = { id: string; previous: string | null; target: string; phase: TransactionPhase };
+type Pending = { id: string; previous: string | null; target: string; phase: TransactionPhase; ownerToken?: string };
 type State = {
   version: 1;
   desired: string | null;
@@ -59,13 +59,14 @@ function publicStatus(state: State): PublicStatus {
   };
 }
 
-async function linuxIdentity(pid: number): Promise<{ bootId: string; startTime: string }> {
+async function linuxIdentity(pid: number): Promise<{ bootId: string; startTime: string; alive: boolean }> {
   const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
   const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
   // comm may contain spaces and parentheses. Field 22 follows the last ')'.
-  const startTime = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+  const startTime = fields[19];
   if (!bootId || !/^\d+$/.test(startTime ?? '')) fail('STORE_LOCKED');
-  return { bootId, startTime };
+  return { bootId, startTime, alive: !['Z', 'X', 'x'].includes(fields[0]) };
 }
 
 /** Private file store. POSIX permissions are enforced; Windows requires a private parent ACL. */
@@ -99,7 +100,10 @@ export class FileTransactionStore {
       const boot = (await linuxIdentity(process.pid)).bootId;
       let dead = owner.bootId !== boot;
       if (!dead) {
-        try { dead = (await linuxIdentity(owner.pid)).startTime !== owner.startTime; }
+        try {
+          const identity = await linuxIdentity(owner.pid);
+          dead = !identity.alive || identity.startTime !== owner.startTime;
+        }
         catch (error) { if (errno(error) === 'ENOENT') dead = true; else return false; }
       }
       if (!dead) return false;
@@ -115,7 +119,7 @@ export class FileTransactionStore {
   }
 
   /** Serializes all mutations across managers and processes; live contention fails closed. */
-  async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+  async exclusive<T>(operation: (ownerToken: string) => Promise<T>): Promise<T> {
     try {
       await this.initialize();
       const lock = join(this.root, '.lock');
@@ -127,9 +131,9 @@ export class FileTransactionStore {
         catch (retryError) { if (errno(retryError) === 'EEXIST') fail('STORE_LOCKED'); throw retryError; }
       }
       const identity = process.platform === 'linux' ? await linuxIdentity(process.pid) : { bootId: null, startTime: null };
-      const owner: LockOwner = { pid: process.pid, token: randomUUID(), ...identity };
+      const owner: LockOwner = { pid: process.pid, token: randomUUID(), bootId: identity.bootId, startTime: identity.startTime };
       await atomicWrite(lock, 'owner.json', JSON.stringify(owner));
-      try { return await operation(); }
+      try { return await operation(owner.token); }
       finally {
         await unlink(join(lock, 'owner.json'));
         await rmdir(lock);
@@ -139,6 +143,26 @@ export class FileTransactionStore {
       if (error instanceof PrivateFileError) throw new TransactionError(error.code); if (error instanceof TransactionError) throw error;
       throw new TransactionError('STORE_IO');
     }
+  }
+
+  /** Read-only Linux proof; a stale intent cannot borrow an unrelated writer's lock. */
+  async hasLiveLockOwner(token: string | undefined): Promise<boolean> {
+    if (process.platform !== 'linux' || typeof token !== 'string' ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(token)) return false;
+    try {
+      await inspectPrivateDirectory(this.root);
+      const lock = join(this.root, '.lock');
+      await inspectPrivateDirectory(lock);
+      const path = join(lock, 'owner.json');
+      const bytes = await privateRead(path, 4096);
+      const owner = JSON.parse(bytes) as LockOwner;
+      if (owner.token !== token || !Number.isSafeInteger(owner.pid) || owner.pid < 1 ||
+          typeof owner.bootId !== 'string' || typeof owner.startTime !== 'string') return false;
+      const identity = await linuxIdentity(owner.pid);
+      if (!identity.alive || identity.bootId !== owner.bootId || identity.startTime !== owner.startTime) return false;
+      // Reclamation/replacement during the process observation revokes this proof.
+      return await privateRead(path, 4096) === bytes;
+    } catch { return false; }
   }
 
   candidatePath(id: string): string {
@@ -168,6 +192,8 @@ export class FileTransactionStore {
     if (value.pending !== null) {
       const pending = value.pending;
       if (!pending || typeof pending.id !== 'string' || !/^[a-f0-9-]{36}$/.test(pending.id) ||
+          (pending.ownerToken !== undefined && (typeof pending.ownerToken !== 'string' ||
+            !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(pending.ownerToken))) ||
           !optionalId(pending.previous) || !validId(pending.target) || !phases.has(pending.phase) ||
           value.desired !== pending.target ||
           (pending.phase === 'committed' ? value.active !== pending.target : value.active !== pending.previous &&
@@ -224,9 +250,10 @@ export class TransactionManager {
   async stage(candidate: Candidate): Promise<{ id: string; path: string }> { return this.store.stage(candidate); }
   async status(): Promise<PublicStatus> { return this.store.status(); }
 
-  private async restore(state: State): Promise<void> {
+  private async restore(state: State, ownerToken: string): Promise<void> {
     const pending = state.pending!;
     pending.phase = 'restoring';
+    pending.ownerToken = ownerToken;
     await this.store.writeState(state);
     try {
       const path = pending.previous === null ? null : await this.store.readCandidate(pending.previous);
@@ -247,7 +274,7 @@ export class TransactionManager {
   }
 
   async apply(id: string, expectedActive: string | null, precondition?: () => Promise<void>): Promise<PublicStatus> {
-    return this.store.exclusive(async () => {
+    return this.store.exclusive(async ownerToken => {
       if (!validId(id)) fail('INVALID_CANDIDATE_ID');
       if (!optionalId(expectedActive)) fail('INVALID_EXPECTED_ACTIVE');
       const state = await this.store.readState();
@@ -258,7 +285,8 @@ export class TransactionManager {
       // before any persisted intent or runtime operation is started.
       await precondition?.();
       state.desired = id;
-      state.pending = { id: randomUUID(), previous: state.active, target: id, phase: 'validating' };
+      state.pending = { id: randomUUID(), previous: state.active, target: id, phase: 'validating',
+        ownerToken };
       await this.store.writeState(state);
       try { await this.runtime.validate(path); }
       catch {
@@ -272,12 +300,12 @@ export class TransactionManager {
       state.pending!.phase = 'activating';
       await this.store.writeState(state);
       try { await this.runtime.activate(path, id); }
-      catch { await this.restore(state); fail('ACTIVATION_FAILED'); }
+      catch { await this.restore(state, ownerToken); fail('ACTIVATION_FAILED'); }
       state.pending!.phase = 'confirming';
       await this.store.writeState(state);
       let confirmed = false;
       try { confirmed = await this.runtime.confirm(id) === true; } catch { /* opaque runtime failure */ }
-      if (!confirmed) { await this.restore(state); fail('CONFIRM_FAILED'); }
+      if (!confirmed) { await this.restore(state, ownerToken); fail('CONFIRM_FAILED'); }
       // The atomic state replacement is the sole commit point. A crash before
       // cleanup must retain the confirmed target, never restore the predecessor.
       state.active = id;
@@ -292,7 +320,7 @@ export class TransactionManager {
   }
 
   async recover(): Promise<PublicStatus> {
-    return this.store.exclusive(async () => {
+    return this.store.exclusive(async ownerToken => {
       const state = await this.store.readState();
       if (!state.pending) return publicStatus(state);
       if (state.pending.phase === 'committed' && state.active === state.pending.target) {
@@ -300,7 +328,7 @@ export class TransactionManager {
         state.pending = null;
         await this.store.writeState(state);
       } else {
-        await this.restore(state);
+        await this.restore(state, ownerToken);
       }
       return publicStatus(state);
     });
@@ -309,7 +337,7 @@ export class TransactionManager {
   /** Explicit operator recovery when the predecessor no longer matches a
    * reviewed deployment. Never infer success from selection or persisted intent. */
   async recoverTarget(expectedTransaction: string, generation: string): Promise<PublicStatus> {
-    return this.store.exclusive(async () => {
+    return this.store.exclusive(async ownerToken => {
       const state = await this.store.readState();
       if (!state.pending || state.pending.id !== expectedTransaction || state.pending.target !== generation ||
           state.desired !== generation) fail('ACTIVE_CONFLICT');
@@ -325,6 +353,7 @@ export class TransactionManager {
       try { await this.runtime.validate(path); } catch { await stopUnconfirmed(); fail('VALIDATION_FAILED'); }
       await this.store.readCandidate(generation);
       state.pending.phase = 'recovering-target';
+      state.pending.ownerToken = ownerToken;
       await this.store.writeState(state);
       try { await this.runtime.activate(path, generation); } catch { await stopUnconfirmed(); fail('ACTIVATION_FAILED'); }
       let confirmed = false;
