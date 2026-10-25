@@ -153,6 +153,11 @@ test('missing-only sniffing excludes bounded domains and ports and reconstructs 
     { mode: 'force', skipPorts: ['1-65535'] }, { mode: 'off', skipPorts: [443] }] as JsonValue[]) {
     deployment.sniffing = sniffing; fails(value, 'INVALID_INPUT');
   }
+  // A range crossing unsniffed gaps must not expand past the 64-entry bound.
+  deployment.sniffing = { mode: 'missing-only', skipPorts: ['1-8080', ...Array.from({ length: 63 }, (_, index) => 8082 + index * 2)] };
+  const bounded = compileConfig(value), recovered = deploymentDnsOptions(bounded.config);
+  assert.equal(((recovered.sniffing as JsonObject).skipPorts as JsonValue[]).length, 64);
+  assert.equal(compileConfig({ ...value, deployment: { ...deployment, ...recovered } }).id, bounded.id);
 });
 
 test('bounded deployment DNS policies preserve bootstrap and round trip independent resolvers', () => {

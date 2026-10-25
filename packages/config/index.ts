@@ -449,19 +449,25 @@ export function deploymentDnsOptions(config: JsonObject): JsonObject {
 }
 
 function extractSniffing(sniffer: JsonObject): JsonObject {
-  const sniff = object(sniffer.sniff), skipped = new Set<number>();
+  const sniff = object(sniffer.sniff), skipped = new Set<number>(), known = new Set<number>();
   for (const [protocol, defaults] of Object.entries(SNIFF_PORTS)) {
     const options = sniff[protocol] === undefined ? undefined : object(sniff[protocol]);
     const included = options === undefined ? [] : array(options.ports).map(portRange);
     for (const entry of defaults) {
       const [start, end] = portRange(entry);
-      for (let value = start; value <= end; value++) if (!included.some(([first, last]) => value >= first && value <= last)) skipped.add(value);
+      for (let value = start; value <= end; value++) {
+        known.add(value);
+        if (!included.some(([first, last]) => value >= first && value <= last)) skipped.add(value);
+      }
     }
   }
-  const ranges: (number | string)[] = [], ordered = [...skipped].sort((a, b) => a - b);
+  const ranges: (number | string)[] = [], ordered = [...known].sort((a, b) => a - b);
   for (let index = 0; index < ordered.length; index++) {
+    if (!skipped.has(ordered[index])) continue;
     const start = ordered[index]; let end = start;
-    while (ordered[index + 1] === end + 1) end = ordered[++index];
+    // Gaps outside the default sniff ports can be included in a skip range.
+    // Keeping them merged avoids expanding 64 input ranges beyond the limit.
+    while (skipped.has(ordered[index + 1])) end = ordered[++index];
     ranges.push(start === end ? start : `${start}-${end}`);
   }
   return { mode: sniffer['force-dns-mapping'] === true ? 'force' : 'missing-only',
