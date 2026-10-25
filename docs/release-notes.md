@@ -8,7 +8,7 @@
 - 固定 Mihomo v1.19.33 原生 TUN、自动路由与重定向，必要的独立 guard、标记出口和终端回程集成。
 - 具有清单摘要及文件白名单的 Linux 载荷，包含对应架构核心、构建后的管理服务及所需运行文件，不含真实订阅、节点、管理员凭据或证书私钥。
 - 离线安装/升级/保留数据卸载入口，默认只读核验，显式 `--apply` 写入；HTTPS 反代及证书使用独立配置样本。
-- [独立部署](deployment.md)、[HTTPS 网页](management-https.md)及[协同路由器要求与说明](cooperating-router-requirements.md)。AlwayRoute 为可选路由器实现，不属于 Coproxy 的运行依赖。
+- [独立部署](deployment.md)、[HTTPS 网页](management-https.md)及[协同路由器要求与说明](cooperating-router-requirements.md)，按角色说明路由器能力、两端配置与验收要求。
 
 具体来源提交、核心/管理组件版本、依赖及每件文件的大小和 SHA-256 以该载荷的 `manifest.json` 为准，包外发布清单记录压缩包及 manifest 摘要。相同产品版本的不同架构必须按 manifest 区分，不能只按文件名选择。
 

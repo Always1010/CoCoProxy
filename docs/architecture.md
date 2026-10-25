@@ -181,10 +181,10 @@ sequenceDiagram
 
 旧框架细节见[网络资源契约](../packages/network/README.md)、[持久协调器](../packages/network/transaction.md)、[固定驱动](../packages/network/driver.md)、[原生资源会话](../packages/network/native.md)、[核心监管](../packages/network/runtime.md)、[运行证据组合](../packages/network/observer.md)及[监测](../packages/network/watchdog.md)。fixture、合成 reader、隔离内核和局部真实 socket 检查各有范围，不能解释为该框架已完成实际系统服务部署或生产转发验收。
 
-### 接入路由器与 AlwayRoute 在哪一层
+### 协同路由器在哪一层
 
-接入路由器属于外部协作角色，负责终端接入、受管来源、代理开关、流量交付、基础网络和独立关闭恢复；Coproxy 负责收到流量后的接管、DNS、分流及自身状态。AlwayRoute 是可选的路由器侧实现，不是内置模块或必须安装的核心。符合能力要求的原厂固件或其他组件也可协作；Coproxy 不依赖特定 RPC、账户或包名。
+协同路由器属于外部协作角色，负责终端接入、受管来源、代理开关、流量交付、基础网络和独立关闭恢复；Coproxy 负责收到流量后的接管、DNS、分流及自身状态。路由器硬件、固件和可选组件共同满足交付能力即可协作；Coproxy 有自己的安装载荷和管理入口，两端通过约定的网络路径协作。
 
-按[首轮协作语义](router-cooperation.md)，开启后的核心、DNS 或链路故障采用受管外网阻断，保留开启意图；用户关闭后恢复直连，不自动降级。来源保留、DNS 转交、回程和未支持 IPv6 的阻断需两侧共同满足，见[协同路由器要求](cooperating-router-requirements.md)。路由器适配器的 revision/job/观测字段不属于 Coproxy 必需协议。
+按[首轮协作语义](router-cooperation.md)，开启后的核心、DNS 或链路故障采用受管外网阻断，保留开启意图；用户关闭后恢复直连，不自动降级。来源保留、DNS 转交、回程和未支持 IPv6 的阻断需两侧共同满足，见[协同路由器要求](cooperating-router-requirements.md)。路由器内部的配置版本、任务和观测字段由各实现自行定义。
 
 当前固定显式发行及 ARM64 原生网关已有实际 Linux/systemd 安装与首轮单终端证据；多终端、整机重启、其他架构及路由器组合仍需独立验收。安装条件见[部署](deployment.md)，版本交付范围见[发行说明](release-notes.md)。结构图描述组件关系，不替代实际安装、网络变更授权或设备验收。
