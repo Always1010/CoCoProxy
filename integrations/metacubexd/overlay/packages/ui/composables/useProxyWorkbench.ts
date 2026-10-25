@@ -12,7 +12,10 @@ export function useProxyWorkbench(scope: string, groupNames: Ref<string[]>) {
   })
   const scrollTop = computed({
     get: () => workbenches.value[scope]?.scroll ?? 0,
-    set: (scroll: number) => { workbenches.value[scope].scroll = scroll },
+    set: (scroll: number) => {
+      const entry = workbenches.value[scope]
+      if (entry) entry.scroll = scroll
+    },
   })
   watchEffect(() => {
     // Transient empty data must not discard the remembered group or position.
