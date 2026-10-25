@@ -5,8 +5,8 @@
 服务端版本和官方资产出处记录在 `review.json`。Mihomo 的固定二进制记录沿用 `integrations/metacubexd/review.json`。测试要求 Linux、非 root 用户以及显式指定的绝对路径；缺少环境变量时测试跳过，跳过不代表通过。二进制摘要不符时失败，不自动下载或使用 PATH 中的替代实现。
 
 ```sh
-COPROXY_TEST_MIHOMO=/absolute/private/path/to/reviewed-mihomo \
-COPROXY_TEST_SING_BOX=/absolute/private/path/to/reviewed-sing-box \
+COCOPROXY_TEST_MIHOMO=/absolute/private/path/to/reviewed-mihomo \
+COCOPROXY_TEST_SING_BOX=/absolute/private/path/to/reviewed-sing-box \
 node --experimental-strip-types --test tests/protocol-live.test.ts
 ```
 
@@ -17,8 +17,8 @@ VMess 使用 AEAD、VLESS 使用基础 TCP、Shadowsocks 使用 `aes-128-gcm`，
 `tests/protocol-reality-live.test.ts` 单独验证 VLESS REALITY，复用 `tests/protocol-live-helpers.ts` 的进程管理、摘要验证、SOCKS5 UDP 封装和源站探针，不会顺带重跑上述六项：
 
 ```sh
-COPROXY_TEST_MIHOMO=/absolute/private/path/to/reviewed-mihomo \
-COPROXY_TEST_SING_BOX=/absolute/private/path/to/reviewed-sing-box \
+COCOPROXY_TEST_MIHOMO=/absolute/private/path/to/reviewed-mihomo \
+COCOPROXY_TEST_SING_BOX=/absolute/private/path/to/reviewed-sing-box \
 node --experimental-strip-types --test tests/protocol-reality-live.test.ts
 ```
 

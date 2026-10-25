@@ -227,8 +227,8 @@ export function createWorkspaceApplication(options: {
 
   return async (request: Request): Promise<unknown> => {
     const path = new URL(request.url).pathname;
-    if (path === '/api/coproxy/workspace' && request.method === 'GET') return view();
-    if (path === '/api/coproxy/workspace/tcp-delay' && request.method === 'POST') {
+    if (path === '/api/cocoproxy/workspace' && request.method === 'GET') return view();
+    if (path === '/api/cocoproxy/workspace/tcp-delay' && request.method === 'POST') {
       const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'expectedActive', 'name', 'fingerprint']);
       if (typeof body.name !== 'string' || typeof body.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(body.fingerprint)) invalid();
       if (tcpProbes >= 8) throw new ManagementError('TCP_PROBE_BUSY', 429);
@@ -247,7 +247,7 @@ export function createWorkspaceApplication(options: {
         return { name: body.name, fingerprint: body.fingerprint, ...result, checkedAt: new Date().toISOString() };
       } finally { tcpProbes--; }
     }
-    if (path === '/api/coproxy/workspace' && request.method === 'PUT') {
+    if (path === '/api/cocoproxy/workspace' && request.method === 'PUT') {
       const body = exactRecord(await readJsonBody(request), ['expectedRevision', 'settings']);
       const current = await load();
       if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
@@ -256,13 +256,13 @@ export function createWorkspaceApplication(options: {
           (await subscriptions.list()).some(source => source.snapshotCurrent)) invalid('SOURCE_REQUIRED');
       return { workspace: await preferences.save(settings, current.revision) };
     }
-    if (path === '/api/coproxy/workspace/apply' && request.method === 'POST') {
+    if (path === '/api/cocoproxy/workspace/apply' && request.method === 'POST') {
       const body = exactRecord(await readJsonBody(request, 512), ['expectedRevision', 'expectedActive']);
       const workspace = await load();
       if (body.expectedRevision !== workspace.revision) invalid('WORKSPACE_CONFLICT');
       return apply(workspace, body.expectedActive);
     }
-    if (path === '/api/coproxy/workspace/select' && request.method === 'POST') {
+    if (path === '/api/cocoproxy/workspace/select' && request.method === 'POST') {
       const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'expectedActive', 'group', 'name']);
       const current = await load();
       if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');

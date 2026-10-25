@@ -1,7 +1,7 @@
 import { defineEventHandler, fromWebHandler } from 'h3'
-import { stripControllerMount } from '@coproxy/packages/management/service.ts'
-import { ManagementError } from '@coproxy/packages/management/http.ts'
-import { getCoproxy, unavailable } from '../../../lib/coproxy'
+import { stripControllerMount } from '@cocoproxy/packages/management/service.ts'
+import { ManagementError } from '@cocoproxy/packages/management/http.ts'
+import { getCoCoProxy, unavailable } from '../../../lib/cocoproxy'
 
 type RelayState = { closed: boolean; cleanup?: () => void }
 const connections = new WeakMap<object, RelayState>()
@@ -14,12 +14,12 @@ function finish(peer: object) {
 
 export default defineEventHandler({
   handler: fromWebHandler(async (request) => {
-    try { return await (await getCoproxy()).fetch(request) }
+    try { return await (await getCoCoProxy()).fetch(request) }
     catch { return unavailable() }
   }),
   websocket: {
     async upgrade(input) {
-      try { (await getCoproxy()).authorize(requestOf(input), true) }
+      try { (await getCoCoProxy()).authorize(requestOf(input), true) }
       catch (error) {
         return new Response(null, { status: error instanceof ManagementError ? error.status : 503,
           headers: { 'cache-control': 'no-store' } })
@@ -31,7 +31,7 @@ export default defineEventHandler({
       connections.set(peer, state)
       openConnections++
       try {
-        const gateway = await getCoproxy()
+        const gateway = await getCoCoProxy()
         const request = requestOf(peer.request)
         gateway.authorize(request, true)
         state.cleanup = await gateway.controller.relay(stripControllerMount(request), {

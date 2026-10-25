@@ -14,16 +14,16 @@ function input(): NetworkPlanInput {
     core: { serviceUid: 12345, binarySha256: 'b'.repeat(64), unitSha256: 'c'.repeat(64) },
     ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
     routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-    tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+    tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
     tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } };
 }
 function identity(plan: NetworkPlan, now: number): NetworkIdentity {
   return { scope: 'fixture', generation: plan.deployment.generation, planSha256: plan.sha256, checkedAt: now,
     bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', corePid: 101, corePidStartTime: '12345',
-    coreUnitControlGroup: '/system.slice/coproxy-mihomo.service', coreCgroupKernelId: '9007199254740999',
+    coreUnitControlGroup: '/system.slice/cocoproxy-mihomo.service', coreCgroupKernelId: '9007199254740999',
     ...plan.deployment.core, processAndUnitVerified: true, socketCgroupIsolationVerified: true,
     ...(plan.deployment.management ? { management: { pid: 202, pidStartTime: '23456',
-      serviceUid: plan.deployment.management.serviceUid, unitControlGroup: '/system.slice/coproxy-management.service' as const,
+      serviceUid: plan.deployment.management.serviceUid, unitControlGroup: '/system.slice/cocoproxy-management.service' as const,
       cgroupKernelId: '9007199254741000' } } : {}) };
 }
 function evidence(bound: NetworkIdentity, now: number): NetworkEvidence {
@@ -33,7 +33,7 @@ function evidence(bound: NetworkIdentity, now: number): NetworkEvidence {
 const reject = (code: string) => (error: unknown) => error instanceof NetworkTransactionError && error.code === code && error.message === code;
 
 async function fixture() {
-  const parent = await mkdtemp(join(tmpdir(), 'coproxy-network-transaction-'));
+  const parent = await mkdtemp(join(tmpdir(), 'cocoproxy-network-transaction-'));
   await chmod(parent, 0o700);
   const root = join(parent, 'network'), calls: string[] = [];
   let now = Date.now();

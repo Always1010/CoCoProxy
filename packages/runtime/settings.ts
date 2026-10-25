@@ -47,7 +47,7 @@ export function parseRuntimeSettings(input: unknown): RuntimeSettings {
     const binaryPath = absolutePath(value.binaryPath);
     const systemctlPath = absolutePath(value.systemctlPath);
     const unitPath = absolutePath(value.unitPath);
-    if (posix.basename(unitPath) !== 'coproxy-mihomo.service') fail('INVALID_RUNTIME_SETTINGS');
+    if (posix.basename(unitPath) !== 'cocoproxy-mihomo.service') fail('INVALID_RUNTIME_SETTINGS');
     const automaticGateway = value.automaticGateway === undefined ? undefined : parseAutomaticGatewaySettings(value.automaticGateway);
     if (automaticGateway && !Object.values(AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM).includes(value.binarySha256)) fail('INVALID_RUNTIME_SETTINGS');
     return { schemaVersion: 1, stateDirectory, binaryPath, binarySha256: value.binarySha256,

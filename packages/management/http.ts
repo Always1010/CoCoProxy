@@ -80,7 +80,7 @@ function json(body: unknown, status = 200, cookie?: string): Response {
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-/** Cookie authentication for the Coproxy mount, independent of core credentials. */
+/** Cookie authentication for the CoCoProxy mount, independent of core credentials. */
 export function createManagementHandler(options: { origin: string; credential: AdminCredential; sessions?: SessionStore; now?: () => number }, action: ManagementAction): (request: Request) => Promise<Response> {
   return createManagementGateway(options, action).fetch;
 }
@@ -91,7 +91,7 @@ export function createManagementGateway(options: { origin: string; credential: A
   const sessions = options.sessions ?? new SessionStore();
   const now = options.now ?? Date.now;
   const secure = origin.startsWith('https:');
-  const name = secure ? '__Host-coproxy_session' : 'coproxy_session';
+  const name = secure ? '__Host-cocoproxy_session' : 'cocoproxy_session';
   const attributes = `Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
   const attempts: number[] = [];
   let loggingIn = 0;
@@ -109,7 +109,7 @@ export function createManagementGateway(options: { origin: string; credential: A
       // Only the controller allowlist interprets its encoded names and queries.
       const controller = url.pathname.startsWith('/api/clash/');
       if ((!controller && (url.search || url.pathname.includes('%'))) || request.headers.has('authorization')) throw new ManagementError('INVALID_REQUEST');
-      const sourceDelete = request.method === 'DELETE' && /^\/api\/coproxy\/sources\/[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(url.pathname);
+      const sourceDelete = request.method === 'DELETE' && /^\/api\/cocoproxy\/sources\/[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(url.pathname);
       if (!sourceDelete && !(controller ? ['GET', 'PUT', 'DELETE'] : ['GET', 'POST', 'PUT']).includes(request.method)) throw new ManagementError('METHOD_NOT_ALLOWED', 405);
       if (request.headers.get('sec-fetch-site') === 'cross-site') throw new ManagementError('ORIGIN_DENIED', 403);
       const suppliedOrigin = request.headers.get('origin');
@@ -128,7 +128,7 @@ export function createManagementGateway(options: { origin: string; credential: A
   return { authorize, fetch: async request => {
     try {
       const url = validate(request);
-      if (request.method === 'GET' && url.pathname === '/api/coproxy/health') return json({ responding: true, scope: 'management_only' });
+      if (request.method === 'GET' && url.pathname === '/api/cocoproxy/health') return json({ responding: true, scope: 'management_only' });
       if (request.method === 'POST' && url.pathname === '/api/session/login') {
         const stamp = now();
         while (attempts.length && attempts[0] <= stamp - 60_000) attempts.shift();

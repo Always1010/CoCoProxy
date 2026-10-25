@@ -9,7 +9,7 @@ const plan = renderNetworkPlan({ schemaVersion: 1, generation: 'a'.repeat(64),
   core: { serviceUid: 12345, binarySha256: 'b'.repeat(64), unitSha256: 'c'.repeat(64) },
   ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24,
   routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-  tun: { interface: 'coproxy-tun', mtu: 1500 },
+  tun: { interface: 'cocoproxy-tun', mtu: 1500 },
   marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
   tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } });
 const identity: NetworkProbeIdentity = { corePid: 101, corePidStartTime: '123456', serviceUid: 12345,
@@ -32,7 +32,7 @@ function fixture() {
     ['/proc/sys/kernel/random/boot_id', identity.bootId + '\n'],
     ['/proc/101/stat', `101 (synthetic ) comm) S ${Array(18).fill('0').join(' ')} 123456 0\n`],
     ['/proc/101/status', 'Uid:\t12345\t12345\t12345\t12345\n'],
-    ['/proc/101/fdinfo/5', 'pos:\t0\nflags:\t0100002\niff:\tcoproxy-tun\n'],
+    ['/proc/101/fdinfo/5', 'pos:\t0\nflags:\t0100002\niff:\tcocoproxy-tun\n'],
   ]);
   for (const [index, protocol] of ['udp', 'tcp'].entries()) {
     data.set(`/proc/101/net/${protocol}`, '  sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n' +
@@ -48,7 +48,7 @@ function fixture() {
       return ({ '3': 'socket:[300]', '4': 'socket:[301]', '5': '/dev/net/tun' } as Record<string, string>)[path.split('/').at(-1)!];
     },
     async entries() { return ['3', '4', '5']; }, async procType() { return 0x9fa0n; }, async tunDevice() { return true; },
-    async address() { return JSON.stringify([{ ifname: 'coproxy-tun', ifindex: 9, mtu: 1500, flags: ['UP'],
+    async address() { return JSON.stringify([{ ifname: 'cocoproxy-tun', ifindex: 9, mtu: 1500, flags: ['UP'],
       linkinfo: { info_kind: 'tun', info_data: { type: 'tun' } }, addr_info: [{ family: 'inet', local: '198.18.0.1', prefixlen: 30 }] }]); },
     async exchange(protocol, query, address, port, timeoutMs) {
       assert.equal(protocol, queries.length === 0 ? 'udp' : 'tcp');
@@ -80,7 +80,7 @@ test('ownership, namespace, mount, PID reuse and exact TUN configuration fail cl
     f => { f.reader.entries = async () => ['3', '5']; },
     f => { f.data.set('/proc/101/fdinfo/5', 'iff:\tunrelated\n'); },
     f => { f.reader.tunDevice = async () => false; },
-    f => { f.reader.address = async () => '[{"ifname":"coproxy-tun","mtu":1400}]'; },
+    f => { f.reader.address = async () => '[{"ifname":"cocoproxy-tun","mtu":1400}]'; },
     f => { f.reader.address = async () => '{'; },
     f => { const original = f.reader.link; f.reader.link = async path => path === '/proc/101/ns/net' ? 'net:[9999]' : original(path); },
     f => { f.data.set('/proc/self/mountinfo', f.data.get('/proc/self/mountinfo')! + '2 1 0:2 / /proc/101/net rw - tmpfs tmpfs rw\n'); },

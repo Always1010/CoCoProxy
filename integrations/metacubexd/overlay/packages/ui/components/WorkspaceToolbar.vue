@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { IconRefresh } from '@tabler/icons-vue'
-import { CoproxyError } from '~/composables/useCoproxy'
+import { CoCoProxyError } from '~/composables/useCoCoProxy'
 defineProps<{ dirty?: boolean }>()
 const { view, workspace, busy, error, feedback, operation, run, load, save, editOverrides } = useWorkspace()
 const profiles = computed(() => view.value?.sources.filter(source => source.kind === 'profile') ?? [])
-const visibleError = computed(() => error.value || (view.value?.error ? new CoproxyError(view.value.error).message : ''))
+const visibleError = computed(() => error.value || (view.value?.error ? new CoCoProxyError(view.value.error).message : ''))
 
 async function changeMode(event: Event) {
   const value = (event.target as HTMLSelectElement).value

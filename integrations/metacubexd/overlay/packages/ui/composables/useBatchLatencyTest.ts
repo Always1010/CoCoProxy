@@ -1,7 +1,7 @@
 import { toast } from 'vue-sonner'
 import { useLatencyFeedback, type LatencyFailureReason } from './useLatencyFeedback'
 import { latencyFailureReason, useRequest } from './useApi'
-import { useCoproxy } from './useCoproxy'
+import { useCoCoProxy } from './useCoCoProxy'
 import { useWorkspace } from './useWorkspace'
 import { latencyProbeKey, runLatencyBatch } from '../utils/latencyBatch'
 
@@ -25,7 +25,7 @@ export function useBatchLatencyTest() {
   const proxiesStore = useProxiesStore()
   const nodeRecommendationStore = useNodeRecommendationStore()
   const latencyFeedback = useLatencyFeedback()
-  const { generation, session } = useCoproxy()
+  const { generation, session } = useCoCoProxy()
   const { view } = useWorkspace()
   const { t } = useI18n()
   const isRunning = ref(false)

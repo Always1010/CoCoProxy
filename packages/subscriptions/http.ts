@@ -206,7 +206,7 @@ export class HttpsSnapshotClient implements SnapshotClient {
           checkServerIdentity: (_name: string, cert: Parameters<typeof checkServerIdentity>[1]) => checkServerIdentity(hostname, cert),
           ...(this.ca === undefined ? {} : { ca: this.ca }), rejectUnauthorized: true }),
         agent: false, signal,
-        headers: { Host: url.host, 'Accept-Encoding': 'identity', 'User-Agent': 'Coproxy/0.1', ...(etag ? { 'If-None-Match': etag } : {}) },
+        headers: { Host: url.host, 'Accept-Encoding': 'identity', 'User-Agent': 'CoCoProxy/0.1', ...(etag ? { 'If-None-Match': etag } : {}) },
       }, res => {
         const status = res.statusCode ?? 0;
         if (status !== 200) {

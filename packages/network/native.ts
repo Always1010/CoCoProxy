@@ -383,7 +383,7 @@ export class NativeNetworkSession {
     const command = scripts.map(script => script.trim().split('\n').join('; ')).join('; ') + ';';
     if (command.length > 16_384 || /[\u0000-\u001f\u007f]/.test(command)) fail('NETWORK_BATCH_INVALID');
     const updates: NftEchoUpdate[] = scripts.map((script, index) => {
-      const table = index === 0 ? 'coproxy_guard' : 'coproxy_data';
+      const table = index === 0 ? 'cocoproxy_guard' : 'cocoproxy_data';
       const chains = index === 0 ? ['input_guard', 'forward_guard', 'output_guard'] : ['classify_ingress', 'classify_output', 'classify_return'];
       return { table, operation, ruleCounts: Object.fromEntries(chains.map(chain => [chain,
         script.split('\n').filter(line => line.startsWith(`add rule inet ${table} ${chain} `)).length])) };

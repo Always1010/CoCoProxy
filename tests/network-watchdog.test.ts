@@ -11,18 +11,18 @@ import { NetworkWatchdog, NetworkWatchdogError } from '../packages/network/watch
 const plan = renderNetworkPlan({ schemaVersion: 1, generation: 'a'.repeat(64),
   core: { serviceUid: 12345, binarySha256: 'b'.repeat(64), unitSha256: 'c'.repeat(64) }, ingressInterface: 'lan-test',
   gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01',
-  clientIPv4: '192.0.2.3', dnsPort: 15353, tun: { interface: 'coproxy-tun', mtu: 1500 },
+  clientIPv4: '192.0.2.3', dnsPort: 15353, tun: { interface: 'cocoproxy-tun', mtu: 1500 },
   marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
   tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } });
 const identity = (p: NetworkPlan): NetworkIdentity => ({ scope: 'fixture', generation: p.deployment.generation,
   planSha256: p.sha256, checkedAt: Date.now(), bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', corePid: 101,
-  corePidStartTime: '12345', coreUnitControlGroup: '/system.slice/coproxy-mihomo.service', coreCgroupKernelId: '123456789',
+  corePidStartTime: '12345', coreUnitControlGroup: '/system.slice/cocoproxy-mihomo.service', coreCgroupKernelId: '123456789',
   ...p.deployment.core, processAndUnitVerified: true, socketCgroupIsolationVerified: true });
 const evidence = (p: NetworkPlan) => ({ identity: identity(p), checkedAt: Date.now(), checks: {
   dnsSocketsOwned: true as const, dnsUdpQuery: true as const, dnsTcpQuery: true as const, tunOwned: true as const,
   linkAndNeighbour: true as const, socketEgressMark: true as const, ownedResources: true as const } });
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-watchdog-')); await chmod(root, 0o700);
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-watchdog-')); await chmod(root, 0o700);
   const state = { failure: 'none' as 'none' | 'known' | 'unknown', verify: 0, guard: 0, activate: 0, pending: false };
   const driver: NetworkDriver = { scope: 'fixture', async preflight() {}, async settlePending() { state.pending = false; },
     async assertSettled() { if (state.pending) throw new NetworkDriverError(false); },

@@ -88,7 +88,7 @@ export async function loadManagementGateway(path: string) {
       runtime, sourceClient, sourceDecoder: decodeSubscriptionProfile, automaticGateway: runtimeSettings.automaticGateway,
       observeSelections: async () => {
         const response = await controller.fetch(new Request(settings.origin + '/proxies'));
-        const generation = response.headers.get('x-coproxy-generation');
+        const generation = response.headers.get('x-cocoproxy-generation');
         if (!response.ok || !generation) throw new ManagementError('CONTROLLER_UNAVAILABLE', 503);
         const body = await response.json() as { proxies: Record<string, { now?: unknown }> };
         const selections: Record<string, string> = Object.create(null);

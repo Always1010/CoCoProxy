@@ -33,7 +33,7 @@ export function automaticGatewayGuardRules(network: AutomaticGatewaySettings): s
   const broadcast = [24, 16, 8, 0].map(shift => Math.floor((subnet + 2 ** (32 - n.prefixLength) - 1) / 2 ** shift) % 256).join('.');
   const scope = n.clientCIDR ?? n.clientIPv4!;
   const excluded = n.clientCIDR ? `  iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan} ip saddr { ${n.gatewayIPv4}, ${n.routerIPv4}, ${lan.split('/')[0]}, ${broadcast} } drop\n` : '';
-  return `table inet coproxy_auto_guard {
+  return `table inet cocoproxy_auto_guard {
  chain ingress {
   type filter hook prerouting priority -310; policy accept;
 ${excluded}  iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan} ip saddr != ${scope} drop
@@ -48,7 +48,7 @@ ${excluded}  iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan
  chain forwarding {
   type filter hook forward priority -310; policy accept;
   iifname "${n.ingressInterface}" meta nfproto ipv6 drop
-  iifname "${n.ingressInterface}" ip saddr ${scope} ip daddr != ${lan} oifname != "coproxy-tun" drop
+  iifname "${n.ingressInterface}" ip saddr ${scope} ip daddr != ${lan} oifname != "cocoproxy-tun" drop
  }
 }
 `;
@@ -75,7 +75,7 @@ export function renderAutomaticGatewayHostPlan(input: {
   const guardRules = automaticGatewayGuardRules(network);
   const command = [python, '-I', posix.join(source, 'apps/gateway/network.py'), 'prepare', '--settings', settingsPath]
     .map(value => quote(value, true)).join(' ');
-  const unit = ['[Unit]', 'Description=Coproxy automatic gateway network prerequisites',
+  const unit = ['[Unit]', 'Description=CoCoProxy automatic gateway network prerequisites',
     'After=network-online.target', 'Wants=network-online.target', '', '[Service]', 'Type=oneshot',
     'RemainAfterExit=true', 'User=root', `ExecStart=${command}`, 'UMask=0077',
     'TimeoutStartSec=60', 'TimeoutStopSec=10', 'NoNewPrivileges=true',

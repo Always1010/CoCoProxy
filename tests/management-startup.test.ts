@@ -14,7 +14,7 @@ function runtime(events: (string | null)[], fail = false) {
     restore: async (_path: string | null, generation: string | null) => { events.push(generation); if (fail) throw new Error('PRIVATE_DIAGNOSTICS'); } };
 }
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-startup-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-startup-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return join(root, 'state');
 }

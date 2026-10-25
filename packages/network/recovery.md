@@ -84,7 +84,7 @@ settlePending返回不自动清fence，保存的unsettled:false也不替代上�
 
 assertBlocked是受信内部回调，不是HTTP布尔值；每次命令pending落盘后、执行前再次证明。核心锁与外层网络authority不同，不嵌套相同root。
 
-gateway-core-state.json含revision、settingsSHA、选择代次和pending action/token/commandSHA/boot/namespace/UID。命令固定systemctl --no-ask-password --no-pager start|stop coproxy-mihomo.service，20秒／16 KiB，无shell。成功result与独立manager状态都核验后才清pending；命令文件尚无自动回收策略。
+gateway-core-state.json含revision、settingsSHA、选择代次和pending action/token/commandSHA/boot/namespace/UID。命令固定systemctl --no-ask-password --no-pager start|stop cocoproxy-mihomo.service，20秒／16 KiB，无shell。成功result与独立manager状态都核验后才清pending；命令文件尚无自动回收策略。
 
 配置通过LoadCredential快照，≤1,000,000 UTF-8字节，在语法检查／stop／选择之前拒绝超限。核心无自动重启／enable。读坏journal不修复，持久写失败下次重读；不存在锁所需candidates时拒绝伪装只读收敛为初始化。
 

@@ -16,15 +16,15 @@ node --experimental-strip-types apps/cli/main.ts admin-init --input /absolute/pr
 
 会话令牌为 32 字节随机数，仅在 HttpOnly cookie 中返回；内存中只保留 SHA-256 摘要。会话绝对有效期 8 小时、最多 256 个，不因请求续期，注销立即撤销，进程重启后失效。当前管理进程应单实例运行，不能假定多 worker 共享会话。单实例每分钟最多接受 8 次登录，最多并行 2 次含密码派生的登录；多进程或反向代理的额外限制尚未实现。
 
-HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Strict; Path=/`。仅精确 loopback origin 可以使用 HTTP 测试 cookie；其他部署 origin 必须为 HTTPS。写操作要求精确匹配 Origin，跨站 Fetch、URL 查询令牌、Bearer 兼容入口与重复同名会话 cookie 均拒绝。所有 JSON 响应禁止缓存，错误只含固定码。JSON 请求有限量、严格 UTF-8 和读取时限；读取完成后才分派业务操作，不通过超时竞赛打断正在应用的事务。
+HTTPS 使用 `__Host-cocoproxy_session`，固定 `Secure; HttpOnly; SameSite=Strict; Path=/`。仅精确 loopback origin 可以使用 HTTP 测试 cookie；其他部署 origin 必须为 HTTPS。写操作要求精确匹配 Origin，跨站 Fetch、URL 查询令牌、Bearer 兼容入口与重复同名会话 cookie 均拒绝。所有 JSON 响应禁止缓存，错误只含固定码。JSON 请求有限量、严格 UTF-8 和读取时限；读取完成后才分派业务操作，不通过超时竞赛打断正在应用的事务。
 
 ## 工作区与来源接口
 
-日常界面使用 `/api/coproxy/workspace`：GET 返回当前方案、来源摘要、策略组与规则来源；PUT 接收 `{expectedRevision, settings}` 保存独立的本地／订阅方案设置，POST `/workspace/apply` 接收 `{expectedRevision, expectedActive}`，统一编译、校验并应用。POST `/workspace/select` 接收相同版本条件及 `{group, name}`，持久保存手动组选择并应用；存在未应用设置时要求先应用，避免节点操作顺带发布其他编辑。自动组保留原算法。设置使用私有原子文件和运行事务共用锁；旧草稿在明确切换前沿用，不自动替换现有运行配置。
+日常界面使用 `/api/cocoproxy/workspace`：GET 返回当前方案、来源摘要、策略组与规则来源；PUT 接收 `{expectedRevision, settings}` 保存独立的本地／订阅方案设置，POST `/workspace/apply` 接收 `{expectedRevision, expectedActive}`，统一编译、校验并应用。POST `/workspace/select` 接收相同版本条件及 `{group, name}`，持久保存手动组选择并应用；存在未应用设置时要求先应用，避免节点操作顺带发布其他编辑。自动组保留原算法。设置使用私有原子文件和运行事务共用锁；旧草稿在明确切换前沿用，不自动替换现有运行配置。
 
 订阅页独立管理来源，支持 PUT `{expectedRevision, name?, url?}` 重命名或替换地址、POST `/sources/:id/refresh` 更新、DELETE `{expectedRevision}` 删除。完整订阅保留策略组与规则，本地方案只使用其节点；来源更新不自动覆盖用户规则或替换当前配置。订阅自带方案只选一份基础配置，各方案分别保留用户覆盖。页面只返回节点名称与组引用，不向概览接口附加节点凭据或订阅地址。
 
-工作区 GET 另返回 `tcpNodes`，每项仅含 `{name, fingerprint, applicable}`。POST `/api/coproxy/workspace/tcp-delay` 接收 `{expectedRevision, expectedActive, name, fingerprint}`，只探测已应用且版本匹配的工作区节点服务器，不接受浏览器提供 host、port 或 URL。结果含 `status`、`delay`（毫秒或 null）和 `checkedAt`，不返回端点或凭据。探测从管理服务所在网关进行，只建立 TCP 连接，DNS 不计入建连耗时；单次总预算 3 秒，每个管理实例最多同时处理 8 项。UDP／QUIC 专用、链式拨号或无明确 TCP 端点的条目返回 `not-applicable`。取消和配置冲突不写配置，TCP 结果不参与代理健康历史或自动选路。
+工作区 GET 另返回 `tcpNodes`，每项仅含 `{name, fingerprint, applicable}`。POST `/api/cocoproxy/workspace/tcp-delay` 接收 `{expectedRevision, expectedActive, name, fingerprint}`，只探测已应用且版本匹配的工作区节点服务器，不接受浏览器提供 host、port 或 URL。结果含 `status`、`delay`（毫秒或 null）和 `checkedAt`，不返回端点或凭据。探测从管理服务所在网关进行，只建立 TCP 连接，DNS 不计入建连耗时；单次总预算 3 秒，每个管理实例最多同时处理 8 项。UDP／QUIC 专用、链式拨号或无明确 TCP 端点的条目返回 `not-applicable`。取消和配置冲突不写配置，TCP 结果不参与代理健康历史或自动选路。
 
 同一工作区的并行读取只合并尚未完成的来源构建；构建完成后重新读取来源。编译结果仅保留一个按完整策略内容匹配的不可变条目，来源内容变化即重新编译，不用 revision 单独替代内容身份。controller 并发只读请求共享在途完整运行核验，完成后不保留健康结果或错误；每个请求仍独立检查当前代次，写操作继续在共用锁内重新核验。每个管理实例最多同时接受 16 个 controller 测速请求，超额返回 `CONTROLLER_PROBE_BUSY`/429，普通状态读取仍可用；只读请求取消会传递给核心请求。核心组接口可能自行展开成员，网页全部组测速改为有界的去重单节点请求。
 
@@ -35,17 +35,17 @@ HTTPS 使用 `__Host-coproxy_session`，固定 `Secure; HttpOnly; SameSite=Stric
 | POST `/api/session/login` | `{username,password}`；仅 cookie 返回令牌 |
 | GET `/api/session` | 当前已认证用户名与到期时间 |
 | POST `/api/session/logout` | 空对象；撤销 cookie |
-| GET `/api/coproxy/health` | 无需认证，仅报告 management_only 响应，不报告核心健康 |
-| GET `/api/coproxy/status` | 历史状态、草稿摘要和独立 core_only 观察；gateway 明确未实现 |
-| GET `/api/coproxy/draft` | 草稿版本、代次及可编辑 policy，不返回部署参数 |
-| PUT `/api/coproxy/draft` | `{expectedRevision,policy}`；只保存 |
-| POST `/api/coproxy/stage` | `{expectedRevision,sources?:[{id,expectedRevision}]}`；捕获指定草稿和来源快照 |
-| POST `/api/coproxy/apply` | `{generation,expectedActive}`；首次 expectedActive 为 null |
-| POST `/api/coproxy/recover` | 空对象；恢复中断事务 |
-| GET `/api/coproxy/sources` | 来源摘要清单，不包含 URL、ETag 或节点凭据 |
-| GET/PUT `/api/coproxy/sources/:id` | 读取摘要；PUT `{expectedRevision,name?,url?}` 保存来源 |
-| POST `/api/coproxy/sources/:id/refresh` | `{expectedRevision}`；按部署许可策略刷新，不自动应用 |
-| DELETE `/api/coproxy/sources/:id` | `{expectedRevision}`；删除来源，页面先解除工作区引用 |
+| GET `/api/cocoproxy/health` | 无需认证，仅报告 management_only 响应，不报告核心健康 |
+| GET `/api/cocoproxy/status` | 历史状态、草稿摘要和独立 core_only 观察；gateway 明确未实现 |
+| GET `/api/cocoproxy/draft` | 草稿版本、代次及可编辑 policy，不返回部署参数 |
+| PUT `/api/cocoproxy/draft` | `{expectedRevision,policy}`；只保存 |
+| POST `/api/cocoproxy/stage` | `{expectedRevision,sources?:[{id,expectedRevision}]}`；捕获指定草稿和来源快照 |
+| POST `/api/cocoproxy/apply` | `{generation,expectedActive}`；首次 expectedActive 为 null |
+| POST `/api/cocoproxy/recover` | 空对象；恢复中断事务 |
+| GET `/api/cocoproxy/sources` | 来源摘要清单，不包含 URL、ETag 或节点凭据 |
+| GET/PUT `/api/cocoproxy/sources/:id` | 读取摘要；PUT `{expectedRevision,name?,url?}` 保存来源 |
+| POST `/api/cocoproxy/sources/:id/refresh` | `{expectedRevision}`；按部署许可策略刷新，不自动应用 |
+| DELETE `/api/cocoproxy/sources/:id` | `{expectedRevision}`；删除来源，页面先解除工作区引用 |
 
 除最小 health 外均要求管理会话；上表路径不接受查询参数。未知路由和原有 `/api/control/**` 返回 404，没有兼容的直接 start、配置热写、脚本、升级、WebDAV 或 geo 下载旁路。
 
@@ -63,7 +63,7 @@ Server overlay 替换了上游原控制 router、自动启动、刷新调度和 
 
 ## 核心代理
 
-`/api/clash/*` 与上述接口共用 Cookie。仅允许有限 GET：version/configs/proxies/group/rules/providers/connections；按名称选择节点的 PUT，以及关闭连接／清除选择的 DELETE 要求 `If-Match` 等于已观察 generation，且在配置应用共用锁内重新核验目标。PATCH/PUT configs、重启、更新、provider 下载与脚本入口均拒绝。GET 返回 `X-Coproxy-Generation`；候选切换由事务接口完成，不借助热写配置。
+`/api/clash/*` 与上述接口共用 Cookie。仅允许有限 GET：version/configs/proxies/group/rules/providers/connections；按名称选择节点的 PUT，以及关闭连接／清除选择的 DELETE 要求 `If-Match` 等于已观察 generation，且在配置应用共用锁内重新核验目标。PATCH/PUT configs、重启、更新、provider 下载与脚本入口均拒绝。GET 返回 `X-CoCoProxy-Generation`；候选切换由事务接口完成，不借助热写配置。
 
 目标固定为当前 active、selection 和真实运行证据一致的 loopback controller，密钥仅在服务端 Authorization 头中使用。不接受客户端 Bearer、Cookie 转发、目标地址或 token 查询。延迟探测只能使用 `controllerPolicy.allowedProbeOrigins` 中精确的 HTTPS origin，timeout 不超过 10 秒；省略 `controllerPolicy` 时使用仪表盘默认的 `https://www.gstatic.com`，显式空数组关闭测速。UI 的探测 URL 必须与部署许可一致。
 

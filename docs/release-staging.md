@@ -6,9 +6,9 @@
 
 ```sh
 node scripts/stage-explicit-release.mjs \
-  --source-dir /absolute/source/coproxy \
+  --source-dir /absolute/source/cocoproxy \
   --server-dir /absolute/build/metacubexd/apps/server/.output \
-  --runtime-dependencies /absolute/source/coproxy/node_modules \
+  --runtime-dependencies /absolute/source/cocoproxy/node_modules \
   --core /absolute/reviewed/mihomo \
   --output /absolute/private/staging/release
 ```

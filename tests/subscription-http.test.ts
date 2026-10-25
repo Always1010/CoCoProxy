@@ -16,7 +16,7 @@ const execute = promisify(execFile);
 const sensitive = 'synthetic-query-token';
 
 async function fixture(run: (origin: string, options: HttpsClientOptions, hits: string[]) => Promise<void>) {
-  const dir = await mkdtemp(join(tmpdir(), 'coproxy-https-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'cocoproxy-https-test-'));
   const hits: string[] = [];
   let server: ReturnType<typeof createServer> | undefined;
   try {
@@ -139,7 +139,7 @@ test('HTTP subscriptions require an exact explicit origin and retain address, re
   await assert.rejects(client.fetch(origin + '/large'), code('SOURCE_BODY_LIMIT'));
   assert.equal(hits, 5);
   assert.throws(() => new HttpsSnapshotClient({ allowedOrigins: [origin] }), code('SOURCE_URL_DENIED'));
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-http-source-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-http-source-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new SubscriptionStore(root, client);
   await store.configure({ id: 'legacy', url: origin + '/nodes?token=' + sensitive }, 0);
@@ -178,7 +178,7 @@ test('total deadline also bounds DNS and late resolution never starts a request'
 
 test('CLI refresh captures a real HTTPS node snapshot into an immutable candidate without starting runtime', async () => {
   await fixture(async (origin, options) => {
-    const dir = await mkdtemp(join(tmpdir(), 'coproxy-source-cli-'));
+    const dir = await mkdtemp(join(tmpdir(), 'cocoproxy-source-cli-'));
     try {
       const directOrigin = origin.replace('snapshot.test', '127.0.0.1');
       const definition = join(dir, 'definition.json');

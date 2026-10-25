@@ -8,7 +8,7 @@ function input(): NetworkPlanInput {
     core: { serviceUid: 12345, binarySha256: 'b'.repeat(64), unitSha256: 'c'.repeat(64) },
     ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24,
     routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-    tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+    tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
     tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } };
 }
 
@@ -21,11 +21,11 @@ test('source renderer binds fresh normalized input and owns only fixed tables an
   assert.notEqual(renderNetworkRules(source, { mode: 'active' }).planSha256, result.planSha256);
   assert.throws(() => renderNetworkRules(renderNetworkPlan(input()), { mode: 'active' }), NetworkRulesError);
   for (const [name, batch] of Object.entries(result.nft)) {
-    assert.ok(batch.create.startsWith(`add table inet coproxy_${name}\n`));
+    assert.ok(batch.create.startsWith(`add table inet cocoproxy_${name}\n`));
     assert.doesNotMatch(batch.replace, /add table|delete|destroy|flush table|flush ruleset/);
     const lines = batch.replace.trim().split('\n');
     assert.equal(lines.filter(line => line.startsWith('flush chain')).length, 3);
-    assert.ok(lines.every(line => line.startsWith(`flush chain inet coproxy_${name} `) || line.startsWith(`add rule inet coproxy_${name} `)));
+    assert.ok(lines.every(line => line.startsWith(`flush chain inet cocoproxy_${name} `) || line.startsWith(`add rule inet cocoproxy_${name} `)));
   }
   assert.doesNotMatch(JSON.stringify(result), /\bsnat\b|\bmasquerade\b|meta mark set ct mark|established|related|flow add/);
   for (const mode of ['blocked', 'core-only', 'active'] as const) {
@@ -45,8 +45,8 @@ test('blocked guard grants only the explicit loopback DNS probe exception', () =
     `input_guard iifname "lo" ip saddr 127.0.0.1 ip daddr 192.0.2.2 meta l4proto ${protocol} th dport 15353 accept`)));
   assert.match(result.nft.guard.replace, /meta skuid 12345 drop/);
   assert.match(result.nft.guard.replace, /ip saddr 192\.0\.2\.3\/32 drop/);
-  assert.match(result.nft.guard.replace, /iifname "coproxy-tun" drop/);
-  assert.match(result.nft.guard.replace, /oifname "coproxy-tun" drop/);
+  assert.match(result.nft.guard.replace, /iifname "cocoproxy-tun" drop/);
+  assert.match(result.nft.guard.replace, /oifname "cocoproxy-tun" drop/);
   for (const protocol of ['tcp', 'udp']) assert.ok(result.nft.guard.replace.includes(`meta l4proto ${protocol} th dport 15353 drop`));
   assert.doesNotMatch(result.nft.data.replace, /\| 0x00000100|\| 0x00000300/);
 });
@@ -73,15 +73,15 @@ test('active forward path requires exact per-packet identity, protocol, mark and
   const forward = rules.nft.guard.replace.split('\n').filter(line => line.includes('forward_guard') && line.endsWith('accept'));
   assert.equal(forward.length, 4);
   for (const protocol of ['tcp', 'udp']) {
-    assert.ok(forward.some(line => line.includes(`iifname "lan-test" ether saddr 02:00:00:00:00:01 ip saddr 192.0.2.3/32 ip daddr != 192.0.2.2 ip daddr != 192.0.2.1 meta l4proto ${protocol} meta mark & 0x0000ff00 == 0x00000100 oifname "coproxy-tun"`)));
-    assert.ok(forward.some(line => line.includes(`iifname "coproxy-tun" ip daddr 192.0.2.3/32 meta l4proto ${protocol} meta mark & 0x0000ff00 == 0x00000300 oifname "lan-test"`)));
+    assert.ok(forward.some(line => line.includes(`iifname "lan-test" ether saddr 02:00:00:00:00:01 ip saddr 192.0.2.3/32 ip daddr != 192.0.2.2 ip daddr != 192.0.2.1 meta l4proto ${protocol} meta mark & 0x0000ff00 == 0x00000100 oifname "cocoproxy-tun"`)));
+    assert.ok(forward.some(line => line.includes(`iifname "cocoproxy-tun" ip daddr 192.0.2.3/32 meta l4proto ${protocol} meta mark & 0x0000ff00 == 0x00000300 oifname "lan-test"`)));
   }
   assert.match(rules.nft.guard.replace, /meta nfproto ipv6 iifname "lan-test" ether saddr 02:00:00:00:00:01 drop/);
   const data = rules.nft.data.replace;
   const clearMarks = data.split('\n').filter(line => line.includes('meta mark set meta mark &'));
   assert.equal(clearMarks.length, 2);
   assert.ok(clearMarks.some(line => line.includes('iifname "lan-test" ip saddr 192.0.2.3/32 meta mark set meta mark & 0xffff00ff')));
-  assert.ok(clearMarks.some(line => line.includes('iifname "coproxy-tun" ip daddr 192.0.2.3/32 meta mark set meta mark & 0xffff00ff')));
+  assert.ok(clearMarks.some(line => line.includes('iifname "cocoproxy-tun" ip daddr 192.0.2.3/32 meta mark set meta mark & 0xffff00ff')));
   assert.match(data, /meta mark set \(meta mark & 0xffff00ff\) \| 0x00000100/);
   assert.match(data, /meta mark set \(meta mark & 0xffff00ff\) \| 0x00000300/);
   const capture = data.split('\n').filter(line => line.includes('| 0x00000100'));
@@ -94,12 +94,12 @@ test('socket cgroup origin is mandatory, shared uid management has a separate un
   assert.equal(result.scope, 'production');
   const allow = result.nft.guard.replace.split('\n').filter(line => line.includes('output_guard') && line.endsWith('accept'));
   assert.equal(allow.length, 6);
-  for (const protocol of ['tcp', 'udp']) assert.ok(allow.some(line => line.includes(`meta skuid 12345 socket cgroupv2 level 2 "system.slice/coproxy-mihomo.service" meta mark & 0x0000ff00 == 0x00000200 oifname "lan-test" ip saddr 192.0.2.2 meta l4proto ${protocol} accept`)));
-  const management = allow.find(line => line.includes('"system.slice/coproxy-management.service"'))!;
-  assert.ok(management.includes('meta skuid 12345 socket cgroupv2 level 2 "system.slice/coproxy-management.service"'));
+  for (const protocol of ['tcp', 'udp']) assert.ok(allow.some(line => line.includes(`meta skuid 12345 socket cgroupv2 level 2 "system.slice/cocoproxy-mihomo.service" meta mark & 0x0000ff00 == 0x00000200 oifname "lan-test" ip saddr 192.0.2.2 meta l4proto ${protocol} accept`)));
+  const management = allow.find(line => line.includes('"system.slice/cocoproxy-management.service"'))!;
+  assert.ok(management.includes('meta skuid 12345 socket cgroupv2 level 2 "system.slice/cocoproxy-management.service"'));
   assert.ok(management.includes('meta mark & 0x0000ff00 == 0'));
-  for (const protocol of ['tcp', 'udp']) assert.ok(allow.some(line => line.includes('"system.slice/coproxy-management.service"') && line.includes(`meta l4proto ${protocol} th sport != 15353 accept`)));
-  assert.ok(!result.nft.data.replace.split('\n').some(line => line.startsWith('add rule inet coproxy_data classify_output ')),
+  for (const protocol of ['tcp', 'udp']) assert.ok(allow.some(line => line.includes('"system.slice/cocoproxy-management.service"') && line.includes(`meta l4proto ${protocol} th sport != 15353 accept`)));
+  assert.ok(!result.nft.data.replace.split('\n').some(line => line.startsWith('add rule inet cocoproxy_data classify_output ')),
     'local output must retain the originating socket mark without modifying unrelated traffic');
   assert.doesNotMatch(result.nft.data.replace, /\| 0x00000200/);
   const fixture = renderNetworkRules(input(), { mode: 'active', fixtureCgroups: { core: '/fixture/core', management: '/fixture/management' } });
@@ -112,7 +112,7 @@ test('socket cgroup origin is mandatory, shared uid management has a separate un
   assert.equal(coreOnly.nft.guard.replace.split('\n').filter(line => line.includes('output_guard') && line.endsWith('accept')).length, 4);
   assert.match(coreOnly.nft.guard.replace, /meta skuid 12345 drop/);
   assert.equal(renderNetworkRules(input(), { mode: 'active', fixtureCgroups: {
-    core: '/system.slice/coproxy-mihomo.service', management: '/system.slice/coproxy-management.service',
+    core: '/system.slice/cocoproxy-mihomo.service', management: '/system.slice/cocoproxy-management.service',
   } }).scope, 'fixture');
 });
 
@@ -128,22 +128,22 @@ test('dedicated management UID is cgroup-bound and falls closed outside its unma
       assert.notEqual(rendered.planSha256, legacy.planSha256);
       assert.deepEqual(rendered.ip, legacy.ip, 'management must not change core routing');
       assert.deepEqual(rendered.nft.data, legacy.nft.data, 'management must not change classification or manufacture marks');
-      const output = rendered.nft.guard.replace.split('\n').filter(line => line.startsWith('add rule inet coproxy_guard output_guard '));
+      const output = rendered.nft.guard.replace.split('\n').filter(line => line.startsWith('add rule inet cocoproxy_guard output_guard '));
       const managementRules = output.filter(line => line.includes('meta skuid 12346'));
       const allowed = managementRules.filter(line => line.endsWith('accept'));
-      const managementPath = fixtureCgroups?.management === null ? null : fixtureCgroups?.management ?? '/system.slice/coproxy-management.service';
+      const managementPath = fixtureCgroups?.management === null ? null : fixtureCgroups?.management ?? '/system.slice/cocoproxy-management.service';
       assert.equal(allowed.length, mode !== 'blocked' && managementPath ? 2 : 0);
       for (const protocol of ['tcp', 'udp']) {
         if (allowed.length) assert.ok(allowed.some(line => line.endsWith(
           `meta skuid 12346 socket cgroupv2 level 2 "${managementPath!.slice(1)}" meta mark & 0x0000ff00 == 0 meta l4proto ${protocol} th sport != 15353 accept`)));
       }
-      assert.equal(managementRules.at(-1), 'add rule inet coproxy_guard output_guard meta skuid 12346 drop',
+      assert.equal(managementRules.at(-1), 'add rule inet cocoproxy_guard output_guard meta skuid 12346 drop',
         'wrong/unknown cgroups, reserved marks, DNS source port and other protocols cannot fall through policy accept');
       assert.equal(managementRules.length, allowed.length + 1, 'no other management UID exception');
       assert.equal(output.at(-1), managementRules.at(-1));
-      assert.equal(output[0], 'add rule inet coproxy_guard output_guard oifname "lo" return');
+      assert.equal(output[0], 'add rule inet cocoproxy_guard output_guard oifname "lo" return');
       assert.deepEqual(output.filter(line => !line.includes('meta skuid 12346')),
-        legacy.nft.guard.replace.split('\n').filter(line => line.startsWith('add rule inet coproxy_guard output_guard ') &&
+        legacy.nft.guard.replace.split('\n').filter(line => line.startsWith('add rule inet cocoproxy_guard output_guard ') &&
           !line.includes('socket cgroupv2 level 2 "' + managementPath?.slice(1) + '"')),
         'all core exceptions and the core UID drop remain identical');
     }
@@ -160,7 +160,7 @@ test('DNS allows only exact IPv4 listener delivered by router for the two permit
   for (const address of ['192.0.2.3', '192.0.2.1']) {
     const source = lan.filter(line => line.includes(`ether saddr 02:00:00:00:00:01 ip saddr ${address}/32 ip daddr 192.0.2.2`));
     assert.equal(source.length, 3);
-    assert.ok(source.find(line => line.includes('udp dport 15353'))!.endsWith('socket cgroupv2 level 2 "system.slice/coproxy-mihomo.service" accept'));
+    assert.ok(source.find(line => line.includes('udp dport 15353'))!.endsWith('socket cgroupv2 level 2 "system.slice/cocoproxy-mihomo.service" accept'));
   }
   assert.ok(script.indexOf('th dport 15353 accept') < script.indexOf('th dport 15353 drop'));
 });
@@ -173,7 +173,7 @@ test('DNS SYNACK alternative requires listener-authenticated conntrack proof and
   for (const address of ['192.0.2.3', '192.0.2.1']) {
     const syn = writes.find(line => line.includes(`ip saddr ${address}/32`))!;
     assert.ok(syn.includes(`input_guard iifname "lan-test" ether saddr 02:00:00:00:00:01 ip saddr ${address}/32 ip daddr 192.0.2.2 tcp dport 15353`));
-    assert.ok(syn.includes('tcp flags & (fin | syn | rst | ack) == syn ct direction original socket cgroupv2 level 2 "system.slice/coproxy-mihomo.service"'));
+    assert.ok(syn.includes('tcp flags & (fin | syn | rst | ack) == syn ct direction original socket cgroupv2 level 2 "system.slice/cocoproxy-mihomo.service"'));
     assert.ok(syn.endsWith('ct mark set (ct mark & 0xffff00ff) | 0x00000200 accept'));
     const newSynDrop = lines.find(line => line.includes(`ip saddr ${address}/32`) && line.includes('tcp flags & (fin | syn | rst | ack) == syn drop'))!;
     const continuation = lines.find(line => line.includes(`ip saddr ${address}/32`) && line.includes('tcp dport 15353 ct direction original ct mark & 0x0000ff00 == 0x00000200 accept'))!;
@@ -202,10 +202,10 @@ test('argv routes retain three blackholes, forced router client return and TUN-o
     assert.deepEqual(item.args.slice(0, 5), ['-4', 'route', 'replace', 'blackhole', 'default']);
     assert.deepEqual(item.args.slice(-4), ['proto', '186', 'metric', '32760']);
   }
-  assert.deepEqual(steps.rules[2].args, ['-4', 'rule', 'add', 'priority', '10001', 'fwmark', '0x00000300/0x0000ff00', 'iif', 'coproxy-tun', 'to', '192.0.2.3/32', 'lookup', '10001']);
+  assert.deepEqual(steps.rules[2].args, ['-4', 'rule', 'add', 'priority', '10001', 'fwmark', '0x00000300/0x0000ff00', 'iif', 'cocoproxy-tun', 'to', '192.0.2.3/32', 'lookup', '10001']);
   assert.ok(steps.prepareRoutes.some(item => item.args.join(' ').includes('192.0.2.3/32 via 192.0.2.1 dev lan-test')));
   assert.ok(steps.prepareRoutes.filter(item => item.args.includes('192.0.2.3/32')).every(item => item.args.includes('via')));
-  assert.deepEqual(steps.activateCapture[0].args, ['-4', 'route', 'replace', '0.0.0.0/0', 'dev', 'coproxy-tun', 'table', '10003', 'proto', '186', 'metric', '10']);
+  assert.deepEqual(steps.activateCapture[0].args, ['-4', 'route', 'replace', '0.0.0.0/0', 'dev', 'cocoproxy-tun', 'table', '10003', 'proto', '186', 'metric', '10']);
   assert.equal(steps.withdrawCapture[0].args[2], 'del');
   assert.ok(Object.values(steps).flat().every(item => item.args.every(arg => typeof arg === 'string' && !/[;\r\n]/.test(arg))));
 });

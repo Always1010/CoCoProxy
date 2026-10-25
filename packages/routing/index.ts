@@ -121,5 +121,5 @@ export function buildLocalPolicy(options: LocalPolicyOptions): JsonObject {
   }
   return { mode: 'rule', proxies: structuredClone(proxies), 'proxy-groups': groups, rules: outputRules,
     'tcp-concurrent': true, 'find-process-mode': 'off',
-    ...(mode === 'rule' ? { 'x-coproxy-rule-mode': 'domestic-v1' } : {}) };
+    ...(mode === 'rule' ? { 'x-cocoproxy-rule-mode': 'domestic-v1' } : {}) };
 }

@@ -160,7 +160,7 @@ function profileDocument(value: JsonValue): unknown {
     'external-ui', 'external-ui-url', 'external-ui-name', 'tls',
     'iptables', 'tuic-server', 'ss-config', 'vmess-config', 'ntp', 'clash-for-android',
     'dns', 'hosts', 'sniffer', 'ipv6', 'profile',
-    'x-coproxy-network', 'x-coproxy-gateway',
+    'x-cocoproxy-network', 'x-cocoproxy-gateway',
     'geodata-mode', 'geodata-loader', 'geosite-matcher', 'geo-auto-update',
     'geo-update-interval', 'geox-url',
   ]);

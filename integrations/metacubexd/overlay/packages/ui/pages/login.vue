@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { IconLock, IconLogin } from '@tabler/icons-vue'
-import { coproxyErrorMessage, useCoproxy } from '~/composables/useCoproxy'
+import { cocoproxyErrorMessage, useCoCoProxy } from '~/composables/useCoCoProxy'
 
 definePageMeta({ layout: false })
-useHead({ title: '登录 · Coproxy' })
-const { login } = useCoproxy()
+useHead({ title: '登录 · CoCoProxy' })
+const { login } = useCoCoProxy()
 const username = ref('')
 const password = ref('')
 const busy = ref(false)
@@ -18,7 +18,7 @@ async function submit() {
     await login(username.value, password.value)
     await navigateTo('/overview', { replace: true })
   } catch (cause) {
-    error.value = coproxyErrorMessage(cause)
+    error.value = cocoproxyErrorMessage(cause)
   } finally {
     password.value = ''
     busy.value = false
@@ -32,15 +32,15 @@ async function submit() {
       <div class="card-body gap-5">
         <div class="flex items-center gap-3">
           <IconLock class="text-primary" :size="30" aria-hidden="true" />
-          <div><h1 class="text-2xl font-bold">Coproxy</h1><p class="text-sm text-base-content/65">管理会话登录</p></div>
+          <div><h1 class="text-2xl font-bold">CoCoProxy</h1><p class="text-sm text-base-content/65">管理会话登录</p></div>
         </div>
-        <label class="flex flex-col gap-2 text-sm" for="coproxy-username">
+        <label class="flex flex-col gap-2 text-sm" for="cocoproxy-username">
           用户名
-          <input id="coproxy-username" v-model="username" class="input input-bordered w-full" autocomplete="username" required maxlength="64" :disabled="busy" />
+          <input id="cocoproxy-username" v-model="username" class="input input-bordered w-full" autocomplete="username" required maxlength="64" :disabled="busy" />
         </label>
-        <label class="flex flex-col gap-2 text-sm" for="coproxy-password">
+        <label class="flex flex-col gap-2 text-sm" for="cocoproxy-password">
           密码
-          <input id="coproxy-password" v-model="password" class="input input-bordered w-full" type="password" autocomplete="current-password" required :disabled="busy" />
+          <input id="cocoproxy-password" v-model="password" class="input input-bordered w-full" type="password" autocomplete="current-password" required :disabled="busy" />
         </label>
         <p v-if="error" class="text-sm text-error" role="alert">{{ error }}</p>
         <button class="btn btn-primary w-full" type="submit" :disabled="busy">

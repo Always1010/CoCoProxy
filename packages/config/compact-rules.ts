@@ -1,10 +1,10 @@
 import { canonicalJson, ConfigError, type JsonObject, type JsonValue } from './index.ts';
 import { domesticDomainRules, domesticIpRules } from '../routing/domestic-data.ts';
 
-const marker = 'x-coproxy-rule-mode';
+const marker = 'x-cocoproxy-rule-mode';
 const version = 'domestic-v1';
-const domains = 'coproxy-domestic-domain-v1';
-const networks = 'coproxy-domestic-ip-v1';
+const domains = 'cocoproxy-domestic-domain-v1';
+const networks = 'cocoproxy-domestic-ip-v1';
 const domainRules = domesticDomainRules.map(rule => `${rule},Domestic`);
 const ipRules = domesticIpRules.map(rule => `${rule},Domestic`);
 const regexRules = domainRules.filter(rule => rule.startsWith('DOMAIN-REGEX,'));

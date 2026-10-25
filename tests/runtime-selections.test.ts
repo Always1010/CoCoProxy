@@ -16,7 +16,7 @@ import type { CoreInspection, RuntimeProcessIdentity, RuntimeSelection, RuntimeS
 
 const bootId = '12345678-1234-1234-1234-123456789abc';
 const settings: RuntimeSettings = { schemaVersion: 1, stateDirectory: '/synthetic/state', binaryPath: '/synthetic/core',
-  binarySha256: 'a'.repeat(64), systemctlPath: '/synthetic/systemctl', unitPath: '/synthetic/coproxy-mihomo.service',
+  binarySha256: 'a'.repeat(64), systemctlPath: '/synthetic/systemctl', unitPath: '/synthetic/cocoproxy-mihomo.service',
   unitSha256: 'b'.repeat(64), serviceUid: 12345 };
 function candidate(reversed = false, log = 'warning'): Candidate {
   return compileConfig({ schemaVersion: 1, deployment: { mixedPort: 17890, controllerPort: 19090,
@@ -30,7 +30,7 @@ const show = (unit: RuntimeUnitState) => [`LoadState=${unit.loadState}`, `Active
   `MainPID=${unit.mainPid}`, 'Job=', `FragmentPath=${unit.fragmentPath}`, 'DropInPaths=', 'NeedDaemonReload=no', `User=${unit.user}`, ''].join('\n');
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-hot-selection-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-hot-selection-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new FileTransactionStore(root), first = candidate(), second = candidate(true), changed = candidate(true, 'error');
   const candidates = new Map([first, second, changed].map(value => [value.id, value]));

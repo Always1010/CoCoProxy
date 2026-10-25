@@ -3,8 +3,8 @@ import { lstat, open, opendir, readlink, statfs } from 'node:fs/promises';
 import { release } from 'node:os';
 import { types } from 'node:util';
 
-export const CORE_CONTROL_GROUP = '/system.slice/coproxy-mihomo.service';
-export const MANAGEMENT_CONTROL_GROUP = '/system.slice/coproxy-management.service';
+export const CORE_CONTROL_GROUP = '/system.slice/cocoproxy-mihomo.service';
+export const MANAGEMENT_CONTROL_GROUP = '/system.slice/cocoproxy-management.service';
 const ROOT = '/sys/fs/cgroup';
 const positive = /^[1-9][0-9]*$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

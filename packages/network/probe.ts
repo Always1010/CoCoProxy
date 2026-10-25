@@ -71,7 +71,7 @@ async function readAddress(options: NetworkProbeOptions, fixture: boolean): Prom
       (path === binary ? !metadata.isFile() : !metadata.isDirectory())) fail();
     if (path === '/') break;
   }
-  return runNetworkCommand(binary, ['-d', '-j', 'address', 'show', 'dev', 'coproxy-tun'],
+  return runNetworkCommand(binary, ['-d', '-j', 'address', 'show', 'dev', 'cocoproxy-tun'],
     { timeoutMs: 1000, maxOutputBytes: 16_384 });
 }
 
@@ -228,7 +228,7 @@ async function snapshot(plan: NetworkPlan, identity: NetworkProbeIdentity, reade
       if (!await reader.tunDevice(`/proc/${pid}/fd/${fd}`)) fail();
       const info = await reader.read(`/proc/${pid}/fdinfo/${fd}`);
       const names = [...info.matchAll(/^iff:\s+([^\s]+)\s*$/gm)].map(match => match[1]);
-      if (names.length !== 1 || names[0] !== 'coproxy-tun') fail();
+      if (names.length !== 1 || names[0] !== 'cocoproxy-tun') fail();
       tun.push(fd);
     }
   }
@@ -239,7 +239,7 @@ async function snapshot(plan: NetworkPlan, identity: NetworkProbeIdentity, reade
   if (!Array.isArray(devices) || devices.length !== 1) fail();
   const device = devices[0];
   const addresses = device.addr_info?.filter((entry: { family: string }) => entry.family === 'inet');
-  if (device.ifname !== 'coproxy-tun' || !Number.isSafeInteger(device.ifindex) || device.ifindex < 1 ||
+  if (device.ifname !== 'cocoproxy-tun' || !Number.isSafeInteger(device.ifindex) || device.ifindex < 1 ||
     device.mtu !== plan.deployment.tun.mtu || !device.flags?.includes('UP') || device.linkinfo?.info_kind !== 'tun' ||
     device.linkinfo?.info_data?.type !== 'tun' || !Array.isArray(addresses) || addresses.length !== 1 ||
     `${addresses[0].local}/${addresses[0].prefixlen}` !== NETWORK_TUN_ADDRESS) fail();

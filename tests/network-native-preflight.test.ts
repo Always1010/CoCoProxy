@@ -12,11 +12,11 @@ import { sameNetworkProtection } from '../packages/network/protection.ts';
 
 // Module mocks are confined to a child process; no production dependency
 // injection or host Linux/network access is needed for these boundary tests.
-if (!process.env.COPROXY_NATIVE_PREFLIGHT_MOCKS) {
+if (!process.env.COCOPROXY_NATIVE_PREFLIGHT_MOCKS) {
   test('native read-only preflight boundary fixtures', () => {
     const child = spawnSync(process.execPath, ['--experimental-strip-types', '--experimental-test-module-mocks', '--test',
       fileURLToPath(import.meta.url)], { encoding: 'utf8', windowsHide: true,
-      env: { ...process.env, COPROXY_NATIVE_PREFLIGHT_MOCKS: '1' } });
+      env: { ...process.env, COCOPROXY_NATIVE_PREFLIGHT_MOCKS: '1' } });
     assert.equal(child.status, 0, child.stdout + child.stderr);
   });
 } else {
@@ -24,7 +24,7 @@ if (!process.env.COPROXY_NATIVE_PREFLIGHT_MOCKS) {
     core: { serviceUid: 12345, binarySha256: 'b'.repeat(64), unitSha256: 'c'.repeat(64) },
     ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24,
     routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-    tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+    tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
     tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } };
   const plan = renderNetworkPlan(deployment);
   const proof = { outerUser: 'user:[100]', outerNet: 'net:[101]', cgroups: { core: '/fixture/core', management: null } };
@@ -85,25 +85,25 @@ if (!process.env.COPROXY_NATIVE_PREFLIGHT_MOCKS) {
         assert.ok(blackhole); routes.push({ type: 'blackhole', dst: 'default', table: blackhole.table,
           protocol: 186, metric: blackhole.metric, flags: [] }); return '';
       }
-      const create = args[3].includes('add table inet coproxy_guard'), echo: unknown[] = [];
+      const create = args[3].includes('add table inet cocoproxy_guard'), echo: unknown[] = [];
       const source = renderNetworkRules(deployment, { mode: 'blocked', fixtureCgroups: proof.cgroups });
-      const definitions: Record<string, [string, string, string, number][]> = { coproxy_guard: [
+      const definitions: Record<string, [string, string, string, number][]> = { cocoproxy_guard: [
         ['input_guard', 'filter', 'input', -10], ['forward_guard', 'filter', 'forward', -10], ['output_guard', 'filter', 'output', -10]],
-      coproxy_data: [['classify_ingress', 'filter', 'prerouting', -150], ['classify_output', 'route', 'output', -150],
+      cocoproxy_data: [['classify_ingress', 'filter', 'prerouting', -150], ['classify_output', 'route', 'output', -150],
         ['classify_return', 'filter', 'prerouting', -149]] };
       const updates = Object.entries(definitions).map(([table, chains]) => {
-        assert.ok(table === 'coproxy_guard' || table === 'coproxy_data');
+        assert.ok(table === 'cocoproxy_guard' || table === 'cocoproxy_data');
         if (create) echo.push({ add: { table: { family: 'inet', name: table, handle: handle++ } } });
         const ruleCounts: Record<string, number> = {};
         for (const [name, type, hook, prio] of chains) {
           if (create) echo.push({ add: { chain: { family: 'inet', table, name, type, hook, prio, policy: 'accept', handle: handle++ } } });
           else echo.push({ flush: { chain: { family: 'inet', table, name } } });
-          const script = table === 'coproxy_guard' ? source.nft.guard.create : source.nft.data.create;
+          const script = table === 'cocoproxy_guard' ? source.nft.guard.create : source.nft.data.create;
           ruleCounts[name] = script.split('\n').filter(line => line.startsWith(`add rule inet ${table} ${name} `)).length;
           for (let index = 0; index < ruleCounts[name]; index++) echo.push({ add: { rule: { family: 'inet', table,
             chain: name, handle: handle++, expr: [{ drop: null }] } } });
         }
-        return { table: table as 'coproxy_guard' | 'coproxy_data', operation: create ? 'create' as const : 'replace' as const, ruleCounts };
+        return { table: table as 'cocoproxy_guard' | 'cocoproxy_data', operation: create ? 'create' as const : 'replace' as const, ruleCounts };
       });
       const output = JSON.stringify({ nftables: echo }); nft = nftSnapshotFromEcho(nft, output, updates); return output;
     },

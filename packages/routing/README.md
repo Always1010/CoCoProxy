@@ -4,7 +4,7 @@
 
 本地模板启用 TCP 多地址并发建连，并关闭网关无须使用的本机进程匹配；可信部署可显式覆盖这些性能选项。规则模式在候选编译时，将固定国内域名和 IPv4 块转为编译器拥有的 `inline` 域名/IP 集合，保留三个正则及用户、业务规则的优先关系；工作区仍显示展开规则。集合不包含 URL 或文件路径，外部策略依然不能提供 provider。运行重编译先严格核对集合与固定资源，再恢复原始块并比较完整候选代次。此前保存的无标记候选保持原表示；新的本地模板须显式应用才改变运行配置。
 
-`serviceCatalog` 定义内置业务分类的服务 id、显示名、说明、默认标记及精确／后缀匹配字段，随 Coproxy 一同提供。默认创建十个组；`selections` 出现可选服务的 id 时启用该组，出现其他合法名称时创建自定义组，供手工规则引用。`localGroupChoices(proxies, groupId)` 返回 UI 可选目标。Proxy 初始选择第一个节点，无节点时选择 REJECT；其他业务及 Other 跟随 Proxy，Domestic 初始 DIRECT。显式 DIRECT／REJECT 可用于每个组，亦接受旧模型的 direct／block 别名。引用只允许业务或自定义组跟随 Proxy；拒绝其他组间引用、未知目标、组与节点名称冲突及重复节点，避免选择器选项形成循环。
+`serviceCatalog` 定义内置业务分类的服务 id、显示名、说明、默认标记及精确／后缀匹配字段，随 CoCoProxy 一同提供。默认创建十个组；`selections` 出现可选服务的 id 时启用该组，出现其他合法名称时创建自定义组，供手工规则引用。`localGroupChoices(proxies, groupId)` 返回 UI 可选目标。Proxy 初始选择第一个节点，无节点时选择 REJECT；其他业务及 Other 跟随 Proxy，Domestic 初始 DIRECT。显式 DIRECT／REJECT 可用于每个组，亦接受旧模型的 direct／block 别名。引用只允许业务或自定义组跟随 Proxy；拒绝其他组间引用、未知目标、组与节点名称冲突及重复节点，避免选择器选项形成循环。
 
 手工规则先于业务规则。YouTube 的精确主机先于 Google 后缀；明确业务先于 Proxy 境外聚合，再依次匹配国内顶级域、社区域名、国内目的 IPv4，最终 MATCH 到 Other。IP 规则不自动添加 `no-resolve`，让 Mihomo 对域名目标使用既有 DNS 解析后匹配地址。此模块不更改 DNS 出口或解析器，也不宣称完成 IPv6 接管。
 

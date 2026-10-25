@@ -1,16 +1,16 @@
 import { useEndpointStore } from '~/stores/endpoint'
 
 export default defineNuxtPlugin({
-  name: 'coproxy-endpoint',
+  name: 'cocoproxy-endpoint',
   dependsOn: ['pinia'],
   setup() {
     const store = useEndpointStore()
     store.setEndpointList([{
-      id: 'coproxy',
+      id: 'cocoproxy',
       url: `${window.location.origin}/api/clash`,
       secret: '',
-      label: 'Coproxy',
+      label: 'CoCoProxy',
     }])
-    store.setSelectedEndpoint('coproxy')
+    store.setSelectedEndpoint('cocoproxy')
   },
 })

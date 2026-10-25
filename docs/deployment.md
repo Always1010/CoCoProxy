@@ -2,7 +2,7 @@
 
 局域网网页的完整 nginx、证书与独立服务配方见[HTTPS 网页部署](management-https.md)。
 
-安装器部署独立的 Coproxy Linux 服务。透明代理还需协同路由器提供流量交付、DNS 和独立关闭，设备条件及两端参数见[路由器协作](cooperating-router-requirements.md)。
+安装器部署独立的 CoCoProxy Linux 服务。透明代理还需协同路由器提供流量交付、DNS 和独立关闭，设备条件及两端参数见[路由器协作](cooperating-router-requirements.md)。
 
 `apps/deployment/main.ts` 是离线、单目标的安装入口。它复用[发行载荷](release-staging.md)及 `renderDeploymentPlan`；自动网关模式安装现有计划的七个文件及目录，显式代理模式为五个文件。默认只读核验并输出不含文件内容的预览，只有 `--apply` 写入目标。工具不通过 SSH 控制另一台设备，不探测或推断地址，不安装依赖、账户、HTTPS 代理或证书，不改默认路由、系统 DNS、sysctl，不启动或启用服务。完整部署还包括下面明确列出的准备、配置、启动和终端验收。
 
@@ -14,7 +14,7 @@
 
 自动网关还要求 Python ≥3.9、`/usr/sbin/ip`、`/usr/sbin/nft`、可用的 `/dev/net/tun`、内核 TUN/nftables/策略路由能力、已显式配置的 `net.ipv4.ip_forward=1`，以及输入指定接口已 UP 且配置了指定 IPv4/前缀。ip/nft 必须支持现有 helper 使用的 JSON 参数与规则。工具只读检查上述条件，不通过创建 TUN、`nft prepare` 或修改 sysctl 来“试验”能力；具体内核能力还需在独立网络启动与验收中证明。发行版对 sandbox、SELinux/AppArmor、挂载和 capability 的限制也须现场审阅。
 
-首次安装、升级和卸载都要求 `coproxy-mihomo.service`、`coproxy-management.service`、`coproxy-gateway-network.service` 已停止且未 enable，没有 drop-in、运行时替代 unit 或待 reload 的定义。已有自有网络资源必须先通过既有 helper 安全退役，工具不会在只读预检中调用 `prepare`。它核对 guard、部署出口表/规则、客户端回程与上游保留资源均无冲突；存在网络回执时只接受 `removed`。因此升级需要一个明确的维护窗口。
+首次安装、升级和卸载都要求 `cocoproxy-mihomo.service`、`cocoproxy-management.service`、`cocoproxy-gateway-network.service` 已停止且未 enable，没有 drop-in、运行时替代 unit 或待 reload 的定义。已有自有网络资源必须先通过既有 helper 安全退役，工具不会在只读预检中调用 `prepare`。它核对 guard、部署出口表/规则、客户端回程与上游保留资源均无冲突；存在网络回执时只接受 `removed`。因此升级需要一个明确的维护窗口。
 
 涉及本机环境或设备的变更前，按各自管理约定取得相应许可并明确目标和影响。准备账户、软件、内核模块、IPv4 转发、网口地址、HTTPS 反向代理、证书及路由器交付均属于显式的前置运维步骤，不能从一次只读预检推导其变更授权。
 
@@ -25,16 +25,16 @@
 以下命令均在**已获准的目标 Linux root shell**执行；路径是合成角色示例。`MANIFEST_SHA` 应填入构建端单独记录并核验的 64 位 SHA-256，不能仅对未知来源的 manifest 自算摘要就视为可信。运行载荷里的入口本身已在执行代码，须在执行前核验载荷来源和清单，不把运行入口当成对任意未知代码的安全沙箱。
 
 ```sh
-PAYLOAD=/srv/coproxy-staging/release
+PAYLOAD=/srv/cocoproxy-staging/release
 MANIFEST_SHA='<构建端记录的64位manifest摘要>'
-INPUT=/etc/coproxy-install/deployment.json
+INPUT=/etc/cocoproxy-install/deployment.json
 NODE=/usr/bin/node
-RELEASE="/opt/coproxy/releases/$MANIFEST_SHA"
+RELEASE="/opt/cocoproxy/releases/$MANIFEST_SHA"
 DEPLOY="$PAYLOAD/source/apps/deployment/main.ts"
 sha256sum "$PAYLOAD/manifest.json"
 ```
 
-操作者先准备 root 控制的载荷目录、输入父目录和 release 父目录，例如 `/srv/coproxy-staging`、`/etc/coproxy-install`、`/opt/coproxy/releases`。入口使用规范绝对路径，不接受空白或 `.local` 路径段；这些位置不能通过链接或服务账号可写目录到达。服务使用的 root 目录还须允许其遍历；入口保守要求相应祖先对其他用户有执行位，不依赖额外组授权。工具不会递归创建或修改未知祖先，不对共享目录递归 chmod/chown。目标 release 目录必须不存在，其最后一级固定为 manifest 全摘要，避免同一源码提交的不同架构或构建载荷混淆；父路径可由输入显式选择，不依赖示例路径。
+操作者先准备 root 控制的载荷目录、输入父目录和 release 父目录，例如 `/srv/cocoproxy-staging`、`/etc/cocoproxy-install`、`/opt/cocoproxy/releases`。入口使用规范绝对路径，不接受空白或 `.local` 路径段；这些位置不能通过链接或服务账号可写目录到达。服务使用的 root 目录还须允许其遍历；入口保守要求相应祖先对其他用户有执行位，不依赖额外组授权。工具不会递归创建或修改未知祖先，不对共享目录递归 chmod/chown。目标 release 目录必须不存在，其最后一级固定为 manifest 全摘要，避免同一源码提交的不同架构或构建载荷混淆；父路径可由输入显式选择，不依赖示例路径。
 
 将[自动网关合成输入](../examples/automatic-gateway-deployment.json)复制到目标的私有输入，按实地核验结果替换全部角色参数、UID、origin、端口、bootstrap、核心摘要和私有 controller secret。输入必须是 root 所有、0600 的普通单链接文件，输入及生成计划不得放进载荷或提交。release 三个路径必须按同一目标设置：
 
@@ -54,7 +54,7 @@ runtime.binarySha256 = manifest.components.mihomo.binarySha256
   --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT"
 
 "$NODE" --experimental-strip-types "$PAYLOAD/source/apps/cli/main.ts" \
-  deployment-plan --input "$INPUT" --output /etc/coproxy-install/plan.json
+  deployment-plan --input "$INPUT" --output /etc/cocoproxy-install/plan.json
 ```
 
 第一条命令没有 `--apply`，不创建目录、锁、临时文件或收据，不执行服务变更或网络 helper。它验证清单摘要、每个文件大小和摘要、完整文件集合、禁止的本地数据和链接、ELF 架构、计划约束、服务身份、root 信任边界、精确归属、停止/禁用条件及网络冲突。预览只列目标、权限、动作和保留路径；不打印 controller secret、订阅或 credential。第二条生成包含秘密的 0600 私有七文件计划，供操作者审阅原始定义；安装入口重新调用同一 renderer，不接受任意待写文件清单。生成计划是明确的私有文件写入，独立于只读预检。
@@ -82,33 +82,33 @@ runtime.binarySha256 = manifest.components.mihomo.binarySha256
   --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --apply
 ```
 
-工具仅创建计划的缺失专用目录、root 控制的完整 release、计划中的七个文件，以及独立的 root:0700 `/var/lib/coproxy-deployment` 收据目录；文件按计划的 root/服务 UID 与 0644/0600 安装，release 目录为 root:0755、普通文件 0644、可执行文件 0755。完成后执行 `systemctl daemon-reload`，保持所有服务停止且未 enable，不生成管理员密码或修改任何订阅和状态。
+工具仅创建计划的缺失专用目录、root 控制的完整 release、计划中的七个文件，以及独立的 root:0700 `/var/lib/cocoproxy-deployment` 收据目录；文件按计划的 root/服务 UID 与 0644/0600 安装，release 目录为 root:0755、普通文件 0644、可执行文件 0755。完成后执行 `systemctl daemon-reload`，保持所有服务停止且未 enable，不生成管理员密码或修改任何订阅和状态。
 
 receipt 只记录自有目标、权限和摘要，不保存文件内容或凭据副本。它在写目标前持久记录 `pending`，全部完成后变为 `complete`；进程失败或断电可能留下部分安装及持久锁。工具拒绝自动覆盖或恢复这类状态。操作者须在维护窗口逐项审阅 receipt、目标字节和 systemd 状态后进行精确恢复；没有无条件重试、递归删除或凭据备份。安装期间由单一可信操作者控制输入、载荷与目录，普通文件 API 不能防御并发恶意 root 更换路径。
 
 初次安装且不存在 credential 时，使用现有 `admin-init`。先在目标的私有 0600 文件中提供 `{"username":"<admin-name>","password":"<private-password>"}`，将占位符替换为选定的 ASCII 用户名及私有强口令；字段约束见[管理模块](../packages/management/README.md)。不要把密码放在命令参数、仓库、载荷或示例文件中。以下命令只创建唯一 credential，已有文件时不得执行覆盖：
 
 ```sh
-ADMIN_INPUT=/etc/coproxy-install/admin-login.json
+ADMIN_INPUT=/etc/cocoproxy-install/admin-login.json
 "$NODE" --experimental-strip-types "$RELEASE/source/apps/cli/main.ts" \
-  admin-init --input "$ADMIN_INPUT" --output /etc/coproxy/admin.json
-chown coproxy:root /etc/coproxy/admin.json
-chmod 0600 /etc/coproxy/admin.json
+  admin-init --input "$ADMIN_INPUT" --output /etc/cocoproxy/admin.json
+chown cocoproxy:root /etc/cocoproxy/admin.json
+chmod 0600 /etc/cocoproxy/admin.json
 ```
 
-示例中的 `coproxy` 和 credential 路径必须与私有输入相同。已有 credential 直接保留，升级不重新初始化。明文登录输入的后续保留/清理由操作者在原私有位置管理，安装工具不复制或备份。root 可按审阅计划核验 `systemd-analyze verify` 的 unit 定义及 polkit 权限：专用身份只可 show/start/stop 固定核心，restart/reload、其他 unit、enable 均应拒绝。
+示例中的 `cocoproxy` 和 credential 路径必须与私有输入相同。已有 credential 直接保留，升级不重新初始化。明文登录输入的后续保留/清理由操作者在原私有位置管理，安装工具不复制或备份。root 可按审阅计划核验 `systemd-analyze verify` 的 unit 定义及 polkit 权限：专用身份只可 show/start/stop 固定核心，restart/reload、其他 unit、enable 均应拒绝。
 
 确认 HTTPS 代理和 credential 就绪后显式启动管理服务：
 
 ```sh
-systemctl start coproxy-management.service
+systemctl start cocoproxy-management.service
 ```
 
 管理登录后，按[使用说明](usage.md)导入订阅、选择方案并应用；候选捕获和运行 CAS 由工作区流程内部完成，不绕过事务直接裸启动 Mihomo。自动网关核心启动会依赖 root 网络 oneshot，它执行固定 `prepare` 并创建 guard、出口及回程规则，属于已审阅的显式网络激活，不能把这一步称为安装预检。管理健康响应只证明管理服务响应，不能作为网关就绪依据。
 
 ## 4. 接入与终端验收
 
-通过协同路由器的管理界面或受支持的命令入口填写网关角色参数。**LAN 模式要求双方配置相同的精确接入子网，覆盖其中普通 IPv4 客户端并阻断受管公网 IPv6；兼容单终端模式仍可显式选用。** 至少验证两个客户端和新加入地址，不能从单终端通过推导整个 LAN 已验收。路由器端保持自身管理和独立关闭入口可达，首次接入时核验核心、接管、DNS、来源保留、出口和回程。已验收组合的日常应用可使用有界的新鲜网关 DNS 预检；该检查只证明局部可达，完整路径状态仍须如实标记，见[协作说明](cooperating-router-requirements.md)。Coproxy 安装工具不替路由器修改配置。服务开机启用由操作者在验收后另行决定，例如 `systemctl enable coproxy-management.service`；后续维护先禁用，不能把 enable 与首次安装合并。
+通过协同路由器的管理界面或受支持的命令入口填写网关角色参数。**LAN 模式要求双方配置相同的精确接入子网，覆盖其中普通 IPv4 客户端并阻断受管公网 IPv6；兼容单终端模式仍可显式选用。** 至少验证两个客户端和新加入地址，不能从单终端通过推导整个 LAN 已验收。路由器端保持自身管理和独立关闭入口可达，首次接入时核验核心、接管、DNS、来源保留、出口和回程。已验收组合的日常应用可使用有界的新鲜网关 DNS 预检；该检查只证明局部可达，完整路径状态仍须如实标记，见[协作说明](cooperating-router-requirements.md)。CoCoProxy 安装工具不替路由器修改配置。服务开机启用由操作者在验收后另行决定，例如 `systemctl enable cocoproxy-management.service`；后续维护先禁用，不能把 enable 与首次安装合并。
 
 验收至少包含 IPv4 TCP/UDP、路由器转交的 DNS、局域网管理、本机原有出口不被接管、未支持 IPv6 在受管范围阻断、核心停止时受管外网阻断，以及核心仍停止时从路由器独立关闭后终端恢复普通直连。业务站点成功、systemd active、Mihomo `-t` 与 HTTP health 各自只覆盖局部条件。具体测量、真实角色参数和恢复笔记保持私有；正式结论只记录组件版本、双方提交及脱敏范围。
 
@@ -117,9 +117,9 @@ systemctl start coproxy-management.service
 用户关闭由路由器撤销交付并恢复其 DNS 完成；停止核心保留 guard，不能代替用户关闭。升级/卸载先完成路由器侧关闭，然后在 Linux 上显式维护：
 
 ```sh
-systemctl disable --now coproxy-management.service
-systemctl disable --now coproxy-mihomo.service
-systemctl stop coproxy-gateway-network.service
+systemctl disable --now cocoproxy-management.service
+systemctl disable --now cocoproxy-mihomo.service
+systemctl stop cocoproxy-gateway-network.service
 "$NODE" --experimental-strip-types "$DEPLOY" \
   --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --operation uninstall
 ```
@@ -128,7 +128,7 @@ systemctl stop coproxy-gateway-network.service
 
 ```sh
 /usr/bin/python3 -I "$RELEASE/source/apps/gateway/network.py" remove \
-  --settings /etc/coproxy/gateway-network.json
+  --settings /etc/cocoproxy/gateway-network.json
 ```
 
 网络设置路径应采用当前已安装计划的确切值。helper 对完整回执和资源严格核验，guard 最后移除；它拒绝不完整收据、未知资源和跨 boot 不匹配，不清理上游残留。若网络服务从未 prepare 且不存在网络资源或回执，无须调用 remove。安装入口只读检查“无冲突且回执已 removed/不存在”，不会调用 remove，也不根据停止状态臆测资源已经安全移除。
@@ -155,7 +155,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 const { configurationReviewDigest } = await import(pathToFileURL(process.argv[2]).href);
-const previous = JSON.parse(await readFile('/var/lib/coproxy-deployment/receipt.json', 'utf8'));
+const previous = JSON.parse(await readFile('/var/lib/cocoproxy-deployment/receipt.json', 'utf8'));
 console.log(configurationReviewDigest({ previousManifestSha256: previous.manifestSha256,
   manifestSha256: process.argv[4], inputSha256: createHash('sha256').update(await readFile(process.argv[3])).digest('hex'),
   previousConfiguration: previous.files.filter(file => file.sensitive).map(({ path, sha256 }) => ({ path, sha256 })) }));

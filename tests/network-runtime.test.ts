@@ -15,7 +15,7 @@ import { FileTransactionStore } from '../packages/transaction/index.ts';
 
 const linux = { skip: process.platform !== 'linux' };
 const secret = 'synthetic-private-controller-secret';
-const group = '/system.slice/coproxy-mihomo.service';
+const group = '/system.slice/cocoproxy-mihomo.service';
 type Action = Parameters<GatewayRuntimeFixtureDependencies['command']>[1];
 type Stored = { revision: number; selected: string | null; pending: null | { action: Action; token: string; commandSHA: string;
   context: Pick<FencedWorkerIdentity, 'bootID' | 'userNS' | 'netNS' | 'uid'> } };
@@ -29,19 +29,19 @@ const failed = (error: unknown): boolean => {
 const sha = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 
 async function fixture(t: test.TestContext, controllerSecret = secret) {
-  const parent = await mkdtemp(join(tmpdir(), 'coproxy-gateway-runtime-'));
+  const parent = await mkdtemp(join(tmpdir(), 'cocoproxy-gateway-runtime-'));
   await chmod(parent, 0o700);
   t.after(() => rm(parent, { recursive: true, force: true }));
   const proposed = renderGatewayRuntimePlan({ schemaVersion: 1, stateDirectory: join(parent, 'state'),
-    coreHome: join(parent, 'home'), binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
-    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/coproxy-mihomo.service', serviceUid: 12345 });
+    coreHome: join(parent, 'home'), binaryPath: '/opt/cocoproxy/bin/mihomo', binarySha256: GATEWAY_CORE_SHA256,
+    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', serviceUid: 12345 });
   const preview = compileGatewayPreview({ schemaVersion: 1, base: { schemaVersion: 1,
     deployment: { mixedPort: 17890, controllerPort: 19090, controllerSecret, dnsPort: 15353, bootstrapResolvers: ['192.0.2.53'] },
     policy: { proxies: [], rules: ['MATCH,REJECT'] } },
     network: { schemaVersion: 1, core: { serviceUid: 12345, binarySha256: GATEWAY_CORE_SHA256, unitSha256: proposed.settings.unitSha256 },
       ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', prefixLength: 24, routerIPv4: '192.0.2.1',
       routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', dnsPort: 15353,
-      tun: { interface: 'coproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
+      tun: { interface: 'cocoproxy-tun', mtu: 1500 }, marks: { mask: 0xff00, capture: 0x100, egress: 0x200, return: 0x300 },
       tables: { capture: 10003, egress: 10002, return: 10001 }, priorities: { capture: 10003, egress: 10002, return: 10001 } } });
   await new FileTransactionStore(proposed.settings.stateDirectory).stage(preview.candidate);
   const journalPath = join(proposed.settings.stateDirectory, 'gateway-core-state.json');
@@ -70,7 +70,7 @@ async function fixture(t: test.TestContext, controllerSecret = secret) {
       const stored = await journal(), pending = stored.pending!;
       assert.ok(pending, 'a durable command intent must exist before invoking systemctl');
       assert.equal(pending.token, token); assert.equal(pending.action, action);
-      assert.deepEqual(args, ['--no-ask-password', '--no-pager', action, 'coproxy-mihomo.service']);
+      assert.deepEqual(args, ['--no-ask-password', '--no-pager', action, 'cocoproxy-mihomo.service']);
       assert.ok(model.blockedCalls > 0, 'every command requires preceding blocked evidence');
       const worker: FencedWorkerIdentity = { ...pending.context, pid: 98765, pgid: 98765, sid: 98765, startTime: '12345678' };
       const receipt = { ...worker, version: 1 as const, token, commandSHA: pending.commandSHA };

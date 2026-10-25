@@ -42,7 +42,7 @@ export async function validateWithMihomo(
   } catch {
     throw new MihomoValidationError('BINARY_UNAVAILABLE');
   }
-  const work = await mkdtemp(join(tmpdir(), 'coproxy-validate-'));
+  const work = await mkdtemp(join(tmpdir(), 'cocoproxy-validate-'));
   try {
     const home = join(work, 'home');
     const config = join(work, 'candidate.json');

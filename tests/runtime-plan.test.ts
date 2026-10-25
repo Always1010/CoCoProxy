@@ -15,10 +15,10 @@ import type { Candidate } from '../packages/config/index.ts';
 import type { RuntimeSettings } from '../packages/runtime/types.ts';
 
 function planInput() {
-  return { schemaVersion: 1, stateDirectory: '/var/lib/coproxy', binaryPath: '/opt/coproxy/bin/mihomo',
+  return { schemaVersion: 1, stateDirectory: '/var/lib/cocoproxy', binaryPath: '/opt/cocoproxy/bin/mihomo',
     binarySha256: 'a'.repeat(64), systemctlPath: '/usr/bin/systemctl', nodePath: '/usr/bin/node',
-    sourceDirectory: '/opt/coproxy/source', settingsPath: '/etc/coproxy/runtime.json',
-    unitPath: '/etc/systemd/system/coproxy-mihomo.service', serviceUid: 12345 };
+    sourceDirectory: '/opt/cocoproxy/source', settingsPath: '/etc/cocoproxy/runtime.json',
+    unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', serviceUid: 12345 };
 }
 
 test('runtime plan pins the entire deterministic service text and selected executable identity', () => {
@@ -29,10 +29,10 @@ test('runtime plan pins the entire deterministic service text and selected execu
   assert.equal(rendered.settings.binarySha256, input.binarySha256);
   assert.equal(rendered.settings.serviceUid, input.serviceUid);
   assert.match(rendered.unit, /^User=12345$/m);
-  assert.match(rendered.unit, /^ExecStart="\/usr\/bin\/node" "--experimental-strip-types" "\/opt\/coproxy\/source\/apps\/runtime\/launch-core.ts" "--settings" "\/etc\/coproxy\/runtime.json"$/m);
+  assert.match(rendered.unit, /^ExecStart="\/usr\/bin\/node" "--experimental-strip-types" "\/opt\/cocoproxy\/source\/apps\/runtime\/launch-core.ts" "--settings" "\/etc\/cocoproxy\/runtime.json"$/m);
   assert.match(rendered.unit, /^ProtectSystem=strict$/m);
   assert.match(rendered.unit, /^ProtectHome=true$/m);
-  assert.match(rendered.unit, /^ReadWritePaths="\/var\/lib\/coproxy"$/m);
+  assert.match(rendered.unit, /^ReadWritePaths="\/var\/lib\/cocoproxy"$/m);
   assert.match(rendered.unit, /^WantedBy=multi-user.target\n$/m);
   assert.doesNotMatch(rendered.unit, /ExecReload|CAP_NET_ADMIN|AmbientCapabilities/);
   const changed = renderRuntimePlan({ ...input, serviceUid: input.serviceUid + 1 });
@@ -76,7 +76,7 @@ test('runtime plan rejects root, hidden deployment paths and injected or non-dat
   });
   assert.equal(getterCalled, false);
   // Prefix matching must preserve ordinary installation directory names.
-  assert.doesNotThrow(() => renderRuntimePlan({ ...planInput(), sourceDirectory: '/homebrew/coproxy' }));
+  assert.doesNotThrow(() => renderRuntimePlan({ ...planInput(), sourceDirectory: '/homebrew/cocoproxy' }));
 });
 
 const linuxExec = process.platform === 'linux' && typeof process.execve === 'function';
@@ -144,7 +144,7 @@ function candidate(): Candidate {
 
 async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash' | 'tun' | 'fault' | 'recovering' |
   'recovering-target' | 'wrong-target' | 'applying' | 'confirming' | 'abandoned-restore' | 'abandoned-confirm' | 'wrong-active' = 'good') {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-launcher-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-launcher-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const stateDirectory = join(root, 'state');
   const binaryPath = join(root, 'fixture-core');
@@ -152,11 +152,11 @@ async function fixture(t: test.TestContext, variant: 'good' | 'missing' | 'hash'
   const settingsPath = join(root, 'runtime.json');
   const uid = process.geteuid!() === 0 ? 65534 : process.geteuid!();
   const script = `#!${process.execPath}\n` +
-    `require('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify({pid:process.pid,args:process.argv.slice(2),inherited:process.env.COPROXY_FIXTURE_OUTPUT}), {mode:0o600});\n`;
+    `require('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify({pid:process.pid,args:process.argv.slice(2),inherited:process.env.COCOPROXY_FIXTURE_OUTPUT}), {mode:0o600});\n`;
   await writeFile(binaryPath, script, { mode: 0o700 });
   const settings: RuntimeSettings = { schemaVersion: 1, stateDirectory, binaryPath,
     binarySha256: variant === 'hash' ? '0'.repeat(64) : createHash('sha256').update(script).digest('hex'),
-    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/coproxy-mihomo.service',
+    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service',
     unitSha256: 'a'.repeat(64), serviceUid: uid };
   let target = candidate();
   if (variant === 'tun') {
@@ -209,7 +209,7 @@ async function launch(f: Awaited<ReturnType<typeof fixture>>, holdTransaction = 
   const args = holdTransaction ? ['--experimental-strip-types', '--input-type=module', '--eval', script] :
     ['--experimental-strip-types', launcher, '--settings', f.settingsPath];
   const child = spawn(process.execPath, args, {
-    env: { ...process.env, COPROXY_FIXTURE_OUTPUT: f.output },
+    env: { ...process.env, COCOPROXY_FIXTURE_OUTPUT: f.output },
     ...(process.geteuid!() === 0 ? { uid: f.uid, gid: f.uid } : {}),
     stdio: ['ignore', 'pipe', 'pipe'],
   });

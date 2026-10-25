@@ -60,7 +60,7 @@ test('native profile binds policy and all normalized deployment inputs to a cano
   assert.equal(config['external-controller'], '127.0.0.1:19090');
   assert.equal(config['routing-mark'], supplied.egressMark);
   assert.equal(config['interface-name'], supplied.ingressInterface);
-  assert.deepEqual(config.tun, { enable: true, device: 'coproxy-tun', stack: 'mips', mtu: 1500,
+  assert.deepEqual(config.tun, { enable: true, device: 'cocoproxy-tun', stack: 'mips', mtu: 1500,
     'auto-route': true, 'auto-redirect': true, 'auto-detect-interface': false, 'strict-route': true,
     'include-interface': ['lan-test'], 'route-exclude-address': ['192.0.2.0/24'],
     'exclude-uid-range': ['0:4294967294'],
@@ -68,7 +68,7 @@ test('native profile binds policy and all normalized deployment inputs to a cano
     'auto-redirect-output-mark': 2024, 'dns-mode': 'disabled', 'dns-hijack': [], gso: false, 'disable-icmp-forwarding': true });
   assert.deepEqual(config.dns, { enable: true, listen: '192.0.2.2:15353', 'enhanced-mode': 'redir-host', ipv6: false,
     'default-nameserver': ['192.0.2.53'], nameserver: ['192.0.2.53'], 'listen-routing-mark': 0x200, 'fake-ip-range': '198.18.0.1/30' });
-  assert.deepEqual(config['x-coproxy-gateway'], supplied);
+  assert.deepEqual(config['x-cocoproxy-gateway'], supplied);
   assert.deepEqual(compileConfig(source).config.tun, { enable: false });
   for (const change of [{ routerMAC: '02:00:00:00:00:02' }, { routerIPv4: '192.0.2.4' }, { clientIPv4: '192.0.2.5' },
     { egressTable: 10003 }, { egressPriority: 8001 }, { egressMark: 0x201 }, { tunMtu: 1400 }]) {
@@ -96,7 +96,7 @@ test('trusted TUN tuning validates bounded values and preserves settings across 
   const original = compileAutomaticGatewayConfig(base(), settings());
   assert.equal((original.config.tun as JsonObject).stack, 'mips');
   assert.equal((original.config.tun as JsonObject).gso, false);
-  assert.equal((original.config['x-coproxy-gateway'] as JsonObject).tunStack, undefined);
+  assert.equal((original.config['x-cocoproxy-gateway'] as JsonObject).tunStack, undefined);
   for (const tunStack of ['mips', 'system', 'mixed', 'gvisor']) {
     for (const tunGso of [false, true]) {
       const tuned = { ...settings(), tunStack, tunGso, tunMtu: 1400 };
@@ -104,7 +104,7 @@ test('trusted TUN tuning validates bounded values and preserves settings across 
       assert.equal((candidate.config.tun as JsonObject).stack, tunStack);
       assert.equal((candidate.config.tun as JsonObject).gso, tunGso);
       assert.equal((candidate.config.tun as JsonObject).mtu, 1400);
-      assert.deepEqual(candidate.config['x-coproxy-gateway'], tuned);
+      assert.deepEqual(candidate.config['x-cocoproxy-gateway'], tuned);
       assert.deepEqual(recompileAutomaticGatewayConfig(candidate.config, tuned), candidate);
       const changed = structuredClone(candidate.config); (changed.tun as JsonObject).stack = 'untrusted';
       assert.equal(recompileAutomaticGatewayConfig(changed, tuned).id, candidate.id);
@@ -119,7 +119,7 @@ test('trusted TUN tuning validates bounded values and preserves settings across 
 test('network settings reject malformed, overlapping, reserved and non-host values', () => {
   for (const change of [
     { schemaVersion: 2 }, { generation: 'a'.repeat(64) }, { command: '/synthetic' },
-    { ingressInterface: 'lo' }, { ingressInterface: 'coproxy-tun' }, { ingressInterface: 'eth0;command' },
+    { ingressInterface: 'lo' }, { ingressInterface: 'cocoproxy-tun' }, { ingressInterface: 'eth0;command' },
     { ingressInterface: 'interface-is-too-long' }, { gatewayIPv4: '127.0.0.2' }, { routerIPv4: '224.0.0.1' },
     { clientIPv4: '169.254.1.2' }, { gatewayIPv4: '192.0.2.0' }, { clientIPv4: '192.0.2.255' },
     { routerIPv4: '192.0.3.1' }, { clientIPv4: '192.0.2.2' }, { prefixLength: 0 }, { prefixLength: 30 },
@@ -138,11 +138,11 @@ test('network settings reject malformed, overlapping, reserved and non-host valu
 });
 
 test('profile preserves compiler policy and snapshot protection and enforces DNS deployment consistency', () => {
-  for (const key of ['x-coproxy-gateway', 'tun', 'dns', 'interface-name', 'routing-mark']) {
+  for (const key of ['x-cocoproxy-gateway', 'tun', 'dns', 'interface-name', 'routing-mark']) {
     const source = base(); (source.policy as JsonObject)[key] = false;
     invalid(() => compileAutomaticGatewayConfig(source, settings()));
   }
-  for (const key of ['x-coproxy-gateway', 'tun', 'interface-name', 'routing-mark']) {
+  for (const key of ['x-cocoproxy-gateway', 'tun', 'interface-name', 'routing-mark']) {
     const nested = base(); nested.sources = [{ id: 'source', proxies: [{ name: 'injected', type: 'socks5', options: { [key]: false } }] }];
     invalid(() => compileAutomaticGatewayConfig(nested, settings()));
   }
@@ -173,7 +173,7 @@ test('trusted recompile derives overlay from deployment and requires generation 
   assert.equal(recompileAutomaticGatewayConfig(candidate.config, settings()).id, candidate.id);
   assert.deepEqual(automaticGatewayPolicy(candidate.config), { ...(source.policy as JsonObject), mode: 'rule' });
   const changed = structuredClone(candidate.config);
-  (changed['x-coproxy-gateway'] as JsonObject).routerMAC = '02:00:00:00:00:02';
+  (changed['x-cocoproxy-gateway'] as JsonObject).routerMAC = '02:00:00:00:00:02';
   (changed.tun as JsonObject)['auto-route'] = false;
   const tamperedId = createHash('sha256').update(canonicalJson(changed)).digest('hex');
   assert.notEqual(recompileAutomaticGatewayConfig(changed, settings()).id, tamperedId);
@@ -187,7 +187,7 @@ test('native runtime pins exactly the platform review catalog without trusting d
   assert.deepEqual(AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM,
     Object.fromEntries(Object.entries(review.coreCandidate.platforms).map(([key, value]) => [key, (value as { binarySha256: string }).binarySha256])));
   const runtime = { schemaVersion: 1, stateDirectory: '/var/lib/synthetic-proxy', binaryPath: '/opt/synthetic-proxy/bin/mihomo',
-    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/coproxy-mihomo.service',
+    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service',
     unitSha256: 'c'.repeat(64), serviceUid: 12345, automaticGateway: settings() };
   for (const binarySha256 of Object.values(AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM)) {
     assert.equal(parseRuntimeSettings({ ...runtime, binarySha256 }).binarySha256, binarySha256);
@@ -196,13 +196,13 @@ test('native runtime pins exactly the platform review catalog without trusting d
 });
 
 test('runtime accepts native candidates only with matching explicit deployment opt-in', { skip: process.platform !== 'linux' }, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-native-profile-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-native-profile-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const candidate = compileAutomaticGatewayConfig(base(), settings());
   await new FileTransactionStore(root).stage(candidate);
   const runtime = { schemaVersion: 1 as const, stateDirectory: root,
-    binaryPath: '/opt/coproxy/bin/mihomo', binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256, systemctlPath: '/usr/bin/systemctl',
-    unitPath: '/etc/systemd/system/coproxy-mihomo.service', unitSha256: 'c'.repeat(64), serviceUid: 12345 };
+    binaryPath: '/opt/cocoproxy/bin/mihomo', binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256, systemctlPath: '/usr/bin/systemctl',
+    unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', unitSha256: 'c'.repeat(64), serviceUid: 12345 };
   await assert.rejects(loadRuntimeCandidate(runtime, candidate.id),
   (error: unknown) => error instanceof Error && error.message === 'CANDIDATE_UNTRUSTED');
   assert.equal((await loadRuntimeCandidate({ ...runtime, automaticGateway: parseAutomaticGatewaySettings(settings()) }, candidate.id)).candidate.id, candidate.id);
@@ -211,8 +211,8 @@ test('runtime accepts native candidates only with matching explicit deployment o
 });
 
 test('pinned reviewed core parses native profile without starting listeners or TUN',
-  { skip: !process.env.COPROXY_TEST_MIHOMO, timeout: 20_000 }, async () => {
-    const binaryPath = process.env.COPROXY_TEST_MIHOMO!;
+  { skip: !process.env.COCOPROXY_TEST_MIHOMO, timeout: 20_000 }, async () => {
+    const binaryPath = process.env.COCOPROXY_TEST_MIHOMO!;
     const review = JSON.parse(await readFile(new URL('../integrations/metacubexd/review.json', import.meta.url), 'utf8'));
     assert.equal(AUTOMATIC_GATEWAY_CORE_SHA256, review.coreCandidate.binarySha256);
     assert.equal(createHash('sha256').update(await readFile(binaryPath)).digest('hex'), AUTOMATIC_GATEWAY_CORE_SHA256);

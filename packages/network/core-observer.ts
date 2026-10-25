@@ -43,7 +43,7 @@ export interface GatewayCoreFixtureReader {
   version(port: number, secret: string): Promise<void>;
   now(): number;
 }
-const unitName = 'coproxy-mihomo.service';
+const unitName = 'cocoproxy-mihomo.service';
 const properties = 'LoadState,ActiveState,SubState,MainPID,Job,FragmentPath,DropInPaths,NeedDaemonReload,User,ControlGroup';
 const positive = /^[1-9]\d{0,19}$/;
 const fail: () => never = () => { throw new Error('NETWORK_CORE_UNVERIFIED'); };

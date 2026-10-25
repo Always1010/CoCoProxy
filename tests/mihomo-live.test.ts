@@ -17,7 +17,7 @@ import { verifyBinary } from '../packages/runtime/settings.ts';
 import type { RuntimeSettings, RuntimeUnitState } from '../packages/runtime/types.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
 
-const binaryInput = process.env.COPROXY_TEST_MIHOMO;
+const binaryInput = process.env.COCOPROXY_TEST_MIHOMO;
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -96,7 +96,7 @@ test('reviewed real Mihomo validates and serves loopback HTTP proxy plus UDP/TCP
     const hash = createHash('sha256').update(await readFile(binary)).digest('hex');
     // The live command must select the reviewed artifact, never an arbitrary substitute.
     assert.equal(hash, review.coreCandidate.binarySha256);
-    const root = await mkdtemp(join(tmpdir(), 'coproxy-real-core-'));
+    const root = await mkdtemp(join(tmpdir(), 'cocoproxy-real-core-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const ports = new Set<number>();
     while (ports.size < 3) ports.add(await freePort());
@@ -112,7 +112,7 @@ test('reviewed real Mihomo validates and serves loopback HTTP proxy plus UDP/TCP
     const home = join(stateDirectory, 'core-home');
     await mkdir(home, { mode: 0o700 });
     const settings: RuntimeSettings = { schemaVersion: 1, stateDirectory, binaryPath: binary, binarySha256: hash,
-      systemctlPath: '/usr/bin/systemctl', unitPath: '/synthetic/coproxy-mihomo.service', unitSha256: 'a'.repeat(64), serviceUid: process.geteuid!() };
+      systemctlPath: '/usr/bin/systemctl', unitPath: '/synthetic/cocoproxy-mihomo.service', unitSha256: 'a'.repeat(64), serviceUid: process.geteuid!() };
     assert.equal(await verifyBinary(settings), binary);
     await validateWithMihomo(candidate, { binaryPath: binary });
     const child = spawn(binary, ['-d', home, '-f', staged.path], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -147,7 +147,7 @@ test('reviewed real Mihomo validates and serves loopback HTTP proxy plus UDP/TCP
     for (const route of ['/version', '/configs', '/proxies', '/rules', '/connections']) {
       const response = await controller.fetch(new Request('https://management.example' + route));
       assert.equal(response.status, 200);
-      assert.equal(response.headers.get('x-coproxy-generation'), candidate.id);
+      assert.equal(response.headers.get('x-cocoproxy-generation'), candidate.id);
       assert.ok(!(await response.text()).includes(candidate.config.secret as string));
     }
     const selected = await controller.fetch(new Request('https://management.example/proxies/synthetic-select', {

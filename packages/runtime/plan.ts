@@ -51,15 +51,15 @@ export function renderRuntimePlan(input: unknown): { unit: string; settings: Run
   const settingsPath = absolutePath(values.settingsPath);
   const unitPath = absolutePath(values.unitPath);
   const automaticGateway = values.automaticGateway === undefined ? undefined : parseAutomaticGatewaySettings(values.automaticGateway);
-  if (posix.basename(unitPath) !== 'coproxy-mihomo.service') invalid();
+  if (posix.basename(unitPath) !== 'cocoproxy-mihomo.service') invalid();
   for (const path of [stateDirectory, binaryPath, nodePath, sourceDirectory, settingsPath]) visibleToService(path);
   const command = [nodePath, '--experimental-strip-types', posix.join(sourceDirectory, 'apps/runtime/launch-core.ts'),
     '--settings', settingsPath].map(arg => quote(arg, true)).join(' ');
   const unit = [
     '[Unit]',
-    'Description=Coproxy Mihomo runtime',
-    ...(automaticGateway ? ['Requires=coproxy-gateway-network.service', 'After=coproxy-gateway-network.service',
-      'BindsTo=coproxy-gateway-network.service'] : []),
+    'Description=CoCoProxy Mihomo runtime',
+    ...(automaticGateway ? ['Requires=cocoproxy-gateway-network.service', 'After=cocoproxy-gateway-network.service',
+      'BindsTo=cocoproxy-gateway-network.service'] : []),
     '',
     '[Service]',
     'Type=exec',

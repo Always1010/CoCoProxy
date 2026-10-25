@@ -42,7 +42,7 @@ test('network command failures expose only fixed codes and stop excessive or inv
 });
 
 test('timeout terminates the process group before returning so a late child cannot mutate restored state', linux, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-network-command-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-network-command-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const started = join(root, 'started'), forbidden = join(root, 'late-write');
   const descendant = `process.on('SIGTERM',()=>{});require('fs').writeFileSync(process.argv[1],'started');setTimeout(()=>require('fs').writeFileSync(process.argv[2],'late'),1400);setTimeout(()=>{},3000);`;

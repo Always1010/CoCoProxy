@@ -1,7 +1,7 @@
 import { fromWebHandler } from 'h3'
-import { getCoproxy, unavailable } from '../../lib/coproxy'
+import { getCoCoProxy, unavailable } from '../../lib/cocoproxy'
 
 export default fromWebHandler(async (request) => {
-  try { return await (await getCoproxy()).fetch(request) }
+  try { return await (await getCoCoProxy()).fetch(request) }
   catch { return unavailable() }
 })

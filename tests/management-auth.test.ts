@@ -86,7 +86,7 @@ test('credential parser refuses extensions, accessors and noncanonical encodings
 });
 
 test('loading credentials requires an existing private bounded regular file and hides diagnostics', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'coproxy-management-auth-'));
+  const directory = await mkdtemp(join(tmpdir(), 'cocoproxy-management-auth-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'admin.json');
   const credential = await createAdminCredential(login);

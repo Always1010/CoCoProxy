@@ -10,7 +10,7 @@ import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
 async function fixture(t: any) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-install-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-install-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const files = [];
   for (const path of ['bin/mihomo', 'source/apps/runtime/launch-core.ts', 'server/.output/server/index.mjs']) {
@@ -63,7 +63,7 @@ test('manifest traversal, duplicate casing, unlisted objects and linked payloads
 
 test('deployment target is explicit, versioned by manifest, and cannot replace shared directories', async () => {
   const input = JSON.parse(await readFile(new URL('../examples/deployment-plan.json', import.meta.url), 'utf8'));
-  const hash = 'a'.repeat(64), target = '/opt/coproxy/releases/' + hash;
+  const hash = 'a'.repeat(64), target = '/opt/cocoproxy/releases/' + hash;
   input.runtime.sourceDirectory = target + '/source';
   input.runtime.binaryPath = target + '/bin/mihomo';
   input.management.serverEntry = target + '/server/.output/server/index.mjs';
@@ -71,7 +71,7 @@ test('deployment target is explicit, versioned by manifest, and cannot replace s
   assert.equal(renderDeploymentPlan(input).files.length, 5);
   input.runtime.sourceDirectory = '/opt/source';
   assert.throws(() => releaseTarget(input, hash), code('INSTALL_RELEASE_LAYOUT_REQUIRED'));
-  input.runtime.sourceDirectory = '/opt/coproxy/releases/' + hash + '/source';
+  input.runtime.sourceDirectory = '/opt/cocoproxy/releases/' + hash + '/source';
   input.management.serverEntry = '/usr/bin/unrelated';
   assert.throws(() => releaseTarget(input, hash), code('INSTALL_RELEASE_LAYOUT_REQUIRED'));
 });
@@ -84,8 +84,8 @@ test('unsupported host never creates installation storage even when apply is req
 
 test('configuration migration requires an explicit review bound to both manifests, old owned settings and exact new input bytes', () => {
   const review = { previousManifestSha256: 'a'.repeat(64), manifestSha256: 'b'.repeat(64), inputSha256: digest('synthetic new input'),
-    previousConfiguration: [{ path: '/etc/coproxy/runtime.json', sha256: 'c'.repeat(64) },
-      { path: '/etc/coproxy/management.json', sha256: 'd'.repeat(64) }] };
+    previousConfiguration: [{ path: '/etc/cocoproxy/runtime.json', sha256: 'c'.repeat(64) },
+      { path: '/etc/cocoproxy/management.json', sha256: 'd'.repeat(64) }] };
   assert.throws(() => assertReviewedUpgradeConfiguration(review, undefined, false), code('INSTALL_CONFIGURATION_CHANGE_REQUIRES_REVIEW'));
   assert.equal(assertReviewedUpgradeConfiguration(review, undefined, true), false);
   const approved = configurationReviewDigest(review);

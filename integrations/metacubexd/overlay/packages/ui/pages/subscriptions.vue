@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { IconCheck, IconDownload, IconEdit, IconPlus, IconRefresh, IconTrash, IconX } from '@tabler/icons-vue'
 import type { WorkspaceSource } from '~/composables/useWorkspace'
-import { CoproxyError } from '~/composables/useCoproxy'
+import { CoCoProxyError } from '~/composables/useCoCoProxy'
 
-useHead({ title: '订阅 · Coproxy' })
+useHead({ title: '订阅 · CoCoProxy' })
 const { api, view, workspace, busy, error, load, run, save } = useWorkspace()
 const editorOpen = ref(false)
 const editing = ref<WorkspaceSource | null>(null)
 const name = ref('')
 const url = ref('')
 const deleting = ref<WorkspaceSource | null>(null)
-const sourcePath = (id: string) => `/api/coproxy/sources/${encodeURIComponent(id)}`
+const sourcePath = (id: string) => `/api/cocoproxy/sources/${encodeURIComponent(id)}`
 const selected = (source: WorkspaceSource) => workspace.value?.mode === 'subscription'
   ? workspace.value.subscriptionId === source.id
   : workspace.value?.sourceIds.includes(source.id)
@@ -138,7 +138,7 @@ onMounted(() => run(load))
             <progress class="progress progress-primary h-1.5 w-full" :value="(source.usage.upload ?? 0) + (source.usage.download ?? 0)" :max="source.usage.total" />
             <div class="flex items-center justify-between text-xs text-base-content/60"><span>{{ formatBytes((source.usage.upload ?? 0) + (source.usage.download ?? 0)) }} / {{ formatBytes(source.usage.total) }}</span><span v-if="source.usage.expire">{{ new Date(source.usage.expire * 1000).toLocaleDateString() }} 到期</span></div>
           </template>
-          <div v-if="source.lastError" class="text-xs text-error" role="status">{{ new CoproxyError(source.lastError).message }}</div>
+          <div v-if="source.lastError" class="text-xs text-error" role="status">{{ new CoCoProxyError(source.lastError).message }}</div>
           <div v-else-if="!source.snapshotCurrent" class="text-xs text-warning">需要更新</div>
           <span v-if="source.unsupportedFields?.length" class="badge badge-warning badge-sm" :title="source.unsupportedFields.join('、')" tabindex="0">部分字段未采用</span>
           <div class="pointer-events-auto relative z-10 flex items-center justify-end gap-1 border-t border-base-content/8 pt-2">

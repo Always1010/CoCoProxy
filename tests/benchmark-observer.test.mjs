@@ -44,7 +44,7 @@ test('an unavailable optional observer is explicit and stops without spawning a 
 });
 
 test('remote filter excludes other traffic and resolves types instead of misleading node names',
-  { skip: !process.env.COPROXY_TEST_PYTHON }, () => {
+  { skip: !process.env.COCOPROXY_TEST_PYTHON }, () => {
     const program = `
 import ast, json, pathlib, runpy, sys
 path = pathlib.Path(sys.argv[1])
@@ -66,13 +66,13 @@ assert "unrelated.example" not in encoded and "chosen" not in encoded and '"DIRE
 assert "DomainSuffix" not in encoded and "synthetic-connection" not in encoded
 print("remote privacy and chain evidence passed")
 `;
-    const completed = spawnSync(process.env.COPROXY_TEST_PYTHON, ['-I', '-B', '-c', program,
+    const completed = spawnSync(process.env.COCOPROXY_TEST_PYTHON, ['-I', '-B', '-c', program,
       fileURLToPath(new URL('../scripts/benchmark-observer.py', import.meta.url))], { encoding: 'utf8', timeout: 5000, windowsHide: true });
     assert.equal(completed.status, 0, completed.stderr || completed.error?.message);
   });
 
 test('remote observer exits on stdin EOF and has a hard lifetime even when a read stalls',
-  { skip: !process.env.COPROXY_TEST_PYTHON, timeout: 6000 }, async () => {
+  { skip: !process.env.COCOPROXY_TEST_PYTHON, timeout: 6000 }, async () => {
     const program = `
 import runpy, sys, time
 m = runpy.run_path(sys.argv[1], run_name="synthetic_observer_test")
@@ -80,7 +80,7 @@ m["main"].__globals__["controller"] = lambda _: time.sleep(30)
 m["main"]()
 `;
     for (const endInput of [true, false]) {
-      const child = spawn(process.env.COPROXY_TEST_PYTHON, ['-I', '-B', '-c', program,
+      const child = spawn(process.env.COCOPROXY_TEST_PYTHON, ['-I', '-B', '-c', program,
         fileURLToPath(new URL('../scripts/benchmark-observer.py', import.meta.url))],
       { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
       const completed = new Promise((resolve, reject) => {

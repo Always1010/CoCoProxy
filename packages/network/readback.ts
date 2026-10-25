@@ -15,7 +15,7 @@ export interface NetworkReadbackExpectation {
   routes: 'absent' | 'partial' | 'prepared' | 'active' | 'retained';
 }
 export interface NftEchoUpdate {
-  table: 'coproxy_guard' | 'coproxy_data';
+  table: 'cocoproxy_guard' | 'cocoproxy_data';
   operation: 'create' | 'replace';
   /** Counts independently derived from the trusted renderer batch, not the echo. */
   ruleCounts: Record<string, number>;
@@ -97,12 +97,12 @@ function canonical(value: Json): string {
   return JSON.stringify(value);
 }
 const chainDefinitions: Record<string, { table: string; type: string; hook: string; prio: number }> = {
-  input_guard: { table: 'coproxy_guard', type: 'filter', hook: 'input', prio: -10 },
-  forward_guard: { table: 'coproxy_guard', type: 'filter', hook: 'forward', prio: -10 },
-  output_guard: { table: 'coproxy_guard', type: 'filter', hook: 'output', prio: -10 },
-  classify_ingress: { table: 'coproxy_data', type: 'filter', hook: 'prerouting', prio: -150 },
-  classify_output: { table: 'coproxy_data', type: 'route', hook: 'output', prio: -150 },
-  classify_return: { table: 'coproxy_data', type: 'filter', hook: 'prerouting', prio: -149 },
+  input_guard: { table: 'cocoproxy_guard', type: 'filter', hook: 'input', prio: -10 },
+  forward_guard: { table: 'cocoproxy_guard', type: 'filter', hook: 'forward', prio: -10 },
+  output_guard: { table: 'cocoproxy_guard', type: 'filter', hook: 'output', prio: -10 },
+  classify_ingress: { table: 'cocoproxy_data', type: 'filter', hook: 'prerouting', prio: -150 },
+  classify_output: { table: 'cocoproxy_data', type: 'route', hook: 'output', prio: -150 },
+  classify_return: { table: 'cocoproxy_data', type: 'filter', hook: 'prerouting', prio: -149 },
 };
 
 /** Preserve expression order and every expression field. Only volatile handles and
@@ -131,7 +131,7 @@ function nft(raw: unknown, identity = false): string {
     if (identity && !('handle' in o)) fail();
     if (!identity) delete o.handle;
     if (kind === 'table') {
-      if (!['coproxy_guard', 'coproxy_data'].includes(o.name as string) || tables.has(o.name as string)) fail();
+      if (!['cocoproxy_guard', 'cocoproxy_data'].includes(o.name as string) || tables.has(o.name as string)) fail();
       tables.set(o.name as string, o); continue;
     }
     if (!tables.has(o.table as string)) fail();
@@ -165,7 +165,7 @@ export function nftSnapshotFromEcho(previous: string, echo: string, updates: rea
       if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) fail();
       const update: unknown = descriptor.value;
       const o = object(update, ['table', 'operation', 'ruleCounts'], ['table', 'operation', 'ruleCounts']);
-      if (!['coproxy_guard', 'coproxy_data'].includes(o.table as string) || specifications.has(o.table as string) ||
+      if (!['cocoproxy_guard', 'cocoproxy_data'].includes(o.table as string) || specifications.has(o.table as string) ||
         !['create', 'replace'].includes(o.operation as string)) fail();
       const names = Object.keys(chainDefinitions).filter(name => chainDefinitions[name].table === o.table);
       const counts = object(o.ruleCounts, names, names);

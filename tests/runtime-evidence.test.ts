@@ -19,9 +19,9 @@ import { FileTransactionStore } from '../packages/transaction/index.ts';
 const secret = 'synthetic-runtime-sensitive-value';
 const linux = process.platform === 'linux';
 const liveSkip = !linux || process.geteuid!() === 0;
-const base = (): RuntimeSettings => ({ schemaVersion: 1, stateDirectory: '/var/lib/coproxy',
-  binaryPath: '/opt/coproxy/mihomo', binarySha256: 'a'.repeat(64), systemctlPath: '/usr/bin/systemctl',
-  unitPath: '/etc/systemd/system/coproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 1001 });
+const base = (): RuntimeSettings => ({ schemaVersion: 1, stateDirectory: '/var/lib/cocoproxy',
+  binaryPath: '/opt/cocoproxy/mihomo', binarySha256: 'a'.repeat(64), systemctlPath: '/usr/bin/systemctl',
+  unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 1001 });
 const unit = (pid: number): RuntimeUnitState => ({ loadState: 'loaded', activeState: 'active', subState: 'running',
   mainPid: pid, jobPending: false, fragmentPath: base().unitPath, hasDropIns: false, needsReload: false, user: String(base().serviceUid) });
 const code = (expected: string) => (error: unknown): boolean => {
@@ -33,7 +33,7 @@ const code = (expected: string) => (error: unknown): boolean => {
 };
 
 async function directory(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-runtime-evidence-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-runtime-evidence-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -60,7 +60,7 @@ test('runtime settings accept only exact plain JSON and normalized POSIX paths',
   const invalid = [getter, Object.assign(Object.create({ inherited: true }), base()), { ...base(), extra: secret },
     { ...base(), serviceUid: 0 }, { ...base(), serviceUid: 1.5 }, { ...base(), serviceUid: Number.MAX_SAFE_INTEGER + 1 },
     { ...base(), binarySha256: 'A'.repeat(64) }, { ...base(), unitPath: '/etc/systemd/system/other.service' },
-    ...['relative', '//var/lib/coproxy', '/var/../lib/coproxy', '/var/lib/coproxy/', '/bad\npath', '/bad\u0000path']
+    ...['relative', '//var/lib/cocoproxy', '/var/../lib/cocoproxy', '/var/lib/cocoproxy/', '/bad\npath', '/bad\u0000path']
       .map(stateDirectory => ({ ...base(), stateDirectory }))];
   for (const input of invalid) assert.throws(() => parseRuntimeSettings(input), code('INVALID_RUNTIME_SETTINGS'));
   assert.equal(accessed, false);
@@ -142,7 +142,7 @@ test('selection lookup is private, exact and read-only when absent', { skip: !li
 
 test('managed unit verification rejects drift and a unit owned by the service user', { skip: liveSkip }, async t => {
   const root = await directory(t);
-  const path = join(root, 'coproxy-mihomo.service');
+  const path = join(root, 'cocoproxy-mihomo.service');
   const bytes = '[Service]\nUser=1001\n';
   await writeFile(path, bytes, { mode: 0o600 });
   const settings = { ...base(), unitPath: path, unitSha256: createHash('sha256').update(bytes).digest('hex'), serviceUid: process.geteuid!() };

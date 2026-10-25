@@ -15,7 +15,7 @@ const navItems = computed(() => [
   { href: '/connections', name: t('connections'), icon: IconNetwork },
   { href: '/traffic', name: t('dataUsage'), icon: IconChartAreaLine },
   { href: '/logs', name: t('logs'), icon: IconFileStack },
-  { href: '/coproxy', name: '设置', icon: IconSettings },
+  { href: '/cocoproxy', name: '设置', icon: IconSettings },
 ])
 const isActive = (href: string) => route.path === href
 

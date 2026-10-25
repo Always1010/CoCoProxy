@@ -1,17 +1,17 @@
-export interface CoproxySession {
+export interface CoCoProxySession {
   authenticated: true
   username: string
   expiresAt: number
 }
 
-export interface CoproxyDraft {
+export interface CoCoProxyDraft {
   revision: number
   generation: string
   updatedAt: string
   policy: Record<string, unknown>
 }
 
-export interface CoproxySource {
+export interface CoCoProxySource {
   id: string
   revision: number
   snapshotRevision: number | null
@@ -21,7 +21,7 @@ export interface CoproxySource {
   lastError: string | null
 }
 
-export interface CoproxyCapture {
+export interface CoCoProxyCapture {
   generation: string
   stagedRevision: number
   sources: {
@@ -32,13 +32,13 @@ export interface CoproxyCapture {
   }[]
 }
 
-export interface CoproxyStatus {
+export interface CoCoProxyStatus {
   active: string | null
   desired: string | null
   transaction: { id: string; phase: string } | null
   fault: string | null
   checkedAt: string | null
-  draft: Omit<CoproxyDraft, 'policy'> | null
+  draft: Omit<CoCoProxyDraft, 'policy'> | null
   core: { ready: boolean; generation: string; checkedAt: string; reason?: string } | null
   gateway: { ready: false; reason: string; profile?: 'mihomo-automatic'; terminalPath?: 'unverified' }
 }
@@ -98,37 +98,37 @@ const messages: Record<string, string> = {
   MANAGEMENT_UNAVAILABLE: '管理服务暂时不可用，请重新读取状态。',
 }
 
-export class CoproxyError extends Error {
+export class CoCoProxyError extends Error {
   constructor(readonly code: string, readonly status = 0) {
     super(messages[code] ?? '操作未完成，请检查输入并重新读取状态。')
-    this.name = 'CoproxyError'
+    this.name = 'CoCoProxyError'
   }
 }
 
-export function coproxyErrorMessage(error: unknown): string {
-  return error instanceof CoproxyError
+export function cocoproxyErrorMessage(error: unknown): string {
+  return error instanceof CoCoProxyError
     ? error.message
     : '操作未完成，请重新读取状态。'
 }
 
-export function useCoproxy() {
-  const session = useState<CoproxySession | null>('coproxy-session', () => null)
-  const generation = useState<string | null>('coproxy-generation', () => null)
+export function useCoCoProxy() {
+  const session = useState<CoCoProxySession | null>('cocoproxy-session', () => null)
+  const generation = useState<string | null>('cocoproxy-generation', () => null)
   // Receipts survive page navigation, but never enter localStorage or a cookie.
-  const capture = useState<CoproxyCapture | null>('coproxy-capture', () => null)
+  const capture = useState<CoCoProxyCapture | null>('cocoproxy-capture', () => null)
 
   function clearSession() {
     session.value = null
     generation.value = null
     capture.value = null
-    useState('coproxy-workspace').value = null
-    useState('coproxy-workspace-error').value = ''
-    useState('coproxy-workspace-feedback').value = ''
-    useState('coproxy-workspace-operation').value = ''
-    useState('coproxy-latency-feedback').value = {}
-    useState('coproxy-proxy-read-error').value = ''
-    useState('coproxy-proxy-workbenches').value = {}
-    useState('coproxy-tcp-delay-results').value = {}
+    useState('cocoproxy-workspace').value = null
+    useState('cocoproxy-workspace-error').value = ''
+    useState('cocoproxy-workspace-feedback').value = ''
+    useState('cocoproxy-workspace-operation').value = ''
+    useState('cocoproxy-latency-feedback').value = {}
+    useState('cocoproxy-proxy-read-error').value = ''
+    useState('cocoproxy-proxy-workbenches').value = {}
+    useState('cocoproxy-tcp-delay-results').value = {}
   }
 
   async function request<T>(path: string, options: {
@@ -148,7 +148,7 @@ export function useCoproxy() {
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
       })
     } catch {
-      throw new CoproxyError('NETWORK_UNKNOWN')
+      throw new CoCoProxyError('NETWORK_UNKNOWN')
     }
     if (response.status === 401) {
       clearSession()
@@ -158,28 +158,28 @@ export function useCoproxy() {
     let data: unknown
     try { data = await response.json() }
     catch {
-      throw new CoproxyError(options.body === undefined ? 'MANAGEMENT_UNAVAILABLE' : 'NETWORK_UNKNOWN', response.status)
+      throw new CoCoProxyError(options.body === undefined ? 'MANAGEMENT_UNAVAILABLE' : 'NETWORK_UNKNOWN', response.status)
     }
     if (!response.ok) {
       const code = (data as { error?: { code?: unknown } })?.error?.code
-      throw new CoproxyError(typeof code === 'string' ? code : 'MANAGEMENT_UNAVAILABLE', response.status)
+      throw new CoCoProxyError(typeof code === 'string' ? code : 'MANAGEMENT_UNAVAILABLE', response.status)
     }
     return data as T
   }
 
   async function readSession() {
     try {
-      session.value = await request<CoproxySession>('/api/session', { redirectUnauthorized: false })
+      session.value = await request<CoCoProxySession>('/api/session', { redirectUnauthorized: false })
       return session.value
     } catch (error) {
-      if (error instanceof CoproxyError && error.status === 401) return null
+      if (error instanceof CoCoProxyError && error.status === 401) return null
       clearSession()
       throw error
     }
   }
 
   async function login(username: string, password: string) {
-    session.value = await request<CoproxySession>('/api/session/login', {
+    session.value = await request<CoCoProxySession>('/api/session/login', {
       method: 'POST', body: { username, password }, redirectUnauthorized: false,
     })
   }
@@ -191,7 +191,7 @@ export function useCoproxy() {
   }
 
   async function readStatus() {
-    const result = await request<CoproxyStatus>('/api/coproxy/status')
+    const result = await request<CoCoProxyStatus>('/api/cocoproxy/status')
     generation.value = result.active
     return result
   }

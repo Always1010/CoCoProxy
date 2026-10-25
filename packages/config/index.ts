@@ -50,8 +50,8 @@ const PROTECTED_ROOT_KEYS = new Set([
   'external-ui', 'external-ui-url', 'external-ui-name', 'tls',
   'iptables', 'tuic-server', 'ss-config', 'vmess-config', 'ntp', 'clash-for-android',
   'dns', 'hosts', 'sniffer', 'ipv6',
-  'x-coproxy-network',
-  'x-coproxy-gateway',
+  'x-cocoproxy-network',
+  'x-cocoproxy-gateway',
   'geodata-mode', 'geodata-loader', 'geosite-matcher', 'geo-auto-update',
   'geo-update-interval', 'geox-url',
 ]);
@@ -73,8 +73,8 @@ const PROTECTED_RECURSIVE_KEYS = new Set([
   'external-controller', 'external-controller-tls', 'external-controller-unix',
   'external-controller-pipe', 'external-controller-cors',
   'file-descriptor', 'dialer-ip4p-convert',
-  'x-coproxy-network',
-  'x-coproxy-gateway',
+  'x-cocoproxy-network',
+  'x-cocoproxy-gateway',
 ]);
 
 const RESERVED_NAMES = new Set([

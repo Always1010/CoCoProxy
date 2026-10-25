@@ -87,7 +87,7 @@ async function identity(plan: NetworkPlan, settings: GatewayObserverSettings, re
       facts.serviceUid !== plan.deployment.core.serviceUid || facts.binarySha256 !== plan.deployment.core.binarySha256 ||
       facts.unitSha256 !== plan.deployment.core.unitSha256 || !uintPid(facts.corePid) || facts.corePid === request.managementPid ||
       typeof facts.bootId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(facts.bootId) ||
-      !positive(facts.corePidStartTime) || facts.coreUnitControlGroup !== '/system.slice/coproxy-mihomo.service') fail();
+      !positive(facts.corePidStartTime) || facts.coreUnitControlGroup !== '/system.slice/cocoproxy-mihomo.service') fail();
     const groups = await reader.cgroup({ corePid: facts.corePid, corePidStartTime: facts.corePidStartTime,
       bootId: facts.bootId, serviceUid: plan.deployment.core.serviceUid, managementUid: plan.deployment.management!.serviceUid,
       managementPid: request.managementPid });
@@ -98,7 +98,7 @@ async function identity(plan: NetworkPlan, settings: GatewayObserverSettings, re
     if (group.bootId !== facts.bootId || group.corePid !== facts.corePid || group.corePidStartTime !== facts.corePidStartTime ||
       group.coreUnitControlGroup !== facts.coreUnitControlGroup || group.managementPid !== request.managementPid ||
       !positive(group.managementPidStartTime) || !positive(group.coreCgroupKernelId) || !positive(group.managementCgroupKernelId) ||
-      group.coreCgroupKernelId === group.managementCgroupKernelId || group.managementUnitControlGroup !== '/system.slice/coproxy-management.service') fail();
+      group.coreCgroupKernelId === group.managementCgroupKernelId || group.managementUnitControlGroup !== '/system.slice/cocoproxy-management.service') fail();
     const result: NetworkIdentity = { scope, generation: plan.deployment.generation, planSha256: plan.sha256,
       checkedAt: Math.min(core.checkedAt, groups.checkedAt), bootId: facts.bootId, corePid: facts.corePid,
       corePidStartTime: facts.corePidStartTime, coreUnitControlGroup: facts.coreUnitControlGroup,

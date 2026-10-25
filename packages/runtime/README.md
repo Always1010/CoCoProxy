@@ -1,12 +1,12 @@
 # systemd 核心运行适配
 
-本模块把[配置事务](../transaction/README.md)接到固定 `coproxy-mihomo.service`，支持 loopback 显式代理及可信设置启用的原生网关。核心就绪只表示身份与 controller 核验，不证明终端路径。部署操作见[部署与维护](../../docs/deployment.md)。
+本模块把[配置事务](../transaction/README.md)接到固定 `cocoproxy-mihomo.service`，支持 loopback 显式代理及可信设置启用的原生网关。核心就绪只表示身份与 controller 核验，不证明终端路径。部署操作见[部署与维护](../../docs/deployment.md)。
 
 ## 部署计划
 
 `renderRuntimePlan(input)` 返回 `{unit, settings}`，只生成数据。必填字段为 `schemaVersion: 1`、`stateDirectory`、`binaryPath`、`binarySha256`、`systemctlPath`、`nodePath`、`sourceDirectory`、`settingsPath`、`unitPath`、非零 `serviceUid`；可选 `automaticGateway`，拒绝未知字段。输入见[显式合成样本](../../examples/runtime-deployment.json)。
 
-路径为规范 POSIX 绝对路径，拒绝控制字符与被 ProtectHome 隐藏的 /home、/root、/run/user。unit 固定名为 `coproxy-mihomo.service`，`unitSha256` 覆盖完整 UTF-8/LF 字节。核心摘要必须是审核过的解压后二进制 SHA-256。CLI `runtime-plan` 仅写指定的新私有计划，不安装文件。
+路径为规范 POSIX 绝对路径，拒绝控制字符与被 ProtectHome 隐藏的 /home、/root、/run/user。unit 固定名为 `cocoproxy-mihomo.service`，`unitSha256` 覆盖完整 UTF-8/LF 字节。核心摘要必须是审核过的解压后二进制 SHA-256。CLI `runtime-plan` 仅写指定的新私有计划，不安装文件。
 
 | 模式 | unit 行为 |
 | --- | --- |
@@ -32,9 +32,9 @@ ReadWritePaths 只允许状态目录；Install 段仅描述显式 enable 的目�
 热切换将目标 generation 与一个固定物理进程的 base generation、PID、Linux boot ID、启动时间原子写入私有 selection。回执不累积历史链；观察仍检查可信二进制、unit、UID、argv、controller 归属与认证及前后进程身份。只有身份严格匹配且 base/目标配置仍只差选择时，才允许 argv 保持 base 候选。核心正常重启会按 selection 启动目标候选，旧回执不能授权其他进程使用旧 argv。部分 PUT 失败、进程中途重启或目标回读不符，均通过既有恢复流程 stop/start 上一代；未提交时管理进程崩溃同样恢复上一代。已持久提交后崩溃保留目标，启动授权规则不变。
 
 ```sh
-npm run cli -- runtime-status --state-dir /var/lib/coproxy --runtime-settings /etc/coproxy/runtime.json
-npm run cli -- runtime-apply --state-dir /var/lib/coproxy --runtime-settings /etc/coproxy/runtime.json --generation <SHA256> --expected-active none
-npm run cli -- runtime-recover --state-dir /var/lib/coproxy --runtime-settings /etc/coproxy/runtime.json
+npm run cli -- runtime-status --state-dir /var/lib/cocoproxy --runtime-settings /etc/cocoproxy/runtime.json
+npm run cli -- runtime-apply --state-dir /var/lib/cocoproxy --runtime-settings /etc/cocoproxy/runtime.json --generation <SHA256> --expected-active none
+npm run cli -- runtime-recover --state-dir /var/lib/cocoproxy --runtime-settings /etc/cocoproxy/runtime.json
 ```
 
 经显式配置迁移后，旧候选可能已不匹配当前部署。普通恢复仍优先恢复前一代；若它进入 `RESTORE_FAILED`，操作者应保持路由器交付关闭并核查故障事务及目标，再显式运行 `runtime-recover-target --state-dir <状态目录> --runtime-settings <当前运行设置> --generation <故障事务目标摘要> --expected-transaction <故障事务ID>`。该入口只允许匹配当前故障的原目标，重新校验不可变候选、实际激活并确认核心后才提交；校验、启动、确认失败或操作中断都保留故障记录，不根据 selection 文件推断成功。

@@ -64,7 +64,7 @@ test('concurrent reads share only the unfinished runtime verification and rechec
   assert.deepEqual((await Promise.all([first, second])).map(response => response.status), [200, 200]);
   assert.equal(calls, 1);
   f.changeGeneration();
-  assert.equal((await proxy.fetch(request('/version'))).headers.get('x-coproxy-generation'), 'generation-2');
+  assert.equal((await proxy.fetch(request('/version'))).headers.get('x-cocoproxy-generation'), 'generation-2');
   assert.equal(calls, 2);
 });
 
@@ -132,8 +132,8 @@ test('HTTP reads redact nested credentials and actual secrets while isolating up
   assert.equal(f.calls[0].headers['x-private'], undefined);
   assert.equal(f.calls[0].headers['x-forwarded-host'], undefined);
   assert.match(f.calls[0].headers.host!, /^127\.0\.0\.1:\d+$/);
-  assert.equal(result.headers.get('x-coproxy-generation'), 'generation-1');
-  assert.deepEqual([...result.headers.keys()].sort(), ['cache-control', 'content-type', 'x-coproxy-generation']);
+  assert.equal(result.headers.get('x-cocoproxy-generation'), 'generation-1');
+  assert.deepEqual([...result.headers.keys()].sort(), ['cache-control', 'content-type', 'x-cocoproxy-generation']);
 });
 
 test('a complete domestic rules inventory fits its bounded route while other reads retain the smaller limit', async t => {
@@ -203,7 +203,7 @@ test('temporary writes require If-Match and re-read the target inside the shared
   const racing = createControllerProxy({ ...f.options, mutate: async action => { f.changeGeneration(); return action(); } });
   const conflict = await racing.fetch(request('/connections', 'DELETE', undefined, { 'if-match': 'generation-1' }));
   assert.equal(conflict.status, 409);
-  assert.equal(conflict.headers.get('x-coproxy-generation'), 'generation-2');
+  assert.equal(conflict.headers.get('x-cocoproxy-generation'), 'generation-2');
   assert.equal(f.calls.length, 1);
   assert.equal((await proxy.fetch(request('/connections/id', 'DELETE', undefined, { 'if-match': 'generation-2' }))).status, 200);
   assert.equal((await proxy.fetch(request('/proxies/group', 'PUT', { name: 'node', unexpected: true }, { 'if-match': 'generation-2' }))).status, 400);

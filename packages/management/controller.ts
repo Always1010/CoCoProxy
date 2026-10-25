@@ -45,7 +45,7 @@ function validateTarget(target: ControllerTarget): ControllerTarget {
 function response(value: unknown, status: number, generation?: string): Response {
   return new Response(status === 204 || status === 205 || status === 304 ? null : JSON.stringify(value), { status, headers: {
     'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
-    ...(generation === undefined ? {} : { 'x-coproxy-generation': generation })
+    ...(generation === undefined ? {} : { 'x-cocoproxy-generation': generation })
   } });
 }
 

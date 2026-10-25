@@ -17,7 +17,7 @@
   <text x="420" y="201" text-anchor="middle" font-size="16" fill="#53677d">LAN 交付 / WAN 出口</text>
   <rect x="595" y="132" width="250" height="95" rx="13" fill="#eaf7f1" stroke="#80bca6" stroke-width="1.5"/>
   <text x="720" y="168" text-anchor="middle" font-size="21" font-weight="700">外接代理设备</text>
-  <text x="720" y="201" text-anchor="middle" font-size="16" fill="#53677d">Coproxy / Mihomo</text>
+  <text x="720" y="201" text-anchor="middle" font-size="16" fill="#53677d">CoCoProxy / Mihomo</text>
   <rect x="925" y="132" width="170" height="95" rx="13" fill="#edf4ff" stroke="#88ade0" stroke-width="1.5"/>
   <text x="1010" y="168" text-anchor="middle" font-size="21" font-weight="700">代理节点</text>
   <text x="1010" y="201" text-anchor="middle" font-size="16" fill="#53677d">外部代理协议对端</text>

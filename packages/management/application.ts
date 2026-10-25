@@ -20,7 +20,7 @@ const protectedKeys = ['mixed-port', 'allow-lan', 'bind-address', 'external-cont
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
-/** Routes only Coproxy operations; the stock upstream write router is not used. */
+/** Routes only CoCoProxy operations; the stock upstream write router is not used. */
 export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient; sourceDecoder?: SnapshotDecoder; automaticGateway?: AutomaticGatewaySettings;
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }> }): ManagementAction {
   // Compile before cloning so getters and non-JSON values cannot run here.
@@ -55,8 +55,8 @@ export function createManagementApplication(options: { stateDirectory: string; d
   return async request => {
     try {
       const path = new URL(request.url).pathname;
-      if (path === '/api/coproxy/workspace' || path.startsWith('/api/coproxy/workspace/')) return await workspace(request);
-      if (path === '/api/coproxy/status' && request.method === 'GET') {
+      if (path === '/api/cocoproxy/workspace' || path.startsWith('/api/cocoproxy/workspace/')) return await workspace(request);
+      if (path === '/api/cocoproxy/status' && request.method === 'GET') {
         const status = await store.status();
         let core: CoreObservation | null = null;
         if (status.active !== null) {
@@ -67,7 +67,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
           gateway: { ready: false, reason: automaticGateway ? 'GATEWAY_PATH_UNVERIFIED' : 'GATEWAY_NOT_IMPLEMENTED',
             ...(automaticGateway ? { profile: 'mihomo-automatic', terminalPath: 'unverified' } : {}) } };
       }
-      if (path === '/api/coproxy/draft' && request.method === 'GET') {
+      if (path === '/api/cocoproxy/draft' && request.method === 'GET') {
         const metadata = await drafts.metadata();
         if (metadata === null) return { draft: null };
         const captured = await managedDraft(metadata.revision);
@@ -75,12 +75,12 @@ export function createManagementApplication(options: { stateDirectory: string; d
         // secrets or the private input envelope/controller configuration.
         return { draft: { ...metadata, policy: captured.input.policy } };
       }
-      if (path === '/api/coproxy/draft' && request.method === 'PUT') {
+      if (path === '/api/cocoproxy/draft' && request.method === 'PUT') {
         const body = exactRecord(await readJsonBody(request), ['expectedRevision', 'policy']);
         if (!revision(body.expectedRevision)) throw new ManagementError('INVALID_REVISION');
         return { ...await drafts.save({ schemaVersion: 1, deployment, policy: body.policy }, body.expectedRevision), saved: true, runtime: 'not_started' };
       }
-      if (path === '/api/coproxy/stage' && request.method === 'POST') {
+      if (path === '/api/cocoproxy/stage' && request.method === 'POST') {
         const body = exactRecord(await readJsonBody(request), ['expectedRevision'], ['sources']);
         const draft = await managedDraft(body.expectedRevision);
         const requested = body.sources ?? [];
@@ -98,7 +98,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
         await store.stage(candidate);
         return { generation: candidate.id, stagedRevision: draft.revision, sources: captures, staged: true, runtime: 'not_started' };
       }
-      if (path === '/api/coproxy/apply' && request.method === 'POST') {
+      if (path === '/api/cocoproxy/apply' && request.method === 'POST') {
         const body = exactRecord(await readJsonBody(request), ['generation', 'expectedActive']);
         if (!digest(body.generation) || !(body.expectedActive === null || digest(body.expectedActive))) throw new ManagementError('INVALID_GENERATION');
         const candidate = JSON.parse(await privateRead(await store.readCandidate(body.generation)));
@@ -108,12 +108,12 @@ export function createManagementApplication(options: { stateDirectory: string; d
         if (expected.id !== body.generation) throw new ManagementError('DEPLOYMENT_MISMATCH', 409);
         return { ...await manager.apply(body.generation, body.expectedActive) };
       }
-      if (path === '/api/coproxy/recover' && request.method === 'POST') {
+      if (path === '/api/cocoproxy/recover' && request.method === 'POST') {
         exactRecord(await readJsonBody(request, 128), []);
         return { ...await manager.recover() };
       }
-      if (path === '/api/coproxy/sources' && request.method === 'GET') return { sources: await subscriptions.list() };
-      const source = /^\/api\/coproxy\/sources\/([A-Za-z][A-Za-z0-9_-]{0,63})(\/refresh)?$/.exec(path);
+      if (path === '/api/cocoproxy/sources' && request.method === 'GET') return { sources: await subscriptions.list() };
+      const source = /^\/api\/cocoproxy\/sources\/([A-Za-z][A-Za-z0-9_-]{0,63})(\/refresh)?$/.exec(path);
       if (source !== null) {
         if (request.method === 'GET' && !source[2]) return { source: await subscriptions.status(source[1]) };
         if (request.method === 'PUT' && !source[2]) {

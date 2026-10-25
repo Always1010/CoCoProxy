@@ -32,7 +32,7 @@ class Client implements SnapshotClient {
 }
 
 async function fixture(t: test.TestContext, decoder?: SnapshotDecoder) {
-  const root = await mkdtemp(join(tmpdir(), 'coproxy-subscriptions-'));
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-subscriptions-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const client = new Client();
   const store = new SubscriptionStore(root, client, decoder);

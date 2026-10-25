@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { IconChevronDown, IconChevronUp, IconDeviceFloppy, IconPlus, IconTrash } from '@tabler/icons-vue'
-useHead({ title: '规则 · Coproxy' })
+useHead({ title: '规则 · CoCoProxy' })
 const { view, workspace, overrides, busy, load, run, save, editOverrides } = useWorkspace()
 const tab = ref<'effective' | 'custom'>('effective')
 const entries = ref<string[]>([])

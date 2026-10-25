@@ -13,19 +13,19 @@ const network = { schemaVersion: 1, ingressInterface: 'lan0', gatewayIPv4: '192.
   routerIPv4: '192.0.2.1', routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.10',
   prefixLength: 24, dnsPort: 1053, egressMark: 3030, egressTable: 3030,
   egressPriority: 8000, tunMtu: 1500 };
-const input = { network, sourceDirectory: '/opt/coproxy', pythonPath: '/usr/bin/python3',
-  settingsPath: '/etc/coproxy/gateway-network.json', stateDirectory: '/var/lib/coproxy-gateway-network' };
+const input = { network, sourceDirectory: '/opt/cocoproxy', pythonPath: '/usr/bin/python3',
+  settingsPath: '/etc/cocoproxy/gateway-network.json', stateDirectory: '/var/lib/cocoproxy-gateway-network' };
 
 test('native root oneshot retains an independent guard when the core or service stops', () => {
   const plan = renderAutomaticGatewayHostPlan(input);
   assert.match(plan.unit, /Type=oneshot\nRemainAfterExit=true\nUser=root/);
-  assert.match(plan.unit, /ExecStart="\/usr\/bin\/python3" "-I" "\/opt\/coproxy\/apps\/gateway\/network.py" "prepare" "--settings"/);
+  assert.match(plan.unit, /ExecStart="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/network.py" "prepare" "--settings"/);
   assert.doesNotMatch(plan.unit, /ExecStop|WantedBy|Restart=|CAP_SYS_ADMIN/);
   assert.equal(plan.settings.ipPath, '/usr/sbin/ip');
   assert.equal(plan.settings.nftPath, '/usr/sbin/nft');
   assert.deepEqual(plan.settings.network, network);
   assert.equal(plan.settings.guardRules, plan.guardRules);
-  assert.match(plan.guardRules, /table inet coproxy_auto_guard/);
+  assert.match(plan.guardRules, /table inet cocoproxy_auto_guard/);
   assert.match(plan.guardRules, /hook prerouting priority -310/);
   assert.match(plan.guardRules, /ip daddr != 192\.0\.2\.0\/24 ip saddr != 192\.0\.2\.10 drop/);
   assert.match(plan.guardRules, /ether saddr != 02:00:00:00:00:01 drop/);
@@ -33,7 +33,7 @@ test('native root oneshot retains an independent guard when the core or service 
   assert.match(plan.guardRules, /iifname "lo" ip daddr 192\.0\.2\.2/);
   assert.match(plan.guardRules, /ip daddr 192\.0\.2\.2 meta l4proto \{ tcp, udp \} th dport 1053 drop/);
   assert.match(plan.guardRules, /meta nfproto ipv6 drop/);
-  assert.match(plan.guardRules, /ip saddr 192\.0\.2\.10 ip daddr != 192\.0\.2\.0\/24 oifname != "coproxy-tun" drop/);
+  assert.match(plan.guardRules, /ip saddr 192\.0\.2\.10 ip daddr != 192\.0\.2\.0\/24 oifname != "cocoproxy-tun" drop/);
 });
 
 test('host plan validates deployment boundaries without invoking user accessors', () => {
@@ -59,13 +59,13 @@ test('LAN guard covers the connected subnet and rejects router, gateway and LAN 
   const plan = renderAutomaticGatewayHostPlan({ ...input, network: { ...common, clientCIDR: '192.0.2.0/24' } });
   assert.match(plan.guardRules, /ip saddr != 192\.0\.2\.0\/24 drop/);
   assert.match(plan.guardRules, /ip saddr \{ 192\.0\.2\.2, 192\.0\.2\.1, 192\.0\.2\.0, 192\.0\.2\.255 \} drop/);
-  assert.match(plan.guardRules, /ip saddr 192\.0\.2\.0\/24 ip daddr != 192\.0\.2\.0\/24 oifname != "coproxy-tun" drop/);
+  assert.match(plan.guardRules, /ip saddr 192\.0\.2\.0\/24 ip daddr != 192\.0\.2\.0\/24 oifname != "cocoproxy-tun" drop/);
 });
 
 
 test('native LAN gateway sends multiple clients through reviewed TUN and retains failure protection',
-  { skip: process.platform !== 'linux' || !process.env.COPROXY_TEST_MIHOMO || process.env.COPROXY_TEST_GATEWAY_KERNEL !== '1', timeout: 70_000 }, async t => {
-    const core = process.env.COPROXY_TEST_MIHOMO!;
+  { skip: process.platform !== 'linux' || !process.env.COCOPROXY_TEST_MIHOMO || process.env.COCOPROXY_TEST_GATEWAY_KERNEL !== '1', timeout: 70_000 }, async t => {
+    const core = process.env.COCOPROXY_TEST_MIHOMO!;
     assert.equal(createHash('sha256').update(await readFile(core)).digest('hex'), AUTOMATIC_GATEWAY_CORE_SHA256);
     const { clientIPv4: _, ...common } = network;
     const lan = { ...common, ingressInterface: 'lan-test', dnsPort: 15353, clientCIDR: '192.0.2.0/24' };
@@ -76,7 +76,7 @@ test('native LAN gateway sends multiple clients through reviewed TUN and retains
       // Clients connect to an IP without querying core DNS. HTTP must recover
       // fixture.invalid from Host; an unrecovered TCP connection is rejected.
       rules: ['DOMAIN,fixture.invalid,DIRECT', 'NETWORK,udp,DIRECT', 'MATCH,REJECT'] } }, lan).config;
-    const root = await mkdtemp(join(tmpdir(), 'coproxy-auto-lan-'));
+    const root = await mkdtemp(join(tmpdir(), 'cocoproxy-auto-lan-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     await writeFile(join(root, 'input.json'), JSON.stringify({ core, config, network: lan, guardRules: plan.guardRules }));
     const hostUser = await readlink('/proc/self/ns/user'), hostNet = await readlink('/proc/self/ns/net');

@@ -29,7 +29,7 @@ export interface GatewayManagementFixtureReader {
   command(binary: string, args: readonly string[]): Promise<string>;
   now(): number;
 }
-const SYSTEMCTL = '/usr/bin/systemctl', UNIT = 'coproxy-management.service';
+const SYSTEMCTL = '/usr/bin/systemctl', UNIT = 'cocoproxy-management.service';
 const FRAGMENT = '/etc/systemd/system/' + UNIT, CGROUP = '/sys/fs/cgroup';
 const properties = 'LoadState,ActiveState,SubState,MainPID,Job,ControlGroup,User,FragmentPath,DropInPaths,NeedDaemonReload';
 const fail: () => never = () => { throw new Error('NETWORK_MANAGEMENT_UNVERIFIED'); };

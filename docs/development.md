@@ -55,20 +55,20 @@ stage 只保存不可变候选，draft-stage 捕获指定保存版本；均不�
 
 | 入口 | 需要的输入与观察范围 |
 | --- | --- |
-| `test:core-live` | `COPROXY_TEST_MIHOMO`：核心语法、身份、回环 HTTP 与 UDP/TCP DNS |
-| `test:protocol-live`、`test:protocol-reality-live` | 再提供 `COPROXY_TEST_SING_BOX`：真实协议回环，范围见[协议夹具](../integrations/protocol-fixture/README.md) |
-| `test:management-live` | `COPROXY_TEST_SERVER` 指向构建后 Server；浏览器子项另需 `COPROXY_TEST_PLAYWRIGHT` 与 `COPROXY_TEST_BROWSER` 绝对路径 |
-| `test:gateway`、`test:deployment`、`test:runtime` | 部分子项读取 `COPROXY_TEST_MIHOMO` 或 `COPROXY_TEST_SYSTEMD_ANALYZE` 执行真实语法解析 |
+| `test:core-live` | `COCOPROXY_TEST_MIHOMO`：核心语法、身份、回环 HTTP 与 UDP/TCP DNS |
+| `test:protocol-live`、`test:protocol-reality-live` | 再提供 `COCOPROXY_TEST_SING_BOX`：真实协议回环，范围见[协议夹具](../integrations/protocol-fixture/README.md) |
+| `test:management-live` | `COCOPROXY_TEST_SERVER` 指向构建后 Server；浏览器子项另需 `COCOPROXY_TEST_PLAYWRIGHT` 与 `COCOPROXY_TEST_BROWSER` 绝对路径 |
+| `test:gateway`、`test:deployment`、`test:runtime` | 部分子项读取 `COCOPROXY_TEST_MIHOMO` 或 `COCOPROXY_TEST_SYSTEMD_ANALYZE` 执行真实语法解析 |
 | `test:network-kernel` | 固定 Mihomo/sing-box、Linux Python/ip/nft/unshare/TUN；在隔离 namespace 内验证旧框架四角色路径 |
 
 示例：
 
 ```sh
-COPROXY_TEST_MIHOMO=/absolute/reviewed/mihomo npm run test:core-live
-COPROXY_TEST_MIHOMO=/absolute/reviewed/mihomo COPROXY_TEST_SING_BOX=/absolute/reviewed/sing-box npm run test:protocol-live
+COCOPROXY_TEST_MIHOMO=/absolute/reviewed/mihomo npm run test:core-live
+COCOPROXY_TEST_MIHOMO=/absolute/reviewed/mihomo COCOPROXY_TEST_SING_BOX=/absolute/reviewed/sing-box npm run test:protocol-live
 ```
 
-Server 检查使用临时合成凭据和 loopback 端口，不替代 systemd 应用。浏览器截图仅在显式 `COPROXY_TEST_ARTIFACTS` 私有目录保存。隔离内核测试与原生网关局部实验各自有范围，不能合并推导生产服务、物理网络或重启可靠性。
+Server 检查使用临时合成凭据和 loopback 端口，不替代 systemd 应用。浏览器截图仅在显式 `COCOPROXY_TEST_ARTIFACTS` 私有目录保存。隔离内核测试与原生网关局部实验各自有范围，不能合并推导生产服务、物理网络或重启可靠性。
 
 ## 请求时延基线
 

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { IconCheck, IconLogout, IconRefresh, IconRestore, IconX } from '@tabler/icons-vue'
-import type { CoproxyStatus } from '~/composables/useCoproxy'
-import { coproxyErrorMessage } from '~/composables/useCoproxy'
+import type { CoCoProxyStatus } from '~/composables/useCoCoProxy'
+import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
-useHead({ title: '设置 · Coproxy' })
-const api = useCoproxy()
-const status = ref<CoproxyStatus | null>(null)
+useHead({ title: '设置 · CoCoProxy' })
+const api = useCoCoProxy()
+const status = ref<CoCoProxyStatus | null>(null)
 const busy = ref(false)
 const error = ref('')
 
@@ -14,12 +14,12 @@ async function run(action: () => Promise<void>) {
   busy.value = true
   error.value = ''
   try { await action() }
-  catch (cause) { error.value = coproxyErrorMessage(cause) }
+  catch (cause) { error.value = cocoproxyErrorMessage(cause) }
   finally { busy.value = false }
 }
 async function refresh() { status.value = await api.readStatus() }
 async function recover() {
-  await api.request('/api/coproxy/recover', { method: 'POST', body: {} })
+  await api.request('/api/cocoproxy/recover', { method: 'POST', body: {} })
   await refresh()
 }
 onMounted(() => run(refresh))

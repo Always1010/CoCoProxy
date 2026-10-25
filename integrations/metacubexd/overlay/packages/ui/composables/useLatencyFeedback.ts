@@ -40,7 +40,7 @@ function shortLatencyFailure(reason: LatencyFailureReason): string {
 
 export function useLatencyFeedback() {
   const nodeFeedback = useState<Record<string, LatencyFeedback>>(
-    'coproxy-latency-feedback',
+    'cocoproxy-latency-feedback',
     () => ({}),
   )
   const beginNode = (name: string) => {
