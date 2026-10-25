@@ -1,5 +1,9 @@
 # MetaCubeXD 适配记录
 
+当前管理界面保留 MetaCubeXD 的概览、连接、流量、日志和原生节点／规则列表；订阅使用独立卡片页，代理页管理出口与策略组，规则页编辑用户覆盖。订阅自带方案与本地模板互斥生效，分别持久保存选择和规则；本地模板包含 AlwayRoute 服务分类、国内域名与 IPv4 补漏。常用操作及导航保留短文字，验证覆盖桌面、平板横竖屏及手机。底层统一使用 Coproxy 校验、冲突检查及应用事务，日常界面不再暴露 JSON、捕获或代次操作。
+
+工作区接口与旧草稿迁移见 `packages/management/README.md`，订阅内联配置和 provider 展开边界见 `packages/subscriptions/README.md`，本地模板来源与转换见 `packages/routing/README.md`。原生自动策略组继续由核心选择，前端不把手动选择写入其算法。旧运行配置在用户明确保存或切换前保持原状。
+
 状态：固定源码与 Git 树已核对，Server/UI 依赖已锁定并构建；Coproxy overlay 已通过真实 Server 与浏览器回环检查。验证范围为管理登录、草稿、捕获、冲突与注销，尚未验收真实 systemd 服务应用或完整网关组合。固定核心另通过独立回环及受限代理检查，范围见 review.json。
 
 审查入口为 v1.273.1，其 Git 引用核对为 8bbc8f58fef71148a94fb5c0ff808f79b057337d。后续构建应核对提交，不只信任可移动 tag。上游是 pnpm 工作区；Agent 包是 private workspace 包，不能假定可从 npm 独立安装。根配置指定 pnpm 10.34.1。[根配置](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/package.json)、[Agent 包](https://github.com/MetaCubeX/metacubexd/blob/8bbc8f58fef71148a94fb5c0ff808f79b057337d/packages/agent/package.json)
