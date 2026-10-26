@@ -1,6 +1,6 @@
 # 支持范围与验证矩阵
 
-本矩阵描述当前 `0.1.0-preview.1` 的交付入口、证据范围和待验收项。它不把“代码接受配置”“安装包可生成”或一次局部测试解释为整机兼容。版本锁来自 [review.json](../integrations/metacubexd/review.json)，产品验收结论与限制见[发行说明](release-notes.md)。部署前同时核对[设备条件](cooperating-router-requirements.md)和[路由器契约 v1](router-contract.md)。
+本矩阵描述当前 `0.1.0-preview.1` 的交付入口、证据范围和待验收项。它不把“代码接受配置”“安装包可生成”或一次局部测试解释为整机兼容。组件来源和字节锁来自 [components.json](../integrations/metacubexd/components.json)，审核记录见 [review.json](../integrations/metacubexd/review.json)，产品验收结论与限制见[发行说明](release-notes.md)。部署前同时核对[设备条件](cooperating-router-requirements.md)和[路由器契约 v1](router-contract.md)。
 
 ## 证据等级
 
