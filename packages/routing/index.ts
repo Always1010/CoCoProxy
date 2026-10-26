@@ -8,6 +8,7 @@ export { serviceCatalog } from './service-catalog.ts';
 export type LocalPolicyOptions = {
   proxies: JsonObject[];
   selections: Record<string, string>;
+  sharedGroups?: string[];
   rules: string[];
   mode: 'rule' | 'global' | 'direct';
 };
@@ -36,14 +37,17 @@ function normalizedTarget(value: string): string {
  * Proxy. Proxy itself must choose a concrete node, DIRECT or REJECT. This keeps
  * every group option acyclic, including options not currently selected.
  */
-export function localGroupChoices(proxies: JsonObject[], groupId: string): string[] {
-  if (!validName(groupId) || reserved.has(groupId) || aliases.has(groupId) || !Array.isArray(proxies) || proxies.length > 5000) invalid();
+export function localGroupChoices(proxies: JsonObject[], groupId: string, sharedGroups: string[] = []): string[] {
+  if (!validName(groupId) || reserved.has(groupId) || aliases.has(groupId) || !Array.isArray(proxies) || proxies.length > 5000 ||
+      !Array.isArray(sharedGroups) || sharedGroups.length > 100 || new Set(sharedGroups).size !== sharedGroups.length ||
+      sharedGroups.some(name => !validName(name) || ids.has(name) || reserved.has(name) || aliases.has(name))) invalid();
+  const shared = new Set(sharedGroups);
   const nodes = proxies.map((proxy) => {
-    if (!proxy || typeof proxy !== 'object' || Array.isArray(proxy) || !validName(proxy.name) || ids.has(proxy.name) || reserved.has(proxy.name) || aliases.has(proxy.name)) invalid();
+    if (!proxy || typeof proxy !== 'object' || Array.isArray(proxy) || !validName(proxy.name) || ids.has(proxy.name) || shared.has(proxy.name) || reserved.has(proxy.name) || aliases.has(proxy.name)) invalid();
     return proxy.name;
   });
   if (new Set(nodes).size !== nodes.length) invalid();
-  return [...(groupId === 'Proxy' ? [] : ['Proxy']), ...nodes, 'DIRECT', 'REJECT'];
+  return [...(groupId === 'Proxy' || shared.has(groupId) ? [] : ['Proxy', ...sharedGroups]), ...nodes, 'DIRECT', 'REJECT'];
 }
 
 /** Validate simple user rules while retaining their exact order and match type. */
@@ -82,24 +86,29 @@ function userRules(rules: string[], targets: Set<string>): string[] {
  * DNS settings are deliberately left to the deployment compiler.
  */
 export function buildLocalPolicy(options: LocalPolicyOptions): JsonObject {
-  const { proxies, selections, rules, mode } = options;
+  const { proxies, selections, sharedGroups = [], rules, mode } = options;
   if (!Array.isArray(proxies) || proxies.length > 5000 || !selections || typeof selections !== 'object' || Array.isArray(selections) || !['rule', 'global', 'direct'].includes(mode)) invalid();
   if (Object.keys(selections).length > 100 || Object.entries(selections).some(([id, target]) => !validName(id) || reserved.has(id) || aliases.has(id) || ['__proto__', 'constructor', 'prototype'].includes(id) || typeof target !== 'string' || !target)) invalid();
   // Validate nodes once before constructing references, including the empty case.
-  localGroupChoices(proxies, 'Proxy');
+  localGroupChoices(proxies, 'Proxy', sharedGroups);
+  const shared = new Set(sharedGroups);
   const enabled = serviceCatalog.filter((service) => service.default || Object.hasOwn(selections, service.id)).map(service => ({ ...service }));
-  for (const id of Object.keys(selections)) if (!ids.has(id)) {
+  for (const id of Object.keys(selections)) if (!ids.has(id) && !shared.has(id)) {
     if (proxies.some(proxy => proxy.name === id)) invalid();
     enabled.push({ id, name: id, default: false, description: '', domains: [], exactDomains: [] } as unknown as typeof enabled[number]);
   }
   const targets = new Set(['DIRECT', 'REJECT', ...enabled.map((service) => service.id), ...proxies.map((proxy) => proxy.name as string)]);
-  const groups: JsonObject[] = enabled.map((service) => {
-    const choices = localGroupChoices(proxies, service.id);
-    const fallback = service.id === 'Proxy' ? (proxies[0]?.name ?? 'REJECT') : service.id === 'Domestic' ? 'DIRECT' : 'Proxy';
-    const selected = normalizedTarget(selections[service.id] ?? String(fallback));
+  const group = (id: string, fallback: string): JsonObject => {
+    const choices = localGroupChoices(proxies, id, sharedGroups);
+    const selected = normalizedTarget(selections[id] ?? fallback);
     if (!choices.includes(selected)) invalid();
-    return { name: service.id, type: 'select', proxies: [selected, ...choices.filter((choice) => choice !== selected)] };
-  });
+    return { name: id, type: 'select', proxies: [selected, ...choices.filter((choice) => choice !== selected)] };
+  };
+  const proxy = group('Proxy', String(proxies[0]?.name ?? 'REJECT'));
+  const proxySelected = String((proxy.proxies as string[])[0]);
+  const groups: JsonObject[] = [proxy, ...sharedGroups.map(name => group(name, proxySelected)),
+    ...enabled.filter(service => service.id !== 'Proxy').map(service =>
+      group(service.id, service.id === 'Domestic' ? 'DIRECT' : 'Proxy'))];
   // Validate even inactive manual rules; switching modes must not hide invalid data.
   const manual = userRules(rules, targets);
   let outputRules: string[];

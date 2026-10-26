@@ -246,7 +246,7 @@ function settings(changes: Partial<WorkspaceSettings> = {}): WorkspaceSettings {
 }
 function withoutRevision({ revision: _revision, ...value }: Workspace): WorkspaceSettings { return value; }
 type View = { workspace: Workspace; active: string | null; pending: boolean; error?: string;
-  groups: { name: string; type: string; selected: string; activeSelected: string | null; options: string[] }[];
+  groups: { name: string; type: string; role: 'service' | 'shared'; selected: string; activeSelected: string | null; options: string[] }[];
   nodes: string[]; tcpNodes: { name: string; fingerprint: string; applicable: boolean }[];
   rules: { value: string; source: string; editable: boolean }[]; ruleCount: number; invalidSelections: string[] };
 
@@ -406,6 +406,27 @@ test('workspace settings enforce schema and durable compare-and-save without ali
   assert.equal((await store.read())!.revision, 1);
   await writeFile(join(store.root, 'workspace.json'), '{broken', { mode: 0o600 });
   await assert.rejects(store.read(), { code: 'WORKSPACE_CORRUPT' });
+});
+
+test('local shared exit groups persist and compile while subscription overrides reject them', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node, { ...node, name: 'second-node' }] });
+  const saved = await f.save(settings({ sourceIds: ['pool'], local: {
+    sharedGroups: ['AI Exit'], selections: { 'AI Exit': 'synthetic-node', OpenAI: 'AI Exit', TikTok: 'AI Exit' }, rules: [],
+  } }), 0);
+  const view = await f.view();
+  assert.deepEqual(view.groups.filter(group => ['Proxy', 'AI Exit', 'OpenAI', 'TikTok'].includes(group.name)).map(group =>
+    [group.name, group.role, group.selected]), [
+    ['Proxy', 'shared', 'synthetic-node'], ['AI Exit', 'shared', 'synthetic-node'],
+    ['OpenAI', 'service', 'AI Exit'], ['TikTok', 'service', 'AI Exit'],
+  ]);
+  const active = await f.apply(saved, null);
+  const groups = (await f.candidate(active.active))['proxy-groups'] as JsonObject[];
+  assert.deepEqual(groups.find(group => group.name === 'AI Exit')!.proxies, ['synthetic-node', 'second-node', 'DIRECT', 'REJECT']);
+  assert.ok((groups.find(group => group.name === 'OpenAI')!.proxies as string[]).includes('AI Exit'));
+  assert.throws(() => parseWorkspaceSettings(settings({ subscriptionOverrides: {
+    pool: { selections: {}, rules: [], sharedGroups: ['invalid'] } as never,
+  } })));
 });
 
 test('legacy migration retains manual and automatic groups and waits for an explicit scheme choice', async t => {
