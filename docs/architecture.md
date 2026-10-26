@@ -66,15 +66,18 @@ sing-box 只作为[协议测试对端](../integrations/protocol-fixture/README.m
 ```mermaid
 sequenceDiagram
     actor U as 管理员
-    participant M as 网页／management
+    participant P as 网页
+    participant M as management
     participant W as 工作区与订阅
     participant C as config／gateway
     participant T as 事务存储
     participant R as runtime／systemd
-    U->>M: 保存设置或刷新来源
+    U->>P: 保存工作区设置
+    P->>M: 保存（expectedRevision + settings）
     M->>W: 按 revision 保存
-    W-->>U: 已保存，尚未应用
-    U->>M: 应用（工作区 revision + expectedActive）
+    W-->>M: 已保存与新 revision
+    M-->>P: 返回已保存工作区
+    P->>M: 自动应用（新 revision + expectedActive）
     M->>W: 读取设置与来源快照
     M->>C: 可信部署 + 策略 + 节点
     C-->>M: 完整候选与 generation
@@ -92,7 +95,7 @@ sequenceDiagram
     end
 ```
 
-保存和刷新不自动应用，候选捕获由网页应用流程内部完成。旧草稿和 CLI 仍可显式 stage/apply。`revision` 防并发覆盖，`generation` 标识完整配置，`expectedActive` 防止覆盖新的运行状态。原生候选包含网络设置，草稿摘要不能替代最终代次。
+网页工作区保存成功后会自动发起应用，无需另点“应用”；底层单独保存工作区、旧草稿保存和 CLI `stage` 不等于应用，仍需显式 `apply`。来源更新仅在已选来源快照变化或工作区已有待生效设置时由网页自动应用；未选来源只更新快照，工具栏“刷新”只重读页面状态。候选捕获由网页应用流程内部完成。`revision` 防并发覆盖，`generation` 标识完整配置，`expectedActive` 防止覆盖新的运行状态。原生候选包含网络设置，草稿摘要不能替代最终代次。
 
 核心状态、节点选择和实时流通过受限 `/api/clash/*`；HTTP/WS 共用会话，修改操作核验代次和共用锁。工作区组选择同时持久化，自动组保留算法。核心密钥不返回浏览器。历史提交、核心就绪、终端连通分别表示不同事实；当前自动状态为 `core_only`，网关路径仍标为 `GATEWAY_PATH_UNVERIFIED`。
 
