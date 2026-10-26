@@ -16,8 +16,14 @@ export interface AutoProbeSettings {
 }
 
 export interface AutomaticStatus {
+  scope?: string
+  workspaceRevision?: number
+  paused?: boolean
+  suspended?: boolean
+  error?: string
   groups: { name: string; phase: string; current: string | null; nextAt: number | null; reason: string | null }[]
-  events: { at: number; group: string; from: string | null; to: string | null; reason: string }[]
+  events: { id?: string; at: number; group: string; from: string | null; to: string | null; reason: string;
+    fromPool?: 'preferred' | 'fallback'; toPool?: 'preferred' | 'fallback' }[]
 }
 
 export interface WorkspaceOverrides {

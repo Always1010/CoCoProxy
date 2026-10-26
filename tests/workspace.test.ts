@@ -14,6 +14,8 @@ import { compileConfig } from '../packages/config/index.ts';
 import type { Workspace, WorkspaceSettings } from '../packages/management/workspace.ts';
 import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts';
 import { setRuntimeLifecycle } from '../packages/runtime/lifecycle.ts';
+import { AutomaticHistoryStore, retainAutomaticEvents, AUTOMATIC_HISTORY_AGE, AUTOMATIC_HISTORY_FILE_LIMIT } from '../packages/management/automatic-history.ts';
+import { randomUUID } from 'node:crypto';
 
 const deployment = { mixedPort: 17890, controllerPort: 19090, dnsPort: 15353,
   controllerSecret: 'EXAMPLE_ONLY_DEPLOYMENT_SECRET', bootstrapResolvers: ['192.0.2.53'] };
@@ -142,6 +144,96 @@ test('automatic activation failure rolls back only its private binding and manua
   const updated = await f.save(withoutRevision(manual), manual.revision);
   assert.equal(updated.local.selections.Proxy, 'DIRECT');
   assert.equal(await f.action.automaticSnapshot(), null);
+});
+
+test('automatic history retains each group independently and expires old records without unstable equal-time ordering', () => {
+  const now = Date.now();
+  const event = (group: string, at: number) => ({ id: randomUUID(), at, group, from: 'old-node', to: 'new-node', reason: 'failure-recovery' });
+  const records = [event('Quiet', now), event('Expired', now - AUTOMATIC_HISTORY_AGE),
+    ...Array.from({ length: 60 }, (_, i) => event('Busy', now - 1000 + i))];
+  const retained = retainAutomaticEvents(records, now);
+  assert.equal(retained.filter(e => e.group === 'Quiet').length, 1);
+  assert.equal(retained.filter(e => e.group === 'Busy').length, 50);
+  assert.equal(retained.some(e => e.group === 'Expired'), false);
+  const equalTime = Array.from({ length: 3 }, () => event('Equal', now));
+  assert.deepEqual(retainAutomaticEvents(retainAutomaticEvents(equalTime, now), now), equalTime);
+});
+
+test('automatic history clear is scoped, survives journal recovery and keeps routing and new switches intact', async t => {
+  const f = await fixture(t);
+  const proxies = [node, { ...node, name: 'spare' }];
+  await f.source('pool', { proxies });
+  await f.source('other', { proxies });
+  const policy = { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true };
+  const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node', OpenAI: 'synthetic-node' }, rules: [],
+    automatic: { Proxy: policy, OpenAI: policy } } });
+  const saved = await f.save(initial, 0);
+  await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node', OpenAI: 'synthetic-node' });
+  assert.equal(await f.action.automaticSwitch((await f.action.automaticSnapshot(true))!, 'Proxy', 'spare', 'failure-recovery'), true);
+  f.observe({ Proxy: 'spare', OpenAI: 'synthetic-node' });
+  assert.equal(await f.action.automaticSwitch((await f.action.automaticSnapshot(true))!, 'OpenAI', 'spare', 'failure-recovery'), true);
+  f.observe({ Proxy: 'spare', OpenAI: 'spare' });
+  type Status = { scope: string; workspaceRevision: number; events: { id: string; group: string; fromPool: string; toPool: string }[] };
+  const status = await f.call<Status>('/automatic/status');
+  assert.equal(status.events.length, 2);
+  assert.equal(status.events[0].fromPool, 'preferred');
+  assert.equal(status.events[0].toPool, 'fallback');
+  // Recreate the committed-but-not-finalized journal left by a process crash.
+  const bindings = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
+  const old = bindings.events.find((e: { group: string }) => e.group === 'Proxy');
+  bindings.pendingEvent = { ...old, signature: bindings.targets.Proxy.signature, revision: saved.revision };
+  await writeFile(join(f.state, 'automatic-selections.json'), JSON.stringify(bindings), { mode: 0o600 });
+  const before = await f.view(), activations = f.events.length;
+  const body = { expectedRevision: saved.revision, scope: status.scope, group: 'Proxy' };
+  await assert.rejects(f.call('/automatic/history/clear', 'POST', { ...body, scope: 'other-scheme' }), { code: 'WORKSPACE_CONFLICT' });
+  await assert.rejects(f.call('/automatic/history/clear', 'POST', { ...body, group: 'missing' }), { code: 'AUTO_GROUP_INVALID' });
+  const cleared = await f.call<Status>('/automatic/history/clear', 'POST', body);
+  assert.deepEqual(cleared.events.map(e => e.group), ['OpenAI']);
+  const after = await f.view();
+  assert.equal(after.active, before.active);
+  assert.equal(after.workspace.revision, saved.revision);
+  assert.deepEqual(after.workspace.local, before.workspace.local);
+  assert.equal(f.events.length, activations);
+  // A fresh reader and recovery must not republish the cleared pending event or legacy ring.
+  assert.equal((await new AutomaticHistoryStore(f.state).read()).scopes[0].events.length, 1);
+  await f.action.automaticSnapshot(true);
+  assert.deepEqual((await f.call<Status>('/automatic/status')).events.map(e => e.group), ['OpenAI']);
+  assert.equal(await f.action.automaticSwitch((await f.action.automaticSnapshot(true))!, 'Proxy', 'synthetic-node', 'preferred-restored'), true);
+  f.observe({ Proxy: 'synthetic-node', OpenAI: 'spare' });
+  assert.equal((await f.call<Status>('/automatic/status')).events.filter(e => e.group === 'Proxy').length, 1);
+  // Turning automatic selection off retains history. Switching schemes isolates the same group name.
+  const disabled = structuredClone(initial);
+  disabled.local.automatic!.Proxy.enabled = false;
+  const off = await f.save(disabled, saved.revision);
+  assert.equal((await f.call<Status>('/automatic/status')).events.filter(e => e.group === 'Proxy').length, 1);
+  const other = await f.save({ ...disabled, sourceIds: ['other'] }, off.revision);
+  assert.equal((await f.call<Status>('/automatic/status')).events.length, 0);
+  await assert.rejects(f.call('/automatic/history/clear', 'POST', { ...body, expectedRevision: other.revision }), { code: 'WORKSPACE_CONFLICT' });
+  await f.save(disabled, other.revision);
+  assert.equal((await f.call<Status>('/automatic/status')).events.length, 2);
+  // A damaged optional archive must not take down the workspace/manual recovery surface.
+  await writeFile(join(f.state, 'automatic-history.json'), '{"version":2}', { mode: 0o600 });
+  assert.equal((await f.call<{ automatic: { error: string } }>('/workspace')).automatic.error, 'AUTO_HISTORY_CORRUPT');
+  await assert.rejects(f.call('/automatic/status'), { code: 'AUTO_HISTORY_CORRUPT' });
+});
+
+test('automatic history imports legacy IDs once and keeps its multibyte archive within the private read ceiling', async t => {
+  const root = await directory(t), archive = new AutomaticHistoryStore(root), now = Date.now();
+  await writeFile(join(root, 'automatic-selections.json'), JSON.stringify({ version: 1, scope: 'legacy', targets: {},
+    events: [{ at: now, group: 'Quiet', from: 'old', to: 'new', reason: 'failure-recovery' }] }), { mode: 0o600 });
+  const imported = await archive.read();
+  assert.equal(imported.scopes[0].events[0].id, (await archive.read()).scopes[0].events[0].id);
+  await archive.write(imported);
+  await archive.clear('legacy', 'Quiet');
+  assert.equal((await new AutomaticHistoryStore(root).read()).scopes.length, 0);
+  const events = Array.from({ length: 1100 }, (_, i) => ({ id: randomUUID(), at: now + i,
+    group: `组${Math.floor(i / 50)}${'组'.repeat(1000)}`, from: '节'.repeat(1024), to: '点'.repeat(1024), reason: 'failure-recovery' }));
+  await archive.write({ version: 1, scopes: [{ scope: 'synthetic', events }] });
+  assert.ok(Buffer.byteLength(await readFile(join(root, 'automatic-history.json'), 'utf8')) <= AUTOMATIC_HISTORY_FILE_LIMIT);
+  const retained = (await archive.read()).scopes[0].events;
+  assert.ok(retained.length < events.length);
+  assert.equal(retained.at(-1)!.id, events.at(-1)!.id);
 });
 
 test('manual takeover and toggling automatic selection retain candidate pools and resume only when enabled', async t => {

@@ -8,6 +8,85 @@ import { localGroupNameError } from '../integrations/metacubexd/overlay/packages
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useWorkspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 
+test('automatic history keeps reading position, preserves failed refreshes and clears only the displayed group', async () => {
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionHistory.vue', import.meta.url), 'utf8');
+  const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
+    '\nexport { open, close, readStatus, clearHistory, onScroll, showLatest, scroller, displayed, newCount, error, confirmClear, available };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const scope = JSON.stringify(['local', ['sample']]);
+  const event = (id: string, group = 'Stream') => ({ id, group, at: 1000, from: 'node-a', to: 'node-b', reason: 'failure-recovery' });
+  let result = { scope, workspaceRevision: 7, groups: [], events: [event('one'), event('other', 'Work')] };
+  const view = { value: { workspace: { mode: 'local', sourceIds: ['sample'], revision: 7 }, automatic: result } };
+  const overrides = { value: { automatic: { Stream: { enabled: true }, Work: { enabled: true } } } };
+  const props = { groupName: 'Stream', selectable: true };
+  const document = { hidden: false, addEventListener() {}, removeEventListener() {} };
+  const calls: { path: string; options?: any }[] = [];
+  let fail = false, deferred: Promise<typeof result> | undefined;
+  const exports: Record<string, any> = {};
+  new Script(code, { filename: 'AutomaticSelectionHistory.js' }).runInNewContext({
+    exports, defineProps: () => props, ref: (value: unknown) => ({ value }),
+    computed: (get: () => unknown) => ({ get value() { return get(); } }), watch() {}, onMounted() {}, onUnmounted() {},
+    document, setTimeout: () => 0, clearTimeout() {}, cocoproxyErrorMessage: () => '读取失败',
+    useWorkspace: () => ({ view, overrides, api: { request: async (path: string, options?: any) => {
+      calls.push({ path, options });
+      if (fail) throw new Error('synthetic failure');
+      if (deferred) return deferred;
+      if (options) {
+        assert.equal(options.body.group, 'Stream');
+        assert.equal(options.body.scope, scope);
+        assert.equal(options.body.expectedRevision, 7);
+        result = { ...result, events: result.events.filter(e => e.group !== 'Stream') };
+      }
+      return structuredClone(result);
+    } } }),
+  });
+  exports.open();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(exports.displayed.value, (e: any) => e.id), ['one']);
+  overrides.value.automatic.Stream.enabled = false;
+  assert.equal(exports.available.value, true); // Historical entry remains available after manual takeover.
+  let jumps = 0;
+  exports.scroller.value = { scrollTop: 120, scrollTo: () => jumps++ };
+  exports.onScroll();
+  result = { ...result, events: [...result.events, event('two')] };
+  await exports.readStatus();
+  assert.equal(exports.displayed.value.length, 1);
+  assert.equal(exports.newCount.value, 1);
+  assert.equal(jumps, 0);
+  exports.showLatest();
+  assert.equal(exports.displayed.value.length, 2);
+  assert.equal(jumps, 1);
+  fail = true;
+  await exports.readStatus();
+  assert.equal(exports.error.value, '读取失败');
+  assert.equal(exports.displayed.value.length, 2);
+  fail = false;
+  exports.confirmClear.value = true;
+  await exports.clearHistory();
+  assert.equal(exports.displayed.value.length, 0);
+  assert.deepEqual(view.value.automatic.events.map(e => e.group), ['Work']);
+  exports.close();
+  assert.equal(exports.available.value, false);
+  const count = calls.length;
+  document.hidden = true;
+  exports.open();
+  await exports.readStatus();
+  assert.equal(calls.length, count);
+  exports.close();
+  document.hidden = false;
+  let resolveOld!: (value: typeof result) => void;
+  deferred = new Promise(resolve => { resolveOld = resolve; });
+  exports.open();
+  exports.close();
+  props.groupName = 'Work';
+  deferred = undefined;
+  exports.open();
+  await new Promise(resolve => setImmediate(resolve));
+  resolveOld({ ...result, events: [event('stale', 'Work')] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(exports.displayed.value, (e: any) => e.id), ['other']);
+});
+
 test('subscription editor loads existing fields and current revision, preserves URLs on save and clears on close', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/pages/subscriptions.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]

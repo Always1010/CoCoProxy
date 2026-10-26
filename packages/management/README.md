@@ -94,8 +94,10 @@ npm run test:management
 
 工作区的 `RoutingOverrides.automatic[group]` 可选保存 `{preferred, fallback, returnToPreferred}`，顶层 `autoProbes` 可选保存 `{primary, secondary, timeoutMs, slowMs}`；地址条目是 `{url, expectedStatus}`。旧格式保持兼容。自动组仅接受原手动组内的具体代理，拒绝内建出口、组引用、重复、越界和原生自动组。部署许可在保存与运行探测前分别校验，默认 Cloudflare 复核地址须显式获准。
 
-GET `/api/cocoproxy/automatic/probes` 返回缺省检测配置及许可来源；POST `/api/cocoproxy/automatic/test` 接收 `{expectedRevision, expectedActive, probes}`，经实际当前节点验证两个地址，不保存配置；GET `/api/cocoproxy/automatic/status` 返回阶段及确认后的切换记录。接口使用现有会话、Origin 和工作区冲突检查。浏览器 controller 路由不增加 `expected` 参数；内部探测额外核对核心每 URL 的 alive 标志，避免正数延迟掩盖状态码不匹配，并与手工探测互斥证据读回窗口。控制器 429 按 Retry-After 退避。
+GET `/api/cocoproxy/automatic/probes` 返回缺省检测配置及许可来源；POST `/api/cocoproxy/automatic/test` 接收 `{expectedRevision, expectedActive, probes}`，经实际当前节点验证两个地址，不保存配置；GET `/api/cocoproxy/automatic/status` 返回当前方案 `scope`、`workspaceRevision`、暂停状态、检测阶段及确认后的切换记录；POST `/api/cocoproxy/automatic/history/clear` 接收 `{expectedRevision, scope, group}`，仅清空匹配方案的指定手动策略组历史，不应用配置或修改自动选点状态。接口使用现有会话、Origin 和工作区冲突检查。浏览器 controller 路由不增加 `expected` 参数；内部探测额外核对核心每 URL 的 alive 标志，避免正数延迟掩盖状态码不匹配，并与手工探测互斥证据读回窗口。控制器 429 按 Retry-After 退避。
 
 私有 `automatic-selections.json` 保存按方案和候选指纹约束的运行出口以及最多 50 条事件，不改用户手动选择或工作区 revision。自动写入复用共同锁和配置事务，失败按绑定内容 CAS 恢复；崩溃后只允许根据已提交 active 和核心实际选择修复自动组的选择差异，不能把用户待应用的规则或其他组修改顺便生效。每秒驱动轻量调度，完整计划和核心观察最多缓存 30 秒；实际切换始终重新构建并核验。后台生命周期关闭会等待在途任务，暂停标记在写入及事务入口复核。
+
+查看历史以独立的私有 `automatic-history.json` 为准，按方案和组分别最多保留 50 条、最长 7 天，读取状态或写入时淘汰过期记录。整个归档另有 8 MiB 保护上限，极端长名称或大量方案触顶时从最旧记录淘汰。首次读取兼容导入旧运行文件中的确认事件；归档一旦存在，即使为空也不再从旧缓存补回。确认写入及崩溃恢复按事件 ID 去重，事件保留切换当时的优选／备选身份；清空同时抑制此前进程遗留的待归档事件重放，仍允许进行中的新切换完成后正常记入。历史读写与运行事务共用锁，但独立于运行绑定的 CAS 内容，清空不会重置调度器。部署兼容及保留检查包含该归档，停服安装窗口校验完整字节，运行后允许记录增长或过期。
 
 `npm run test:automatic` 使用假时钟验证故障、劣化、回切、全断退避、共享限流和关闭；`npm run test:workspace` 包含自动绑定恢复、权限和手动接管验证。默认时间及使用方法见使用说明。这些验证不代替真实 Linux 核心与浏览器验收。

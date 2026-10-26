@@ -54,6 +54,7 @@ const messages: Record<string, string> = {
   AUTO_GROUP_INVALID: '此策略组不支持自动选择，或候选节点已变化，请刷新后重试。',
   AUTO_STATE_CONFLICT: '自动选择运行状态已变化，请刷新后重试。',
   AUTO_STATE_CORRUPT: '自动选择运行记录无法读取，请检查服务存储。',
+  AUTO_HISTORY_CORRUPT: '自动选择历史无法读取，请检查服务存储。',
   AUTO_PROBE_DENIED: '检测网址来源未获当前部署许可，请联系管理员配置。',
   AUTO_PROBE_UNAVAILABLE: '当前无法通过具体节点检测，请先选择可用节点并确认核心就绪。',
   AUTO_PROBE_BUSY: '另一项检测正在执行，请稍后重试。',

@@ -3,6 +3,7 @@ import type { Proxy as ProxyType } from '~/types'
 import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
 import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
 import AutomaticSelectionSettings from '~/components/AutomaticSelectionSettings.vue'
+import AutomaticSelectionHistory from '~/components/AutomaticSelectionHistory.vue'
 import GroupRuleSummary from '~/components/GroupRuleSummary.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
 import { siteGroupMembers } from '~/composables/useSiteProbes'
@@ -336,6 +337,7 @@ function aliveCount(group: ProxyType) {
             <span>定位</span>
           </button>
           <AutomaticSelectionSettings ref="groupSettings" :group-name="activeGroup.name" :selectable="canSelect" />
+          <AutomaticSelectionHistory :group-name="activeGroup.name" :selectable="canSelect" />
         </div>
 
         <p v-if="automaticEnabled" class="text-xs text-primary" role="status">点击节点可切换为手动选择</p>
