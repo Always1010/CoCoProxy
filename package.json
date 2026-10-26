@@ -27,7 +27,7 @@
     "test:automatic": "node --experimental-strip-types --test tests/automatic-selector.test.ts",
     "test:notifications": "node --experimental-strip-types --test tests/notifications.test.ts",
     "test:notifications-browser": "node --experimental-strip-types --test tests/notifications-browser-live.test.mjs",
-    "test:deployment": "node --experimental-strip-types --test tests/deployment-plan.test.ts tests/deployment-install.test.ts",
+    "test:deployment": "node --experimental-strip-types --test tests/deployment-plan.test.ts tests/deployment-install.test.ts tests/deployment-preservation.test.ts",
     "test:release-stage": "node --experimental-strip-types --test tests/release-stage.test.ts",
     "test:network-plan": "node --experimental-strip-types --test tests/network-plan.test.ts",
     "test:network-config": "node --experimental-strip-types --test tests/network-config.test.ts",

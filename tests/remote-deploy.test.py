@@ -2,6 +2,7 @@
 import contextlib
 import importlib.util
 import io
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -15,7 +16,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete'):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -39,7 +40,8 @@ class RemoteDeploymentTests(unittest.TestCase):
         before = {'schemaVersion': 1, 'runtime': {'nodePath': '/usr/bin/node', 'systemctlPath': '/usr/bin/systemctl',
             'sourceDirectory': '/opt/sample/releases/' + 'a' * 64 + '/source', 'binaryPath': '/old/core', 'binarySha256': 'c' * 64,
             'stateDirectory': str(state), 'settingsPath': '/etc/sample/runtime.json', 'serviceUid': 12345, 'automaticGateway': {'schemaVersion': 1}},
-            'management': {'serviceUser': 'synthetic', 'credentialPath': str(credential), 'serverEntry': '/old/server', 'deployment': {'controllerSecret': 'synthetic secret'}}}
+            'management': {'serviceUser': 'synthetic', 'credentialPath': str(credential), 'settingsPath': '/etc/sample/management.json',
+                'serverEntry': '/old/server', 'deployment': {'controllerSecret': 'synthetic secret'}}}
         (private / 'deployment.json').write_text(json.dumps(before))
         receipt = root / 'receipt.json'
         receipt.write_text(json.dumps({'status': 'complete', 'release': '/old/release', 'manifestSha256': 'a' * 64}))
@@ -53,6 +55,16 @@ class RemoteDeploymentTests(unittest.TestCase):
         def run(args, timeout=120):
             args = [str(item) for item in args]
             events.append(args)
+            if any(item.replace('\\', '/').endswith('/apps/deployment/preservation.ts') for item in args):
+                hashed = lambda path: hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+                return json.dumps({'schemaVersion': 1, 'observedAt': 1000, 'identity': {'credential': hashed(credential), 'epoch': 'synthetic-epoch'},
+                    'files': {'workspace': hashed(state / 'workspace.json'), 'lifecycle': hashed(state / 'lifecycle.json'), 'automaticSelections': None},
+                    'directories': {'state': sorted(item.name for item in state.iterdir())},
+                    'contentChecks': [{'id': 'workspace', 'status': 'pass'}],
+                    'stable': {'workspace': hashed(state / 'workspace.json'), 'siteProbes': None, 'draft': None, 'subscriptions': 'synthetic-empty'},
+                    'trusted': {'binding': 'absent', 'devices': []}, 'notifications': {'binding': 'absent', 'keys': None, 'subscriptions': []},
+                    'runtime': {'coherent': True, 'active': 'a' * 64 if core_active else None, 'selection': 'a' * 64 if core_active else None,
+                        'automaticBindingsReadable': True}, 'ready': True}).encode()
             if args[0] == str(hook):
                 if args[1] != 'status':
                     router['enabled'] = args[1] == 'enable'
@@ -83,6 +95,8 @@ class RemoteDeploymentTests(unittest.TestCase):
                         'files': [{'status': 'matches-receipt'}], 'lock': {'present': False}}).encode()
                 if '--apply' in args and fail_apply:
                     raise RuntimeError('INSTALL_SYNTHETIC_FAILURE')
+                if '--apply' in args and change_during_install:
+                    (state / 'workspace.json').write_text('{"revision":99}')
             if args[0] == '/usr/bin/systemctl':
                 action = args[1]
                 if action == 'show':
@@ -102,6 +116,7 @@ class RemoteDeploymentTests(unittest.TestCase):
             return b'{"core":{"ready":true}}'
 
         stack = contextlib.ExitStack()
+        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
         stack.enter_context(patch.object(deploy, 'PRIVATE', private))
         stack.enter_context(patch.object(deploy, 'RECEIPT', receipt))
         stack.enter_context(patch.object(deploy, 'NETWORK_RECEIPT', network))
@@ -126,9 +141,9 @@ class RemoteDeploymentTests(unittest.TestCase):
             report = json.loads(output.getvalue())
             self.assertNotIn('privateStatePreserved', report)
             self.assertEqual(report['preservation']['status'], 'pass')
-            self.assertEqual(report['preservation']['checks'][1]['comparedFileCount'], 1)
-            self.assertIn('trusted-devices', report['preservation']['notAssessed'])
-            self.assertIn('notification-identity-preferences-and-outbox', report['preservation']['notAssessed'])
+            self.assertEqual(report['preservation']['windows'][0]['scope'], 'stopped-install-window')
+            self.assertEqual(report['preservation']['windows'][1]['authentication']['status'], 'not-run')
+            self.assertIn('real-restored-authentication', report['preservation']['notAssessed'])
             self.assertNotIn('synthetic secret', output.getvalue())
             after = json.loads((private / 'deployment.json').read_text())
             self.assertEqual(after['management']['deployment'], before['management']['deployment'])
@@ -141,6 +156,14 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertLess(find('remove'), find('--apply'))
             enable_router = next(index for index, command in enumerate(events) if command[0].endswith('router-hook') and command[1] == 'enable')
             self.assertLess(find('runtime-status'), enable_router)
+            snapshots = [index for index, command in enumerate(events) if any(item.replace('\\', '/').endswith('/apps/deployment/preservation.ts') for item in command)]
+            self.assertEqual(len(snapshots), 3)
+            self.assertLess(find('stop'), snapshots[0])
+            self.assertLess(snapshots[0], find('--apply'))
+            self.assertLess(find('--apply'), snapshots[1])
+            self.assertLess(snapshots[1], find('runtime-maintenance-restore'))
+            self.assertLess(find('runtime-status'), snapshots[2])
+            self.assertLess(snapshots[2], enable_router)
             self.assertLess(find('runtime-maintenance-restore'), next(index for index, command in enumerate(events)
                 if command[:2] == ['/usr/bin/systemctl', 'start']))
             pause_command = next(command for command in events if 'runtime-maintenance-pause' in command)
@@ -154,6 +177,17 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.assertEqual(report['status'], 'not-applicable')
         self.assertEqual(report['code'], 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE')
         self.assertTrue(all(item['status'] == 'not-applicable' for item in report['checks']))
+
+    def test_changed_install_window_blocks_service_and_router_restoration(self):
+        temporary, stack, private, before, events, router, args = self.scenario(change_during_install=True)
+        with temporary, stack:
+            with self.assertRaisesRegex(RuntimeError, 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED'):
+                deploy.main_locked(args)
+            self.assertFalse(router['enabled'])
+            self.assertFalse(any('runtime-maintenance-restore' in command for command in events))
+            journal = json.loads((private / 'remote-last.json').read_text())
+            self.assertEqual(journal['preservation']['status'], 'fail')
+            self.assertEqual(journal['status'], 'failed')
 
     def test_failed_install_keeps_router_disabled_and_blocks_blind_retry(self):
         temporary, stack, private, before, events, router, args = self.scenario(True)

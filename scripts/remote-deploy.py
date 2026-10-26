@@ -36,6 +36,53 @@ def preservation_report(upgraded, compared_files=0):
             'restored-authentication-and-business-availability']}
 
 
+def compare_preservation(before, after, frozen=False):
+    """Digests stay in memory; public results disclose fixed roles and scope only."""
+    checks = []
+    def check(identity, passed, scope, changed='REMOTE_PRESERVATION_REVIEW_REQUIRED', absent=False):
+        checks.append({'id': identity, 'status': 'not-applicable' if passed and absent else 'pass' if passed else 'fail' if frozen else 'unknown',
+            'code': 'REMOTE_PRESERVATION_NO_APPLICABLE_BASELINE' if passed and absent else 'REMOTE_PRESERVATION_MATCHED' if passed else changed, 'evidenceScope': scope})
+    check('content-readability', all(item['status'] != 'fail' for snapshot in [before, after] for item in snapshot['contentChecks']), 'actual-readers-content-validation-only',
+          'REMOTE_PRESERVATION_CONTENT_OR_RUNTIME_UNVERIFIED')
+    if frozen:
+        check('known-state-files', before['files'] == after['files'], 'stopped-install-window-file-presence-set-and-exact-bytes',
+              'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
+        check('state-directories', before['directories'] == after['directories'], 'stopped-install-window-directory-presence-and-entry-set',
+              'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
+        check('administrator-binding', before['identity'] == after['identity'], 'stopped-install-window-origin-and-credential',
+              'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
+    else:
+        same_identity = before['identity'] == after['identity']
+        check('administrator-binding', same_identity, 'origin-and-normalized-administrator-identity', 'REMOTE_PRESERVATION_REAUTH_REQUIRED')
+        for role in ['workspace', 'siteProbes', 'draft', 'subscriptions']:
+            check(role, before['stable'][role] == after['stable'][role], 'restored-stable-user-settings-excluding-runtime-events-and-refresh-times',
+                  absent=before['files'].get(role) is None)
+        current_devices = {item['id']: item for item in after['trusted']['devices']}
+        expected = [item for item in before['trusted']['devices'] if item['expiresAt'] is None or item['expiresAt'] > after['observedAt']]
+        devices_match = all(item['id'] in current_devices and item['stable'] == current_devices[item['id']]['stable'] and
+            current_devices[item['id']]['renewedAt'] >= item['renewedAt'] and
+            (item['expiresAt'] is None and current_devices[item['id']]['expiresAt'] is None or item['expiresAt'] is not None and
+             current_devices[item['id']]['expiresAt'] is not None and current_devices[item['id']]['expiresAt'] >= item['expiresAt']) for item in expected)
+        check('trusted-devices', same_identity and devices_match, 'unexpired-device-identity-token-digest-and-trust-with-legal-renewal', absent=not expected)
+        expected_ids = {item['id'] for item in expected}
+        expired_ids = {item['id'] for item in before['trusted']['devices']} - expected_ids
+        current_subscriptions = {item['device']: item['stable'] for item in after['notifications']['subscriptions']}
+        notifications_match = (before['notifications']['keys'] is None or before['notifications']['keys'] == after['notifications']['keys']) and all(
+            item['device'] in expired_ids or current_subscriptions.get(item['device']) == item['stable'] for item in before['notifications']['subscriptions'])
+        check('notifications', same_identity and notifications_match, 'vapid-keys-subscription-identities-and-preferences-excluding-outbox-and-delivery-times',
+              absent=before['notifications']['keys'] is None and not before['notifications']['subscriptions'])
+        check('automatic-runtime-bindings', after['runtime']['automaticBindingsReadable'] and not (
+            before['files'].get('automaticSelections') is not None and after['files'].get('automaticSelections') is None),
+            'runtime-binding-reader-only-dynamic-targets-events-and-times-may-change', absent=before['files'].get('automaticSelections') is None)
+        check('runtime-selection', after['runtime']['coherent'] and not (before['runtime']['active'] is not None and after['runtime']['active'] is None),
+            'current-committed-active-selection-and-recompiled-candidate-not-process-identity-or-same-dynamic-target', absent=before['runtime']['active'] is None)
+    required = [item['status'] for item in checks]
+    return {'schemaVersion': 1, 'scope': 'stopped-install-window' if frozen else 'restored-stable-identity-preferences-and-readability',
+        'status': 'pass' if all(status in ['pass', 'not-applicable'] for status in required) else 'fail' if 'fail' in required else 'unknown',
+        'checks': checks, 'contentChecks': after['contentChecks'], 'authentication': {'status': 'not-run', 'code': 'REMOTE_RESTORED_LOGIN_NOT_PROBED',
+            'evidenceScope': 'no-real-login-cookie-or-terminal-notification-delivery-probe'}}
+
+
 def need(value, code):
     if not value:
         raise RuntimeError(code)
@@ -356,12 +403,14 @@ def main_locked(options):
         if before_lifecycle:
             need(not (before_lifecycle['enabled'] and before_lifecycle['paused']), 'REMOTE_RUNTIME_ALREADY_PAUSED')
             need(not before_lifecycle['paused'] or not before_units['cocoproxy-mihomo.service']['active'], 'REMOTE_PAUSED_ACTIVE_CORE_REQUIRES_REVIEW')
-        credential_sha = None
-        def business():
-            state = Path(runtime['stateDirectory'])
-            files = [state / 'workspace.json', state / 'site-probes.json', state / 'draft.json', *sorted((state / 'subscriptions').glob('*.json'))]
-            return {str(file.relative_to(state)): hashlib.sha256(regular(file)).hexdigest() for file in files if file.exists()}
-        before_business = None
+        before_preservation = None
+        preservation_windows = []
+        def snapshot_preservation():
+            snapshot = json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
+                payload / 'source/apps/deployment/preservation.ts', '--management-settings', management['settingsPath']]))
+            need(snapshot.get('schemaVersion') == 1 and isinstance(snapshot.get('files'), dict) and
+                 isinstance(snapshot.get('directories'), dict) and isinstance(snapshot.get('contentChecks'), list), 'REMOTE_PRESERVATION_SNAPSHOT_INVALID')
+            return snapshot
         progress = {'status': 'running', 'phase': 'maintenance', 'manifestSha256': options.manifest_sha256,
                     'previousServices': before_units, 'routerPreviouslyEnabled': router_enabled,
                     'previousNetworkReceipt': previous_network,
@@ -406,9 +455,12 @@ def main_locked(options):
                 # Snapshot after the manager has stopped: edits completed while
                 # entering maintenance must remain valid, rather than look like
                 # changes caused by the subsequent file installation.
-                credential_sha = hashlib.sha256(regular(management['credentialPath'])).hexdigest()
-                before_business = business()
                 record_phase('services-stopped-network-retired')
+                before_preservation = snapshot_preservation()
+                record_phase('preservation-baseline-observed', preservation={'scope': 'stopped-baseline-readability',
+                    'checks': before_preservation['contentChecks'], 'runtimeCode': before_preservation['runtime'].get('code')})
+                need(before_preservation.get('ready') is True, 'REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED'
+                    if before_preservation.get('runtime', {}).get('coherent') is False else 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
             operation = 'upgrade' if installed else 'install'
             run(installer + ['--operation', operation, *common])
             run(installer + ['--operation', operation, *common, '--apply'])
@@ -423,6 +475,10 @@ def main_locked(options):
                 os.chmod(management['credentialPath'], 0o600)
             inspect_complete(options.manifest_sha256)
             if installed:
+                frozen = compare_preservation(before_preservation, snapshot_preservation(), frozen=True)
+                preservation_windows.append(frozen)
+                record_phase('installed-state-verified', preservation=frozen)
+                need(frozen['status'] == 'pass', 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
                 restored = maintenance('runtime-maintenance-restore', token_path)
                 need(restored.get('lifecycle') == {'schemaVersion': 1, 'enabled': previous_intent['enabled'], 'paused': previous_intent['paused']} and
                      (Path(runtime['stateDirectory']) / 'lifecycle.json').exists() == previous_intent['present'], 'REMOTE_RUNTIME_INTENT_NOT_RESTORED')
@@ -443,7 +499,10 @@ def main_locked(options):
                         time.sleep(1)
                     else:
                         raise RuntimeError('REMOTE_CORE_NOT_READY')
-                need(credential_sha == hashlib.sha256(regular(management['credentialPath'])).hexdigest() and before_business == business(), 'REMOTE_PRIVATE_STATE_CHANGED')
+                restored_preservation = compare_preservation(before_preservation, snapshot_preservation())
+                preservation_windows.append(restored_preservation)
+                record_phase('restored-state-verified', preservation=restored_preservation)
+                need(restored_preservation['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
             else:
                 run([systemctl, 'start', 'cocoproxy-management.service'])
                 if candidate.get('web'):
@@ -454,7 +513,10 @@ def main_locked(options):
             if router_enabled:
                 run([*router_command, 'enable'], timeout=300)
                 need(json.loads(run([*router_command, 'status']))['enabled'] is True, 'REMOTE_ROUTER_NOT_RESTORED')
-            preservation = preservation_report(installed, len(before_business) if before_business is not None else 0)
+            preservation = preservation_report(False)
+            if installed:
+                preservation = {'schemaVersion': 1, 'status': 'pass', 'scope': 'verified-install-window-and-restored-stable-state',
+                    'windows': preservation_windows, 'notAssessed': ['real-restored-authentication', 'terminal-notification-display', 'long-running-business-availability']}
             replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit'],
                 'preservation': preservation})
             print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256,
