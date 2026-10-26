@@ -52,13 +52,6 @@ def compare_preservation(before, after, frozen=False):
             (item['expiresAt'] is None and current_devices[item['id']]['expiresAt'] is None or item['expiresAt'] is not None and
              current_devices[item['id']]['expiresAt'] is not None and current_devices[item['id']]['expiresAt'] >= item['expiresAt']) for item in expected)
         check('trusted-devices', same_identity and devices_match, 'unexpired-device-identity-token-digest-and-trust-with-legal-renewal', absent=not expected)
-        expected_ids = {item['id'] for item in expected}
-        expired_ids = {item['id'] for item in before['trusted']['devices']} - expected_ids
-        current_subscriptions = {item['device']: item['stable'] for item in after['notifications']['subscriptions']}
-        notifications_match = (before['notifications']['keys'] is None or before['notifications']['keys'] == after['notifications']['keys']) and all(
-            item['device'] in expired_ids or current_subscriptions.get(item['device']) == item['stable'] for item in before['notifications']['subscriptions'])
-        check('notifications', same_identity and notifications_match, 'vapid-keys-subscription-identities-and-preferences-excluding-outbox-and-delivery-times',
-              absent=before['notifications']['keys'] is None and not before['notifications']['subscriptions'])
         check('automatic-runtime-bindings', after['runtime']['automaticBindingsReadable'] and not (
             before['files'].get('automaticSelections') is not None and after['files'].get('automaticSelections') is None),
             'runtime-binding-reader-only-dynamic-targets-events-and-times-may-change', absent=before['files'].get('automaticSelections') is None)
@@ -68,7 +61,7 @@ def compare_preservation(before, after, frozen=False):
     return {'schemaVersion': 1, 'scope': 'stopped-install-window' if frozen else 'restored-stable-identity-preferences-and-readability',
         'status': 'pass' if all(status in ['pass', 'not-applicable'] for status in required) else 'fail' if 'fail' in required else 'unknown',
         'checks': checks, 'contentChecks': after['contentChecks'], 'authentication': {'status': 'not-run', 'code': 'REMOTE_RESTORED_LOGIN_NOT_PROBED',
-            'evidenceScope': 'no-real-login-cookie-or-terminal-notification-delivery-probe'}}
+            'evidenceScope': 'no-real-login-or-cookie-probe'}}
 
 
 def need(value, code):
@@ -522,7 +515,7 @@ def main_locked(options):
             preservation = {'schemaVersion': 1, 'status': 'not-applicable', 'code': 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE'}
             if installed:
                 preservation = {'schemaVersion': 1, 'status': 'pass', 'scope': 'verified-install-window-and-restored-stable-state',
-                    'windows': preservation_windows, 'notAssessed': ['real-restored-authentication', 'terminal-notification-display', 'long-running-business-availability']}
+                    'windows': preservation_windows, 'notAssessed': ['real-restored-authentication', 'long-running-business-availability']}
             replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit'],
                 'preservation': preservation})
             print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256,

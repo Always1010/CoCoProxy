@@ -64,9 +64,7 @@ manifest.json
 
 ## 依赖与构建产物
 
-根生产依赖仅允许 package.json 的 web-push/ws/yaml 及必需闭包。锁为v3，根元数据、安装快照version/integrity和包声明必须一致；拒绝链接、选中开发依赖、未知模块、缺许可及未支持的必需peer/optional。根目录已知开发依赖可存在，但不进入载荷。Server 显式跟踪动态加载的 web-push，装配时核对并带入完整闭包。
-
-仅省略固定依赖中的四个上游 CI／目录元数据文件：jws/jwa 的 `opslevel.yml`、buffer-equal-constant-time 的 `.travis.yml` 和 minimist 的 `.github/FUNDING.yml`；其他敏感路径检查保持拒绝。http_ece 1.2.0 的 npm 包缺失许可证正文，按固定版本、npm 完整性值和上游正文哈希从[审阅补件](../integrations/http-ece/README.md)补入两个运行依赖目录，不修改本机依赖安装。
+根生产依赖仅允许 package.json 的 ws/yaml 及必需闭包。锁为v3，根元数据、安装快照version/integrity和包声明必须一致；拒绝链接、选中开发依赖、未知模块、缺许可及未支持的必需peer/optional。根目录已知开发依赖可存在，但不进入载荷。装配时核对并带入 Server 的完整生产依赖。
 
 npm integrity对应tarball，展开目录无法重算；快照一致不能证明字节未被同时篡改。使用按锁安装、审阅且稳定的输入；manifest 为实际复制字节另算SHA-256。
 
@@ -85,7 +83,7 @@ Mihomo二进制必须匹配HEAD中[组件清单](../integrations/metacubexd/comp
 
 目标运行和验收范围见[发行说明](release-notes.md)。跨架构装配不执行外来核心，目标安装还须核对架构和能力。
 
-载荷保留MetaCubeXD MIT、Mihomo GPLv3、ws MIT、yaml ISC、web-push MIT及其依赖许可与固定来源。对外分发还需按实际分发方式提供适用的对应源码、通知等，装配完成本身不证明分发要求全部满足。当前载荷的版本与文件以manifest为准。
+载荷保留MetaCubeXD MIT、Mihomo GPLv3、ws MIT、yaml ISC及其依赖许可与固定来源。对外分发还需按实际分发方式提供适用的对应源码、通知等，装配完成本身不证明分发要求全部满足。当前载荷的版本与文件以manifest为准。
 
 ## 输出与复核
 

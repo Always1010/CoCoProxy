@@ -56,5 +56,5 @@ export async function createManagementHttpsReport(deploymentInput: unknown, opti
       reason: !options.probeHttps ? '尚未执行管理 HTTPS 检查；使用 --probe-https 显式探测。'
         : code === 'SETUP_MANAGEMENT_HTTPS_REACHABLE' ? '调用端 Node 已完成可信 TLS 及固定管理 health 响应检查。'
           : '调用端 Node 未通过可信 TLS 或固定管理 health 响应检查。',
-      action: '在实际浏览器另行验收证书信任、登录及按需使用的通知；Node 检查不能证明这些终端行为。' }] };
+      action: '在实际浏览器另行验收证书信任和登录；Node 检查不能证明这些终端行为。' }] };
 }

@@ -14,12 +14,7 @@ export default defineNitroConfig({
   experimental: { websocket: true },
   alias: { '@cocoproxy': source },
   nodeModulesDirs: [dependencies],
-  // createRequire keeps the optional sender isolated; explicitly trace its
-  // complete production closure so the packaged server can send notifications.
-  externals: { traceInclude: [resolve(dependencies, 'web-push/src/index.js'), resolve(dependencies, 'web-push/src/cli.js')] },
   publicAssets: [{ baseURL: '/', dir: uiDist, maxAge: 0 }],
   ignore: ['**/__tests__/**', '**/*.spec.ts', '**/*.test.ts'],
-  routeRules: { '/api/**': { headers: { 'cache-control': 'no-store' } }, '/config.js': { headers: { 'cache-control': 'no-store' } },
-    '/cocoproxy-sw.js': { headers: { 'cache-control': 'no-cache', 'service-worker-allowed': '/' } },
-    '/manifest.webmanifest': { headers: { 'cache-control': 'no-cache', 'content-type': 'application/manifest+json' } } },
+  routeRules: { '/api/**': { headers: { 'cache-control': 'no-store' } }, '/config.js': { headers: { 'cache-control': 'no-store' } } },
 })

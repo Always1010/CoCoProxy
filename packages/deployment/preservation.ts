@@ -5,7 +5,6 @@ import { canonicalJson, type JsonObject } from '../config/index.ts';
 import { privateRead, inspectPrivateDirectory } from '../storage/private-files.ts';
 import { parseAdminCredential, type AdminCredential } from '../management/auth.ts';
 import { parseTrustedDeviceDocument } from '../management/trusted-devices.ts';
-import { parseNotificationEnvelope } from '../management/notifications.ts';
 import { parseAutomaticBindings } from '../management/automatic-bindings.ts';
 import { parseWorkspaceDocument } from '../management/workspace.ts';
 import { parseSiteProbeState } from '../management/site-probes.ts';
@@ -20,7 +19,7 @@ const digest = (bytes: string) => createHash('sha256').update(bytes).digest('hex
 const hash = (value: unknown) => digest(canonicalJson(value as JsonObject));
 const stores = {
   transaction: ['state.json', 65536], lifecycle: ['lifecycle.json', 4096], trustedDevices: ['auth/trusted-devices.json', 131072],
-  notifications: ['notifications/state.json', 2097152], workspace: ['workspace.json', 1048576],
+  workspace: ['workspace.json', 1048576],
   siteProbes: ['site-probes.json', 1048576], draft: ['draft.json', 4194304], automaticSelections: ['automatic-selections.json', 262144],
   selection: ['selection.json', 4096],
 } as const;
@@ -49,7 +48,6 @@ export function summarizePreservation(documents: Documents, sources: Record<stri
   const transaction = validate('transaction', documents.transaction, parseTransactionState);
   validate('lifecycle', documents.lifecycle, parseRuntimeLifecycle);
   const devices = validate('trustedDevices', documents.trustedDevices, parseTrustedDeviceDocument);
-  const notification = validate('notifications', documents.notifications, parseNotificationEnvelope);
   const workspace = validate('workspace', documents.workspace, parseWorkspaceDocument);
   const siteProbes = validate('siteProbes', documents.siteProbes, parseSiteProbeState);
   const draft = validate('draft', documents.draft, parseDraftDocument);
@@ -68,13 +66,9 @@ export function summarizePreservation(documents: Documents, sources: Record<stri
   else if (candidate !== null) throw new PreservationError();
   const epoch = digest(JSON.stringify({ origin: context.origin, credential: parseAdminCredential(context.credential) }));
   const currentDevices = devices?.credentialFingerprint === epoch ? devices.devices : [];
-  const notificationCurrent = notification?.epoch === epoch;
   const identity = { origin: digest(context.origin), credential: hash(parseAdminCredential(context.credential)), epoch };
   const trusted = currentDevices.map(device => ({ id: digest(device.id), stable: hash({ id: device.id, tokenDigest: device.tokenDigest,
     label: device.label, trust: device.trust, createdAt: device.createdAt }), renewedAt: device.renewedAt, expiresAt: device.expiresAt }));
-  const subscriptions = notificationCurrent ? notification!.state.subscriptions.filter(item => currentDevices.some(device => device.id === item.deviceId &&
-    (device.expiresAt === null || device.expiresAt > context.now))).map(item => ({ device: digest(item.deviceId),
-    stable: hash({ subscription: item.subscription, preferences: item.preferences }) })) : [];
   const files = Object.fromEntries(Object.entries(documents).map(([id, bytes]) => [id, bytes === null ? null : digest(bytes)]));
   files.subscriptions = Object.keys(sources).length ? hash(Object.entries(sources).sort(([a], [b]) => a.localeCompare(b)).map(([id, bytes]) => [id, digest(bytes)])) : null;
   files.activeCandidate = candidate === null ? null : digest(candidate);
@@ -84,8 +78,6 @@ export function summarizePreservation(documents: Documents, sources: Record<stri
     stable: { workspace: workspace === null ? null : hash({ ...workspace, revision: 0 }), siteProbes: siteProbes === null ? null : hash({ ...siteProbes, revision: 0 }),
       draft: draft === null ? null : hash({ input: draft.input, generation: draft.generation }), subscriptions: hash(sourceSettings) },
     trusted: { binding: devices === null ? 'absent' : devices.credentialFingerprint === epoch ? 'current' : 'invalidated', devices: trusted },
-    notifications: { binding: notification === null ? 'absent' : notificationCurrent ? 'current' : 'invalidated',
-      keys: notificationCurrent && notification!.state.keys ? hash(notification!.state.keys) : null, subscriptions },
     // Matching committed active/selection is the same necessary binding checked by SystemdMihomoRuntime.observe.
     // It does not claim a process or controller is healthy; the coordinator performs runtime-status separately.
     runtime: { coherent, code: coherent ? 'REMOTE_PRESERVATION_RUNTIME_BINDING_VALID' : 'REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED',
@@ -107,7 +99,7 @@ export async function capturePreservation(managementSettingsPath: string) {
   await inspectPrivateDirectory(settings.stateDirectory);
   const credentialBytes = await privateRead(management.credentialPath, 16384);
   const credential = parseAdminCredential(JSON.parse(credentialBytes));
-  const directoryRoles = { state: '', auth: 'auth', notifications: 'notifications', subscriptions: 'subscriptions', candidates: 'candidates' };
+  const directoryRoles = { state: '', auth: 'auth', subscriptions: 'subscriptions', candidates: 'candidates' };
   const directories: Record<string, { present: boolean; entries: string | null }> = {};
   const names: Record<string, string[]> = {};
   for (const [role, name] of Object.entries(directoryRoles)) {

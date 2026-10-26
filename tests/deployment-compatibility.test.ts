@@ -14,14 +14,14 @@ import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 const configInput = JSON.parse(await readFile(new URL('../examples/explicit-proxy.json', import.meta.url), 'utf8'));
 
 test('state compatibility refuses newer or unknown schemas without guessing a data migration', () => {
-  assert.equal(assessStateSchema('notifications', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
+  assert.equal(assessStateSchema('workspace', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('siteProbes', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('siteProbes', 1, { schemaVersion: 1, stateSchemas: { workspace: 1 } }), 'not-declared');
   assert.equal(assessStateSchema('trustedDevices', 2, DEPLOYMENT_STATE_COMPATIBILITY), 'unsupported-version');
   assert.equal(assessStateSchema('transaction', 1, undefined), 'not-declared');
   assert.equal(assessStateSchema('workspace', 1, { schemaVersion: 1, stateSchemas: {} }), 'not-declared');
   for (const value of [undefined, null, '1', 0, -1, 1.5]) {
-    assert.equal(assessStateSchema('notifications', value, DEPLOYMENT_STATE_COMPATIBILITY), 'invalid');
+    assert.equal(assessStateSchema('workspace', value, DEPLOYMENT_STATE_COMPATIBILITY), 'invalid');
   }
 });
 
@@ -31,7 +31,6 @@ test('content assessment reuses complete readers and refuses broken fields even 
     transaction: { version: 1, desired: null, active: null, pending: null, fault: null, checkedAt: null },
     lifecycle: { schemaVersion: 1, enabled: false, paused: false },
     trustedDevices: { schemaVersion: 1, credentialFingerprint: 'a'.repeat(64), devices: [] },
-    notifications: { epoch: 'b'.repeat(64), state: { version: 1, keys: null, events: [], subscriptions: [], jobs: [], phases: {} } },
     draft: { version: 1, revision: 1, input: configInput, generation: candidate.id, updatedAt: '2026-01-01T00:00:00.000Z' },
     workspace: { version: 1, revision: 1, settings },
     siteProbes: { version: 1, revision: 0, custom: [], groups: {} },
@@ -44,13 +43,12 @@ test('content assessment reuses complete readers and refuses broken fields even 
     const good = assessStateContent(store, input, DEPLOYMENT_STATE_COMPATIBILITY, 'sourceA');
     assert.equal(good.status, 'supported', store); assert.equal(good.content, 'valid', store);
     const minimal = ['lifecycle', 'trustedDevices', 'selection'].includes(store) ? { schemaVersion: 1 }
-      : store === 'notifications' ? { epoch: 'b'.repeat(64), state: { version: 1 } } : { version: 1 };
+      : { version: 1 };
     const bad = assessStateContent(store, minimal, DEPLOYMENT_STATE_COMPATIBILITY, 'sourceA');
     assert.equal(bad.status, 'unsupported', store); assert.equal(bad.code, 'DEPLOYMENT_STATE_CONTENT_INVALID', store);
   }
-  // Both envelopes are structurally valid. Whether a changed binding resets state is a separate assessment.
+  // Both documents are structurally valid. Whether a changed binding resets state is a separate assessment.
   assert.equal(assessStateContent('trustedDevices', { ...(valid.trustedDevices as object), credentialFingerprint: 'c'.repeat(64) }, DEPLOYMENT_STATE_COMPATIBILITY).status, 'supported');
-  assert.equal(assessStateContent('notifications', { ...(valid.notifications as object), epoch: 'd'.repeat(64) }, DEPLOYMENT_STATE_COMPATIBILITY).status, 'supported');
 });
 
 test('schema declarations alone do not establish a complete or unknown reader contract', () => {
@@ -86,7 +84,6 @@ function upgradeFixture() {
     ['state.json', JSON.stringify({ version: 1, active: active.id, desired: active.id, pending: null, fault: null, checkedAt: null })],
     ['lifecycle.json', JSON.stringify({ schemaVersion: 1, enabled: true, paused: false })],
     ['auth/trusted-devices.json', JSON.stringify({ schemaVersion: 1, credentialFingerprint: fingerprint, devices: [] })],
-    ['notifications/state.json', JSON.stringify({ epoch: fingerprint, state: { version: 1, keys: null, events: [], subscriptions: [], jobs: [], phases: {} } })],
     ['candidates/' + active.id + '.json', canonicalJson(active.config)], ['candidates/' + previous.id + '.json', canonicalJson(previous.config)],
   ]);
   const calls: string[] = [];

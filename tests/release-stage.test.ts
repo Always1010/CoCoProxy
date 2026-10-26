@@ -48,10 +48,10 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
     await put(join(sourceDir, 'scripts', name), '# synthetic remote deployment entry\n');
   }
   await put(join(sourceDir, '.gitignore'), '.local/\n');
-  const dependencies = { 'web-push': '1.0.0', ws: '1.0.0', yaml: '1.0.0' };
+  const dependencies = { ws: '1.0.0', yaml: '1.0.0' };
   const pkg = { name: 'synthetic-cocoproxy', version: '0.0.0', dependencies };
   const packages: Record<string, unknown> = { '': pkg };
-  for (const name of ['web-push', 'ws', 'yaml']) {
+  for (const name of ['ws', 'yaml']) {
     packages[`node_modules/${name}`] = { version: '1.0.0', integrity: `sha512-${Buffer.from(name).toString('base64')}` };
     for (const base of [runtimeDependencies, join(serverDir, 'server/node_modules')]) {
       await put(join(base, name, 'package.json'), JSON.stringify({ name, version: '1.0.0' }));
@@ -103,7 +103,7 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.equal(manifest.commit, receipt.commit);
   assert.equal(receipt.fileCount, manifest.files.length);
   assert.ok(manifest.files.some(file => file.path === 'source/node_modules/yaml/dist/index.js'));
-  assert.ok(manifest.files.some(file => file.path === 'server/.output/server/node_modules/web-push/dist/index.js'));
+  assert.ok(manifest.files.some(file => file.path === 'server/.output/server/node_modules/ws/dist/index.js'));
   assert.ok(manifest.files.some(file => file.path === 'source/integrations/mihomo/LICENSE'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/deployment.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/support-matrix.md'));
@@ -155,7 +155,7 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   await writeFile(join(options.output, 'manifest.json'), bytes);
 });
 
-test('real built server traces the complete locked push dependency closure for release assembly', {
+test('real built server includes the locked runtime dependencies for release assembly', {
   skip: !process.env.COCOPROXY_TEST_RUNTIME_DEPENDENCIES || !process.env.COCOPROXY_TEST_SERVER_OUTPUT,
 }, async t => {
   const options = await fixture(t);
@@ -164,26 +164,12 @@ test('real built server traces the complete locked push dependency closure for r
   for (const name of ['package.json', 'package-lock.json']) {
     await writeFile(join(options.sourceDir, name), await readFile(new URL(`../${name}`, import.meta.url)));
   }
-  await mkdir(join(options.sourceDir, 'integrations/http-ece'), { recursive: true });
-  for (const name of ['LICENSE', 'README.md']) await writeFile(join(options.sourceDir, 'integrations/http-ece', name), await readFile(new URL(`../integrations/http-ece/${name}`, import.meta.url)));
-  await execute('git', ['-C', options.sourceDir, 'add', 'package.json', 'package-lock.json', 'integrations/http-ece']);
+  await execute('git', ['-C', options.sourceDir, 'add', 'package.json', 'package-lock.json']);
   await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'locked production fixture']);
   await stageExplicitRelease(options);
-  const manifest = JSON.parse(await readFile(join(options.output, 'manifest.json'), 'utf8'));
-  assert.ok(manifest.files.some((file: { path: string }) => file.path === 'server/.output/server/node_modules/web-push/src/index.js'));
-  assert.ok(manifest.files.some((file: { path: string }) => file.path === 'server/.output/server/node_modules/http_ece/ece.js'));
-  assert.equal(digest(await readFile(join(options.output, 'server/.output/server/node_modules/http_ece/LICENSE'))), '7d71f48c474da1de82fbdaac7fea5a1eaa41e4ac998dd44fd2897812812138d9');
-  assert.ok(manifest.files.every((file: { path: string }) => !file.path.endsWith('.yml')));
-  const push = createRequire(join(options.output, 'server/.output/server/package.json'))('web-push');
-  const keys = push.generateVAPIDKeys();
-  const encrypted = push.generateRequestDetails({ endpoint: 'https://fcm.googleapis.com/wp/synthetic-release', keys: {
-    p256dh: keys.publicKey, auth: Buffer.alloc(16, 3).toString('base64url') } }, '合成发行测试', {
-    vapidDetails: { ...keys, subject: 'https://management.example' }, TTL: 300 });
-  assert.ok(encrypted.body.length > 0);
-  await writeFile(join(options.sourceDir, 'integrations/http-ece/LICENSE'), 'tampered synthetic license');
-  await execute('git', ['-C', options.sourceDir, 'add', 'integrations/http-ece/LICENSE']);
-  await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'tampered license fixture']);
-  await rejects(stageExplicitRelease({ ...options, output: options.output + '-rejected' }), 'DEPENDENCY_LICENSE_MISSING');
+  const require = createRequire(join(options.output, 'server/.output/server/package.json'));
+  assert.equal(typeof require('ws').WebSocket, 'function');
+  assert.deepEqual(require('yaml').parse('synthetic: true'), { synthetic: true });
 });
 
 test('rejects source drift and nonignored untracked input while leaving ignored local material outside the payload', async t => {
@@ -222,7 +208,7 @@ test('rejects mismatched release metadata, missing bootstrap and broken offline 
 
 test('accepts pruned Nitro traces with semantically unchanged package metadata and restores full locked packages', async t => {
   const options = await fixture(t);
-  for (const name of ['web-push', 'ws', 'yaml']) {
+  for (const name of ['ws', 'yaml']) {
     const directory = join(options.serverDir, 'server/node_modules', name);
     await rm(join(directory, 'LICENSE'));
     await rm(join(directory, 'dist'), { recursive: true });
@@ -230,7 +216,7 @@ test('accepts pruned Nitro traces with semantically unchanged package metadata a
   }
   await stageExplicitRelease(options);
   const manifest = JSON.parse(await readFile(join(options.output, 'manifest.json'), 'utf8')) as { files: Array<{path: string; sha256: string}> };
-  for (const name of ['web-push', 'ws', 'yaml']) {
+  for (const name of ['ws', 'yaml']) {
     for (const path of ['LICENSE', 'dist/index.js', 'package.json']) {
       const original = await readFile(join(options.runtimeDependencies, name, path));
       for (const base of ['source/node_modules', 'server/.output/server/node_modules']) {
@@ -297,16 +283,17 @@ test('fixed platform catalog selects both reviewed ELF architectures and refuses
 });
 
 test('rejects lock drift, unknown runtime modules and changed or unknown Nitro trace files', async t => {
-  for (const variant of ['lock', 'unknown', 'server-extra', 'server-drift', 'server-unknown-file', 'server-metadata'] as const) {
+  for (const variant of ['lock', 'unknown', 'server-extra', 'server-drift', 'server-unknown-file', 'server-metadata', 'license'] as const) {
     await t.test(variant, async t => {
       const options = await fixture(t);
+      if (variant === 'license') await rm(join(options.runtimeDependencies, 'ws/LICENSE'));
       if (variant === 'lock') await writeFile(join(options.runtimeDependencies, '.package-lock.json'), '{"packages":{}}');
       if (variant === 'unknown') await mkdir(join(options.runtimeDependencies, 'unknown'));
       if (variant === 'server-extra') await mkdir(join(options.serverDir, 'server/node_modules/unknown'));
       if (variant === 'server-drift') await writeFile(join(options.serverDir, 'server/node_modules/ws/dist/index.js'), 'drift');
       if (variant === 'server-unknown-file') await writeFile(join(options.serverDir, 'server/node_modules/ws/unknown.js'), 'unknown');
       if (variant === 'server-metadata') await writeFile(join(options.serverDir, 'server/node_modules/ws/package.json'), JSON.stringify({ name: 'ws', version: '1.0.1' }));
-      await rejects(stageExplicitRelease(options), variant === 'lock' ? 'DEPENDENCY_LOCK_MISMATCH' : variant === 'unknown' ? 'DEPENDENCY_UNKNOWN' : 'SERVER_DEPENDENCY_MISMATCH');
+      await rejects(stageExplicitRelease(options), variant === 'license' ? 'DEPENDENCY_LICENSE_MISSING' : variant === 'lock' ? 'DEPENDENCY_LOCK_MISMATCH' : variant === 'unknown' ? 'DEPENDENCY_UNKNOWN' : 'SERVER_DEPENDENCY_MISMATCH');
       await assert.rejects(lstat(options.output), { code: 'ENOENT' });
     });
   }

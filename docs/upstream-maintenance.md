@@ -23,16 +23,16 @@ CoCoProxy 分别固定 Mihomo 核心、MetaCubeXD 源树与 overlay、离线规�
 | --- | --- | --- |
 | Server supervisor、boot-kernel、control 路由和 auth middleware | systemd 和 CoCoProxy 事务持有核心生命周期；旧 Agent/getAgent 及直接写活跃配置通道明确拒绝 | 新上游新增/改名路由、插件或 supervisor 不得恢复旁路；HTTP middleware 不能替代全局 WS upgrade gate |
 | Server cocoproxy 桥接、API catch-all、clash relay、SPA catch-all | 惰性加载管理网关，认证失败/加载失败可解释；Controller HTTP/WS 统一同源会话，secret 仅服务端；SPA 回退不吞 API/资源错误 | Nitro/h3/crossws 接口、路由优先级、异常和连接清理、背压/撤销；新入口须审阅 |
-| Server nitro.config、公共 config.js | Node 单实例、项目源码及完整推送生产依赖；公共脚本不注入凭据 | trace 闭包、public 覆盖顺序、缓存头、静态 config 注入；不能推导多 worker 会话同步 |
-| UI auth.global、login/cocoproxy 页面、同源插件 | 管理员/可信设备会话、退出与撤销、事务恢复和设备通知；旧 profiles/config/control 路径转入自有流程 | 新页面守卫、hash 路由、错误/等待与触屏操作文字，不能恢复任意远程 endpoint 或核心 secret 登录 |
-| UI nuxt.config、Desktop 空插件、Worker/manifest | 独立 CSR/hash 页面，关闭上游 Workbox 离线缓存及 Desktop 同步；自有通知仅设备主动启用 | 新插件/桥接/缓存是否重启旁路，Worker 作用域/头及缓存为空，不能让通知承担页面缓存 |
+| Server nitro.config、公共 config.js | Node 单实例、项目源码及完整生产依赖；公共脚本不注入凭据 | trace 闭包、public 覆盖顺序、缓存头、静态 config 注入；不能推导多 worker 会话同步 |
+| UI auth.global、login/cocoproxy 页面、同源插件 | 管理员/可信设备会话、退出与撤销、事务恢复；旧 profiles/config/control 路径转入自有流程 | 新页面守卫、hash 路由、错误/等待与触屏操作文字，不能恢复任意远程 endpoint 或核心 secret 登录 |
+| UI nuxt.config、Desktop 空插件 | 独立 CSR/hash 页面，关闭上游 PWA、Workbox 离线缓存及 Desktop 同步 | 新插件/桥接/缓存是否重启旁路，不能恢复离线页面缓存 |
 | subscriptions、proxies/rules 页面、工作区 store/composable | 来源私密 URL、保存与更新分开、方案隔离；规则/选择自动经事务生效，保留旧草稿兼容 | revision、过时响应和页面切换、当前来源删除限制、保存与生效的反馈，不能直接写活跃配置 |
 | NativeProxies/组节点组件、自动选择、TCP/代理/站点检测 composable | 统一检测范围、进度、取消、站点设置和结果；自动策略/节点元数据由后端约束 | 请求去重、代次/取消、组和方案隔离、真实0值、节点不适用情况；前端显示不能扩张检测结论 |
 | 导航、Modal、toolbar、规则测试等基础组件 | 移动端可见操作文字、更多导航、受控关闭/焦点及规则解释 | 新路由、虚拟列表/滚动、弹层卸载清理、窄屏溢出与焦点；构建不代替实际触屏验证 |
 
 当前全局 upgrade gate 位于 apps/server/plugins/boot-kernel.ts，局部 relay 位于 apps/server/routes/api/clash/[...].ts，HTTP 和 upgrade 两条入口分别复核。文件理由有变化时更新本表对应职责，避免重新维护逐文件实现摘要。
 
-测试按真实范围选用：latency-batch 直接测纯调度；workspace-ui 抽取脚本在 VM/stub 中执行；overlay 内 composable/store spec 需要现成 Vue/Vitest 环境，不能称 DOM 或真实网络验证。management/controller、automatic-selector、tcp-delay、rule-test、site-probes 保护后端契约，不能替代适配文件执行。management-server-live 的 Server/浏览器分支和 notifications-browser-live 分别需要显式构建/浏览器输入；它们不证明 systemd、物理网络或公网推送。metacubexd-overlay 测合成 blob、幂等及漂移/冲突，不证明上游修复已保留；未有直接断言的桥接失败、组件焦点/布局等仍是缺口，不为填表新增镜像测试。
+测试按真实范围选用：latency-batch 直接测纯调度；workspace-ui 抽取脚本在 VM/stub 中执行；overlay 内 composable/store spec 需要现成 Vue/Vitest 环境，不能称 DOM 或真实网络验证。management/controller、automatic-selector、tcp-delay、rule-test、site-probes 保护后端契约，不能替代适配文件执行。management-server-live 的 Server/浏览器分支需要显式构建/浏览器输入；它们不证明 systemd 或物理网络。metacubexd-overlay 测合成 blob、幂等及漂移/冲突，不证明上游修复已保留；未有直接断言的桥接失败、组件焦点/布局等仍是缺口，不为填表新增镜像测试。
 
 上游更新按以下步骤作人工三方比较：
 
@@ -87,8 +87,6 @@ CoCoProxy 分别固定 Mihomo 核心、MetaCubeXD 源树与 overlay、离线规�
 | 例外 | 当前理由与范围 | 重新审阅/移除条件 |
 | --- | --- | --- |
 | 适配 UI 显式用 TypeScript 5.9.3 | 当前上游 vue-tsc 默认启动 TypeScript 7 的问题；[专用脚本](../scripts/typecheck-metacubexd-ui.mjs)检查适配 UI | 上游修复或升级类型工具后重试原生检查；未执行上游全量检查时保持审核 false |
-| http_ece 1.2.0 许可正文补件 | npm 包缺正文；仅针对固定版本/integrity，装配按固定上游正文哈希补入 | 依赖升级或 npm 包包含正文时重新审阅，删除不再必要的补件逻辑；依据见[补件来源](../integrations/http-ece/README.md) |
-| 四个依赖 CI/目录元数据省略 | 装配仅省略 jws/jwa 的 `opslevel.yml`、buffer-equal-constant-time 的 `.travis.yml`、minimist 的 `.github/FUNDING.yml` | 上游包结构/版本变化时重新检查；不扩展为任意敏感路径过滤例外 |
 | 构建警告 | 当前记录 UI 大 chunk、上游未使用 import；构建成功不抹除警告 | 更新后复核是否消失/变化，新增警告单独说明，不统一忽略全部警告 |
 | 运行验证缺口 | `review.json` 的 x86-64 运行、完整 systemd 集成及 `compatibilityVerified` 未通过 | 完成对应平台/场景证据后逐项修改；不因版本发布、锁校验或回环成功改为全部通过 |
 

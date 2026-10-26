@@ -13,7 +13,7 @@
 | config.js 凭据注入 | 只提供无凭据公共配置，核心 secret 留在服务端 |
 | UI endpoint/sync、controller 连接 | 禁用桌面同步，固定同源会话认证的 HTTP/WS |
 | 页面 | 适配本地／订阅工作区、策略和规则；自动组保留算法 |
-| PWA、mock、远程字体 | 关闭上游离线缓存；自有通知 Worker 与安装清单按设备主动启用；关闭 mock，使用系统字体 |
+| PWA、mock、远程字体 | 关闭上游 PWA 与离线缓存；关闭 mock，使用系统字体 |
 
 Nitro 全局 WS upgrade gate 补足 crossws 0.3.5 对无处理器路径的默认升级行为，不能只靠 HTTP middleware。当前只支持单实例 Node preset；短期会话在进程内，受信任设备授权在私有状态目录持久保存，不支持多 worker 共享或同步撤销。
 
@@ -36,7 +36,7 @@ CI=true COCOPROXY_SOURCE_DIR="$PWD" node tooling/node_modules/pnpm/bin/pnpm.cjs 
 
 安装限定 Server/UI 依赖，使用固定 pnpm 10.34.1，不执行依赖生命周期脚本。构建前后核对上游锁文件不变；不安装 Desktop/Electron 或浏览器资产。UI 类型检查脚本显式使用锁定 TypeScript 5.9.3，以避开上游 vue-tsc 3.3.10 默认调用 TypeScript 7 的启动问题。
 
-Server 默认从项目根 `node_modules` 跟踪运行依赖；隔离构建可显式设置 `COCOPROXY_RUNTIME_DEPENDENCIES` 为已按根锁文件安装的绝对 `node_modules` 目录。该输入不写入运行配置，装配仍校验锁和依赖完整性。通知 Worker 及安装清单的用途和设备条件见[通知说明](../../docs/usage.md#自动选择通知)。
+Server 默认从项目根 `node_modules` 跟踪运行依赖；隔离构建可显式设置 `COCOPROXY_RUNTIME_DEPENDENCIES` 为已按根锁文件安装的绝对 `node_modules` 目录。该输入不写入运行配置，装配仍校验锁和依赖完整性。
 
 Overlay 工具逐项核对原上游 blob 或相同已应用 overlay，整批预检后原子替换，拒绝未知漂移、冲突和目录链接。更新 overlay 后从核验过的原始源树重新装配，不强行覆盖手改。已有依赖／产物的目录不再是原始干净源树。
 

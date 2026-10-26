@@ -80,13 +80,13 @@ prepare 拒绝先输出 `phase:"prepare"` 的脱敏摘要和原因码，再返�
 | --- | --- |
 | `contentChecks` | 实际 reader 验证完整字段、候选摘要及重编译；可读不单独证明业务可用 |
 | 工作区、站点、草稿、订阅 | 用户策略、手动/自动选择、站点设置、草稿及订阅定义保留；修订/刷新时间、尝试/失败及动态快照可变化 |
-| 可信设备/通知 | 有效设备身份、令牌摘要、信任范围/标签、VAPID 密钥及订阅偏好保留；合法续期、自然过期清理、事件/队列/发送时间可变化 |
+| 可信设备 | 有效设备身份、令牌摘要、信任范围/标签保留；允许合法续期与自然过期清理 |
 | 运行绑定/选择 | 已提交 active、selection 与重编译候选一致、reader 可读；动态目标、时间、PID 不要求相同 |
-| `authentication` | 默认 `not-run`，实际登录、Cookie、终端通知另验 |
+| `authentication` | 默认 `not-run`，实际登录和 Cookie 另验 |
 
 快照仅在协调进程内保留脱敏摘要，不复制凭据、数据库或订阅，不创建备份。读取复核目录项和同代数据；已知原子写入临时文件不按业务解析，仍参与目录项比较；未知文件、损坏/缺失记录拒绝继续。首次安装为 `not-applicable`，同版本未升级为 `not-run`。
 
-`REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED` 保持原意图/服务未恢复及路由器关闭；`REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW` 表示恢复后稳定字段或读回待审阅，不能直接归因安装破坏；`REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED` 要求先恢复原事务。明确变更 origin/管理员会使旧设备及通知绑定合法失效，以 `REMOTE_PRESERVATION_REAUTH_REQUIRED` 提示重新授权，不强保留旧身份或把失效当损坏。远程入口仍只更换发行引用，配置迁移另按下述手工审阅。
+`REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED` 保持原意图/服务未恢复及路由器关闭；`REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW` 表示恢复后稳定字段或读回待审阅，不能直接归因安装破坏；`REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED` 要求先恢复原事务。明确变更 origin/管理员会使旧设备绑定合法失效，以 `REMOTE_PRESERVATION_REAUTH_REQUIRED` 提示重新授权，不强保留旧身份或把失效当损坏。远程入口仍只更换发行引用，配置迁移另按下述手工审阅。
 
 ## 机器状态与生命周期
 
@@ -99,7 +99,7 @@ prepare 拒绝先输出 `phase:"prepare"` 的脱敏摘要和原因码，再返�
 
 status 分列安装、管理员、管理服务、配置、核心、持久运行，`currentWait`、`next` 提示后续动作。入口复核完整收据、发布、文件及身份，以服务 UID 调用只读状态；核心仅观察本机回环 Controller 和版本。结束前复核安装/身份/配置，变化项改 unknown。它不写状态、启停服务或探测路由器/管理 origin。
 
-可选 HTTPS 探测由调用端 Node 请求固定 `/api/cocoproxy/health`，最多5秒、2 KiB，不跳转、不带认证、不忽略 TLS；可信 TLS、HTTP 200 及预期内容同时满足才通过。省略探测不联网、不创建文件；完整私有输入校验仍适用，无需 root。`scope:"invoking-node"` 不能证明浏览器信任、登录或通知显示，实际验收按[总指南第9节](getting-started.md#9-部署验收与交给使用者)。
+可选 HTTPS 探测由调用端 Node 请求固定 `/api/cocoproxy/health`，最多5秒、2 KiB，不跳转、不带认证、不忽略 TLS；可信 TLS、HTTP 200 及预期内容同时满足才通过。省略探测不联网、不创建文件；完整私有输入校验仍适用，无需 root。`scope:"invoking-node"` 不能证明浏览器证书信任或登录成功，实际验收按[总指南第9节](getting-started.md#9-部署验收与交给使用者)。
 
 生命周期动作默认预览，须附 `--apply --reviewed-plan-sha256 <本次摘要>` 才执行：
 

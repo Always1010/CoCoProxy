@@ -12,7 +12,7 @@ CoCoProxy 使用 Mihomo 作为唯一运行代理核心，复用 MetaCubeXD UI／
 | --- | --- |
 | Mihomo | 协议、加密、DNS、分流和原生 TUN 自动接管。固定 v1.19.33，资产及摘要见[审阅数据](../integrations/metacubexd/review.json) |
 | MetaCubeXD UI／Server | 页面与同源 API 宿主。固定 v1.273.1，通过 overlay 接入自有管理；上游 Agent、自动拉核和刷新应用入口禁用。见[构建说明](https://github.com/Always1010/CoCoProxy/blob/main/integrations/metacubexd/README.md) |
-| Node.js、ws、yaml、web-push | 管理和 CLI 运行环境、实时流、订阅解析及通知加密签名；版本由[包元数据](../package.json)与锁文件固定 |
+| Node.js、ws、yaml | 管理和 CLI 运行环境、实时流及订阅解析；版本由[包元数据](../package.json)与锁文件固定 |
 | Linux/systemd、polkit、Python、ip/nft | 服务监管、精确启停授权及网络外围集成；条件见[部署](deployment.md) |
 | HTTPS 反向代理 | 局域网管理入口的 TLS 终止与 HTTP／WebSocket 转交，见[HTTPS 配置](management-https.md) |
 

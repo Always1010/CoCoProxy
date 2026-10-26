@@ -406,8 +406,8 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
   }
   add('router-contract', 'unknown', '路由器协作条件仍须通过适配说明及两端验收确认。', '按路由器协作约定核对交付、DNS、保护与独立关闭。', false,
     { code: 'SETUP_EXTERNAL_VERIFICATION_REQUIRED', reason: '尚未取得路由器组合的实际验收证据。' });
-  add('https-client-trust', 'unknown', '服务器只读检查不能证明浏览器信任证书或通知实际送达。', '在实际终端验证 HTTPS 登录和可选通知。', false,
-    { code: 'SETUP_EXTERNAL_VERIFICATION_REQUIRED', reason: '终端信任和实际通知显示不能由本次服务器只读检查判定。' });
+  add('https-client-trust', 'unknown', '服务器只读检查不能证明浏览器信任证书或登录成功。', '在实际终端验证 HTTPS 证书信任和登录。', false,
+    { code: 'SETUP_EXTERNAL_VERIFICATION_REQUIRED', reason: '终端信任和实际登录不能由本次服务器只读检查判定。' });
   return result(serviceUid);
 }
 
