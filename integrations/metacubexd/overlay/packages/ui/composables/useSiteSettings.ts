@@ -24,7 +24,8 @@ export function useSiteSettings() {
     const scope = scopeKey.value
     const login = session.value
     const value = await api.request<SiteSettings>('/api/cocoproxy/workspace/sites')
-    if (scope === scopeKey.value && login === session.value) data.value = value
+    if (scope === scopeKey.value && login === session.value &&
+      (!data.value || data.value.scope !== value.scope || data.value.revision <= value.revision)) data.value = value
   }
   const selectedIds = (group: string): string[] => {
     if (!data.value) return []

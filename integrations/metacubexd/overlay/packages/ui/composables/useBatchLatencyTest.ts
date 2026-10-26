@@ -56,7 +56,7 @@ export function useBatchLatencyTest() {
   const groupMembers = (name: string, visiting = new Set<string>()): string[] => {
     if (visiting.has(name)) return []
     const group = proxiesStore.proxies.find(group => group.name === name)
-    if (!group) return [name]
+    if (!group) return /^(REJECT|REJECT-DROP|PASS|COMPATIBLE)$/i.test(name) ? [] : [name]
     const path = new Set(visiting).add(name)
     return [...new Set((group.all ?? []).flatMap(member => groupMembers(member, path)))]
   }

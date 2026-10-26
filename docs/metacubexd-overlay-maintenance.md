@@ -1,6 +1,6 @@
 # MetaCubeXD overlay逐文件维护
 
-本说明是源码维护资料，从[上游维护流程](upstream-maintenance.md)进入，不随运行载荷的离线导航扩展白名单。当前以[组件锁](../integrations/metacubexd/components.json)中的 MetaCubeXD **v1.273.1 / `8bbc8f58fef71148a94fb5c0ff808f79b057337d`** 为base；[完整原始树](../integrations/metacubexd/source-tree.json)共476个文件。下表覆盖项目已提交基线 `5f20d57` 中 `integrations/metacubexd/overlay/` 的63个路径：**30个整文件替换、33个项目新增**。这是该提交的精确集合，不是对未提交工作区或后来新增路径的验收；新增、删除或移动文件时须同步补齐本表并重新对实际提交核对。
+本说明是源码维护资料，从[上游维护流程](upstream-maintenance.md)进入，不随运行载荷的离线导航扩展白名单。当前以[组件锁](../integrations/metacubexd/components.json)中的 MetaCubeXD **v1.273.1 / `8bbc8f58fef71148a94fb5c0ff808f79b057337d`** 为base；[完整原始树](../integrations/metacubexd/source-tree.json)共476个文件。下表以项目已提交基线 `ea91f38` 的66条路径为起点，并补充本次站点设置组件及配置回归测试，合计68条：**30个整文件替换、38个项目新增**。路径职责按当前实现记录；基线标识用于追溯集合，不表示后续功能已存在于旧提交。新增、删除或移动文件时须同步补齐本表并重新核对实际集合。
 
 “替换”的完整base blob和模式来自该固定提交的source-tree；不是overlay自身摘要。“新增”指该固定树没有同名路径，base为无；新增文件可以承接上游其他文件的职责，因此不等于业务概念从未存在。表内“覆盖行为”描述当前文件接管的职责和结果，不声明已审阅尚未提供的新上游修复。更新上游时必须读取旧、新实际内容并记录决策，不能只看能否应用。当前没有新的目标提交或新树输入，**本表不是一次已完成的上游三方升级审阅**。
 
@@ -16,7 +16,7 @@
 | D-WORKBENCH | [useProxyWorkbench.spec.ts](../integrations/metacubexd/overlay/packages/ui/composables/__tests__/useProxyWorkbench.spec.ts)用Vue effectScope/ref直接测组/scroll/方案隔离 | 非真实虚拟列表/DOM；同样需要上游测试环境 |
 | D-TCP | [useTcpDelay.spec.ts](../integrations/metacubexd/overlay/packages/ui/composables/__tests__/useTcpDelay.spec.ts)mock API测去重、有效0、fingerprint变化与并发取消 | 非真实TCP或页面；需要上游测试环境 |
 | D-BOARD | [useReachabilityBoard.spec.ts](../integrations/metacubexd/overlay/packages/ui/composables/__tests__/useReachabilityBoard.spec.ts)mock请求测许可、错误、进度、取消、过时结果与卸载 | 非真实站点/解锁验证；需要上游测试环境 |
-| D-SITE | [useSiteProbes.spec.ts](../integrations/metacubexd/overlay/packages/ui/composables/__tests__/useSiteProbes.spec.ts)直接导入组展开/检测composable，mock settings/API/store，测断环、结果保留、代次与并发取消 | 不执行真实useSiteSettings、组件DOM或网络；需要上游测试环境，本轮未执行 |
+| D-SITE | [useSiteProbes.spec.ts](../integrations/metacubexd/overlay/packages/ui/composables/__tests__/useSiteProbes.spec.ts)直接导入组展开/检测composable，mock settings/API/store，测断环、结果保留、代次与并发取消 | 不执行真实useSiteSettings、组件DOM或网络；需要上游测试环境；不能替代页面或网络验证 |
 | I-SERVER | [management-server-live.test.ts](../tests/management-server-live.test.ts)对已构建Server断言SPA、control拒绝、config不含secret、HTTP/WS会话与Origin边界 | 要求Linux与显式`COCOPROXY_TEST_SERVER`；缺前提skip，不能称单测或systemd验收 |
 | I-UI | 同文件的浏览器子测试：生成UI登录/退出、订阅、规则、方案/组/节点、错误、代理/TCP反馈、响应式导航与操作文字 | 还需现成Playwright/浏览器；部分API拦截为合成响应，非真实核心/目标网络；不能泛化覆盖所有组件 |
 | I-NOTIFY | [notifications-browser-live.test.mjs](../tests/notifications-browser-live.test.mjs)真实生成UI/浏览器/Worker，模拟订阅provider和PushEvent，断言主动启停、去旧/过期、退出和无cache | 需显式UI/driver/browser输入；不是公网推送、系统锁屏或所有终端证书信任验收 |
@@ -25,6 +25,8 @@
 | P-TCP | [tcp-delay.test.ts](../tests/tcp-delay.test.ts)验证服务端TCP测量语义、取消与节点元数据 | 不执行overlay客户端/显示组件 |
 | P-RULES | [rule-test.test.ts](../tests/rule-test.test.ts)验证后端规则匹配解释 | 不证明弹层定位、输入/取消和规则列表DOM |
 | P-SITE | [site-probes.test.ts](../tests/site-probes.test.ts)验证后端站点配置持久化、方案隔离、revision与URL许可 | 不执行useSiteSettings或前端站点设置/结果组件 |
+| D-SITE-SETTINGS | [useSiteSettings.spec.ts](../integrations/metacubexd/overlay/packages/ui/composables/__tests__/useSiteSettings.spec.ts)直接导入客户端，验证方案/响应隔离、保存范围和冲突恢复 | mock服务端；非持久化或DOM验证 |
+| D-SITE-MODEL | [site-latency.spec.ts](../integrations/metacubexd/overlay/packages/ui/stores/__tests__/site-latency.spec.ts)直接导入真实store验证站点与基准历史隔离 | mock网络；非真实核心/浏览器端到端 |
 | P-RELEASE | [release-stage.test.ts](../tests/release-stage.test.ts)含真实已构建trace闭包分支及合成装配保护 | 真实trace分支需显式构建输入，不能当Nitro配置所有选项单测 |
 
 [metacubexd-overlay.test.ts](../tests/metacubexd-overlay.test.ts)只用合成文件验证blob、幂等、整批漂移拒绝、新增同名冲突及链接防护；不会逐个执行下列文件的产品行为。`source-tree`校验和[overlay应用工具](../scripts/apply-metacubexd-overlay.mjs)也不判断上游修复是否被整文件覆盖。
@@ -70,11 +72,11 @@
 | --- | --- | --- | --- | --- | --- |
 | `packages/ui/components/MobileBottomNav.vue`<br>替换；base `b3331c3e3394f7eec75251cf8d32b3605eca30e4`；模式 `100644` | 在触屏保留订阅/代理/规则主导航与更多项 | 响应式主/次导航及当前页重复点击事件 | 替换上游导航文件，调整路由分组和reselect分发 | 无隔离组件单测；I-UI在390px打开更多并检查connections/订阅入口 | 新增路由、hash判断、弹层关闭和触屏文字不退化纯图标 |
 | `packages/ui/components/Modal.vue`<br>替换；base `f8750ae5d7a8be2a83861b2225b3e810a8f412d1`；模式 `100644` | 让弹层支持受控关闭、焦点及移动布局 | beforeClose、过渡计时、唯一标题ID、reduced-motion | 整替换上游通用Modal，服务组/检测等组合使用 | 无专门焦点/过渡单测；I-UI管理策略组弹层间接覆盖 | 上游dialog修复、esc/backdrop、焦点还原、异步close和卸载计时器 |
-| `packages/ui/components/NativeProxies.vue`<br>新增；base无（固定上游树无此路径） | 统一节点页刷新、TCP/代理检测和站点检测 | 筛选/排序、测当前可见/全部组、取消/进度、Modal站点板 | 项目新增代理页容器，避免另一套工作区配置通道 | 无隔离组件单测；I-UI当前组代理/TCP、无重复tab和响应布局 | 检测范围和文字、取消卸载、焦点刷新、核心离线及检测不改变选择 |
-| `packages/ui/components/NativeProxyMasterDetail.vue`<br>新增；base无（固定上游树无此路径） | 同屏提供组与节点浏览并保留工作上下文 | 方案scope组/滚动、虚拟列表、筛选、自动/手动选择 | 项目新增master/detail，配置变代不清除同方案浏览状态 | 无隔离组件单测；I-UI选择/不确定反馈/方案返回组；D-WORKBENCH只测底层状态 | 方案identity与generation分开、虚拟索引/选中滚动、手动接管自动策略、布局断点 |
+| `packages/ui/components/NativeProxies.vue`<br>新增；base无（固定上游树无此路径） | 统一代理页检测和设置范围 | 检测进度/取消、站点上下文与详情、代理设置三页签 | 项目代理页容器；移除全部组/全部TCP与独立站点板入口 | D-SITE仅调度；无持久化页面组件单测，需验证菜单/触屏布局 | 组切换归属、页面离开取消、设置保存范围、窄屏无溢出 |
+| `packages/ui/components/NativeProxyMasterDetail.vue`<br>新增；base无（固定上游树无此路径） | 紧凑组工作台与统一操作范围 | 检测/定位/组设置，三类检测展开全部成员，筛选仅影响展示 | 保留上游分组节点浏览，移除重复检测按钮 | D-WORKBENCH保护浏览状态；D-SITE保护组展开；菜单DOM无持久化单测 | 隐藏嵌套组、筛选不改检测范围、自动算法标识、子按钮事件 |
 | `packages/ui/components/NativeRules.vue`<br>新增；base无（固定上游树无此路径） | 把生效规则/来源查看与自定义编辑容器分工 | 规则/来源查询、筛选/排序/虚拟列表及支持的运行操作 | 新增文件承接原规则浏览职责；不是上游同名替换，不声称原逻辑全部重写 | 无直接组件行为测试；P-RULES只保护后端匹配，I-UI主要测外层自定义tab | 上游原规则页修复需人工对照；禁用/更新权限、generation及虚拟滚动结果变更 |
 | `packages/ui/components/ProtectedResources.vue`<br>替换；base `7c17230885a8071a224fedfda8f272b18908662d`；模式 `100644` | WebSocket只随已认证会话保持 | session建立connect、退出disconnect、日志等级重连 | 替换上游保护资源激活条件，不从endpoint secret推断登录 | 无直接组件单测；I-UI退出、I-SERVER会话/WS属间接覆盖 | watch immediate、卸载清理、重连不能在注销后恢复，日志等级变化行为 |
-| `packages/ui/components/ProxyNodeListItem.vue`<br>替换；base `aaf61e510ee28604ef81b72d7b27dd63d17cff70`；模式 `100644` | 触屏选节点不被悬浮层遮挡，增加TCP与代理反馈 | 移动禁用跟随popover，点击选取与检测事件分开 | 整替换上游节点行，保留节点信息/工具提示但调整触摸交互 | 无隔离组件单测；I-UI节点选取/代理与TCP文字间接覆盖 | coarse pointer、多定时器清理、滚动懒popover、选择与测试冒泡 |
+| `packages/ui/components/ProxyNodeListItem.vue`<br>替换；base `aaf61e510ee28604ef81b72d7b27dd63d17cff70`；模式 `100644` | 紧凑节点行中区分站点与代理证据 | 站点摘要/色条、代理与TCP、选点与详情点击隔离 | 整替换上游节点行；组内用站点色条，提供者保留延迟历史条 | D-SITE-MODEL保护基准隔离；I-UI旧选点流程间接；新增摘要DOM需验证 | 行高、窄屏次要信息、键盘事件冒泡、popover清理 |
 | `packages/ui/components/Sidebar.vue`<br>替换；base `5d5a237787670494531cafe915d5cd7218a4b6f9`；模式 `100644` | 桌面/抽屉导航指向项目任务入口 | 订阅/代理/规则/设置入口及切换关闭抽屉 | 整替换上游sidebar导航与路由分组 | 无隔离组件单测；I-UI宽屏/平板导航间接覆盖 | 新上游菜单和路由迁移、选中态/抽屉关闭、不要引回control/profiles编辑入口 |
 | `packages/ui/components/WorkspaceGroupsMenu.vue`<br>新增；base无（固定上游树无此路径） | 提供本地模板组管理而不直接改核心 | 添加/移除自定义或目录组，保护默认/引用组 | 项目新增菜单，增删工作区选择后事务应用 | 无隔离组件单测；I-UI明确添加/移除Browser Custom | 默认/被规则引用的组保护、名字重复、自动选择配置随删组清理 |
 | `packages/ui/components/WorkspaceToolbar.vue`<br>新增；base无（固定上游树无此路径） | 统一方案/运行模式/刷新和应用反馈 | 本地/订阅切换、DIRECT/global/rule、pending/dirty/错误重试 | 项目新增工具条；修改走workspace.save，刷新只读 | 无隔离组件单测；I-UI方案切换、保存失败及刷新可见文字 | 保存/生效不可混同，旧legacy不可新选，运行模式变更和触屏操作字 |
@@ -83,15 +85,19 @@
 
 | 路径、归属与完整base blob | 为什么存在 | 对应自有能力 | 覆盖或承接的上游行为 | 真实保护测试/明确缺口 | 上游更新重点 |
 | --- | --- | --- | --- | --- | --- |
-| `packages/ui/components/AutoProbeSettings.vue`<br>新增；base无（固定上游树无此路径） | 统一服务端自动探测目标并先验证再保存 | 许可origin/主复核URL/超时/慢阈值及test API | 项目新增检测设置，不允许前端扩大allowedProbeOrigins | 无直接组件测试；P-AUTO仅策略/调度间接覆盖 | expectedRevision/active竞争、URL限制、验证失败不能保存、许可展示 |
-| `packages/ui/components/AutomaticProxyNode.vue`<br>新增；base无（固定上游树无此路径） | 让自动组行复用同一节点检测与展示 | 显示类型、TCP和代理延迟，检测事件不触发选取 | 项目新增自动组节点行，无同名上游base | 无直接组件测试；P-AUTO不覆盖该DOM | 自动组与手动组事件语义、上游useProxyNode签名、触屏可识别动作 |
-| `packages/ui/components/AutomaticSelectionSettings.vue`<br>新增；base无（固定上游树无此路径） | 让每组自动选择偏好可保存/关闭/再开启 | 优选/备选顺序、回切、实时状态/事件、失效候选 | 项目新增设置弹层，用户策略保存workspace，不重写核心非手动组算法 | 直接D-VM设置脚本保存/重开；P-AUTO间接算法；未直接测全部DOM | 关闭仅enabled=false且偏好保留、组/方案切换清轮询、节点上限/去重 |
+| `packages/ui/components/AutoProbeSettings.vue`<br>新增；base无（固定上游树无此路径） | 在代理设置内维护共用自动选点检测参数 | 主/复核HTTPS、期望状态、超时/慢阈值，验证后保存 | 项目新增嵌入式设置；不再嵌套打开独立设置弹窗 | P-AUTO仅后端参数/调度间接；无直接组件单测 | 保持origin许可、冻结revision/active、验证失败不保存 |
+| `packages/ui/components/AutomaticProxyNode.vue`<br>新增；base无（固定上游树无此路径） | 核心自动组也可读独立站点结果 | 无手动选点的紧凑行、TCP/基准/站点摘要 | 项目新增只读自动组节点行，不改核心算法 | D-SITE间接调度；无独立组件单测 | 不增加选点旁路、行高和groupName归属 |
+| `packages/ui/components/AutomaticSelectionSettings.vue`<br>新增；base无（固定上游树无此路径） | 统一当前组的节点选择和站点选择设置 | 节点选择/站点连通页签；优选/备选/回切和组内目标 | 项目组设置弹层；非手动组仍保留核心算法 | D-VM保护自动策略保存/重开；P-SITE保护站点写入；无完整DOM单测 | 组/方案切换关闭、偏好保留、轮询与可见页签、两类保存互不混用 |
 | `packages/ui/components/ConnectionErrorBanner.vue`<br>替换；base `b3357ac477955be617c5d7b6530f6c04d5ef89c7`；模式 `100644` | 核心读失败可观察且可重试 | 已登录非设置页显示错误，重试version及代理刷新 | 整替换上游连接错误条，不因读失败清空既有节点 | 无隔离组件单测；I-UI核心不可用文字 | session/route门槛、重试并发/动画、页面不是核心ready证明 |
 | `packages/ui/components/ConnectivityBoard.vue`<br>替换；base `f22a8a6a85a830e5ee46d0b64b993a6cea9dfcea`；模式 `100644` | 站点检测按指定对象和许可给证据 | 节点/类别切换失效、允许项检测、进度/取消/目标域名 | 替换上游站点板，不用直连浏览器fetch伪装节点路径 | 无直接组件测试；D-BOARD测底层；未覆盖完整板DOM | 当前对象/allowedOrigins变动清证据，未许可项不发送，解锁说明不能当业务保证 |
 | `packages/ui/components/Latency.vue`<br>替换；base `613b37b6e8c50c2f0fa9a1ebb4c1c69fe5efedfb`；模式 `100644` | 让代理时延有明确状态而非只显示数值 | testing/denied/timeout反馈、历史时延、可交互a11y标签 | 整替换上游时延显示，与TCP结果分开 | 无隔离组件单测；I-UI实际断言未启用/88ms/超时；D-BATCH测底层进度 | 0/失败数值语义、旧缓存与当前失败区分、检测动作名称/键盘反馈 |
 | `packages/ui/components/LatencyCard.vue`<br>替换；base `08becb959f0a08bc6de1dbf9b50dc83b3171b11b`；模式 `100644` | 保留概览中浏览器到后台的延迟语义 | useLatencyTest结果、平均与进度和重试 | 整替换上游延迟卡，明确是浏览器链路耗时，非节点代理速度 | 无直接组件测试；I-UI概览访问只间接，不证明数值语义 | onMounted检测与卸载、浏览器路径和代理路径命名、失败/0/平均算法 |
 | `packages/ui/components/RuleTestPopover.vue`<br>新增；base无（固定上游树无此路径） | 解释当前生效规则匹配，不另起真实目标访问 | 目标/协议/源目端口输入、取消、active绑定、策略结果 | 项目新增规则匹配弹层；通过rules/test API读取当前证据 | 无直接组件测试；P-RULES验证后端匹配，非DOM交互 | Popover定位/滚动/关闭、过时active响应、复杂规则不可确定时准确说明 |
 | `packages/ui/components/TcpLatency.vue`<br>新增；base无（固定上游树无此路径） | 区分TCP建连耗时和代理访问 | 展示零值/不可用/取消/失败及独立重测 | 项目新增TCP显示，复用useTcpDelay，不等同认证/业务可用 | 无直接组件单测；I-UI断言TCP12ms；D-TCP只测composable | 合法0、fingerprint失效、tooltip不能代操作文字、与代理延迟分列 |
+
+| `packages/ui/components/SiteResultBadge.vue`<br>新增；base无（固定上游树无此路径） | 在原有行高中展示站点覆盖 | 稳定顺序小段、可达计数与未完成状态、点击详情 | 项目新增紧凑摘要，不把红色慢延迟当作站点失败 | D-SITE间接结果；无持久化组件DOM单测 | 嵌套组实际出口、灰/黄语义、触屏点击不选点 |
+| `packages/ui/components/SiteProbeDetails.vue`<br>新增；base无（固定上游树无此路径） | 让触屏可查看完整检测证据 | 站点名称/耗时/状态/时间、单节点重测、代理历史 | 项目新增Modal内容，窄屏底部呈现，不撑高列表 | D-SITE保护单节点重测；D-SITE-MODEL保护代理历史；无直接DOM单测 | 节点时间不被别的节点重测更新、忙状态与目标失效、成功非解锁 |
+| `packages/ui/components/SiteTargetSettings.vue`<br>新增；base无（固定上游树无此路径） | 统一目录管理与当前组多选 | 分类/搜索、添加/删除、最多16项、保存/冲突反馈 | 项目新增设置组件，共用于代理目录页与组设置 | P-SITE保护服务端持久化/冲突/许可；无直接持久化组件单测 | 受限已选项可取消、跨方案响应、目录引用不能静默删除 |
 
 ### UI请求、状态和检测逻辑
 
@@ -104,8 +110,8 @@
 | `packages/ui/composables/useProxyRefresh.ts`<br>新增；base无（固定上游树无此路径） | 后台读失败保留节点并让错误可见 | 包装fetchProxies，独立错误useState、成功清错 | 项目新增刷新包装，调用方不会把读取失败当空列表 | 无直接composable测试；I-UI核心错误条间接覆盖 | 新store失败行为、并发刷新、旧数据保留与错误回收 |
 | `packages/ui/composables/useProxyWorkbench.ts`<br>新增；base无（固定上游树无此路径） | 保存浏览组和滚动，不随核心代次乱重置 | 按scheme scope持久化group/scroll，组消失才回退 | 项目新增浏览上下文，状态不属于配置选择 | 直接D-WORKBENCH模拟vue/effectScope；I-UI方案返回组 | 上游resolveActiveGroup变更、scope键碰撞、重挂载/刷新不丢组 |
 | `packages/ui/composables/useReachabilityBoard.ts`<br>替换；base `273cbffa465d6667ebe3a5cff2ddc5ab4e1b4d02`；模式 `100644` | 站点证据绑定节点/代次/会话和许可 | 默认目标、逐站状态/进度、超时/繁忙/拒绝、取消晚回包 | 整替换上游站点探测，经过受控Controller节点delay接口 | 直接D-BOARD mock请求测拒绝/错误/取消/代次/卸载；无真实业务解锁证明 | allowedOrigins、finite positive delay、换对象清证据、同名目标/URL及状态分类 |
-| `packages/ui/composables/useSiteSettings.ts`<br>新增；base无（固定上游树无此路径） | 将按组站点配置与业务方案隔离并防旧请求覆盖 | 站点目录/组选择、revision+workspaceRevision+scope保存与会话清理 | 项目新增站点配置客户端，不改变工作区节点选择 | 无直接composable测试；D-SITE mock了此模块不保护真实实现；P-SITE仅后端间接 | scope/session变更丢弃旧响应，默认自有站点/Google回退、许可与并发pending、写入冲突 |
-| `packages/ui/composables/useSiteProbes.ts`<br>新增；base无（固定上游树无此路径） | 将组内真实节点×站点的检测结果分开，不更改推荐或选取 | 嵌套组去重/断环、逐节点结果与精测、10并发补位、取消/代次失效 | 项目新增多站点检测逻辑，复用受控Controller API和latencyBatch，不替换已有站点板 | 直接D-SITE：组展开、单目标mock结果/精测保留、代次清理与并发取消；未覆盖所有许可/多目标组合 | scope/targets/selections/节点内容变更失效，晚结果和取消、deny/busy/unavailable分类，检测不得触发选择 |
+| `packages/ui/composables/useSiteSettings.ts`<br>新增；base无（固定上游树无此路径） | 按方案保存站点目标并防旧请求覆盖 | 目录/组选择、revision+workspaceRevision+scope、会话与来源隔离 | 项目新增客户端；保存检测偏好不应用路由 | D-SITE-SETTINGS直接验证旧读取、来源切换与冲突恢复；P-SITE保护服务端 | 同来源模式切换、单调revision、默认目标、保存不修改业务配置 |
+| `packages/ui/composables/useSiteProbes.ts`<br>新增；base无（固定上游树无此路径） | 按节点和站点隔离检测证据 | 嵌套断环/去重、10并发、取消、逐节点时间、配置失效 | 项目新增多站点调度；站点摘要替代旧独立站点板入口 | D-SITE直接保护展开/结果/取消；D-SITE-MODEL保护基准不回退到站点 | 迟到结果、scope/目标/节点/generation绑定、不得改选取或推荐 |
 | `packages/ui/composables/useTcpDelay.ts`<br>新增；base无（固定上游树无此路径） | TCP结果绑定实际节点内容并限制批量 | fingerprint去重/有效0、10并发、取消/代次失效 | 项目新增TCP测量客户端，不复用HTTP代理时延缓存 | 直接D-TCP mock API/时间测0、重复、修改、并发取消；P-TCP服务端间接 | 节点编辑/active变动、请求/取消竞态、结果不得冒充代理认证成功 |
 | `packages/ui/composables/useWebSocket.ts`<br>替换；base `38ab6dda34cc4d7418c1ee1921ae7f15a5168c64`；模式 `100644` | 同源会话流无query token/secret | traffic/memory/connections/logs串流、断线退避、注销/卸载清理 | 整替换上游WS连接封装，以浏览器Cookie而非endpoint凭据 | 无直接composable测试；I-SERVER只测服务端gate，I-UI退出属间接 | URL参数、重连timer/session race、旧事件回调、日志重连不能跨会话 |
 | `packages/ui/composables/useWorkspace.ts`<br>新增；base无（固定上游树无此路径） | 保存、应用、读回与手动选取走单事务路线 | revision/expectedActive、busy/operation/pending、选择确认后反馈 | 项目新增工作区composable，禁止仅保存就显示已生效 | 直接D-VM手动接管脚本；I-UI保存/失败/不确定/选择反馈 | 失效revision、apply响应丢失、只有读回确认才成功；local/subscription/legacy隔离 |
@@ -119,8 +125,12 @@
 | `packages/ui/composables/__tests__/useReachabilityBoard.spec.ts`<br>替换；base `c9a4d6b3b9d6c679e79183d2b38fa1bfc4ee8d96`；模式 `100644` | 防站点检测伪成功和过时证据 | D-BOARD测试载体 | 替换上游同名测试，适应自有许可与会话 | 本文件直接mock请求断言拒绝/timeout/busy/晚结果；非站点实测 | mock不能跳过生产许可/代次规则，新增状态要有相应断言 |
 | `packages/ui/composables/__tests__/useSiteProbes.spec.ts`<br>新增；base无（固定上游树无此路径） | 防按组多站点检测改变业务状态或保留过时结果 | D-SITE测试载体 | 项目新增mock测试，无上游base | 本文件直接导入useSiteProbes/siteGroupMembers；mock useSiteSettings/API/store，非真实页面或网络 | mock数据和生产scope/target schema同步；分清当前单目标用例与尚未覆盖的多目标/失败组合 |
 | `packages/ui/composables/__tests__/useTcpDelay.spec.ts`<br>新增；base无（固定上游树无此路径） | 防TCP重复/零值/取消/并发回归 | D-TCP测试载体 | 项目新增测试文件，无上游base | 本文件直接mock API断言；非真实TCP测量或DOM | fingerprint/API schema变化、取消时所有testing项是否清空 |
-| `packages/ui/stores/proxies.ts`<br>替换；base `c698e4176dd63c3ff08f7ef9fa36ae0c070ecf7b`；模式 `100644` | 兼容上游节点读模型并加入自有时延反馈 | fetch原子化、节点/组解析、时延历史、批测和选择委托 | 整替换上游store，选择入口经useWorkspace，读取失败不把旧列表清空 | 无专门完整store单测；D-BATCH mock了store非保护本实现；I-UI读取/选择/探测间接覆盖 | 上游proxy类型/组环/历史字段、并发更新/原子替换、provider检测、选取不能直接绕事务 |
+| `packages/ui/stores/proxies.ts`<br>替换；base `c698e4176dd63c3ff08f7ef9fa36ae0c070ecf7b`；模式 `100644` | 统一节点读模型并隔离不同检测证据 | fetch/解析/选择委托、基准与历史回退排除站点专属记录 | 整替换上游store，选择仍经useWorkspace；不把站点历史重新标作基准 | D-SITE-MODEL直接保护真实store的基准/历史回退；D-BATCH仍mock store | 上游extra/history变化、无per-URL历史时保留基准、并发读取与选择事务 |
 | `packages/ui/utils/latencyBatch.ts`<br>新增；base无（固定上游树无此路径） | 为HTTPS批测提供有限并发和同轮去重 | key含generation/identity/name/url/timeout，动态补位 | 项目新增纯工具，无同名base | 直接D-UTIL导入实际函数测身份/URL隔离、并发补位、取消和generation失效 | 新去重维度、跨代复用、同步抛错/取消及并发上限10 |
+
+| `packages/ui/stores/__tests__/site-latency.spec.ts`<br>新增；base无（固定上游树无此路径） | 防站点检测污染基准延迟和历史 | 直接导入真实proxies store，模拟核心extra和通用history | 项目新增回归测试，无上游同名base | D-SITE-MODEL测试载体；mock网络而不mock被测store | 请求URL精确优先、站点成功不填充失败基准、无extra回退 |
+
+| `packages/ui/composables/__tests__/useSiteSettings.spec.ts`<br>新增；base无（固定上游树无此路径） | 防止旧响应或旧方案污染当前站点偏好 | 真实客户端读写与scope/revision冲突回归 | 项目新增测试，无上游同名base | D-SITE-SETTINGS测试载体；仅mock服务端请求 | 迟到GET不能回退revision、来源切换清理、保存仅写检测设置、失败释放pending |
 
 ### 通知与安装资产
 

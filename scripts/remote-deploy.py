@@ -345,7 +345,7 @@ def main_locked(options):
         credential_sha = None
         def business():
             state = Path(runtime['stateDirectory'])
-            files = [state / 'workspace.json', state / 'draft.json', *sorted((state / 'subscriptions').glob('*.json'))]
+            files = [state / 'workspace.json', state / 'site-probes.json', state / 'draft.json', *sorted((state / 'subscriptions').glob('*.json'))]
             return {str(file.relative_to(state)): hashlib.sha256(regular(file)).hexdigest() for file in files if file.exists()}
         before_business = None
         progress = {'status': 'running', 'phase': 'maintenance', 'manifestSha256': options.manifest_sha256,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconSettings, IconX } from '@tabler/icons-vue'
+import { IconCheck, IconSettings, IconX } from '@tabler/icons-vue'
 import type { AutomaticStatus, AutoGroupPolicy } from '~/composables/useWorkspace'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
@@ -13,6 +13,7 @@ const fallback = ref<string[]>([])
 const returnToPreferred = ref(true)
 const search = ref('')
 const visible = ref(false)
+const tab = ref<'selection' | 'sites'>('selection')
 const statusError = ref('')
 const status = ref<AutomaticStatus>()
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -50,7 +51,7 @@ function phaseLabel(phase: string) { return phases[phase] ?? '自动选择运行
 function timeLabel(at: number) { return new Date(at).toLocaleTimeString() }
 
 async function readStatus() {
-  if (reading || !visible.value || document.hidden) return
+  if (reading || !visible.value || document.hidden || tab.value !== 'selection' || !props.selectable) return
   const requestSession = session
   reading = true
   try {
@@ -70,7 +71,7 @@ function close() {
   if (timer) clearTimeout(timer)
 }
 function open() {
-  if (!props.selectable) return
+  tab.value = 'selection'
   const policy = overrides.value.automatic?.[props.groupName]
   enabled.value = !!policy && policy.enabled !== false
   preferred.value = [...(policy?.preferred ?? [])]
@@ -83,6 +84,8 @@ function open() {
   dialog.value?.showModal()
   void refreshStatus(++session)
 }
+function openSites() { open(); tab.value = 'sites' }
+defineExpose({ open, openSites })
 async function persist() {
   if (invalid.value || busy.value) return
   await run(async () => {
@@ -102,27 +105,30 @@ async function persist() {
   })
 }
 watch(() => props.groupName, () => { dialog.value?.close(); close() })
-watch(() => `${view.value?.workspace.mode}:${view.value?.workspace.subscriptionId ?? ''}`, () => { dialog.value?.close(); close() })
+watch(() => JSON.stringify([view.value?.workspace.mode, view.value?.workspace.subscriptionId, view.value?.workspace.sourceIds]), () => { dialog.value?.close(); close() })
 onUnmounted(() => { disposed = true; close() })
 </script>
 
 <template>
-  <span class="shrink-0" :title="selectable ? '自动选择设置' : '此订阅策略组保留核心自动算法，无法叠加自动选择'">
-    <button type="button" class="btn btn-ghost btn-sm" :class="overrides.automatic?.[groupName] && overrides.automatic?.[groupName]?.enabled !== false ? 'text-primary' : ''" :disabled="!selectable" :title="selectable ? '自动选择设置' : '此订阅策略组保留核心自动算法'" :aria-label="`${groupName} 自动选择设置`" @click="open"><IconSettings :size="18" /><span>自动设置</span></button>
+  <span class="shrink-0">
+    <button type="button" class="btn btn-ghost btn-sm" :aria-label="`${groupName} 组设置`" @click="open"><IconSettings :size="18" /><span>组设置</span></button>
   </span>
-  <dialog ref="dialog" class="modal" @close="close">
+  <dialog ref="dialog" class="modal modal-bottom sm:modal-middle" @close="close">
     <div class="modal-box max-w-2xl">
-      <h2 class="mb-4 text-lg font-semibold">{{ groupName }} · 自动选择</h2>
-      <form class="flex flex-col gap-4" @submit.prevent="persist">
-        <label class="flex items-center justify-between gap-3">启用自动选择<input v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="busy" /></label>
-        <p class="text-xs leading-relaxed text-base-content/65">正常时每 30 秒检测当前节点；故障时按需检测候选节点并切换。优选不可用时使用备选；开启回切后按 5、10、15 分钟退避检测优选恢复。点击组内节点可随时接管为手动；停用后保留优选、备选和回切设置，再次开启可继续使用。</p>
+      <div class="mb-3 flex items-center justify-between gap-2"><h2 class="text-lg font-semibold">{{ groupName }} · 组设置</h2><button type="button" class="btn btn-ghost btn-sm" @click="dialog?.close()"><IconX :size="16" /><span>关闭</span></button></div>
+      <div class="mb-4 flex gap-2" role="tablist" aria-label="组设置类别"><button type="button" role="tab" class="btn btn-sm" :class="tab === 'selection' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'selection'" @click="tab = 'selection'">节点选择</button><button type="button" role="tab" class="btn btn-sm" :class="tab === 'sites' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'sites'" @click="tab = 'sites'">站点连通</button></div>
+      <SiteTargetSettings v-if="visible && tab === 'sites'" :group-name="groupName" />
+      <p v-if="tab === 'selection' && !selectable" class="text-sm text-base-content/65">此组保留核心的 {{ view?.groups.find(group => group.name === groupName)?.type }} 自动算法，不能叠加自动选点；仍可配置站点连通检测。</p>
+      <form v-if="tab === 'selection' && selectable" class="flex flex-col gap-4" @submit.prevent="persist">
+        <label class="flex items-center justify-between gap-3">自动选点<input v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="busy" /></label>
+      <p class="text-xs leading-relaxed text-base-content/65">开启后按检测结果自动选择节点；关闭后手动选择。正常时每 30 秒检测当前节点，故障时按需检测候选节点。优选不可用时使用备选；开启回切后按 5、10、15 分钟退避检测优选恢复。停用后保留候选和回切设置。此处的自动选点独立于手动站点连通检测。</p>
         <template v-if="enabled">
           <input v-model="search" type="search" class="input input-sm w-full" placeholder="筛选候选节点" aria-label="筛选自动选择候选节点" />
           <div class="grid grid-cols-2 gap-3">
             <fieldset v-for="kind in (['preferred', 'fallback'] as const)" :key="kind" class="min-w-0 rounded-lg border border-base-content/10 p-2">
               <legend class="px-1 text-sm font-medium">{{ kind === 'preferred' ? '优选' : '备选' }}（{{ kind === 'preferred' ? preferred.length : fallback.length }}）</legend>
               <ul v-if="(kind === 'preferred' ? preferred : fallback).length" class="mb-2 space-y-1 border-b border-base-content/10 pb-2">
-                <li v-for="name in (kind === 'preferred' ? preferred : fallback)" :key="name" class="flex items-start justify-between gap-1 text-xs"><span class="break-all" :class="!nodes.includes(name) ? 'text-warning' : ''">{{ name }}{{ !nodes.includes(name) ? '（已不可用）' : '' }}</span><button type="button" class="shrink-0 rounded p-0.5 hover:bg-base-content/10" :disabled="busy" :title="`移除 ${name}`" :aria-label="`从${kind === 'preferred' ? '优选' : '备选'}移除 ${name}`" @click="kind === 'preferred' ? preferred = preferred.filter(item => item !== name) : fallback = fallback.filter(item => item !== name)"><IconX :size="13" /></button></li>
+                <li v-for="name in (kind === 'preferred' ? preferred : fallback)" :key="name" class="flex items-start justify-between gap-1 text-xs"><span class="break-all" :class="!nodes.includes(name) ? 'text-warning' : ''">{{ name }}{{ !nodes.includes(name) ? '（已不可用）' : '' }}</span><button type="button" class="inline-flex shrink-0 items-center gap-0.5 rounded p-0.5 hover:bg-base-content/10" :disabled="busy" :title="`移除 ${name}`" :aria-label="`从${kind === 'preferred' ? '优选' : '备选'}移除 ${name}`" @click="kind === 'preferred' ? preferred = preferred.filter(item => item !== name) : fallback = fallback.filter(item => item !== name)"><IconX :size="13" /><span>移除</span></button></li>
               </ul>
               <div class="max-h-56 space-y-1 overflow-y-auto">
                 <label v-for="name in visibleNodes" :key="name" class="flex items-start gap-2 rounded px-1 py-1 text-sm">
@@ -147,7 +153,7 @@ onUnmounted(() => { disposed = true; close() })
           <p v-if="statusError" class="text-warning">状态读取失败：{{ statusError }}</p>
           <ol v-if="events.length" class="space-y-1 border-t border-base-content/10 pt-2" aria-label="最近切换记录"><li v-for="(event, index) in events" :key="`${event.at}:${index}`">{{ timeLabel(event.at) }} · {{ event.from ?? '未选择' }} → {{ event.to ?? '未选择' }} · {{ reasonLabel(event.reason) }}</li></ol>
         </section>
-        <div class="modal-action mt-1"><button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="dialog?.close()">取消</button><button type="submit" class="btn btn-primary btn-sm" :disabled="busy || !!invalid">{{ busy ? '正在保存…' : '保存' }}</button></div>
+        <div class="modal-action mt-1"><button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="dialog?.close()"><IconX :size="16" /><span>取消</span></button><button type="submit" class="btn btn-primary btn-sm" :disabled="busy || !!invalid"><IconCheck :size="16" /><span>{{ busy ? '正在保存…' : '保存' }}</span></button></div>
       </form>
     </div>
     <form method="dialog" class="modal-backdrop"><button aria-label="关闭自动选择设置">关闭</button></form>
