@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import ts from '../tooling/node_modules/typescript/lib/typescript.js';
 import * as rules from '../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts';
+
+test('group rule utility passes strict indexed-access type checks', () => {
+  const program = ts.createProgram({
+    rootNames: [fileURLToPath(new URL('../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts', import.meta.url))],
+    options: { noEmit: true, strict: true, noUncheckedIndexedAccess: true, skipLibCheck: true,
+      target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, types: [] },
+  });
+  assert.deepEqual(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')), []);
+});
 
 async function editor(initial: string[]) {
   const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupMatchingRules.vue', import.meta.url), 'utf8');

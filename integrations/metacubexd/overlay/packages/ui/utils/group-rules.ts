@@ -37,7 +37,7 @@ export function saveGroupRules(current: string[], original: string[], draft: str
 }
 
 export function templateRuleLabel(rule: string): string {
-  const [type, payload] = rule.split(',')
+  const [type, payload = ''] = rule.split(',')
   if (type === 'MATCH') return '最终兜底：其他规则均未命中时使用本组'
   if (type === 'RULE-SET') {
     if (payload.startsWith('cocoproxy-domestic-domain-')) return '内置国内域名集合（随程序提供）'
