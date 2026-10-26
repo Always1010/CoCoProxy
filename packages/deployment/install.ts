@@ -8,6 +8,8 @@ import { renderDeploymentPlan, type DeploymentPlan } from './plan.ts';
 import { assessStateSchema, DEPLOYMENT_STATE_FILES, type StateStore } from './compatibility.ts';
 import { verifyManagedWeb } from '../setup/https.ts';
 import { inspectServiceAccount, validServiceAccountRequest } from './service-account.ts';
+import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory,
+  PathEvidenceError, type PathEvidenceHost } from './path-evidence.ts';
 
 // This is deliberately an offline file installer. Service lifecycle, router
 // activation and the existing root network helper remain separate operations.
@@ -252,36 +254,21 @@ export async function verifyRelease(payload: string, expected: string): Promise<
     found.has('source/apps/runtime/launch-core.ts') && found.has('server/.output/server/index.mjs'), 'INSTALL_PAYLOAD_ENTRY_MISSING');
   return { files: value.files, coreSHA: core.sha256 };
 }
-/** Existing path components must be root-controlled; missing leaves are explicit. */
+const pathHost: PathEvidenceHost = { resolve: realpath, info: async path => {
+  const stat = await info(path);
+  return stat ? { directory: stat.isDirectory(), file: stat.isFile(), link: stat.isSymbolicLink(),
+    uid: stat.uid, mode: stat.mode, nlink: stat.nlink } : null;
+} };
+async function pathCheck(action: () => Promise<unknown>) {
+  try { await action(); } catch (error) {
+    if (error instanceof PathEvidenceError) throw new InstallError(error.code);
+    throw error;
+  }
+}
 async function trusted(path: string, leafMissing = false) {
-  absolute(path);
-  let current = '';
-  for (const part of path.slice(1).split('/')) {
-    current += '/' + part;
-    const stat = await info(current);
-    if (!stat && leafMissing && current === path) return;
-    require(stat && !stat.isSymbolicLink() && stat.uid === 0 && !(stat.mode & 0o022), 'INSTALL_ROOT_OWNERSHIP_REQUIRED');
-    if (current !== path) require(stat.isDirectory(), 'INSTALL_DIRECTORY_REQUIRED');
-  }
+  await pathCheck(() => assertRootControlledPath(path, pathHost, leafMissing));
 }
-async function executable(path: string) {
-  // Permit distro usr-merge/python links, checking each link owner and parent.
-  let current = path;
-  for (let count = 0; count < 16; count++) {
-    const parts = current.slice(1).split('/'); let prefix = ''; let changed = false;
-    for (let index = 0; index < parts.length; index++) {
-      prefix += '/' + parts[index]; const stat = await info(prefix);
-      require(stat, 'INSTALL_REQUIRED_SYSTEM_TOOL_MISSING');
-      require(stat.uid === 0 && (stat.isSymbolicLink() || !(stat.mode & 0o022)), 'INSTALL_TOOL_UNTRUSTED');
-      if (stat.isSymbolicLink()) {
-        current = await realpath(prefix) + (index + 1 < parts.length ? '/' + parts.slice(index + 1).join('/') : '');
-        changed = true; break;
-      }
-    }
-    if (!changed) { await trusted(current); require((await lstat(current)).isFile() && ((await lstat(current)).mode & 0o111), 'INSTALL_TOOL_NOT_EXECUTABLE'); return; }
-  }
-  throw new InstallError('INSTALL_TOOL_LINK_LIMIT');
-}
+async function executable(path: string) { await pathCheck(() => assertTrustedExecutable(path, pathHost)); }
 async function run(binary: string, args: string[], timeoutMs = 15000) {
   require(Number.isSafeInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 90000, 'INSTALL_TOOL_TIMEOUT_INVALID');
   return new Promise<string>((accept, reject) => execFile(binary, args, { encoding: 'utf8', timeout: timeoutMs,
@@ -299,14 +286,7 @@ async function privateFile(path: string, uid: number) {
   require(stat && stat.isFile() && stat.nlink === 1 && stat.uid === uid && (stat.mode & 0o7777) === 0o600,
     'INSTALL_PRIVATE_FILE_OWNERSHIP');
 }
-async function serviceAncestors(path: string) {
-  let parent = posix.dirname(path);
-  while (parent !== '/') {
-    const stat = await info(parent);
-    if (stat) require(stat.isDirectory() && Boolean(stat.mode & 0o001), 'INSTALL_SERVICE_TRAVERSE_REQUIRED');
-    parent = posix.dirname(parent);
-  }
-}
+async function serviceAncestors(path: string) { await pathCheck(() => assertServiceAncestors(path, pathHost)); }
 async function stopped(systemctl: string, units: string[], allowReload = false) {
   for (const unit of units) {
     const value = await run(systemctl, ['show', unit, '--property=ActiveState,MainPID,ControlPID,DropInPaths,NeedDaemonReload,FragmentPath']);
@@ -459,16 +439,8 @@ async function deployment(options: InstallOptions, preparing: boolean) {
     }
   }
   require(options.operation === 'install' ? !previous : previous, 'INSTALL_OPERATION_RECEIPT_REQUIRED');
-  async function plannedRootParent(path: string): Promise<void> {
-    if (await info(path)) { await trusted(path); return; }
-    require(plan.directories.some(directory => directory.path === path && directory.owner === 'root'), 'INSTALL_DIRECTORY_REQUIRED');
-    await plannedRootParent(posix.dirname(path));
-  }
   for (const directory of plan.directories) {
-    await plannedRootParent(posix.dirname(directory.path));
-    const stat = await info(directory.path);
-    if (stat) require(stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === (directory.owner === 'root' ? 0 : directory.owner) &&
-      (directory.mode === '0700' ? (stat.mode & 0o7777) === 0o700 : !(stat.mode & 0o022)), 'INSTALL_DIRECTORY_OWNERSHIP_CONFLICT');
+    await pathCheck(() => assertPlannedDeploymentDirectory(directory, plan.directories, pathHost));
   }
   await trusted(posix.dirname(input.management.credentialPath), true);
   if (await info(input.management.credentialPath)) await privateFile(input.management.credentialPath, input.runtime.serviceUid);

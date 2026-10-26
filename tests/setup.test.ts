@@ -126,8 +126,9 @@ test('doctor aggregates independent failures without invoking mutation commands 
   const result = await inspectSetup(sample, host);
   assert.equal(result.readyForInstallPreflight, false);
   assert.ok(result.checks.filter(c => c.status !== 'pass').length > 8);
-  assert.ok(calls.includes('/usr/bin/python3 --version'));
-  assert.ok(calls.includes('/usr/sbin/nft -j list ruleset'));
+  assert.ok(calls.includes('/usr'));
+  assert.ok(!calls.includes('/usr/bin/python3 --version'));
+  assert.ok(!calls.includes('/usr/sbin/nft -j list ruleset'));
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE RAW ERROR|192\.0\.2|subscription\.example/);
   assert.ok(calls.every(call => !/prepare|remove|restart|enable|sysctl\s+-w/.test(call)));
 });
@@ -219,8 +220,14 @@ test('doctor only treats explicit missing-tool observations as failure and keeps
 function readyDoctorHost(): DoctorHost {
   return { platform: 'linux', architecture: 'arm64', uid: 0, nodeVersion: '22.18.0',
     read: async () => '1', resolve: async path => path,
-    stat: async path => ({ directory: ['/run/systemd/system', '/etc/polkit-1/rules.d'].includes(path),
-      characterDevice: path === '/dev/net/tun', uid: 0, mode: 0o755, link: false }),
+    stat: async path => {
+      if (['/var/lib/cocoproxy', '/var/lib/cocoproxy-gateway-network', '/var/lib/cocoproxy-deployment', '/etc/cocoproxy'].includes(path) ||
+        path.startsWith('/var/lib/cocoproxy-web-') || path.startsWith('/run/cocoproxy-web') ||
+        path.startsWith('/opt/cocoproxy/releases/')) throw Object.assign(new Error('synthetic absent'), { code: 'ENOENT' });
+      const file = ['/usr/bin/node', '/usr/bin/systemctl', '/usr/bin/python3', '/usr/bin/getent', '/usr/sbin/ip', '/usr/sbin/nft'].includes(path);
+      return { directory: !file && path !== '/dev/net/tun', file,
+        characterDevice: path === '/dev/net/tun', uid: 0, mode: 0o755, link: false, nlink: 1 };
+    },
     run: async (path, args) => {
       if (path.endsWith('getent')) return 'cocoproxy:x:12345:12345::/nonexistent:/usr/sbin/nologin';
       if (path.endsWith('node')) return 'v22.18.0';
@@ -248,6 +255,47 @@ test('doctor requires every necessary check including the configured Node execut
   assert.equal(failed.checks.find(c => c.id === 'forwarding')?.status, 'fail');
 });
 
+test('doctor aggregates untrusted tool ancestors, deployment links, wrong owners and traversal failures without running unsafe tools', async () => {
+  const base = readyDoctorHost(), commands: string[] = [];
+  const result = await inspectSetup(sample, { ...base, stat: async path => {
+    if (path === '/usr/bin') return { ...await base.stat(path), mode: 0o777 };
+    if (path === '/opt/cocoproxy') return { ...await base.stat(path), link: true };
+    if (path === '/var/lib/cocoproxy') return { directory: true, file: false, characterDevice: false, link: false, uid: 999, mode: 0o700, nlink: 1 };
+    if (path === '/etc') return { ...await base.stat(path), mode: 0o750 };
+    return base.stat(path);
+  }, run: async (path, args) => { commands.push(path); return base.run(path, args); } });
+  for (const id of ['python', 'systemctl', 'service-account', 'node-path', 'systemctl-path', 'release-parent']) {
+    assert.equal(result.checks.find(check => check.id === id)?.status, 'fail', id);
+  }
+  assert.ok(!commands.some(path => path.startsWith('/usr/bin/')));
+  assert.equal(result.readyForInstallPreflight, false);
+  assert.equal(result.checks.find(check => check.id === 'service-paths')?.status, 'unknown');
+  assert.doesNotMatch(JSON.stringify(result), /999|\/opt\/cocoproxy|synthetic absent/);
+  const traversal = await inspectSetup(sample, { ...base, stat: async path => path === '/opt/cocoproxy'
+    ? { ...await base.stat(path), mode: 0o750 } : base.stat(path) });
+  assert.equal(traversal.checks.find(check => check.id === 'service-paths')?.code, 'INSTALL_SERVICE_TRAVERSE_REQUIRED');
+  const wrongOwner = await inspectSetup(sample, { ...base, stat: async path => path === '/var/lib/cocoproxy'
+    ? { directory: true, file: false, characterDevice: false, link: false, uid: 999, mode: 0o700, nlink: 1 } : base.stat(path) });
+  assert.equal(wrongOwner.checks.find(check => check.id === 'deployment-directory-1')?.code, 'INSTALL_DIRECTORY_OWNERSHIP_CONFLICT');
+});
+
+test('doctor follows root-owned distro tool links and keeps incomplete path observations unknown', async () => {
+  const base = readyDoctorHost();
+  const merged = await inspectSetup(sample, { ...base,
+    resolve: async path => path === '/usr/bin/node' ? '/usr/libexec/node' : path,
+    stat: async path => path === '/usr/bin/node' ? { ...await base.stat(path), link: true, mode: 0o777 }
+      : path === '/usr/libexec/node' ? { ...await base.stat('/usr/bin/node') } : base.stat(path),
+  });
+  assert.equal(merged.checks.find(check => check.id === 'node-path')?.status, 'pass');
+  const incomplete = await inspectSetup(sample, { ...base, stat: async path => {
+    const { file, nlink, ...oldObservation } = await base.stat(path);
+    return oldObservation;
+  }, run: async () => { throw new Error('must not execute with incomplete trust evidence'); } });
+  assert.equal(incomplete.checks.find(check => check.id === 'python')?.status, 'unknown');
+  assert.equal(incomplete.checks.find(check => check.id === 'node-path')?.status, 'unknown');
+  assert.equal(incomplete.readyForInstallPreflight, false);
+});
+
 test('doctor blocks managed HTTPS on failed or unavailable evidence and keeps private details out of its report', async () => {
   const environment = { ...sample, https: { mode: 'managed', certificatePath: '/etc/cocoproxy/tls/server.crt',
     privateKeyPath: '/etc/cocoproxy/tls/server.key' } };
@@ -263,7 +311,7 @@ test('doctor blocks managed HTTPS on failed or unavailable evidence and keeps pr
       certificatePath: environment.https.certificatePath, privateKeyPath: environment.https.privateKeyPath });
   };
   const success = await inspectSetup(environment, { ...host, managedWeb });
-  assert.equal(success.readyForInstallPreflight, true);
+  assert.equal(success.readyForInstallPreflight, true, JSON.stringify(success.checks.filter(check => check.required && check.status !== 'pass')));
   assert.equal(success.checks.find(c => c.id === 'managed-https')?.status, 'pass');
   assert.equal(calls, 1);
   await inspectSetup(sample, { ...host, managedWeb });

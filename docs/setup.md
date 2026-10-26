@@ -42,6 +42,10 @@ sh ./cocoproxy doctor
 
 账户继续保留 `SETUP_SERVICE_ACCOUNT_REQUIRED`、`SETUP_SERVICE_ACCOUNT_INVALID`，受管HTTPS继续保留原 `SETUP_HTTPS_*` 原因码和处理方向。环境对象未通过格式校验时，报告该错误并继续收集不依赖它的基础结果；CLI在调用doctor之前读取私有文件或解析JSON的失败仍走原错误出口，不保证形成分层报告。本报告没有创建账户、准备依赖、修改网络或更改证书信任的执行步骤。
 
+可信路径检查与最终安装器共享同一组只读判定。所有版本、账户和网络查询在执行前先检查工具及链接链：允许 root 所有的发行版工具链接，逐层检查链接目标，拒绝可写祖先、错误归属和非普通可执行文件。`node-path`、`systemctl-path` 还要求服务账户能遍历祖先并读取、执行工具；`release-parent` 要求发行父目录已存在。`deployment-directory-N` 按当前生成计划的目录顺序分别检查 root 或服务 UID 的归属和权限；缺失目录只在安装计划明确允许创建时接受。`receipt-directory` 检查已有收据目录的 root:0700 条件，`service-paths` 检查普通部署路径的服务遍历条件。缺少服务 UID 或文件类型等观察字段时返回 `unknown`。
+
+这些检查保留安装器原因码：`INSTALL_TOOL_UNTRUSTED`、`INSTALL_ROOT_OWNERSHIP_REQUIRED` 表示工具或祖先的链接、归属、可写权限不符；`INSTALL_REQUIRED_SYSTEM_TOOL_MISSING`、`INSTALL_TOOL_NOT_EXECUTABLE`、`INSTALL_TOOL_LINK_LIMIT` 分别表示工具缺失、文件不可执行、链接链超限；`INSTALL_DIRECTORY_REQUIRED`、`INSTALL_DIRECTORY_OWNERSHIP_CONFLICT`、`INSTALL_SERVICE_TRAVERSE_REQUIRED` 分别要求准备对应目录、核对目录归属与权限、核对服务遍历条件。报告不打印实际路径，也不修复权限；最终安装会按实际载荷和输入重新核验全部路径。
+
 ## 2. 填写一次环境事实
 
 将随包 `source/examples/setup-environment.json` 作为合成参考，在已存在的私有目录创建自己的 0600 文件。不要直接使用文档地址。
