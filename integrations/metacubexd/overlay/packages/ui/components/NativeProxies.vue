@@ -20,7 +20,14 @@ const { isRunning: isBatchTesting, testMultipleGroups, healthCheckAllProviders, 
 const activeTab = ref<'proxies' | 'proxyProviders'>('proxies')
 const settingsModal = ref<{ open: () => void }>()
 const connectivityModal = ref<{ open: () => void }>()
-const proxyMasterDetail = ref<{ scrollToTop: (behavior?: ScrollBehavior) => void }>()
+const proxyMasterDetail = ref<{ scrollToTop: (behavior?: ScrollBehavior) => void; activeName: string | null }>()
+const connectivityBoard = ref<{ cancel: () => void }>()
+const connectivityNode = ref('')
+function openConnectivity() {
+  connectivityNode.value = proxyMasterDetail.value?.activeName ?? renderProxies.value[0]?.name ?? ''
+  connectivityModal.value?.open()
+}
+function closeConnectivity() { connectivityBoard.value?.cancel(); return true }
 const scrollEl = ref<HTMLElement | null>(null)
 const showScrollToTop = ref(false)
 const initialRead = ref(true)
@@ -93,7 +100,7 @@ watch(activeTab, () => { showScrollToTop.value = false })
         <input v-model="configStore.proxiesGroupNameFilter" type="search" class="min-w-0 grow" :placeholder="t('filterNodesByName')" aria-label="按名称筛选节点" />
         <button v-if="configStore.proxiesGroupNameFilter" title="清空搜索" aria-label="清空搜索" @click="configStore.proxiesGroupNameFilter = ''"><IconX :size="14" /></button>
       </label>
-      <button class="btn btn-ghost btn-sm" title="站点检测" aria-label="站点检测" @click="connectivityModal?.open()"><IconActivity :size="18" /><span>站点检测</span></button>
+      <button class="btn btn-ghost btn-sm" title="检测指定节点或策略组访问站点的连通性" aria-label="站点检测" @click="openConnectivity"><IconActivity :size="18" /><span>站点检测</span></button>
       <button class="btn btn-ghost btn-sm" title="显示设置" aria-label="显示设置" @click="settingsModal?.open()"><IconSettings :size="18" /></button>
     </div>
 
@@ -128,6 +135,6 @@ watch(activeTab, () => { showScrollToTop.value = false })
         <button class="btn btn-error" @click="configStore.resetProxiesSettings()">{{ t('resetSettings') }}</button>
       </div>
     </Modal>
-    <Modal ref="connectivityModal" title="站点检测"><ConnectivityBoard /></Modal>
+    <Modal ref="connectivityModal" title="站点检测" :before-close="closeConnectivity"><ConnectivityBoard ref="connectivityBoard" :initial-node="connectivityNode" /></Modal>
   </div>
 </template>
