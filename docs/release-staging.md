@@ -55,7 +55,7 @@ manifest.json
 
 解压后从根 `README.md` 或 `./cocoproxy help` 开始，入口按自身位置查找源码，不要求当前目录等于载荷目录。[安装配置与诊断](setup.md)说明 doctor、configure 和后续安装入口；`source/docs/getting-started.md` 提供[从零部署与使用总指南](getting-started.md)。相对链接引用的使用说明、模块说明、图像和合成样本均随载荷保留，可离线阅读。指向上游及源码专用维护说明的 HTTPS 链接仍需联网。
 
-在目标 Linux 上直接更新已有安装可运行 `sudo ./cocoproxy deploy --local`，从另一台电脑更新则运行 `./cocoproxy deploy <IP>`。首次安装输入与预览方式见[本机与远程部署更新](remote-deployment.md)。本地入口直接复用安装协调器，无需 SSH 连接本机。
+在目标 Linux 上直接更新已有安装可运行 `sudo ./cocoproxy deploy --local`，从另一台电脑更新则运行 `./cocoproxy deploy <IP>`。首次安装输入与预览方式见[本机与远程部署更新](deployment.md)。本地入口直接复用安装协调器，无需 SSH 连接本机。
 
 源码必须是干净 Git 工作树根，拒绝受跟踪修改和未忽略的新文件；固定启动HEAD，以 Git blob 读取并在完成前复核。symlink/gitlink 拒绝，不执行 Git hooks 或构建代码。
 

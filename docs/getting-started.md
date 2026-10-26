@@ -10,7 +10,7 @@
 
 可以先使用[统一部署入口](setup.md)盘点环境并生成私有输入，自动填写载荷摘要、release 路径和重复端口；本指南继续说明实际接线、系统准备、HTTPS、启用及终端验收。
 
-安装前后都可用 `./cocoproxy status --input /absolute/private/deployment.json` 查询当前安装、管理员、管理服务、配置、核心与持久意图，以及需要处理的项目和下一步。入口复用本机核心只读探针，不向管理 origin 或路由器探测。实际终端的 HTTPS、登录、证书信任、路由器交付及网络路径按第 9 节直接验收；需要通知时再测试实际显示，无需填写额外 JSON。具体命令见[机器状态与生命周期操作](setup-lifecycle.md)。
+安装前后都可用 `./cocoproxy status --input /absolute/private/deployment.json` 查询当前安装、管理员、管理服务、配置、核心与持久意图，以及需要处理的项目和下一步。入口复用本机核心只读探针，不向管理 origin 或路由器探测。实际终端的 HTTPS、登录、证书信任、路由器交付及网络路径按第 9 节直接验收；需要通知时再测试实际显示，无需填写额外 JSON。具体命令见[机器状态与生命周期操作](deployment.md#机器状态与生命周期)。
 
 | 阶段 | 在哪里操作 | 完成后应看到什么 |
 | --- | --- | --- |
@@ -23,11 +23,11 @@
 | 8：持久运行 | 外设与协同路由器 | 持久前置条件、自动恢复和独立关闭入口就绪 |
 | 9：实际验收 | 至少两个终端及两端设备 | 代理、直连、本地访问、重启、断线恢复及保护符合预期 |
 
-需要查细节时：[设备与路由器能力](cooperating-router-requirements.md)、[安装与维护](deployment.md)、[HTTPS 配方](management-https.md)、[后台使用](usage.md)。本页命令除特别说明外均在**目标 Linux 的 root shell**执行；不要直接粘贴到 Windows 开发机。
+需要查细节时：[设备与路由器能力](support-matrix.md)、[安装与维护](deployment.md)、[HTTPS 配方](management-https.md)、[后台使用](usage.md)。本页命令除特别说明外均在**目标 Linux 的 root shell**执行；不要直接粘贴到 Windows 开发机。
 
 ## 1. 准备硬件并接线
 
-需要能接入上游网络的协同路由器、一台满足条件的 Linux 外接设备、管理电脑或手机，以及网线和稳定电源。路由器须满足[协作能力表](cooperating-router-requirements.md#路由器必须提供的行为)，不能仅凭有“静态路由”或“VPN”菜单判断适用。
+需要能接入上游网络的协同路由器、一台满足条件的 Linux 外接设备、管理电脑或手机，以及网线和稳定电源。路由器须满足[协作能力表](support-matrix.md#路由器必须提供的行为)，不能仅凭有“静态路由”或“VPN”菜单判断适用。
 
 最基本的单网口连接如下。交换机是可选的；如使用 VLAN，相关 LAN 端口和终端必须处于同一个接入子网，并允许所需转发。
 
@@ -153,44 +153,26 @@ install -d -o root -g root -m 0700 /etc/cocoproxy-install
 
 若没有可用 Release，由构建者按[开发说明](development.md)和[发行装配说明](release-staging.md)提供载荷及单独核验的 manifest 摘要；普通部署者不必重新构建。传输只选择载荷目录，显式排除 `.local/`，不要整体复制工作区、父目录或跟随本地链接。
 
-### 4.2 填写私有部署输入
+### 4.2 生成私有部署输入
 
-推荐先按[统一部署入口](setup.md)运行 `configure`，从环境事实自动生成本节所需输入；可选 HTTPS 与升级沿用值也由该入口处理。下面保留底层手工填写方式，便于自定义布局和核对生成结果。
+将随包 `source/examples/setup-environment.json` 作为结构参考，在第3节准备的私有目录创建自己的0600环境文件，填入第2节核实的接口、地址、MAC、精确 LAN、origin、bootstrap 和订阅/探测许可。服务账号必须已存在，不能直接使用合成地址。完整字段和可选受管 HTTPS 见[配置参考](setup.md#2-填写一次环境事实)。
 
-以下变量使用合成路径，请把 `PAYLOAD` 改为实际解压目录。`NODE` 必须为 root 控制的真实系统 Node 路径，不使用用户目录中的版本管理器路径。摘要必须替换为上一步核验的 64 位值。
+以下变量均替换为实际角色值，Node 须为 root 控制的系统路径：
 
 ```sh
 PAYLOAD=/srv/cocoproxy-staging/cocoproxy-0.1.0-preview.1-linux-arm64
 MANIFEST_SHA='<已核验的64位manifest摘要>'
 NODE=/usr/bin/node
+ENVIRONMENT=/etc/cocoproxy-install/environment.json
 INPUT=/etc/cocoproxy-install/deployment.json
 RELEASE="/opt/cocoproxy/releases/$MANIFEST_SHA"
 DEPLOY="$PAYLOAD/source/apps/deployment/main.ts"
-sha256sum "$PAYLOAD/manifest.json"
+sh "$PAYLOAD/cocoproxy" doctor --environment "$ENVIRONMENT"
+sh "$PAYLOAD/cocoproxy" configure --environment "$ENVIRONMENT" \
+  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --output "$INPUT"
 ```
 
-首次安装，把载荷中的 `source/examples/automatic-gateway-deployment.json` 复制为私有输入：
-
-```sh
-install -o root -g root -m 0600 \
-  "$PAYLOAD/source/examples/automatic-gateway-deployment.json" "$INPUT"
-```
-
-编辑这个私有文件，按第 2 节替换所有合成角色值、UID、DNS、origin、许可和 controller secret。特别核对：
-
-| 字段 | 应填写的值 |
-| --- | --- |
-| `runtime.sourceDirectory` | 实际 `$RELEASE/source` |
-| `runtime.binaryPath` | 实际 `$RELEASE/bin/mihomo` |
-| `management.serverEntry` | 实际 `$RELEASE/server/.output/server/index.mjs` |
-| `runtime.binarySha256` | 当前 manifest 的 `components.mihomo.binarySha256` |
-| `runtime.nodePath` | 实际 `$NODE` 路径 |
-| `management.origin` | 最终浏览器 HTTPS 地址，含非默认端口 |
-| `management.deployment.controllerSecret` | 自己生成并私下保存的高强度随机秘密 |
-| `management.subscriptionPolicy.allowedOrigins` | 实际订阅下载许可；地址中的令牌放在后台私有来源中 |
-| `management.controllerPolicy.allowedProbeOrigins` | 实际延迟／站点检测所需的探测 origin |
-
-JSON 中填展开后的绝对路径字符串，不填字面量 `$RELEASE`；release 目录最后一级必须是 manifest 完整摘要，并且首次安装时尚不存在。样本内的核心摘要也要从所选架构载荷重新核对。controller secret 是内部 API 的秘密，管理员网页登录使用另外设置的账号口令。
+输出父目录须已存在、root所有且0700，输入新建0600、拒绝覆盖。configure 从已核验 manifest 派生核心摘要、release/source/binary/server 路径和重复端口，并生成内部 controller secret。release 目录末级是完整 manifest 摘要，首装时尚不存在；controller secret 和网页登录口令分别管理。自定义布局可按[自动网关输入](../examples/automatic-gateway-deployment.json)手工准备，仍须通过相同校验。
 
 ### 4.3 预检、审阅与写入
 
@@ -208,7 +190,7 @@ JSON 中填展开后的绝对路径字符串，不填字面量 `$RELEASE`；rele
   deployment-plan --input "$INPUT" --output /etc/cocoproxy-install/plan.json
 ```
 
-如预检拒绝，按[安装错误对照](deployment.md#2-只读预检与计划审阅)解决具体条件。所有相关服务须停止、未 enable，已有网络资源须先按维护流程退役；旧安装应使用升级流程。不要删除 receipt 或伪造摘要把旧安装当作首次安装。
+如预检拒绝，按[安装错误对照](deployment.md#安装预检拒绝)解决具体条件。所有相关服务须停止、未 enable，已有网络资源须先按维护流程退役；旧安装应使用升级流程。不要删除 receipt 或伪造摘要把旧安装当作首次安装。
 
 确认计划后执行安装：
 
@@ -217,7 +199,7 @@ JSON 中填展开后的绝对路径字符串，不填字面量 `$RELEASE`；rele
   --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --apply
 ```
 
-成功后安装器写入 release、八个自动网关计划文件和归属收据，执行 `daemon-reload`；**此时服务仍未启动、未设置开机启用，路由器也未改变。** 若发生断电或部分安装，停止普通重试，按[安装收据处理说明](deployment.md#3-显式安装与服务准备)核对状态。
+成功后安装器写入 release、八个自动网关计划文件和归属收据，执行 `daemon-reload`；**此时服务仍未启动、未设置开机启用，路由器也未改变。** 若发生断电或部分安装，停止普通重试，按[安装收据处理说明](deployment.md#升级准备与中断恢复)核对状态。
 
 ## 5. 建立 HTTPS 管理入口
 
@@ -268,44 +250,16 @@ systemctl status cocoproxy-management.service cocoproxy-web.service --no-pager
 
 ## 6. 首次登录与基本使用
 
-桌面侧栏提供“概览、代理、规则、订阅、连接、流量、日志、设置”。概览用于查看速率、流量和连接等运行信息，设置页可查看核心状态、处理需恢复的事务以及退出登录。手机底栏提供“概览、代理、规则、订阅”，其他页面在“更多”中。
+1. 电脑或手机连入可达 LAN，打开第5节确定的 HTTPS 地址，用初始化的管理员登录。
+2. 进入“订阅”→“导入订阅”，填写自己的来源；分别确认地址保存和更新成功、有可用节点。支持 JSON/Clash YAML 或受支持的完整配置，不支持 URI/base64 自动转换；下载失败先核对许可，不公开订阅 URL。
+3. 第一份可用来源会成为本地模板当前来源并尝试生效。在“配置方案”选择本地规则模板或订阅配置，首次通常使用“规则”模式，在代理页选择手动组节点。
+4. 方案、来源、模式和节点修改自动保存生效；自定义规则点“保存”。确认“已生效/已切换”及核心状态后再接入路由器。仅已保存或 service active 不证明终端路径。
 
-### 6.1 导入第一份订阅
-
-1. 管理终端连入可达 LAN，打开第 5 节确定的 HTTPS 地址，用刚初始化的管理员账号登录。
-2. 进入“订阅”，选择“导入订阅”，填写名称和自己的来源地址。
-3. 新增后会尝试更新。分别检查“地址保存成功”和“更新成功”，确认有可用节点、更新时间且没有错误。
-4. 第一份可用来源会自动成为本地模板的当前来源并尝试生效。需要更换时点击订阅卡片，在订阅页顶部选择“配置方案”；“代理”和“规则”页顶部也有同一工具栏。订阅存在可用来源时会保留一个当前来源。
-
-支持 JSON／Clash YAML 节点或受支持的完整配置，不支持 URI/base64 自动转换。来源下载受部署许可限制；遇到拒绝时由部署者核对 `subscriptionPolicy`，不能仅在网页反复重试。订阅地址可能带访问令牌，不要公开截图或日志。
-
-### 6.2 选择方案、模式与节点
-
-| 后台操作 | 适用场景与结果 |
-| --- | --- |
-| “配置方案”→“本地规则模板” | 用订阅节点配合内置业务分类、国内补漏和自己的规则 |
-| “配置方案”→“订阅配置” | 选择标为“配置”的来源，使用其策略组和规则，并保存自己的选择与覆盖 |
-| “运行模式”→“规则” | 按当前方案的规则分流，首次使用通常从这里开始 |
-| “运行模式”→“全局” | 业务统一交给代理出口 |
-| “运行模式”→“直连” | 业务交给 DIRECT；已交付流量仍由 CoCoProxy 处理 |
-| “代理”→选择手动策略组→点击节点 | 切换该组出口，查看“当前生效”；自动组由核心算法决定 |
-| “规则”→“自定义规则”→“保存” | 按列表顺序匹配，保存后自动生效，作用于当前方案 |
-
-方案、来源、运行模式和策略组修改会自动保存并生效，不需再找一个“应用”按钮；自定义规则点“保存”即可。首次应用会通过事务校验并启动核心及依赖网络服务。确认页面显示“已生效／已切换”，再继续路由器步骤。仅显示已保存、设置未生效或错误时，不视为完成。
-
-节点数、服务 active 和核心确认成功只说明局部状态；此时终端还没有完成路由器接入和联网验收。“现有配置”是旧草稿兼容状态，不是新部署需要选择的第三种方案。
-
-### 6.3 延迟、规则与日常管理
-
-“代理”里的 TCP 延迟测试只测外设到节点端口的 TCP 建连；代理延迟通过节点访问测试网址，站点检测检查实际站点。TCP 成功不能证明认证或网站可用。UDP／QUIC 专用等节点可能显示 TCP 测试“不适用”。探测网址同样受部署许可约束。
-
-工具栏“刷新”重读页面状态；订阅卡片的更新操作才下载来源。当前来源更新成功后会自动校验并生效，未选来源只更新快照。修改来源地址后必须重新成功更新；删除当前来源前需有另一份可用订阅。
-
-核心离线时仍可登录和编辑，但运行信息可能不可用。查看设置页错误；若显示“配置切换需要恢复”，可使用该页“恢复”处理未完成事务。恢复失败时保持路由器交付关闭，由部署者按[运行模块维护说明](../packages/runtime/README.md)处理，不绕过事务直接启动 Mihomo。多页面编辑冲突时刷新并核对最新状态后重做。管理服务重启会使临时登录失效，受信任设备可自动登录；主动退出会同时撤销当前设备的自动登录授权。更多操作见[使用说明](usage.md)。
+桌面侧栏及手机“更多”提供连接、流量、日志和设置；订阅更新、各类延迟/站点检测、自动选择、设备通知及故障操作见[使用说明](usage.md)。遇配置事务需恢复时从设置页处理，失败保持路由器交付关闭，不裸启动 Mihomo。“现有配置”保留旧草稿兼容，不是首装第三种方案。
 
 ## 7. 配置协同路由器并开启交付
 
-先确认该路由器或已选组件实现了全部[协作要求](cooperating-router-requirements.md#路由器必须提供的行为)。CoCoProxy 以网络行为对接不同路由器；本项目没有可直接套用到所有厂商的菜单路径、刷机步骤或通用配置命令。缺少下面关键能力时，应先补齐适配或更换满足条件的协作实现，不能靠普通静态路由继续部署。
+先确认该路由器或已选组件实现了全部[协作要求](support-matrix.md#路由器必须提供的行为)。CoCoProxy 以网络行为对接不同路由器；本项目没有可直接套用到所有厂商的菜单路径、刷机步骤或通用配置命令。缺少下面关键能力时，应先补齐适配或更换满足条件的协作实现，不能靠普通静态路由继续部署。
 
 保持交付关闭，按路由器自己的管理入口逐项配置：
 
@@ -354,7 +308,7 @@ runuser -u "$SERVICE_USER" -- "$NODE" --experimental-strip-types "$CLI" \
 
 `runtime-enable` 要求已有成功提交且无待恢复事务的配置，只保存恢复意图，不改路由器或 systemd 启用状态。自动网关的早期 guard unit 在本地文件系统就绪后、`network-pre.target` 前建立保护，不等待网口地址；网络服务随后等待实际接口再准备路由。必须核对目标网络管理器遵守该启动顺序。管理服务在恢复意图开启时串行核对并恢复已提交配置；systemd 仍是唯一核心进程监管者。核心不需要单独开机 enable，由协调流程在网络就绪后启动。缺少标记时默认不启用自动恢复。显式代理模式没有早期 guard unit，上面的 enable 命令应只包含管理和网页。
 
-协同路由器也须安装支持持久意图、早期保护和自动恢复的适配版本，并启用其开机服务。AlwayRoute 的具体安装、fw4 自动 include 前提和恢复状态见该项目的外接部署文档；其他路由器按[协作要求](cooperating-router-requirements.md)提供等价行为，不能仅用开机执行一次脚本代替。
+协同路由器也须安装支持持久意图、早期保护和自动恢复的适配版本，并启用其开机服务。AlwayRoute 的具体安装、fw4 自动 include 前提和恢复状态见该项目的外接部署文档；其他路由器按[协作要求](support-matrix.md)提供等价行为，不能仅用开机执行一次脚本代替。
 
 ### 8.3 日常恢复与异常边界
 
@@ -399,16 +353,7 @@ runuser -u "$SERVICE_USER" -- "$NODE" --experimental-strip-types "$CLI" \
 
 完全恢复普通直连时，**从协同路由器关闭交付并恢复其 DNS**。网页“直连模式”仍经过外设；仅停止核心会保留独立 guard，并继续阻断受管外网。
 
-升级和卸载前先暂停外设自动恢复，成功后再关闭路由器交付，按[维护完整流程](deployment.md#关闭升级与卸载)停止并禁用服务、用旧版本 helper 和旧设置安全退役自有网络，然后预检并执行升级或卸载：
-
-```sh
-runuser -u "$SERVICE_USER" -- "$NODE" --experimental-strip-types "$CLI" \
-  runtime-pause --state-dir "$STATE_DIR" --runtime-settings "$RUNTIME_SETTINGS"
-```
-
-pause 会与配置应用及恢复共用锁，成功返回才表示此前协调已结束；超时或失败时不要继续停服务或安装。维护标记跨重启保留，核心启动器也拒绝在暂停时启动。安装器发现已启用但未暂停的恢复标记会拒绝操作。`runtime-disable` 关闭自动恢复并保留暂停状态，不会立即停止现有核心，也不代替路由器独立关闭。
-
-升级完成后将 `RELEASE`、`CLI` 更新为新版本，检查当前部署与保留配置匹配，再启动管理及网页，使用相同身份运行 `runtime-resume`（此前必须已 enable），或在首次启用时运行 `runtime-enable`；然后恢复路由器交付并验证。账号、订阅、选择和状态应保留，不要重建管理员或重新导入订阅。卸载默认保留私有设置及数据，独立 HTTPS 服务和路由器配置另行处理。
+升级/卸载按[运维手册](deployment.md#关闭升级与卸载)先暂停并排空事务，再关闭路由器、停用服务及退役旧网络；升级后恢复原意图并验收。不要删收据、重建管理员或重新导入订阅。卸载默认保留私有数据，独立 HTTPS 和路由器另行处理。
 
 | 现象 | 优先检查 |
 | --- | --- |

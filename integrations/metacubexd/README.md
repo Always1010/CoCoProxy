@@ -36,7 +36,7 @@ CI=true COCOPROXY_SOURCE_DIR="$PWD" node tooling/node_modules/pnpm/bin/pnpm.cjs 
 
 安装限定 Server/UI 依赖，使用固定 pnpm 10.34.1，不执行依赖生命周期脚本。构建前后核对上游锁文件不变；不安装 Desktop/Electron 或浏览器资产。UI 类型检查脚本显式使用锁定 TypeScript 5.9.3，以避开上游 vue-tsc 3.3.10 默认调用 TypeScript 7 的启动问题。
 
-Server 默认从项目根 `node_modules` 跟踪运行依赖；隔离构建可显式设置 `COCOPROXY_RUNTIME_DEPENDENCIES` 为已按根锁文件安装的绝对 `node_modules` 目录。该输入不写入运行配置，装配仍校验锁和依赖完整性。通知 Worker 及安装清单的用途和设备条件见[通知说明](../../docs/notifications.md)。
+Server 默认从项目根 `node_modules` 跟踪运行依赖；隔离构建可显式设置 `COCOPROXY_RUNTIME_DEPENDENCIES` 为已按根锁文件安装的绝对 `node_modules` 目录。该输入不写入运行配置，装配仍校验锁和依赖完整性。通知 Worker 及安装清单的用途和设备条件见[通知说明](../../docs/usage.md#自动选择通知)。
 
 Overlay 工具逐项核对原上游 blob 或相同已应用 overlay，整批预检后原子替换，拒绝未知漂移、冲突和目录链接。更新 overlay 后从核验过的原始源树重新装配，不强行覆盖手改。已有依赖／产物的目录不再是原始干净源树。
 

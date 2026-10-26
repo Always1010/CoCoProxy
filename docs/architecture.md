@@ -57,7 +57,7 @@ sing-box 只作为[协议测试对端](../integrations/protocol-fixture/README.m
 | root oneshot | 独立 guard、标记出口、终端回程及来源／入口策略规则；停止服务仍保留，完整退役按[维护流程](deployment.md#关闭升级与卸载)核验移除，guard 最后移除 |
 | 接入路由器 | 来源选择、交付、DNS、IPv6 边界和独立关闭；由路由器自身控制 |
 
-两端能力和参数映射见[路由器协作](cooperating-router-requirements.md)。
+两端能力和参数映射见[路由器协作](support-matrix.md)。
 
 ## 保存与应用
 
