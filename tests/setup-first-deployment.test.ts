@@ -4,7 +4,7 @@ import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFirstDeploymentReport, type FirstDeploymentHost } from '../packages/setup/first-deployment.ts';
+import { createFirstDeploymentObservations, createFirstDeploymentReport, type FirstDeploymentHost } from '../packages/setup/first-deployment.ts';
 
 const deployment = JSON.parse(await readFile(new URL('../examples/automatic-gateway-deployment.json', import.meta.url), 'utf8'));
 const now = 2_000_000_000_000, generation = 'a'.repeat(64), administrator = 'b'.repeat(64);
@@ -158,4 +158,81 @@ test('status CLI consumes private input, returns fixed observation errors off Li
     const result = call('status', '--input', inputPath, ...args);
     assert.equal(result.status, 1); assert.equal(result.stdout, ''); assert.equal(result.stderr.trim(), 'SETUP_ARGUMENTS_INVALID');
   }
+});
+
+test('recording facts derives current internal bindings and timestamps, preserves failures, and leaves omitted observations unverified', async () => {
+  const observedAt = new Date(now - 1000).toISOString();
+  const facts = { schemaVersion: 1, observedAt, management: { terminalId: 'terminalA', notifications: 'declined', https: { pageLoaded: false } },
+    router: { parametersMatched: true, deliveryEnabled: false, independentDisableVerified: true },
+    terminal: { terminalIds: ['terminalA'], proxy: false, direct: true, dns: true, localAccess: true } };
+  const generated = await createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts }, fixture().host);
+  const consumed = await report(fixture().host, generated);
+  assert.deepEqual(generated.binding, consumed.binding); assert.equal(generated.recordedAt, now);
+  assert.equal(generated.router?.observedAt, now - 1000); assert.equal(generated.router?.scope, 'configured-lan');
+  assert.equal(by(consumed, 'https-reachable').status, 'fail'); assert.equal(by(consumed, 'router').status, 'fail');
+  assert.equal(by(consumed, 'terminal').status, 'fail'); assert.equal(by(consumed, 'login').status, 'not-run');
+  assert.equal(by(consumed, 'test-notification-displayed').status, 'not-applicable');
+  const blank = await createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts: { schemaVersion: 1 } }, fixture().host);
+  assert.equal(Object.hasOwn(blank, 'management'), false); assert.equal(Object.hasOwn(blank, 'router'), false);
+  assert.equal(by(await report(fixture().host, blank), 'login').status, 'not-run');
+  const first = await createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts: {
+    schemaVersion: 1, observedAt, management: { terminalId: 'terminalA', notifications: 'undecided', https: { pageLoaded: true } } } }, fixture({ active: null }).host);
+  assert.equal(first.binding.activeGeneration, null);
+  assert.equal(by(await report(fixture({ active: null }).host, first), 'https-reachable').status, 'pass');
+});
+
+test('recording preserves actual notification event times independently of recording and accepts explicit timezone offsets', async () => {
+  const facts = { schemaVersion: 1, observedAt: new Date(now - 1000).toISOString(), management: { terminalId: 'terminalA', notifications: 'selected',
+    notification: { testRequestedAt: new Date(now - 4000).toISOString(), providerAccepted: true,
+      displayedAt: new Date(now - 2000).toISOString(), notDisplayed: false } } };
+  const generated = await createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts }, fixture().host);
+  const notification = (generated.management as any).notification;
+  assert.equal(notification.testRequestedAt, now - 4000); assert.equal(notification.displayedAt, now - 2000);
+  assert.equal(notification.observedAt, now - 1000); assert.equal(generated.recordedAt, now);
+  const zoned = { schemaVersion: 1, observedAt: '2033-05-18T11:33:19+08:00', router: { parametersMatched: true, deliveryEnabled: true, independentDisableVerified: true } };
+  const timezone = await createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts: zoned }, fixture().host);
+  assert.equal(timezone.router?.observedAt, Date.parse(zoned.observedAt));
+  const pending: any = structuredClone(facts); pending.management.notification.displayedAt = null;
+  const waiting = await createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts: pending }, fixture().host);
+  assert.equal(by(await report(fixture().host, waiting), 'test-notification-displayed').status, 'unknown');
+});
+
+test('recording rejects prior envelopes, internal metadata, guessed times, impossible events, unverified deployment and concurrent rebinding', async () => {
+  const raw = await evidence();
+  const base = { schemaVersion: 1, observedAt: new Date(now - 1000).toISOString(), router: { parametersMatched: true, deliveryEnabled: true, independentDisableVerified: true } };
+  for (const facts of [raw, { ...base, binding: raw.binding }, { ...base, recordedAt: now }, { ...base, status: 'pass' },
+    { ...base, observedAt: now }, { ...base, observedAt: '2033-02-31T00:00:00Z' }, { ...base, observedAt: '2033-05-18T03:33:19' },
+    { ...base, observedAt: new Date(now + 1).toISOString() }, { ...base, observedAt: undefined },
+    { ...base, router: { ...base.router, observedAt: now - 1000 } },
+    { ...base, management: { terminalId: 'terminalA', notifications: 'selected', notification: {
+      testRequestedAt: new Date(now - 1000).toISOString(), providerAccepted: true, displayedAt: new Date(now - 2000).toISOString(), notDisplayed: false } } }]) {
+    await assert.rejects(createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts }, fixture().host));
+  }
+  await assert.rejects(createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts: base }, fixture({ installed: false }).host),
+    { code: 'SETUP_FIRST_RECORD_DEPLOYMENT_UNVERIFIED' });
+  await assert.rejects(createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts: base }, fixture({ credential: null }).host),
+    { code: 'SETUP_FIRST_RECORD_DEPLOYMENT_UNVERIFIED' });
+  const { host } = fixture(); let reads = 0; const stable = host.credential;
+  host.credential = async installed => ++reads === 1 ? stable(installed) : 'f'.repeat(64);
+  await assert.rejects(createFirstDeploymentObservations(deployment, { inputPath: '/synthetic/deployment.json', facts: base }, host),
+    { code: 'SETUP_FIRST_RECORD_BINDING_CHANGED' });
+});
+
+test('recording CLI refuses unverified hosts and mutating flags without creating an evidence file or echoing facts', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-record-observations-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const input = join(root, 'deployment.json'), facts = join(root, 'facts.json'), output = join(root, 'observations.json');
+  await writeFile(input, JSON.stringify(deployment), { mode: 0o600 }); await writeFile(facts, JSON.stringify({ schemaVersion: 1 }), { mode: 0o600 });
+  const call = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', 'apps/setup/main.ts', 'record-observations',
+    '--input', input, '--facts', facts, '--output', output, ...args], { cwd: new URL('..', import.meta.url), encoding: 'utf8', windowsHide: true });
+  if (process.platform !== 'linux') {
+    const result = call(); assert.equal(result.status, 1); assert.equal(result.stdout, '');
+    assert.equal(result.stderr.trim(), 'SETUP_FIRST_RECORD_DEPLOYMENT_UNVERIFIED');
+    await assert.rejects(readFile(output), { code: 'ENOENT' });
+  }
+  for (const flag of ['--apply', '--probe-https', '--terminal-path-verified']) {
+    const result = call(flag); assert.equal(result.status, 1); assert.equal(result.stdout, ''); assert.equal(result.stderr.trim(), 'SETUP_ARGUMENTS_INVALID');
+  }
+  await writeFile(output, 'preserve existing private evidence', { mode: 0o600 });
+  const existing = call(); assert.equal(existing.status, 1); assert.equal(existing.stdout, ''); assert.equal(existing.stderr.trim(), 'SETUP_OUTPUT_EXISTS');
+  assert.equal(await readFile(output, 'utf8'), 'preserve existing private evidence');
 });
