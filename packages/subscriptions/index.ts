@@ -61,7 +61,10 @@ type SnapshotData = { proxies: JsonObject[]; policy?: JsonObject; nodeDnsPolicy?
 type RefreshResult = ({ status: 'modified'; sha256: string; etag: string | null; usage?: SubscriptionUsage } & SnapshotData) |
   { status: 'not-modified'; usage?: SubscriptionUsage } | { status: 'failed'; code: SnapshotFailure };
 const MAX_BYTES = 4 * 1024 * 1024;
-const MAX_SOURCES = 100;
+export const SUBSCRIPTION_SOURCE_LIMIT = 100;
+export const SUBSCRIPTION_INVENTORY_LIMIT = SUBSCRIPTION_SOURCE_LIMIT + 16;
+export const isSubscriptionTemporaryName = (name: string): boolean => /^\.write-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(name);
+const MAX_SOURCES = SUBSCRIPTION_SOURCE_LIMIT;
 const digestPattern = /^[a-f0-9]{64}$/;
 const sourcePattern = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const validEtag = (value: unknown): value is string => typeof value === 'string' && value.length <= 512 && !/[^\x20-\x7e]/.test(value);
@@ -322,11 +325,11 @@ export class SubscriptionStore {
       const result: SourceMetadata[] = [];
       let inspected = 0;
       for await (const entry of await opendir(join(this.root, 'subscriptions'))) {
-        if (++inspected > MAX_SOURCES + 16) fail('SOURCE_LIMIT');
+        if (++inspected > SUBSCRIPTION_INVENTORY_LIMIT) fail('SOURCE_LIMIT');
         const name = entry.name;
         // Atomic writers may have a private temporary file while a refresh
         // commits. Ignore only their known temporary naming convention.
-        if (/^\.write-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(name)) continue;
+        if (isSubscriptionTemporaryName(name)) continue;
         if (!entry.isFile() || !name.endsWith('.json') || !sourcePattern.test(name.slice(0, -5))) fail('SOURCE_CORRUPT');
         const record = await this.read(name.slice(0, -5));
         if (record !== null) result.push(metadata(record));

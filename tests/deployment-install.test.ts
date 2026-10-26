@@ -7,6 +7,9 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, compatibleOwnedFiles, configurationReviewDigest, deployRelease,
   parseDeploymentLock, prepareUpgrade, releaseTarget, validateReceipt, verifyRelease, type Receipt } from '../packages/deployment/install.ts';
+import { assertDeploymentStateCompatibility } from '../packages/deployment/install.ts';
+import { inspectStateCompatibility, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
+import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/compatibility.ts';
 import { assessRecoveryCredential, assertFinalizableReceipt, deploymentOwnerGone, inspectDeployment, recoverDeployment } from '../packages/deployment/maintenance.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
@@ -20,6 +23,30 @@ test('maintenance refuses enabled automatic recovery until it has been explicitl
   for (const value of [null, {}, { schemaVersion: 1, enabled: false }, { schemaVersion: 1, enabled: 'false', paused: true }]) {
     assert.throws(() => assertMaintenanceLifecycle(value), code('INSTALL_LIFECYCLE_INVALID'));
   }
+});
+
+test('upgrade apply refuses invalid complete content, unknown readers and missing observations with different fixed errors', async () => {
+  const valid = JSON.stringify({ version: 1, desired: null, active: null, pending: null, fault: null, checkedAt: null });
+  let bytes = valid;
+  const host: UpgradeStateHost = { read: async path => path === 'state.json' ? bytes : null, list: async () => [] };
+  const complete = await inspectStateCompatibility(host, DEPLOYMENT_STATE_COMPATIBILITY);
+  assert.doesNotThrow(() => assertDeploymentStateCompatibility(complete.findings));
+  bytes = '{"version":1}';
+  const damaged = await inspectStateCompatibility(host, DEPLOYMENT_STATE_COMPATIBILITY);
+  assert.equal(damaged.findings[0].status, 'supported-version');
+  assert.throws(() => assertDeploymentStateCompatibility(damaged.findings), code('INSTALL_STATE_CONTENT_UNSUPPORTED'));
+  bytes = 'PRIVATE INVALID JSON';
+  const malformed = await inspectStateCompatibility(host, DEPLOYMENT_STATE_COMPATIBILITY);
+  assert.throws(() => assertDeploymentStateCompatibility(malformed.findings), code('INSTALL_STATE_CONTENT_UNSUPPORTED'));
+  bytes = '{"version":2}';
+  const future = await inspectStateCompatibility(host, DEPLOYMENT_STATE_COMPATIBILITY);
+  assert.throws(() => assertDeploymentStateCompatibility(future.findings), code('INSTALL_STATE_SCHEMA_UNSUPPORTED'));
+  bytes = valid;
+  const legacy = await inspectStateCompatibility(host, { schemaVersion: 1, stateSchemas: DEPLOYMENT_STATE_COMPATIBILITY.stateSchemas });
+  assert.throws(() => assertDeploymentStateCompatibility(legacy.findings), code('INSTALL_STATE_COMPATIBILITY_NOT_DECLARED'));
+  const unavailable = await inspectStateCompatibility({ ...host, read: async () => { throw new Error('PRIVATE EACCES'); } }, DEPLOYMENT_STATE_COMPATIBILITY);
+  assert.throws(() => assertDeploymentStateCompatibility(unavailable.findings), code('INSTALL_STATE_INSPECTION_UNAVAILABLE'));
+  assert.doesNotMatch(JSON.stringify(unavailable.findings), /PRIVATE|EACCES/);
 });
 
 test('upgrade adds only the early guard to a verified previous seven-file gateway receipt', async () => {

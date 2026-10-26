@@ -7,6 +7,9 @@ import { compileConfig, canonicalJson } from '../packages/config/index.ts';
 import { parseStoredCandidate } from '../packages/transaction/index.ts';
 import { recompileRuntimeCandidate } from '../packages/runtime/settings.ts';
 import { initialWorkspace } from '../packages/management/workspace.ts';
+import { createUpgradeAssessment, inspectStateCompatibility, stateDirectoryExists, type UpgradeAssessmentContext, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
+import { parseRuntimeSettings } from '../packages/runtime/settings.ts';
+import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
 const configInput = JSON.parse(await readFile(new URL('../examples/explicit-proxy.json', import.meta.url), 'utf8'));
 
@@ -60,7 +63,7 @@ test('schema declarations alone do not establish a complete or unknown reader co
   assert.equal(assessStateContent('transaction', { ...state, version: 2 }, DEPLOYMENT_STATE_COMPATIBILITY).status, 'unsupported');
 });
 
-test('historical candidate readers share canonical bytes, generation and runtime recompile validation without running a core', () => {
+test('retained candidate readers share canonical bytes, generation and runtime recompile validation without running a core', () => {
   const candidate = compileConfig(configInput), bytes = canonicalJson(candidate.config);
   const settings = { schemaVersion: 1 as const, stateDirectory: '/synthetic/state', binaryPath: '/synthetic/core', binarySha256: 'a'.repeat(64),
     systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 };
@@ -70,4 +73,117 @@ test('historical candidate readers share canonical bytes, generation and runtime
   assert.throws(() => parseStoredCandidate(pretty, createHash('sha256').update(pretty).digest('hex')), { code: 'CANDIDATE_TAMPERED' });
   assert.throws(() => parseStoredCandidate(bytes, 'f'.repeat(64)), { code: 'CANDIDATE_TAMPERED' });
   assert.throws(() => recompileRuntimeCandidate({ ...config, 'external-controller': '0.0.0.0:19090' }, settings, candidate.id), { code: 'CANDIDATE_UNTRUSTED' });
+});
+
+function upgradeFixture() {
+  const active = compileConfig(configInput), previous = compileConfig({ ...configInput, policy: { ...configInput.policy, 'log-level': 'warning' } });
+  const runtime = { schemaVersion: 1 as const, stateDirectory: '/synthetic/state', binaryPath: '/synthetic/core', binarySha256: 'a'.repeat(64),
+    systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 };
+  const credential = { schemaVersion: 1, algorithm: 'scrypt-v1', username: 'admin', salt: Buffer.alloc(16, 1).toString('base64url'), hash: Buffer.alloc(64, 2).toString('base64url') };
+  const management = { origin: 'https://gateway.example:8443', credentialPath: '/synthetic/admin.json', deployment: configInput.deployment };
+  const fingerprint = createHash('sha256').update(JSON.stringify({ origin: management.origin, credential })).digest('hex');
+  const files = new Map<string, string>([
+    ['state.json', JSON.stringify({ version: 1, active: active.id, desired: active.id, pending: null, fault: null, checkedAt: null })],
+    ['lifecycle.json', JSON.stringify({ schemaVersion: 1, enabled: true, paused: false })],
+    ['auth/trusted-devices.json', JSON.stringify({ schemaVersion: 1, credentialFingerprint: fingerprint, devices: [] })],
+    ['notifications/state.json', JSON.stringify({ epoch: fingerprint, state: { version: 1, keys: null, events: [], subscriptions: [], jobs: [], phases: {} } })],
+    ['candidates/' + active.id + '.json', canonicalJson(active.config)], ['candidates/' + previous.id + '.json', canonicalJson(previous.config)],
+  ]);
+  const calls: string[] = [];
+  const host: UpgradeStateHost = { read: async (path, maximum) => { calls.push('read:' + path);
+    const value = files.get(path); if (value !== undefined && Buffer.byteLength(value) > maximum) throw new Error('bounded'); return value ?? null; },
+    list: async path => { calls.push('list:' + path); return [...files.keys()].filter(key => key.startsWith(path + '/')).map(key => key.slice(path.length + 1)); } };
+  const context: UpgradeAssessmentContext = { previousDeclaration: DEPLOYMENT_STATE_COMPATIBILITY, targetDeclaration: DEPLOYMENT_STATE_COMPATIBILITY,
+    currentRuntime: runtime, targetRuntime: { ...runtime, binaryPath: '/synthetic/new-core' }, currentManagement: management, targetManagement: management,
+    credential, credentialObserved: true, networkReceipt: { observation: 'absent' } };
+  return { context, host, files, active, previous, calls };
+}
+
+test('upgrade preparation evaluates five formats and three rollback routes with checked facts and outstanding core or external evidence', async () => {
+  const fixture = upgradeFixture();
+  const result = await createUpgradeAssessment(fixture.context, fixture.host);
+  assert.deepEqual(Object.keys(result.assessments), ['state', 'configuration', 'historyCandidates', 'network', 'identity']);
+  for (const assessment of Object.values(result.assessments)) assert.equal(assessment.status, 'supported', assessment.code);
+  assert.deepEqual(Object.keys(result.rollback), ['configuration', 'program', 'directConnectivity']);
+  assert.equal(result.rollback.configuration.status, 'unknown');
+  assert.equal(result.rollback.configuration.code, 'ROLLBACK_CONFIGURATION_CORE_VALIDATION_REQUIRED');
+  assert.equal(result.rollback.program.status, 'unknown');
+  assert.ok(result.rollback.program.checks!.some(item => item.code === 'UPGRADE_CORE_SYNTAX_NOT_RUN'));
+  assert.equal(result.rollback.directConnectivity.code, 'ROLLBACK_DIRECT_CONNECTIVITY_EXTERNAL_EVIDENCE_REQUIRED');
+  assert.ok(Object.values(result.rollback).every(item => item.conditions.length > 0));
+  assert.ok(fixture.calls.every(call => /^(read|list):/.test(call)));
+  assert.doesNotMatch(JSON.stringify(result), /EXAMPLE_ONLY|subscription\.example|gateway\.example|\/synthetic\/|"salt"|"hash"/);
+});
+
+test('synthetic legacy declarations, broken complete data, missing history references and unavailable observations remain distinct', async () => {
+  const old = upgradeFixture(); old.context.previousDeclaration = { schemaVersion: 1, stateSchemas: DEPLOYMENT_STATE_COMPATIBILITY.stateSchemas };
+  const legacy = await createUpgradeAssessment(old.context, old.host);
+  assert.equal(legacy.assessments.state.status, 'supported');
+  assert.equal(legacy.rollback.program.status, 'unknown');
+  assert.equal(legacy.rollback.program.checks![0].status, 'unknown');
+  assert.ok(legacy.rollback.program.checks!.some(item => item.code === 'ROLLBACK_OLD_CONFIGURATION_READER_UNKNOWN'));
+  old.context.targetDeclaration = { schemaVersion: 1, stateSchemas: DEPLOYMENT_STATE_COMPATIBILITY.stateSchemas };
+  const undeclared = await createUpgradeAssessment(old.context, old.host);
+  assert.equal(undeclared.assessments.state.status, 'unknown');
+  assert.equal(undeclared.assessments.configuration.status, 'unknown');
+  assert.equal(undeclared.assessments.historyCandidates.status, 'unknown');
+  const broken = upgradeFixture(); broken.files.set('auth/trusted-devices.json', '{"schemaVersion":1}');
+  const damaged = await createUpgradeAssessment(broken.context, broken.host);
+  assert.equal(damaged.assessments.state.status, 'unsupported');
+  assert.ok(damaged.assessments.state.checks!.some(item => item.code === 'DEPLOYMENT_STATE_CONTENT_INVALID'));
+  const missing = upgradeFixture(); missing.files.delete('candidates/' + missing.active.id + '.json');
+  assert.ok((await createUpgradeAssessment(missing.context, missing.host)).assessments.historyCandidates.checks!
+    .some(item => item.code === 'UPGRADE_REFERENCED_CANDIDATE_MISSING'));
+  const unavailable = upgradeFixture();
+  const unreadable = await createUpgradeAssessment(unavailable.context, { ...unavailable.host, read: async (path, maximum) => {
+    if (path.startsWith('candidates/')) throw new Error('PRIVATE PATH EACCES'); return unavailable.host.read(path, maximum);
+  } });
+  assert.equal(unreadable.assessments.historyCandidates.status, 'unknown');
+  assert.equal(unreadable.rollback.configuration.status, 'unknown');
+  assert.ok(unreadable.rollback.program.checks!.some(item => item.code === 'ROLLBACK_OLD_CANDIDATE_FORMAT_ASSESSED' && item.status === 'unknown'));
+  assert.doesNotMatch(JSON.stringify(unreadable), /PRIVATE PATH|EACCES/);
+});
+
+test('configuration and program rollback reject incompatible readers while valid origin changes require reauthorization rather than damaged-state handling', async () => {
+  const fixture = upgradeFixture();
+  fixture.context.targetManagement = { ...fixture.context.currentManagement, origin: 'https://next.example:8443' };
+  const changedOrigin = await createUpgradeAssessment(fixture.context, fixture.host);
+  assert.equal(changedOrigin.assessments.state.status, 'supported');
+  assert.equal(changedOrigin.assessments.identity.status, 'unsupported');
+  assert.ok(changedOrigin.assessments.identity.checks!.some(item => item.code === 'UPGRADE_IDENTITY_REAUTHORIZATION_REQUIRED'));
+  fixture.context.previousDeclaration = { ...DEPLOYMENT_STATE_COMPATIBILITY, stateSchemas: { ...DEPLOYMENT_STATE_COMPATIBILITY.stateSchemas, transaction: 2 } };
+  assert.equal((await createUpgradeAssessment(fixture.context, fixture.host)).rollback.program.status, 'unsupported');
+  const noAlternative = upgradeFixture(); noAlternative.files.delete('candidates/' + noAlternative.previous.id + '.json');
+  assert.equal((await createUpgradeAssessment(noAlternative.context, noAlternative.host)).rollback.configuration.code, 'ROLLBACK_ALTERNATIVE_CONFIGURATION_ABSENT');
+});
+
+test('gateway assessment separates static bindings and trusted receipt headers from unverified complete resources and live ownership', async () => {
+  const fixture = upgradeFixture();
+  const gateway = JSON.parse(await readFile(new URL('../examples/automatic-gateway-deployment.json', import.meta.url), 'utf8'));
+  const plan = renderDeploymentPlan(gateway);
+  const runtime = parseRuntimeSettings(JSON.parse(plan.files.find(file => file.path === gateway.runtime.settingsPath)!.content));
+  fixture.context.currentRuntime = runtime; fixture.context.targetRuntime = runtime;
+  fixture.context.networkReceipt = { observation: 'read', value: { schemaVersion: 1, status: 'complete', resources: 'not assessed' } };
+  const complete = await createUpgradeAssessment(fixture.context, fixture.host);
+  assert.equal(complete.assessments.network.status, 'unknown');
+  assert.equal(complete.assessments.network.checks![0].status, 'supported');
+  assert.ok(complete.assessments.network.checks!.some(item => item.code === 'UPGRADE_NETWORK_RESOURCES_NOT_ASSESSED' && item.status === 'unknown'));
+  fixture.context.networkReceipt.value = { schemaVersion: 1, status: 'incomplete' };
+  assert.equal((await createUpgradeAssessment(fixture.context, fixture.host)).assessments.network.status, 'unsupported');
+  fixture.context.networkReceipt.value = { schemaVersion: 1, status: ['complete'] };
+  assert.ok((await createUpgradeAssessment(fixture.context, fixture.host)).assessments.network.checks!
+    .some(item => item.code === 'UPGRADE_NETWORK_RECEIPT_HEADER_INVALID'));
+});
+
+test('uninitialized state preserves missing-parent semantics while existing untrusted ancestors and actual subscription limits remain visible', async () => {
+  const trusted: string[] = [];
+  const absent = { info: async (path: string) => ['/srv', '/'].includes(path) ? { isDirectory: () => true } : null,
+    rootPath: async (path: string) => { trusted.push(path); } };
+  assert.equal(await stateDirectoryExists('/srv/new/parent/state', absent), false);
+  assert.deepEqual(trusted, ['/srv']);
+  await assert.rejects(stateDirectoryExists('/srv/new/parent/state', { ...absent, rootPath: async () => { throw new Error('untrusted existing ancestor'); } }));
+  const fixture = upgradeFixture();
+  const limited = await inspectStateCompatibility({ ...fixture.host, list: async path => path === 'subscriptions'
+    ? Array.from({ length: 101 }, (_, index) => 'source' + index + '.json') : fixture.host.list(path) }, DEPLOYMENT_STATE_COMPATIBILITY);
+  assert.ok(limited.findings.some(item => item.store === 'subscription' && item.contentCompatibility.code === 'DEPLOYMENT_STATE_COLLECTION_LIMIT'));
 });
