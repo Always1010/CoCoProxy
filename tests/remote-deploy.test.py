@@ -14,7 +14,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete'):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -27,6 +27,9 @@ class RemoteDeploymentTests(unittest.TestCase):
             lifecycle = {'schemaVersion': 1, 'enabled': True, 'paused': False}
         if lifecycle is not None:
             (state / 'lifecycle.json').write_text(json.dumps(lifecycle))
+        network = root / 'network-receipt.json'
+        if network_receipt is not None:
+            network.write_text(json.dumps({'schemaVersion': 1, 'status': network_receipt}))
         credential = root / 'credential'
         credential.write_text('synthetic unchanged credential')
         hook = root / 'router-hook'
@@ -100,9 +103,10 @@ class RemoteDeploymentTests(unittest.TestCase):
         stack = contextlib.ExitStack()
         stack.enter_context(patch.object(deploy, 'PRIVATE', private))
         stack.enter_context(patch.object(deploy, 'RECEIPT', receipt))
+        stack.enter_context(patch.object(deploy, 'NETWORK_RECEIPT', network))
         stack.enter_context(patch.object(deploy, 'trusted', lambda path: Path(path)))
         stack.enter_context(patch.object(deploy, 'directory', lambda path, mode=0o755: Path(path)))
-        stack.enter_context(patch.object(deploy, 'regular', lambda path, private=False: Path(path).read_bytes()))
+        stack.enter_context(patch.object(deploy, 'regular', lambda path, private=False, maximum=None: Path(path).read_bytes()))
         stack.enter_context(patch.object(deploy, 'put', lambda path, data, mode=0o600: Path(path).write_bytes(data)))
         stack.enter_context(patch.object(deploy, 'stage_payload', lambda *_: (root / 'payload', manifest)))
         stack.enter_context(patch.object(deploy, 'run', run))
@@ -166,6 +170,24 @@ class RemoteDeploymentTests(unittest.TestCase):
             deploy.main_locked(args)
             self.assertEqual(json.loads((Path(before['runtime']['stateDirectory']) / 'workspace.json').read_text()), {'revision': 8})
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
+
+    def test_absent_and_removed_networks_do_not_run_non_idempotent_remove(self):
+        for status in [None, 'removed']:
+            with self.subTest(status=status):
+                temporary, stack, private, before, events, router, args = self.scenario(
+                    lifecycle=None, core_active=False, router_enabled=False, network_receipt=status)
+                with temporary, stack:
+                    deploy.main_locked(args)
+                    self.assertFalse(any('remove' in command for command in events))
+                    self.assertTrue(any('--apply' in command for command in events))
+
+    def test_incomplete_network_receipt_stops_before_runtime_or_router_mutation(self):
+        temporary, stack, private, before, events, router, args = self.scenario(network_receipt='incomplete')
+        with temporary, stack:
+            with self.assertRaisesRegex(RuntimeError, 'REMOTE_NETWORK_RECEIPT_REQUIRES_REVIEW'):
+                deploy.main_locked(args)
+            self.assertFalse(any('runtime-maintenance-pause' in command or 'disable' in command for command in events))
+            self.assertTrue(router['enabled'])
 
 
 
