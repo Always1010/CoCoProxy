@@ -16,7 +16,7 @@ import { useCoCoProxy } from './useCoCoProxy'
 import type { LatencyFailureReason } from './useLatencyFeedback'
 
 export class LatencyTestError extends Error {
-  constructor(readonly reason: LatencyFailureReason) {
+  constructor(readonly reason: LatencyFailureReason, readonly code?: string) {
     super(reason)
     this.name = 'LatencyTestError'
   }
@@ -256,18 +256,19 @@ export function useRequest() {
           const observed = response.headers.get('X-CoCoProxy-Generation')
           if (observed && /^[a-f0-9]{64}$/.test(observed)) generation.value = observed
         }
-        if (response.status === 409)
-          throw new Error('运行代次已变化，请重新读取状态。')
         if (!response.ok && isLatencyRequest(request.url)) {
           const body = (await response
             .clone()
             .json()
             .catch(() => null)) as { error?: { code?: string } } | null
           if (body?.error?.code === 'CONTROLLER_PROBE_DENIED')
-            throw new LatencyTestError('probe_denied')
+            throw new LatencyTestError('probe_denied', body.error.code)
           if (body?.error?.code === 'CONTROLLER_PROBE_TIMEOUT')
-            throw new LatencyTestError('timeout')
+            throw new LatencyTestError('timeout', body.error.code)
+          throw new LatencyTestError('failed', body?.error?.code)
         }
+        if (response.status === 409)
+          throw new Error('运行代次已变化，请重新读取状态。')
         if (!response.ok)
           throw new Error('核心请求未完成，请重新读取状态。')
       }],
