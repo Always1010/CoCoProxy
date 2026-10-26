@@ -17,26 +17,11 @@ CoCoProxy 分别固定 Mihomo 核心、MetaCubeXD 源树与 overlay、离线规�
 
 ## MetaCubeXD overlay 清单
 
-下表从当前 `integrations/metacubexd/overlay/` 的 60 个文件归类。表内路径相对该目录；分组表示应共同审阅的边界，不表示文件只影响一种行为。新增、删除或上游移动文件时同步此清单及 overlay 检查。
-
-| 边界 | 文件 |
-| --- | --- |
-| Server 生命周期（2） | `apps/server/lib/supervisor.ts`、`apps/server/plugins/boot-kernel.ts` |
-| Server 集成/构建（2） | `apps/server/lib/cocoproxy.ts`、`apps/server/nitro.config.ts` |
-| Server 认证与路由（6） | `apps/server/middleware/auth.ts`、`apps/server/routes/[...].ts`、`apps/server/routes/config.js.ts`、`apps/server/routes/api/[...].ts`、`apps/server/routes/api/clash/[...].ts`、`apps/server/routes/api/control/[...].ts` |
-| UI 启动与认证（5） | `packages/ui/nuxt.config.ts`、`packages/ui/middleware/auth.global.ts`、`packages/ui/plugins/cocoproxy.client.ts`、`packages/ui/plugins/desktop-endpoint.client.ts`、`packages/ui/plugins/desktop-sync.client.ts` |
-| UI 页面（6） | `packages/ui/pages/cocoproxy.vue`、`packages/ui/pages/login.vue`、`packages/ui/pages/overview.vue`、`packages/ui/pages/proxies.vue`、`packages/ui/pages/rules.vue`、`packages/ui/pages/subscriptions.vue` |
-| 工作区与导航（10） | `packages/ui/components/MobileBottomNav.vue`、`packages/ui/components/Modal.vue`、`packages/ui/components/NativeProxies.vue`、`packages/ui/components/NativeProxyMasterDetail.vue`、`packages/ui/components/NativeRules.vue`、`packages/ui/components/ProtectedResources.vue`、`packages/ui/components/RuleTestPopover.vue`、`packages/ui/components/Sidebar.vue`、`packages/ui/components/WorkspaceGroupsMenu.vue`、`packages/ui/components/WorkspaceToolbar.vue` |
-| 自动选择与时延显示（7） | `packages/ui/components/AutomaticProxyNode.vue`、`packages/ui/components/AutomaticSelectionSettings.vue`、`packages/ui/components/AutoProbeSettings.vue`、`packages/ui/components/ConnectionErrorBanner.vue`、`packages/ui/components/Latency.vue`、`packages/ui/components/ProxyNodeListItem.vue`、`packages/ui/components/TcpLatency.vue` |
-| UI 会话/工作区 composables（5） | `packages/ui/composables/useApi.ts`、`packages/ui/composables/useCoCoProxy.ts`、`packages/ui/composables/useProxyWorkbench.ts`、`packages/ui/composables/useWebSocket.ts`、`packages/ui/composables/useWorkspace.ts` |
-| UI 时延/刷新 composables 与状态（8） | `packages/ui/composables/useBatchLatencyTest.ts`、`packages/ui/composables/useLatencyFeedback.ts`、`packages/ui/composables/useProxyRefresh.ts`、`packages/ui/composables/useTcpDelay.ts`、`packages/ui/stores/proxies.ts`、`packages/ui/utils/latencyBatch.ts`、`packages/ui/composables/__tests__/useTcpDelay.spec.ts`、`packages/ui/composables/__tests__/useBatchLatencyTest.spec.ts` |
-| 工作区测试（1） | `packages/ui/composables/__tests__/useProxyWorkbench.spec.ts` |
-| 站点检测与浏览器耗时（4） | `packages/ui/components/ConnectivityBoard.vue`、`packages/ui/components/LatencyCard.vue`、`packages/ui/composables/useReachabilityBoard.ts`、`packages/ui/composables/__tests__/useReachabilityBoard.spec.ts` |
-| 通知与安装清单（4） | `packages/ui/components/NotificationSettings.vue`、`packages/ui/composables/useNotifications.ts`、`packages/ui/public/cocoproxy-sw.js`、`packages/ui/public/manifest.webmanifest` |
+逐文件清单当前记录项目已提交基线 `5f20d57` 的63个overlay文件，按固定上游树区分30个整文件替换和33个项目新增；工作区或后续提交新增路径须另补清单并重新核对。每个路径的覆盖原因、自有能力、上游行为、真实测试或无直接测试、更新关注点，以及完整base blob，统一维护在[逐文件清单与人工三方比较步骤](metacubexd-overlay-maintenance.md)。该说明是源码维护资料，不扩展运行载荷白名单；分组概览不能代替逐文件五项记录。
 
 上游更新时重点保留这些边界：原 Agent 启动/刷新/直接写活跃配置通道被禁用，配置应用统一进入 CoCoProxy 事务并由 systemd 监管；公共 `config.js` 不注入凭据；浏览器固定同源会话认证的 Controller HTTP/WS，核心 secret 留在服务端；Desktop 同步与上游离线缓存禁用，自有通知 Worker 和安装清单按设备主动启用。不能因新上游增加路由、插件或全局钩子而恢复旁路。
 
-当前 Nitro 全局 WebSocket upgrade gate 处理 crossws 对无处理器路径的升级行为，HTTP middleware 单独不足。该检查在 `apps/server/lib/cocoproxy.ts`；升级 Nitro/h3/crossws 时必须复核 HTTP 和 upgrade 两条入口。当前服务为单实例 Node preset，进程内短会话不能推导多 worker 会话共享/同步撤销支持。
+当前 Nitro 全局 WebSocket upgrade gate 处理 crossws 对无处理器路径的升级行为，HTTP middleware 单独不足。全局upgrade gate在 `apps/server/plugins/boot-kernel.ts`，路由局部relay在 `apps/server/routes/api/clash/[...].ts`；升级 Nitro/h3/crossws 时必须复核 HTTP 和 upgrade 两条入口。当前服务为单实例 Node preset，进程内短会话不能推导多 worker 会话共享/同步撤销支持。
 
 ## 分别维护五类上游
 
