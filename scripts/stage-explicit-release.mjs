@@ -35,7 +35,10 @@ function safePath(value) {
   return parts;
 }
 function allowed(path) {
-  return !safePath(path).some(part => forbidden.has(part.toLowerCase()) || part.toLowerCase() === 'node_modules');
+  const parts = safePath(path);
+  // Ship the explicitly selected integration guide, while excluding fixtures.
+  return path === 'integrations/protocol-fixture/README.md'
+    || !parts.some(part => forbidden.has(part.toLowerCase()) || part.toLowerCase() === 'node_modules');
 }
 function sensitive(path) {
   return safePath(path).some(part => /^\.env(?:\.|$)|^\.(?:npmrc|netrc|pypirc)$|\.(?:pem|key|p12|pfx|ya?ml)$/iu.test(part)
@@ -285,7 +288,10 @@ export async function stageExplicitRelease(options) {
     if (!files.some(file => file.path === 'server/.output/server/index.mjs')) fail('SERVER_ENTRY_MISSING');
     if (sha256(coreBytes) !== reviewedHash) fail('CORE_HASH_MISMATCH');
     await write('bin/mihomo', coreBytes, '0755');
-    try { verifyOfflineDocumentation(documents); }
+    // Upstream package READMEs may link to repository-only images and tests;
+    // validate the product's offline guide without expanding dependency scope.
+    const productDocuments = new Map([...documents].filter(([path]) => !path.split('/').includes('node_modules')));
+    try { verifyOfflineDocumentation(productDocuments); }
     catch (error) { if (error?.code) fail(error.code); throw error; }
     const manifest = {
       schemaVersion: 1, scope: 'local-explicit-proxy-payload', commit,
