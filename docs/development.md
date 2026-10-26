@@ -15,6 +15,25 @@ npm run cli -- help
 
 管理 Server/UI 按[MetaCubeXD 构建说明](../integrations/metacubexd/README.md)准备固定源码、核验 Git 树并应用 overlay；完成后按[发行装配](release-staging.md)生成载荷。合成样本不能直接联网或安装，真实输入和输出保持私有。
 
+### 已准备工作区的一步构建
+
+Linux 开发工作区可使用通用入口，前提是同步流程已经核验源码，并准备现成的 Node、npm、Git、tar、flock、运行依赖、tooling、上游限定依赖、固定上游源码包和已审阅核心。入口只接受一份绝对路径的私有配置：
+
+```sh
+node scripts/build-release.mjs --config /absolute/private/build-config.json
+node scripts/build-deploy.mjs --config /absolute/private/build-config.json
+```
+
+配置包含绝对、规范且不经过符号链接的 `workspace`、`source`、`mirror`、`snapshot`、`runtimeDependencies`、`toolingDependencies`、`upstreamArchive`、`upstreamDependencies`、`core`、`releases`。其中 `source` 是可构建源码，`mirror` 是纯源码镜像，`snapshot` 是同次同步生成的干净 Git 根目录，`releases` 是发行输出父目录；这四者须位于 `workspace` 内且彼此及依赖输入没有包含关系。`runtimeDependencies` 和 `toolingDependencies` 分别指向已准备好的 `node_modules` 根目录；`upstreamDependencies` 指向保留 `pnpm-lock.yaml` 及上游各包 `node_modules` 的依赖工作区。pnpm 依赖内部链接可以保留，源码、快照、归档和核心路径不能通过链接重定向。
+
+配置的 `expected` 必须包含 `commit`（40 位提交 ID）、`files`（每项为 `[相对路径, 字节数, SHA256, 是否可执行]`）与 `dirs`（完整父目录清单）。它是同步成功后生成的校验回执，不能手工复用历史回执。同步集成须与构建共同使用 `workspace/.workspace-sync.lock`：开始新同步前在锁内撤销旧配置，只有源码、镜像及快照全部核验成功后，才在锁内原子写入新配置。
+
+构建入口在整个构建、装配及可选部署期间持有该锁；锁忙即失败。它核验镜像与构建源码的完整清单，并使用 Git clean 规则将源码与快照提交对应，允许受控的 CRLF 规范化。随后在 `source` 下新建独立临时目录，核验固定归档、Git 树、上游锁和 pnpm 版本，复用既有依赖运行项目类型检查、UI generate、适配 UI 类型检查及 Server build。默认 Node 内存上限为 3 GiB，libuv 和 Rayon 工作线程数各为 2；不安装依赖，不下载构建输入。临时构建目录在结束时清理。
+
+每次成功装配使用全新的 `提交前缀-随机ID` 输出目录，并校验装配回执、提交、manifest 摘要、文件集合、内容及模式。普通构建保留该发行目录；构建并部署仅在全部校验通过后通过 `sudo` 调用本次发行中的公开 `deploy --local` 实现，传入确切发行目录和 manifest 摘要，复用既有安装的目标协调器。不会查找或回退到旧包。命令日志写入标准错误，最后一行标准输出为 JSON 回执，其中 `output` 是本次发行绝对路径，`manifestSha256` 是对应摘要，`deployed` 表示是否已完成部署。任一步失败即非零退出；构建失败不会进入提权部署。
+
+仅核验编排门禁时执行 `node --test tests/build-release.test.mjs`；该测试使用临时合成源码和替代执行器，Linux 子项另核验真实 CLI 的锁竞争，不构建真实服务或执行部署。
+
 ## CLI 常用流程
 
 下列命令从仓库根目录执行，输出使用绝对路径；`compile` 和计划生成不覆盖已有输出：
