@@ -28,7 +28,6 @@ async function refresh() {
 async function revoke(device: TrustedDevice) {
   const result = await api.request<{ current: boolean }>('/api/session/devices/revoke', { method: 'POST', body: { id: device.id } })
   if (result.current) {
-    await api.stopLocalNotifications()
     api.clearSession()
     await navigateTo('/login', { replace: true })
   } else await refresh()
@@ -64,6 +63,5 @@ onMounted(() => run(refresh))
       </ul>
     </section>
     <div v-if="status?.transaction || status?.fault" class="flex max-w-2xl items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning/10 p-4"><span class="text-sm text-warning">配置切换需要恢复</span><button class="btn btn-warning btn-sm" :disabled="busy" @click="run(recover)"><IconRestore :size="16" />恢复</button></div>
-    <NotificationSettings />
   </div>
 </template>

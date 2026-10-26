@@ -43,7 +43,7 @@ CoCoProxy 安装在 Linux 外接设备上；路由器负责终端接入、流量
 | Linux x86-64 | 固定 `linux-amd64-v1` 资产，E1 可装配；`runtimeVerified:false`，待验证 | 目标安装、核心运行、代理和完整维护 |
 | 其他 Linux 发行版/内核 | 按实际 TUN、polkit、ip/nft JSON 能力、系统策略及生命周期核验 | 没有逐发行版/内核认证名单，不继承历史 ARM64 结论 |
 | MetaCubeXD | 固定 v1.273.1 提交及 overlay，单实例 Node Server；E1 构建/适配类型检查、E2 回环管理/浏览器流程 | 上游全量类型检查、完整 systemd 组合及目标终端 |
-| HTTPS/通知 | 匹配 origin/Host 的反代及证书；按[HTTPS](management-https.md)和[通知](usage.md#自动选择通知)验收 | 终端证书信任、真实登录、通知送达/显示；HTTP 回环不覆盖远程 HTTPS |
+| HTTPS | 匹配 origin/Host 的反代及证书；按[HTTPS](management-https.md)验收 | 终端证书信任、真实登录；HTTP 回环不覆盖远程 HTTPS |
 | 无 systemd、其他架构、Windows/macOS、普通端口映射容器 | 不满足当前原生安装要求（E0 范围） | 在这些环境开发或合成测试成功不改变目标安装边界 |
 
 历史 ARM64 主机的具体 OS/内核、CPU、systemd/Node/工具版本、载荷 manifest、操作日期及规模测量未在公开证据中完整记录，不用当前开发机信息补填。x86 的 v1 资产仅标识字节/指令集目标，不表示实际运行通过。核心版本、ELF machine 和各平台摘要由组件锁维护，不在本页重复抄录。Mihomo 语法、显式代理、回环 DNS/Controller 成功也不证明透明接管或回程。

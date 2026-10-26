@@ -17,10 +17,6 @@ const COUNT_LIMIT = 12000;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const dependenciesEqual = (a, b) => JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
 const forbidden = new Set(['.local', '.git', '.links', '.cache', '.nuxt', '.output', 'coverage', 'dist', 'build', 'testfixtures', 'protocol-fixture']);
-// Published CI/catalog metadata is not runtime input. Keep the omission narrow;
-// every other sensitive-looking dependency file still fails validation.
-const dependencyOmissions = { jws: ['opslevel.yml'], jwa: ['opslevel.yml'],
-  'buffer-equal-constant-time': ['.travis.yml'], minimist: ['.github/FUNDING.yml'] };
 export class ReleaseStageError extends Error {
   constructor(code) { super(code); this.name = 'ReleaseStageError'; this.code = code; }
 }
@@ -77,16 +73,15 @@ async function git(root, args, binary = false) {
   return result.stdout;
 }
 function json(bytes) { try { return JSON.parse(bytes.toString('utf8')); } catch { fail('JSON_INVALID'); } }
-async function walk(root, prefix = '', result = [], omissions = new Set()) {
+async function walk(root, prefix = '', result = []) {
   for (const name of (await readdir(prefix ? join(root, ...safePath(prefix)) : root)).sort()) {
     const path = prefix ? `${prefix}/${name}` : name;
     safePath(path);
-    if (omissions.has(path)) continue;
     if (safePath(path).some(part => ['.local', '.git', '.links', '.cache', '.nuxt', '.output'].includes(part.toLowerCase())) || sensitive(path)) fail('RUNTIME_FILE_FORBIDDEN');
     const target = join(root, ...safePath(path));
     const info = await lstat(target);
     if (info.isSymbolicLink()) fail('INPUT_LINK_OR_MISSING');
-    if (info.isDirectory()) await walk(root, path, result, omissions);
+    if (info.isDirectory()) await walk(root, path, result);
     else if (info.isFile()) result.push(path);
     else fail('FILE_INVALID');
     if (result.length > COUNT_LIMIT) fail('PAYLOAD_LIMIT');
@@ -175,7 +170,7 @@ export async function stageExplicitRelease(options) {
       || lock.lockfileVersion !== 3 || lock.name !== pkg.name || lock.version !== pkg.version
       || lock.packages?.['']?.name !== pkg.name || lock.packages?.['']?.version !== pkg.version
       || !dependenciesEqual(lock.packages?.['']?.dependencies, pkg.dependencies)
-      || Object.keys(pkg.dependencies ?? {}).sort().join(',') !== 'web-push,ws,yaml') fail('LOCK_INVALID');
+      || Object.keys(pkg.dependencies ?? {}).sort().join(',') !== 'ws,yaml') fail('LOCK_INVALID');
     const installed = json(await regular(join(runtimeDependencies, '.package-lock.json'), 1024 * 1024));
     const modules = new Map();
     const visit = name => {
@@ -243,18 +238,10 @@ export async function stageExplicitRelease(options) {
       const modulePackage = json(await regular(join(directory, 'package.json'), 1024 * 1024));
       if (modulePackage.name !== name || modulePackage.version !== entry.version
         || !dependenciesEqual(modulePackage.dependencies, entry.dependencies)) fail('DEPENDENCY_PACKAGE_MISMATCH');
-      const omissions = new Set(dependencyOmissions[name] ?? []);
-      const paths = await walk(directory, '', [], omissions);
-      let supplementalLicense;
-      if (!paths.some(path => /^(LICENSE|LICENCE|COPYING)(?:\.|$)/iu.test(path))) {
-        if (name !== 'http_ece' || entry.version !== '1.2.0' || entry.integrity !== 'sha512-JrF8SSLVmcvc5NducxgyOrKXe3EsyHMgBFgSaIUGmArKe+rwr0uphRkRXvwiom3I+fpIfoItveHrfudL8/rxuA==') fail('DEPENDENCY_LICENSE_MISSING');
-        supplementalLicense = await blob('integrations/http-ece/LICENSE');
-        if (sha256(supplementalLicense) !== '7d71f48c474da1de82fbdaac7fea5a1eaa41e4ac998dd44fd2897812812138d9') fail('DEPENDENCY_LICENSE_MISSING');
-        await write('source/integrations/http-ece/LICENSE', supplementalLicense);
-        await write('source/integrations/http-ece/README.md', await blob('integrations/http-ece/README.md'));
-      }
+      const paths = await walk(directory);
+      if (!paths.some(path => /^(LICENSE|LICENCE|COPYING)(?:\.|$)/iu.test(path))) fail('DEPENDENCY_LICENSE_MISSING');
       const serverCopy = await noLinks(join(serverModules, ...name.split('/')));
-      const tracedPaths = new Set(await walk(serverCopy, '', [], omissions));
+      const tracedPaths = new Set(await walk(serverCopy));
       const rootPaths = new Set(paths);
       if (!tracedPaths.has('package.json') || [...tracedPaths].some(path => !rootPaths.has(path))) fail('SERVER_DEPENDENCY_MISMATCH');
       for (const path of paths) {
@@ -268,9 +255,6 @@ export async function stageExplicitRelease(options) {
         if (path.endsWith('.map')) continue;
         await write(`source/node_modules/${name}/${path}`, bytes);
         await write(`server/.output/server/node_modules/${name}/${path}`, bytes);
-      }
-      if (supplementalLicense) for (const base of ['source/node_modules', 'server/.output/server/node_modules']) {
-        await write(`${base}/${name}/LICENSE`, supplementalLicense);
       }
       dependencyVersions[name] = { version: entry.version, integrity: entry.integrity };
     }

@@ -190,6 +190,6 @@ export async function createFirstDeploymentReport(deploymentInput: unknown, opti
     checks,
     currentWait: next ? { step: next.id, code: next.code, kind: next.status === 'fail' ? 'repair' : 'observation-or-action' } : null,
     next: next ? { step: next.id, action: next.action } : { step: 'manual-acceptance',
-      action: '在实际终端验收 HTTPS、登录、证书信任、代理、直连、DNS 与本地访问，核对路由器交付及独立关闭；按需测试通知，再按文档验收冷启动和恢复。' },
+      action: '在实际终端验收 HTTPS、登录、证书信任、代理、直连、DNS 与本地访问，核对路由器交付及独立关闭；再按文档验收冷启动和恢复。' },
     acceptanceNotice: '本报告只查询当前机器状态；实际终端、路由器路径、冷启动和长期稳定性须按文档验收。' };
 }

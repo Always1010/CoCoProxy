@@ -2,8 +2,7 @@
 import tailwindcss from '@tailwindcss/vite'
 import pkg from './package.json'
 
-// Keep upstream Workbox/app-shell caching disabled. The notification-only
-// worker and manifest are explicit public assets, registered on user opt-in.
+// Keep upstream Workbox/app-shell caching disabled.
 const pwaDisabled = true
 
 export default defineNuxtConfig({
@@ -54,7 +53,6 @@ export default defineNuxtConfig({
   ],
 
   // Retain upstream module options for compatibility, with generation disabled.
-  // The explicit public manifest/worker provide opt-in notifications only.
   pwa: {
     disable: pwaDisabled,
     registerType: 'prompt',
@@ -176,8 +174,6 @@ export default defineNuxtConfig({
           sizes: '180x180',
           href: 'apple-touch-icon-180x180.png',
         },
-        // Static public asset: available in development and generated output.
-        { rel: 'manifest' as const, href: '/manifest.webmanifest' },
       ],
       script: [
         {

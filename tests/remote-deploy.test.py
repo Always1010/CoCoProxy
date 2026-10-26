@@ -63,7 +63,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                     'directories': {'state': sorted(item.name for item in state.iterdir())},
                     'contentChecks': [{'id': 'workspace', 'status': 'pass'}],
                     'stable': {'workspace': hashed(state / 'workspace.json'), 'siteProbes': None, 'draft': None, 'subscriptions': 'synthetic-empty'},
-                    'trusted': {'binding': 'absent', 'devices': []}, 'notifications': {'binding': 'absent', 'keys': None, 'subscriptions': []},
+                    'trusted': {'binding': 'absent', 'devices': []},
                     'runtime': {'coherent': True, 'active': 'a' * 64 if core_active else None, 'selection': 'a' * 64 if core_active else None,
                         'automaticBindingsReadable': True}, 'ready': True}).encode()
             if args[0] == str(hook):

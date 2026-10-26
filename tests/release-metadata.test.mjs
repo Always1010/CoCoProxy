@@ -65,8 +65,7 @@ test('offline documentation resolves inline, image and reference links and rejec
 test('repository release whitelist contains the complete offline documentation navigation', async () => {
   const names = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
     { cwd: project, encoding: 'utf8', windowsHide: true }).split('\0').filter(Boolean);
-  const selected = names.filter(path => selectedReleaseSource(path) || releaseIntegrationFiles.includes(path)
-    || ['integrations/http-ece/README.md', 'integrations/http-ece/LICENSE'].includes(path));
+  const selected = names.filter(path => selectedReleaseSource(path) || releaseIntegrationFiles.includes(path));
   assert.ok(!selected.some(path => path.split('/').includes('.local')));
   const files = new Map(await Promise.all(selected.map(async path => [`source/${path}`,
     path.endsWith('.md') ? await readFile(new URL(`../${path}`, import.meta.url)) : Buffer.alloc(0)])));

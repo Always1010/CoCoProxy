@@ -11,8 +11,6 @@ import { FileTransactionStore } from '../packages/transaction/index.ts';
 import { createAdminCredential, type AdminCredential } from '../packages/management/auth.ts';
 import { TrustedDeviceStore } from '../packages/management/trusted-devices.ts';
 import { createManagementGateway } from '../packages/management/http.ts';
-import { createNotifications } from '../packages/management/notifications.ts';
-import { generatePushKeys } from '../packages/management/web-push.ts';
 import { WorkspaceStore, initialWorkspace } from '../packages/management/workspace.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
 import { capturePreservation, summarizePreservation } from '../packages/deployment/preservation.ts';
@@ -49,19 +47,8 @@ async function fixture(t: test.TestContext) {
     targets: { 'Example Select': { signature: 'a'.repeat(64), target: 'Example Proxy' } }, events: [] }), { mode: 0o600 });
   let devices = await TrustedDeviceStore.load(root, credential, origin, () => now);
   const grant = await devices.issue('90days', 'synthetic-device');
-  const source = { scope: 'synthetic-scope', events: [] as { id: string; at: number; group: string; from: string; to: string; reason: string }[], groups: [] };
-  const sent: string[] = [], send = async (_subscription: unknown, payload: string) => { sent.push(payload); return { status: 201 }; };
-  let notifications = await createNotifications({ stateDirectory: root, origin, devices, source: async () => source, now: () => now, send });
-  t.after(() => notifications.close());
-  const call = (path: string, method = 'GET', body?: unknown) => createManagementGateway({ origin, credential, trustedDevices: devices, now: () => now }, notifications.route).fetch(
-    new Request(origin + '/api/cocoproxy/notifications/' + path, { method, headers: { cookie: '__Host-cocoproxy_device=' + grant.token,
-      ...(method === 'GET' ? {} : { origin, 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
-  assert.equal((await call('initialize', 'POST', {})).status, 200);
-  const subscription = { endpoint: 'https://fcm.googleapis.com/wp/synthetic-private-subscription', keys: { p256dh: generatePushKeys().publicKey, auth: Buffer.alloc(16, 1).toString('base64url') } };
-  assert.equal((await call('subscription', 'POST', { subscription })).status, 200);
-  assert.equal((await call('preferences', 'PUT', { groups: ['Example Select'], switches: true, recovery: false, outage: true, showNodes: true })).status, 200);
   const project = async (selectedOrigin = origin, selectedCredential: AdminCredential = credential) => {
-    const paths = { transaction: 'state.json', lifecycle: 'lifecycle.json', trustedDevices: 'auth/trusted-devices.json', notifications: 'notifications/state.json',
+    const paths = { transaction: 'state.json', lifecycle: 'lifecycle.json', trustedDevices: 'auth/trusted-devices.json',
       workspace: 'workspace.json', siteProbes: 'site-probes.json', draft: 'draft.json', automaticSelections: 'automatic-selections.json', selection: 'selection.json' };
     const documents = {} as Parameters<typeof summarizePreservation>[0];
     for (const [id, path] of Object.entries(paths)) {
@@ -72,12 +59,8 @@ async function fixture(t: test.TestContext) {
     const capsule = summarizePreservation(documents, sources, canonicalJson(candidate.config), { origin: selectedOrigin, credential: selectedCredential, settings, now });
     return { ...capsule, directories: { state: { present: true, entries: createHash('sha256').update(JSON.stringify((await readdir(root)).sort())).digest('hex') } } };
   };
-  return { root, grant, subscription, call, project, sent, advance(ms: number) { now += ms; }, tick: () => notifications.tick(), async queue() {
-    source.events.push({ id: 'synthetic-pending-event', at: now, group: 'Example Select', from: 'Example Proxy', to: 'Example Proxy', reason: 'faster-candidate' });
-    await notifications.tick();
-  }, async restart() {
-    await notifications.close(); devices = await TrustedDeviceStore.load(root, credential, origin, () => now);
-    notifications = await createNotifications({ stateDirectory: root, origin, devices, source: async () => source, now: () => now, send });
+  return { root, grant, project, advance(ms: number) { now += ms; }, async restart() {
+    devices = await TrustedDeviceStore.load(root, credential, origin, () => now);
     return devices;
   } };
 }
@@ -86,7 +69,7 @@ test('real stores project to secret-free preservation capsules and the coordinat
   const f = await fixture(t), before = await f.project(), after = await f.project();
   assert.equal(before.ready, true); assert.equal(compare(before, after, true).status, 'pass');
   const serialized = JSON.stringify(before);
-  for (const secret of [f.grant.token, f.grant.device.id, f.subscription.endpoint, f.subscription.keys.auth, credential.hash, 'Example Proxy', 'synthetic-token=private']) assert.equal(serialized.includes(secret), false);
+  for (const secret of [f.grant.token, f.grant.device.id, credential.hash, 'Example Proxy', 'synthetic-token=private']) assert.equal(serialized.includes(secret), false);
   const changed = structuredClone(after); changed.files.trustedDevices = null;
   assert.equal(find(compare(before, changed, true), 'known-state-files').status, 'fail');
   const added: Snapshot = structuredClone(after); added.directories.auth = { present: true, entries: 'new' };
@@ -111,32 +94,27 @@ test('preservation accepts the same abandoned atomic files as the business reade
   await assert.rejects(capturePreservation(managementSettingsPath), { code: 'REMOTE_PRESERVATION_SNAPSHOT_UNAVAILABLE' });
 });
 
-test('same identity survives renewal and notification processing while dynamic times, jobs, events and hot process evidence may change', async t => {
-  const f = await fixture(t); await f.queue(); const before = await f.project(); assert.equal(f.sent.length, 0);
-  f.advance(10000); await f.restart(); await f.tick(); assert.equal(f.sent.length, 1);
-  await f.tick(); assert.equal(f.sent.length, 1); // The restored durable event is not queued/sent twice.
+test('same trusted device identity survives renewal while automatic events and hot process evidence may change', async t => {
+  const f = await fixture(t), before = await f.project();
   f.advance(86400001); const restoredDevices = await f.restart(); await restoredDevices.renew(f.grant.token);
   assert.equal(restoredDevices.check(f.grant.token)?.id, f.grant.device.id);
-  assert.equal((await f.call('test', 'POST', {})).status, 200);
   await writeFile(join(f.root, 'selection.json'), JSON.stringify({ schemaVersion: 1, generation: candidate.id }), { mode: 0o600 });
   const automatic = JSON.parse(await readFile(join(f.root, 'automatic-selections.json'), 'utf8'));
   automatic.events.push({ at: 1234, group: 'Example Select', from: 'Example Proxy', to: 'Example Proxy', reason: 'failure-recovery' });
   await writeFile(join(f.root, 'automatic-selections.json'), JSON.stringify(automatic), { mode: 0o600 });
   const after = await f.project(), result = compare(before, after);
-  assert.notEqual(before.files.notifications, after.files.notifications); assert.notEqual(before.files.trustedDevices, after.files.trustedDevices);
+  assert.notEqual(before.files.trustedDevices, after.files.trustedDevices);
   assert.notEqual(before.files.selection, after.files.selection); assert.equal(result.status, 'pass');
-  assert.equal(find(result, 'trusted-devices').status, 'pass'); assert.equal(find(result, 'notifications').status, 'pass');
-  const status = await (await f.call('status')).json(); assert.equal(status.subscribed, true); assert.equal(status.preferences.showNodes, true);
+  assert.equal(find(result, 'trusted-devices').status, 'pass');
 });
 
-test('lost stable identities or preferences require review independently of valid schemas, and expired devices may be pruned', async t => {
+test('lost stable device identities require review independently of valid schemas, and expired devices may be pruned', async t => {
   const f = await fixture(t), before = await f.project();
-  const changed = structuredClone(before); changed.notifications.subscriptions[0].stable = 'f'.repeat(64);
+  const changed = structuredClone(before); changed.trusted.devices[0].stable = 'f'.repeat(64);
   const result = compare(before, changed); assert.equal(find(result, 'content-readability').status, 'pass');
-  assert.equal(find(result, 'notifications').status, 'unknown'); assert.equal(result.status, 'unknown');
-  const pruned = structuredClone(before); pruned.observedAt += 91 * 86400000; pruned.trusted.devices = []; pruned.notifications.subscriptions = [];
+  assert.equal(find(result, 'trusted-devices').status, 'unknown'); assert.equal(result.status, 'unknown');
+  const pruned = structuredClone(before); pruned.observedAt += 91 * 86400000; pruned.trusted.devices = [];
   assert.equal(find(compare(before, pruned), 'trusted-devices').status, 'not-applicable');
-  assert.equal(find(compare(before, pruned), 'notifications').status, 'pass');
   const broken = structuredClone(before); broken.contentChecks.push({ id: 'workspace', status: 'fail', code: 'REMOTE_PRESERVATION_CONTENT_INVALID', evidenceScope: 'current-reader-content-validation' });
   assert.equal(find(compare(before, broken), 'content-readability').status, 'unknown');
 });
@@ -151,13 +129,13 @@ test('origin or administrator changes invalidate actual old authorization withou
       new Request(selectedOrigin + '/api/cocoproxy/private', { headers: { cookie: '__Host-cocoproxy_device=' + f.grant.token } }));
     assert.equal(denied.status, 401);
     const after = await f.project(selectedOrigin, selectedCredential), result = compare(before, after);
-    assert.equal(after.ready, true); assert.equal(after.trusted.binding, 'invalidated'); assert.equal(after.notifications.binding, 'invalidated');
+    assert.equal(after.ready, true); assert.equal(after.trusted.binding, 'invalidated');
     assert.equal(find(result, 'content-readability').status, 'pass'); assert.equal(find(result, 'administrator-binding').code, 'REMOTE_PRESERVATION_REAUTH_REQUIRED');
   }
 });
 
 test('a declared matching schema never proves content or an unsettled runtime is ready for an upgrade baseline', async t => {
-  const empty = Object.fromEntries(['transaction', 'lifecycle', 'trustedDevices', 'notifications', 'workspace', 'siteProbes', 'draft', 'automaticSelections', 'selection'].map(id => [id, null])) as Parameters<typeof summarizePreservation>[0];
+  const empty = Object.fromEntries(['transaction', 'lifecycle', 'trustedDevices', 'workspace', 'siteProbes', 'draft', 'automaticSelections', 'selection'].map(id => [id, null])) as Parameters<typeof summarizePreservation>[0];
   const context = { origin, credential, settings, now: 2_000_000_000_000 };
   assert.equal(summarizePreservation(empty, {}, null, context).runtime.coherent, true); // Never configured or started.
   const selected = { ...empty, transaction: JSON.stringify({ version: 1, desired: candidate.id, active: candidate.id, pending: null, fault: null, checkedAt: null }) };

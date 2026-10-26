@@ -45,7 +45,6 @@ stage 只保存不可变候选，draft-stage 捕获指定保存版本；均不�
 | 原生网关与部署 | `test:gateway`、`test:deployment`（含状态兼容检查） |
 | 载荷与源码装配 | `test:release-stage`（含离线文档与发行元数据）、`test:git-tree` |
 | 时延与网络诊断工具 | `test:diagnostics`；仅检查时延基线时用 `test:latency-baseline` |
-| 通知 | `test:notifications`；`test:notifications-browser` 需显式现成 UI/Playwright/浏览器输入，模拟推送，不证明公网送达或系统显示 |
 | CLI | `test:cli` |
 
 单元层覆盖输入约束、冲突、权限、锁、持久提交和恢复；显式替身不构成真实服务或网络验收。Linux 文件权限、进程与内核行为须在 Linux 验证。

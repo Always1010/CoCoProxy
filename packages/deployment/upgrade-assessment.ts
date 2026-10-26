@@ -188,13 +188,13 @@ export async function createUpgradeAssessment(context: UpgradeAssessmentContext,
       context.currentManagement.credentialPath === context.targetManagement.credentialPath && context.currentRuntime.serviceUid === context.targetRuntime.serviceUid;
     identityChecks.push(check(unchanged ? 'supported' : 'unsupported', unchanged ? 'UPGRADE_IDENTITY_BINDING_UNCHANGED' : 'UPGRADE_IDENTITY_REAUTHORIZATION_REQUIRED',
       'origin-credential-and-service-identity', unchanged ? '当前凭据合法且原地保留，origin、凭据路径与服务 UID 未改变。'
-        : '身份绑定发生变化，旧设备信任或通知绑定将按原规则失效；这不是内容损坏。', ['不复制或重新生成管理员凭据；身份变更后重新授权终端和通知。']));
+        : '身份绑定发生变化，旧设备信任绑定将按原规则失效；这不是内容损坏。', ['不复制或重新生成管理员凭据；身份变更后重新授权终端。']));
   } catch { identityChecks.push(check(context.credentialObserved ? 'unsupported' : 'unknown',
     context.credentialObserved ? 'UPGRADE_CREDENTIAL_CONTENT_INVALID' : 'UPGRADE_CREDENTIAL_EVIDENCE_UNAVAILABLE',
     'origin-credential-and-service-identity', context.credentialObserved ? '已读取凭据，但未通过原管理员凭据内容校验。' : '未取得管理员凭据证据，不能保证保留身份绑定。')); }
-  for (const item of observations.filter(item => ['trustedDevices', 'notifications'].includes(item.store) && item.presence === 'present' && item.assessment.content === 'valid')) {
-    const value = item.value as { credentialFingerprint?: unknown; epoch?: unknown };
-    const same = fingerprint !== undefined && (item.store === 'trustedDevices' ? value.credentialFingerprint : value.epoch) === fingerprint;
+  for (const item of observations.filter(item => item.store === 'trustedDevices' && item.presence === 'present' && item.assessment.content === 'valid')) {
+    const value = item.value as { credentialFingerprint?: unknown };
+    const same = fingerprint !== undefined && value.credentialFingerprint === fingerprint;
     identityChecks.push(check(fingerprint === undefined ? 'unknown' : same ? 'supported' : 'unsupported',
       same ? 'UPGRADE_SAVED_BINDING_MATCHES' : 'UPGRADE_SAVED_BINDING_INVALIDATED', item.store,
       same ? '保存的身份绑定与当前管理员和 origin 相符。' : '合法记录的保存绑定已不同；原 reader 将按规则失效处理，不当作损坏。'));
