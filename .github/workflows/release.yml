@@ -41,8 +41,10 @@ jobs:
         run: |
           npm run typecheck
           npm run test:git-tree
+          node --test tests/release-metadata.test.mjs
           npm run test:overlay
           npm run test:release-stage
+          npm run test:setup
           npm run test:deployment
       - name: Build UI, server and both reviewed Linux payloads
         run: node scripts/build-github-release.mjs

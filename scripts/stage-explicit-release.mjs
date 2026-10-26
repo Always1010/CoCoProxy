@@ -2,10 +2,13 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, open, readFile, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual, promisify } from 'node:util';
+import { validateReleaseMetadata } from './release-metadata.mjs';
+import { assertReleaseSourcePaths, releaseIntegrationFiles, releaseLauncher, releaseReadme, selectedReleaseSource, verifyOfflineDocumentation } from './release-layout.mjs';
+import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/state-compatibility.mjs';
 
 const execute = promisify(execFile);
 const FILE_LIMIT = 256 * 1024 * 1024;
@@ -122,6 +125,7 @@ export async function stageExplicitRelease(options) {
       return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[3], path: match[4] };
     });
     if (tree.length > COUNT_LIMIT) fail('PAYLOAD_LIMIT');
+    try { assertReleaseSourcePaths(tree.map(entry => entry.path)); } catch (error) { fail(error.code); }
     const entries = new Map(tree.map(entry => [entry.path, entry]));
     const blob = async path => {
       const entry = entries.get(path);
@@ -134,11 +138,20 @@ export async function stageExplicitRelease(options) {
     const lockBytes = await blob('package-lock.json');
     const lock = json(lockBytes);
     const review = json(await blob('integrations/metacubexd/review.json'));
-    if (review.schemaVersion !== 1) fail('REVIEW_INVALID');
-    const coreReview = review.coreCandidate;
-    const managementReview = review.management;
+    // The declared readers must be the same contract shipped in the fixed source.
+    const compatibilityPath = 'packages/deployment/state-compatibility.mjs';
+    const declaration = bytes => bytes.toString('utf8').replaceAll('\r\n', '\n');
+    if (declaration(await blob(compatibilityPath)) !== declaration(await readFile(new URL(`../${compatibilityPath}`, import.meta.url)))) fail('COMPATIBILITY_SOURCE_MISMATCH');
+    for (const path of ['apps/setup/main.ts', 'scripts/cocoproxy-setup.sh']) if (!entries.has(path)) fail('SOURCE_REQUIRED_FILE_MISSING');
+    const componentsBytes = await blob('integrations/metacubexd/components.json');
+    const catalog = json(componentsBytes);
+    try { validateReleaseMetadata(catalog, review, json(await blob('integrations/metacubexd/source-tree.json'))); }
+    catch (error) { if (error?.code) fail(error.code); throw error; }
+    const coreReview = catalog.mihomo;
+    const managementReview = catalog.management;
     const coreBytes = await regular(core);
-    let reviewedHash = requireString(options.reviewedCoreSha256 ?? coreReview?.binarySha256, /^[a-f0-9]{64}$/u);
+    let reviewedHash = options.reviewedCoreSha256;
+    if (reviewedHash !== undefined) requireString(reviewedHash, /^[a-f0-9]{64}$/u);
     let corePlatform;
     if (options.reviewedCoreSha256 === undefined && coreReview?.platforms !== undefined) {
       const catalog = coreReview.platforms;
@@ -148,7 +161,7 @@ export async function stageExplicitRelease(options) {
       if (matches.length !== 1) fail('CORE_REVIEW_INVALID');
       const [name, entry] = matches[0];
       const expected = { 'linux-arm64': { architecture: 'arm64', machine: 183 }, 'linux-amd64-v1': { architecture: 'x64', machine: 62 } }[name];
-      if (!expected || entry.architecture !== expected.architecture || entry.elfMachine !== expected.machine || entry.downloadedAssetVerified !== true) fail('CORE_REVIEW_INVALID');
+      if (!expected || entry.architecture !== expected.architecture || entry.elfMachine !== expected.machine) fail('CORE_REVIEW_INVALID');
       if (coreBytes.length < 20 || !coreBytes.subarray(0, 6).equals(Buffer.from([127, 69, 76, 70, 2, 1])) || coreBytes.readUInt16LE(18) !== expected.machine) fail('CORE_ARCH_MISMATCH');
       reviewedHash = requireString(entry.binarySha256, /^[a-f0-9]{64}$/u);
       corePlatform = name;
@@ -159,6 +172,7 @@ export async function stageExplicitRelease(options) {
     const uiTag = requireString(managementReview?.tag, /^v[0-9]+\.[0-9]+\.[0-9]+$/u);
     if (!/^[a-z0-9][a-z0-9._-]*$/u.test(pkg.name ?? '') || !/^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/u.test(pkg.version ?? '')
       || lock.lockfileVersion !== 3 || lock.name !== pkg.name || lock.version !== pkg.version
+      || lock.packages?.['']?.name !== pkg.name || lock.packages?.['']?.version !== pkg.version
       || !dependenciesEqual(lock.packages?.['']?.dependencies, pkg.dependencies)
       || Object.keys(pkg.dependencies ?? {}).sort().join(',') !== 'web-push,ws,yaml') fail('LOCK_INVALID');
     const installed = json(await regular(join(runtimeDependencies, '.package-lock.json'), 1024 * 1024));
@@ -197,7 +211,7 @@ export async function stageExplicitRelease(options) {
     staging = join(parent, `.cocoproxy-stage-${randomUUID()}`);
     await mkdir(staging, { mode: 0o700 });
     await chmod(staging, 0o700);
-    const files = []; const names = new Set(); let total = 0;
+    const files = []; const names = new Set(); const documents = new Map(); let total = 0;
     async function write(path, bytes, mode = '0644') {
       const parts = safePath(path); const key = path.toLowerCase();
       if (names.has(key)) fail('DUPLICATE_PATH');
@@ -208,23 +222,18 @@ export async function stageExplicitRelease(options) {
       const handle = await open(target, 'wx', parseInt(mode, 8));
       try { await handle.writeFile(bytes); await handle.chmod(parseInt(mode, 8)); } finally { await handle.close(); }
       files.push({ path, sha256: sha256(bytes), size: bytes.length, mode });
+      documents.set(path, path.endsWith('.md') ? bytes : Buffer.alloc(0));
     }
+    await write('README.md', releaseReadme(pkg.version));
+    await write('cocoproxy', releaseLauncher, '0755');
     for (const entry of tree) {
       if (!allowed(entry.path)) continue;
-      const selected = /^(apps|packages)\//u.test(entry.path) || /^(package(?:-lock)?\.json|LICENSE(?:\.[A-Za-z0-9-]+)?|NOTICE(?:\.[A-Za-z0-9-]+)?)$/u.test(entry.path)
-        || ['docs/getting-started.md', 'docs/deployment.md', 'docs/management-https.md', 'docs/release-staging.md',
-          'docs/usage.md', 'docs/notifications.md', 'docs/architecture.md', 'docs/development.md',
-          'docs/images/architecture-overview.svg', 'docs/images/runtime-relations.svg', 'docs/images/proxy-traffic-flow.svg',
-          'docs/cooperating-router-requirements.md', 'docs/release-notes.md',
-          'examples/deployment-plan.json', 'examples/automatic-gateway-deployment.json', 'examples/deployment-options.md',
-          'scripts/measure-latency.mjs',
-          'examples/nginx-management.conf', 'examples/cocoproxy-web.service'].includes(entry.path);
-      if (selected) {
-        if (sensitive(entry.path)) fail('SOURCE_FILE_FORBIDDEN');
+      if (selectedReleaseSource(entry.path)) {
+        if (sensitive(entry.path) && entry.path !== '.github/workflows/release.yml') fail('SOURCE_FILE_FORBIDDEN');
         await write(`source/${entry.path}`, await blob(entry.path), entry.mode);
       }
     }
-    for (const path of ['integrations/metacubexd/LICENSE', 'integrations/metacubexd/review.json', 'integrations/metacubexd/source-tree.json', 'integrations/metacubexd/README.md', 'integrations/mihomo/LICENSE']) {
+    for (const path of releaseIntegrationFiles) {
       await write(`source/${path}`, await blob(path));
     }
     const dependencyVersions = {};
@@ -276,9 +285,12 @@ export async function stageExplicitRelease(options) {
     if (!files.some(file => file.path === 'server/.output/server/index.mjs')) fail('SERVER_ENTRY_MISSING');
     if (sha256(coreBytes) !== reviewedHash) fail('CORE_HASH_MISMATCH');
     await write('bin/mihomo', coreBytes, '0755');
+    try { verifyOfflineDocumentation(documents); }
+    catch (error) { if (error?.code) fail(error.code); throw error; }
     const manifest = {
       schemaVersion: 1, scope: 'local-explicit-proxy-payload', commit,
-      components: { cocoproxy: { version: pkg.version, lockSha256: sha256(lockBytes) },
+      compatibility: DEPLOYMENT_STATE_COMPATIBILITY,
+      components: { cocoproxy: { version: pkg.version, lockSha256: sha256(lockBytes), componentCatalogSha256: sha256(componentsBytes) },
         metacubexd: { version: uiTag, commit: uiCommit }, mihomo: { version: coreTag, commit: coreCommit, binarySha256: reviewedHash, ...(corePlatform ? { platform: corePlatform } : {}) },
         runtimeDependencies: dependencyVersions },
       sourceSelection: 'HEAD blobs: apps, packages, selected deployment docs/examples, root package metadata and license/source notices; no links or local/build data',

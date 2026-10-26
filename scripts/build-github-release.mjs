@@ -6,6 +6,8 @@ import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { stageExplicitRelease } from './stage-explicit-release.mjs';
+import { validateReleaseMetadata, validateReleaseTooling, validateReleaseVersion } from './release-metadata.mjs';
+import { assertReleaseSourcePaths } from './release-layout.mjs';
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', windowsHide: true, ...options });
@@ -18,21 +20,26 @@ const sha256 = async path => createHash('sha256').update(await readFile(path)).d
 const source = await realpath(process.cwd());
 const pkg = await json(join(source, 'package.json'));
 const lock = await json(join(source, 'package-lock.json'));
+const catalog = validateReleaseMetadata(await json(join(source, 'integrations/metacubexd/components.json')),
+  await json(join(source, 'integrations/metacubexd/review.json')), await json(join(source, 'integrations/metacubexd/source-tree.json')));
+validateReleaseTooling(catalog, await json(join(source, 'tooling/package.json')), await json(join(source, 'tooling/package-lock.json')));
 const tag = process.env.GITHUB_REF_NAME;
 // Accept SemVer release/prerelease tags only, and require exact package agreement.
-const number = '(?:0|[1-9][0-9]*)';
-const identifier = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
-const versionPattern = new RegExp(`^v${number}\\.${number}\\.${number}(?:-${identifier}(?:\\.${identifier})*)?$`, 'u');
 assert.equal(process.env.GITHUB_REF_TYPE, 'tag', 'A tag push is required');
-assert.ok(typeof tag === 'string' && versionPattern.test(tag), 'Invalid release tag');
-assert.equal(tag, `v${pkg.version}`, 'Tag must match package.json version');
-assert.equal(lock.version, pkg.version, 'Lockfile version must match');
-assert.equal(lock.packages[''].version, pkg.version, 'Lockfile root version must match');
+validateReleaseVersion(pkg, lock, tag);
 assert.match(process.env.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/u, 'Release commit is required');
 run('git', ['diff', '--exit-code', process.env.GITHUB_SHA, 'HEAD']);
 const head = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true });
 assert.equal(head.status, 0);
 assert.equal(head.stdout.trim(), process.env.GITHUB_SHA, 'Checkout must match triggering commit');
+const tracked = spawnSync('git', ['ls-tree', '-rz', '--full-tree', 'HEAD'], { encoding: 'utf8', windowsHide: true });
+assert.equal(tracked.status, 0, 'Cannot inspect release source tree');
+const sourceEntries = tracked.stdout.split('\0').filter(Boolean).map(line => {
+  const entry = /^(100644|100755) blob [a-f0-9]{40}\t(.+)$/u.exec(line);
+  assert.ok(entry, 'Release source cannot contain links or submodules');
+  return entry[2];
+});
+assertReleaseSourcePaths(sourceEntries);
 if (process.argv.length === 3 && process.argv[2] === '--validate') {
   console.log(`Validated ${tag} at ${process.env.GITHUB_SHA}`);
 } else {
@@ -47,9 +54,8 @@ if (process.argv.length === 3 && process.argv[2] === '--validate') {
   const upstream = join(work, 'metacubexd');
   await mkdir(assets);
   await mkdir(upstream);
-  const review = await json(join(source, 'integrations/metacubexd/review.json'));
-  const management = review.management;
-  const core = review.coreCandidate;
+  const management = catalog.management;
+  const core = catalog.mihomo;
   const download = async (url, destination, expectedHash) => {
     run('curl', ['--fail', '--location', '--silent', '--show-error', '--retry', '3',
       '--proto', '=https', '--proto-redir', '=https', '--output', destination, url]);
