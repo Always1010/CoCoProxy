@@ -28,11 +28,13 @@ interface Props {
   groups: ProxyType[]
   sortedNamesByGroup: Record<string, string[]>
   scrollContainer?: HTMLElement | null
+  batchTesting?: boolean
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   scroll: [event: Event]
+  'test-group': [name: string]
 }>()
 
 const proxiesStore = useProxiesStore()
@@ -238,7 +240,7 @@ function aliveCount(group: ProxyType) {
         data-testid="master-detail-header"
         class="flex shrink-0 flex-col gap-2 rounded-t-xl border-b border-base-content/8 bg-base-200/95 px-3 pt-3 pb-2"
       >
-        <div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
           <div class="flex min-w-0 flex-1 basis-full items-center gap-2 sm:basis-auto">
             <span class="truncate text-lg font-semibold text-base-content">{{
               activeGroup.name
@@ -260,12 +262,12 @@ function aliveCount(group: ProxyType) {
           </span>
           <AutomaticSelectionSettings :group-name="activeGroup.name" :selectable="canSelect" />
           <span v-if="tcpRunning" role="status" class="shrink-0 text-xs text-primary">{{ tcpCompleted }}/{{ tcpTotal }}</span>
-          <button type="button" class="btn btn-ghost btn-sm" :disabled="!tcpRunning && (busy || !hasTcpNodes)" :title="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟（从网关建连）'" :aria-label="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟'" @click="tcpRunning ? cancelTcp() : runTcp(displayNodes)"><IconX v-if="tcpRunning" :size="18" /><IconBolt v-else :size="18" /></button>
+          <button type="button" class="btn btn-ghost btn-sm" :disabled="!tcpRunning && (busy || !hasTcpNodes)" :title="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟（从网关建连）'" :aria-label="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟'" @click="tcpRunning ? cancelTcp() : runTcp(displayNodes)"><IconX v-if="tcpRunning" :size="18" /><IconBolt v-else :size="18" /><span>{{ tcpRunning ? '取消 TCP' : '测 TCP' }}</span></button>
           <details class="dropdown dropdown-end shrink-0">
-            <summary class="btn btn-ghost btn-xs" title="更多 TCP 测试操作" aria-label="更多 TCP 测试操作"><IconChevronRight :size="14" class="rotate-90" /></summary>
+            <summary class="btn btn-ghost btn-xs" title="更多 TCP 测试操作" aria-label="更多 TCP 测试操作"><IconChevronRight :size="14" class="rotate-90" /><span>更多 TCP</span></summary>
             <ul class="dropdown-content z-30 menu mt-1 w-52 rounded-box border border-base-content/10 bg-base-200 shadow-lg"><li><button :disabled="tcpRunning || busy" @click="testAllTcp">测试全部节点 TCP 延迟</button></li></ul>
           </details>
-          <button type="button" class="btn btn-ghost btn-sm" title="测试当前组代理延迟（访问测试网址）" aria-label="测试当前组代理延迟" :disabled="proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name]" @click="proxiesStore.proxyGroupLatencyTest(activeGroup.name)"><IconBrandSpeedtest :size="18" /></button>
+          <button type="button" class="btn btn-ghost btn-sm" title="测试当前组代理延迟（访问测试网址）" aria-label="测试当前组代理延迟" :disabled="batchTesting || proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name]" @click="emit('test-group', activeGroup.name)"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-success': batchTesting || proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name] }" /><span>{{ batchTesting ? '测速中' : '测当前组' }}</span></button>
           <button
             type="button"
             class="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-base-content/10 bg-base-100/60 px-2 text-xs text-base-content/70 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
@@ -399,6 +401,7 @@ function aliveCount(group: ProxyType) {
             @click="clearFilters"
           >
             <IconX :size="14" />
+            <span class="px-1 text-xs">清空筛选</span>
           </button>
         </div>
       </div>

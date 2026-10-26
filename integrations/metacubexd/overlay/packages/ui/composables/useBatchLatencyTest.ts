@@ -30,6 +30,15 @@ export function useBatchLatencyTest() {
   const { t } = useI18n()
   const isRunning = ref(false)
   const progress = ref({ completed: 0, total: 0, current: '' })
+  const inFlight = ref<Record<string, { name: string; url: string }>>({})
+  const activeProbes = computed(() => Object.values(inFlight.value))
+  const groupJobs = ref<{ name: string; keys: string[] }[]>([])
+  const completedKeys = ref(new Set<string>())
+  const groupProgress = computed(() => ({
+    total: groupJobs.value.length,
+    completed: groupJobs.value.filter(group => group.keys.every(key => completedKeys.value.has(key))).length,
+    active: groupJobs.value.filter(group => group.keys.some(key => !!inFlight.value[key])).map(group => group.name),
+  }))
   const abortController = ref<AbortController | null>(null)
   const abortTest = () => abortController.value?.abort()
   watch([generation, session], abortTest, { flush: 'sync' })
@@ -59,7 +68,7 @@ export function useBatchLatencyTest() {
 
   // One continuously replenished pool for the whole operation, including all
   // groups. A slow node occupies one slot, never a complete ten-node batch.
-  const runProbes = async (input: Probe[], options?: Partial<BatchTestOptions>) => {
+  const runProbes = async (input: Probe[], options?: Partial<BatchTestOptions>, groups: { name: string; keys: string[] }[] = []) => {
     const jobs = [...new Map(input.map(job => [job.key, job])).values()]
     const results = new Map<string, ProbeResult>()
     if (isRunning.value) return results
@@ -72,6 +81,9 @@ export function useBatchLatencyTest() {
     const touched = new Set<string>()
     abortController.value = controller
     isRunning.value = true
+    inFlight.value = {}
+    groupJobs.value = groups
+    completedKeys.value = new Set()
     progress.value = { completed: 0, total: jobs.length, current: '' }
     nodeRecommendationStore.batchTestProgress = { total: jobs.length, completed: 0, current: null, isRunning: true }
     try {
@@ -82,6 +94,7 @@ export function useBatchLatencyTest() {
           latencyFeedback.beginNode(job.name)
           progress.value.current = job.name
           nodeRecommendationStore.batchTestProgress.current = job.name
+          inFlight.value[job.key] = { name: job.name, url: job.url }
           let result: ProbeResult
           try {
             const response = await request.get(`proxies/${encodeURIComponent(job.name)}/delay`, {
@@ -91,8 +104,10 @@ export function useBatchLatencyTest() {
             result = response.delay > 0 && Number.isFinite(response.delay)
               ? { delay: response.delay } : { delay: 0, reason: 'failed' }
           } catch (error) { result = { delay: 0, reason: latencyFailureReason(error) } }
+          finally { delete inFlight.value[job.key] }
           if (!current() || makeProbe(job.name, job.url, job.timeout).key !== job.key) return
           results.set(job.key, result)
+          completedKeys.value.add(job.key)
           proxiesStore.recordLatencyTestResult?.(job.name, job.url, result.delay)
           nodeRecommendationStore.recordTestResult(job.name, result.delay > 0 ? result.delay : null, result.delay > 0)
           if (result.reason) latencyFeedback.failNode(job.name, result.reason)
@@ -108,6 +123,7 @@ export function useBatchLatencyTest() {
         if (latencyFeedback.feedbackForNode(name).state === 'testing')
           delete latencyFeedback.nodeFeedback.value[name]
       isRunning.value = false
+      inFlight.value = {}
       progress.value.current = ''
       nodeRecommendationStore.batchTestProgress = { total: jobs.length, completed: progress.value.completed, current: null, isRunning: false }
       abortController.value = null
@@ -131,7 +147,8 @@ export function useBatchLatencyTest() {
       const timeout = options?.timeout ?? configStore.latencyTestTimeoutDuration
       return { name, jobs: group ? groupMembers(name).map(member => makeProbe(member, url, timeout)) : [] }
     })
-    const results = await runProbes(groups.flatMap(group => group.jobs), options)
+    const results = await runProbes(groups.flatMap(group => group.jobs), options,
+      groups.map(group => ({ name: group.name, keys: group.jobs.map(job => job.key) })))
     const allResults = Object.fromEntries(groups.map(group => [group.name,
       Object.fromEntries(group.jobs.filter(job => results.has(job.key)).map(job => [job.name, results.get(job.key)!.delay])),
     ]))
@@ -168,6 +185,8 @@ export function useBatchLatencyTest() {
     )
     if (providerNames.length === 0) return
 
+    groupJobs.value = []
+    completedKeys.value = new Set()
     isRunning.value = true
     nodeRecommendationStore.batchTestProgress = {
       total: providerNames.length,
@@ -237,6 +256,8 @@ export function useBatchLatencyTest() {
   return {
     isRunning,
     progress,
+    activeProbes,
+    groupProgress,
     batchTestNodes,
     testGroupNodes,
     testMultipleGroups,
