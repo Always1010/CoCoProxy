@@ -13,7 +13,7 @@ import { verifyRelease } from '../packages/deployment/install.ts';
 
 const execute = promisify(execFile);
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
-const developmentFiles = ['AGENTS.md', '.github/workflows/release.yml', 'docs/development.md', 'docs/network-benchmark.md',
+const developmentFiles = ['AGENTS.md', '.github/workflows/release.yml', 'docs/development.md',
   'docs/release-staging.md', 'integrations/protocol-fixture/README.md', 'integrations/metacubexd/README.md',
   'scripts/measure-latency.mjs', 'packages/routing/generate-assets.mjs'];
 const routingFiles = ['index.ts', 'service-catalog.ts', 'domestic-data.ts', 'legacy-domestic-data.ts', 'overseas-data.ts',

@@ -15,7 +15,7 @@
     "typecheck": "node tooling/node_modules/typescript/bin/tsc -p tsconfig.json",
     "test:config": "node --experimental-strip-types --test tests/config.test.ts",
     "test:latency-baseline": "node --test tests/latency-baseline.test.mjs",
-    "test:diagnostics": "node --test tests/latency-baseline.test.mjs tests/network-benchmark.test.mjs tests/benchmark-observer.test.mjs",
+    "test:diagnostics": "node --test tests/latency-baseline.test.mjs",
     "test:transaction": "node --experimental-strip-types --test tests/transaction.test.ts",
     "test:drafts": "node --experimental-strip-types --test tests/drafts.test.ts",
     "test:subscriptions": "node --experimental-strip-types --test tests/subscriptions.test.ts tests/subscription-http.test.ts",
