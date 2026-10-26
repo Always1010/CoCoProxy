@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { renderDeploymentPlan, type DeploymentPlan } from './plan.ts';
 import { assessStateSchema, DEPLOYMENT_STATE_FILES, type StateStore } from './compatibility.ts';
 import { verifyManagedWeb } from '../setup/https.ts';
+import { inspectServiceAccount, validServiceAccountRequest } from './service-account.ts';
 
 // This is deliberately an offline file installer. Service lifecycle, router
 // activation and the existing root network helper remain separate operations.
@@ -288,13 +289,10 @@ async function run(binary: string, args: string[], timeoutMs = 15000) {
   (error, stdout) => error ? reject(new InstallError('INSTALL_SYSTEM_QUERY_FAILED')) : accept(stdout)));
 }
 export async function assertDeploymentAccount(serviceUser: string, serviceUid: number) {
-  require(typeof serviceUser === 'string' && /^[a-z_][a-z0-9_-]{0,31}$/.test(serviceUser) && !['root', 'nobody'].includes(serviceUser) &&
-    Number.isSafeInteger(serviceUid) && serviceUid > 0, 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
+  require(validServiceAccountRequest(serviceUser, serviceUid), 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
   await executable('/usr/bin/getent');
-  const accounts = (await run('/usr/bin/getent', ['passwd'])).trim().split('\n').map(line => line.split(':'));
-  require(accounts.filter(a => a[0] === serviceUser).length === 1 && accounts.filter(a => Number(a[2]) === serviceUid).length === 1 &&
-    accounts.some(a => a[0] === serviceUser && Number(a[2]) === serviceUid &&
-      ['/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false'].includes(a[6])), 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
+  const identity = inspectServiceAccount(await run('/usr/bin/getent', ['passwd']), serviceUser, serviceUid);
+  require(identity.status === 'valid', 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
 }
 async function privateFile(path: string, uid: number) {
   const stat = await info(path);

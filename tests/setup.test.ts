@@ -7,6 +7,7 @@ import { inspectSetup, parseServiceIdentity, type DoctorHost } from '../packages
 import { ManagedWebError } from '../packages/setup/https.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
+import { assertDeploymentAccount } from '../packages/deployment/install.ts';
 
 const sample = JSON.parse(await readFile(new URL('../examples/setup-environment.json', import.meta.url), 'utf8'));
 const release = { manifestSha256: 'b'.repeat(64), binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256, serviceUid: 12345 };
@@ -79,9 +80,42 @@ test('upgrade environment resolution preserves omitted ports, network resources 
 test('service identity rejects duplicate UIDs, interactive identities and mismatched explicit UID', () => {
   const account = 'cocoproxy:x:12345:12345::/nonexistent:/usr/sbin/nologin';
   assert.equal(parseServiceIdentity(account, 'cocoproxy'), 12345);
-  assert.throws(() => parseServiceIdentity(account + '\nother:x:12345:1::/:/bin/false', 'cocoproxy'));
-  assert.throws(() => parseServiceIdentity(account.replace('nologin', 'bash'), 'cocoproxy'));
-  assert.throws(() => parseServiceIdentity(account, 'cocoproxy', 12346));
+  assert.throws(() => parseServiceIdentity('', 'cocoproxy'), { code: 'SETUP_SERVICE_ACCOUNT_REQUIRED' });
+  assert.throws(() => parseServiceIdentity(account + '\n' + account, 'cocoproxy'), { code: 'SETUP_SERVICE_ACCOUNT_REQUIRED' });
+  for (const accounts of [account + '\nother:x:12345:1::/:/bin/false', account.replace('nologin', 'bash'),
+    account.replace(':12345:12345:', ':0:12345:'), account.replace(':12345:12345:', ':4294967295:12345:'),
+    account.replace(':12345:12345:', ':1e4:12345:'), account + ':extra']) {
+    assert.throws(() => parseServiceIdentity(accounts, 'cocoproxy'), { code: 'SETUP_SERVICE_ACCOUNT_INVALID' });
+  }
+  assert.throws(() => parseServiceIdentity(account, 'cocoproxy', 12346), { code: 'SETUP_SERVICE_ACCOUNT_INVALID' });
+  for (const name of ['root', 'nobody', 'invalid.name']) {
+    assert.throws(() => parseServiceIdentity(account.replace('cocoproxy:', name + ':'), name), { code: 'SETUP_SERVICE_ACCOUNT_INVALID' });
+  }
+});
+test('service identity accepts only the installer system shell paths', () => {
+  const account = (shell: string) => 'cocoproxy:x:12345:12345::/nonexistent:' + shell;
+  for (const shell of ['/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false']) {
+    assert.equal(parseServiceIdentity(account(shell), 'cocoproxy', 12345), 12345);
+  }
+  for (const shell of ['/opt/custom/nologin', '/opt/custom/false', '/bin/bash', 'nologin', '/usr/sbin/nologin/']) {
+    assert.throws(() => parseServiceIdentity(account(shell), 'cocoproxy'), { code: 'SETUP_SERVICE_ACCOUNT_INVALID' });
+  }
+});
+test('installer keeps its account error code for invalid service identity requests', async () => {
+  for (const [name, uid] of [['root', 12345], ['nobody', 12345], ['invalid.name', 12345],
+    ['cocoproxy', 0], ['cocoproxy', 1.5], ['cocoproxy', 4_294_967_295]] as const) {
+    await assert.rejects(assertDeploymentAccount(name, uid), { code: 'INSTALL_DEDICATED_ACCOUNT_REQUIRED' });
+  }
+});
+test('doctor blocks account shells outside the installer allowlist', async () => {
+  const host = readyDoctorHost();
+  for (const shell of ['/opt/custom/nologin', '/opt/custom/false']) {
+    const result = await inspectSetup(sample, { ...host, run: async (path, args) => path.endsWith('getent')
+      ? 'cocoproxy:x:12345:12345::/nonexistent:' + shell : host.run(path, args) });
+    assert.equal(result.serviceUid, null);
+    assert.equal(result.checks.find(check => check.id === 'service-account')?.status, 'fail');
+    assert.equal(result.readyForInstallPreflight, false);
+  }
 });
 test('doctor aggregates independent failures without invoking mutation commands or exposing raw failures', async () => {
   const calls: string[] = [];
