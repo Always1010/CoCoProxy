@@ -329,20 +329,20 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
       '按维护流程停止服务后继续最终安装预检；不要为此自动升级工具或尝试绑定端口。', false,
       boundObservation && !boundFailed ? undefined : { code: 'SETUP_PORT_BOUND_SCOPE_UNAVAILABLE',
         reason: '本次没有取得完整的仅绑定未监听 TCP 观察证据；此额外范围未覆盖，不要求升级 ss。' });
-    const trustedInstallation = installation?.installed === true && typeof installation.receipt === 'object' && installation.receipt.status === 'complete' &&
-      installation.release === 'matches-receipt' && installation.files?.every(file => file.status === 'matches-receipt') &&
-      installation.identity?.serviceUid === serviceUid;
+    const installedSnapshot = installation?.installed === true ? installation : undefined;
+    const trustedInstallation = installedSnapshot?.receipt?.status === 'complete' && installedSnapshot.release === 'matches-receipt' &&
+      installedSnapshot.files?.every(file => file.status === 'matches-receipt') && installedSnapshot.identity?.serviceUid === serviceUid;
     async function socketOwner(socket: ListeningSocket, target: ListeningTarget): Promise<'owned' | 'foreign' | 'unknown'> {
       if (installation?.installed === false) return 'foreign';
-      if (!trustedInstallation || !installation?.identity || !socket.pids.length ||
-        !installation.files?.some(file => file.path === '/etc/systemd/system/' + target.unit && file.status === 'matches-receipt')) return 'unknown';
+      if (!trustedInstallation || !installedSnapshot?.identity || !socket.pids.length ||
+        !installedSnapshot.files?.some(file => file.path === '/etc/systemd/system/' + target.unit && file.status === 'matches-receipt')) return 'unknown';
       try {
         const output = await trustedRun(environment!.system.systemctlPath, ['show', target.unit, '--property=MainPID,FragmentPath,DropInPaths,NeedDaemonReload']);
         const properties = Object.fromEntries(output.trim().split('\n').map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)]; }));
         if (!/^[1-9]\d*$/.test(properties.MainPID ?? '') || properties.FragmentPath !== '/etc/systemd/system/' + target.unit ||
           properties.DropInPaths !== '' || properties.NeedDaemonReload !== 'no') return 'unknown';
         const expected = target.executable === 'node' ? environment!.system.nodePath : target.executable === 'nginx' && environment!.https?.mode === 'managed'
-          ? environment!.https.nginxPath : installation.identity.release + '/bin/mihomo';
+          ? environment!.https.nginxPath : installedSnapshot.identity.release + '/bin/mihomo';
         const executable = await host.resolve(expected);
         for (const pid of socket.pids) {
           const actual = await host.resolve('/proc/' + pid + '/exe');
