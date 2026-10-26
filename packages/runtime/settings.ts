@@ -14,6 +14,20 @@ import type { RuntimeSettings, RuntimeSelection } from './types.ts';
 const digest = /^[a-f0-9]{64}$/;
 const settingKeys = ['schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256', 'systemctlPath', 'unitPath', 'unitSha256', 'serviceUid'];
 const fail: (code: string) => never = code => { throw new RuntimeError(code); };
+// Bounded, process-local proof caches. They cannot bypass current file checks
+// and never expose the private candidate snapshots to callers.
+let verifiedBinary: { key: string; identity: string } | undefined;
+type RuntimeCandidate = {
+  candidate: Candidate; path: string; controller: { port: number; secret: string }; home: string;
+};
+const compiledCandidates = new Map<string, RuntimeCandidate>();
+
+function rememberCandidate(key: string, loaded: RuntimeCandidate): RuntimeCandidate {
+  const snapshot = structuredClone(loaded);
+  if (compiledCandidates.size >= 2) compiledCandidates.delete(compiledCandidates.keys().next().value!);
+  compiledCandidates.set(key, snapshot);
+  return loaded;
+}
 
 function plainRecord(input: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input) ||
@@ -76,28 +90,36 @@ export async function verifyBinary(input: RuntimeSettings): Promise<string> {
     try {
       const same = (stat: typeof before) => stat.isFile() && stat.dev === before.dev && stat.ino === before.ino &&
         stat.size === before.size && stat.mtimeNs === before.mtimeNs && stat.ctimeNs === before.ctimeNs &&
-        stat.uid === before.uid && stat.mode === before.mode;
+        stat.uid === before.uid && stat.gid === before.gid && stat.mode === before.mode;
       if (!same(await handle.stat({ bigint: true }))) fail('BINARY_UNTRUSTED');
-      const hash = createHash('sha256');
-      const buffer = Buffer.alloc(64 * 1024);
-      let total = 0n;
-      for (;;) {
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-        if (bytesRead === 0) break;
-        total += BigInt(bytesRead);
-        if (total > maximum) fail('BINARY_UNTRUSTED');
-        hash.update(buffer.subarray(0, bytesRead));
+      const key = JSON.stringify(settings);
+      // ctimeNs changes for same-inode writes, ownership and mode changes even
+      // when an operator restores size and mtime. Replacement changes dev/ino.
+      const identity = [path, before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs,
+        before.uid, before.gid, before.mode].join(':');
+      const cached = verifiedBinary?.key === key && verifiedBinary.identity === identity;
+      if (!cached) {
+        const hash = createHash('sha256');
+        const buffer = Buffer.alloc(64 * 1024);
+        let total = 0n;
+        for (;;) {
+          const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+          if (bytesRead === 0) break;
+          total += BigInt(bytesRead);
+          if (total > maximum) fail('BINARY_UNTRUSTED');
+          hash.update(buffer.subarray(0, bytesRead));
+        }
+        if (hash.digest('hex') !== settings.binarySha256) fail('BINARY_UNTRUSTED');
       }
-      if (hash.digest('hex') !== settings.binarySha256 || !same(await handle.stat({ bigint: true })) ||
+      if (!same(await handle.stat({ bigint: true })) ||
           !same(await lstat(path, { bigint: true })) || await realpath(settings.binaryPath) !== path) fail('BINARY_UNTRUSTED');
+      verifiedBinary = { key, identity };
       return path;
     } finally { await handle.close(); }
-  } catch { return fail('BINARY_UNTRUSTED'); }
+  } catch { verifiedBinary = undefined; return fail('BINARY_UNTRUSTED'); }
 }
 
-export async function loadRuntimeCandidate(input: RuntimeSettings, generation: string): Promise<{
-  candidate: Candidate; path: string; controller: { port: number; secret: string }; home: string;
-}> {
+export async function loadRuntimeCandidate(input: RuntimeSettings, generation: string): Promise<RuntimeCandidate> {
   const settings = parseRuntimeSettings(input);
   if (typeof generation !== 'string' || !digest.test(generation)) fail('INVALID_RUNTIME_GENERATION');
   try {
@@ -109,14 +131,17 @@ export async function loadRuntimeCandidate(input: RuntimeSettings, generation: s
     // bytes which were never checked by the immutable candidate store.
     const bytes = await privateRead(path);
     if (createHash('sha256').update(bytes).digest('hex') !== generation) fail('CANDIDATE_UNTRUSTED');
+    const key = JSON.stringify([settings, generation]);
+    const cached = compiledCandidates.get(key);
+    if (cached) return structuredClone(cached);
     const config = JSON.parse(bytes) as JsonObject;
     const controller = config['external-controller'];
     const dns = config.dns;
     if (settings.automaticGateway) {
       const compiled = recompileAutomaticGatewayConfig(config, settings.automaticGateway);
       if (compiled.id !== generation || typeof controller !== 'string' || typeof config.secret !== 'string') fail('CANDIDATE_UNTRUSTED');
-      return { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret },
-        home: posix.join(settings.stateDirectory, 'core-home') };
+      return rememberCandidate(key, { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret },
+        home: posix.join(settings.stateDirectory, 'core-home') });
     }
     if (typeof controller !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(controller) ||
         !dns || typeof dns !== 'object' || Array.isArray(dns) ||
@@ -129,8 +154,8 @@ export async function loadRuntimeCandidate(input: RuntimeSettings, generation: s
       dnsPort: Number(dns.listen.slice(10)), bootstrapResolvers: dns['default-nameserver'], ...deploymentDnsOptions(config),
     }, policy });
     if (compiled.id !== generation) fail('CANDIDATE_UNTRUSTED');
-    return { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret },
-      home: posix.join(settings.stateDirectory, 'core-home') };
+    return rememberCandidate(key, { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret },
+      home: posix.join(settings.stateDirectory, 'core-home') });
   } catch { return fail('CANDIDATE_UNTRUSTED'); }
 }
 
