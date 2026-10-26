@@ -53,7 +53,11 @@ IP 不能确定接口、路由器 MAC、LAN 范围、HTTPS、管理员身份或�
 }
 ```
 
-这些路径指向目标网关上原有的密钥与主机指纹文件，工具不会复制密钥。首次更新增加 `--router-config /absolute/private/router-ssh.json`，以后复用目标上的 root:0600 配置。适配器通过公开 ubus API 查询、关闭、等待任务并恢复原开启意图，不安装或更新路由器软件。异步任务轮询按 120 秒总时限计入 RPC 耗时，每次 RPC 最多 30 秒；协调器为包含前后状态核验的操作保留 300 秒上限，超时返回失败并要求审阅，不推断远端任务已经取消。其他协同路由器可配置 `--router-hook /absolute/root-owned/executable`：它依次接受 `status`、`disable`、`enable`，`status` 只返回 `{"enabled":true}` 或 `{"enabled":false}`，执行操作须等待结果确认。适配器及全部祖先须 root 控制、不可被其他身份写入。
+这些路径指向目标网关上原有的密钥与主机指纹文件，工具不会复制密钥。首次更新增加 `--router-config /absolute/private/router-ssh.json`，以后复用目标上的 root:0600 配置。适配器通过公开 ubus API 查询、关闭、等待任务并恢复原开启意图，不安装或更新路由器软件。异步任务轮询按 120 秒总时限计入 RPC 耗时，每次 RPC 最多 30 秒；协调器为包含前后状态核验的操作保留 300 秒上限，超时返回失败并要求审阅，不推断远端任务已经取消。其他协同路由器可配置 `--router-hook /absolute/root-owned/executable`：它须接受下述 `check-adapter`，以及 `status`、`disable`、`enable`；`status` 只返回 `{"enabled":true}` 或 `{"enabled":false}`，执行操作须等待结果确认。适配器及全部祖先须 root 控制、不可被其他身份写入。
+
+自动网关已有安装在预览或开始维护前，先调用 `check-adapter`，再独立查询 status。内置适配器复用 enable 的能力/schema校验，最小返回格式为 `{"schemaVersion":1,"compatible":true}`；还提供 `scope:capabilities-and-readable-configuration-schema` 和 `endToEnd:unverified`，仅说明所需接口能力与配置 schema/revision 可读，不证明两端配置匹配、真实转发或恢复必定成功。候选 enabled:false 或 degraded 本身不阻止该兼容性观察；是否处于可维护状态仍由后续 status 等前置条件判断。
+
+自定义 hook 也须实现该只读动作：检查自己的查询/独立关闭/恢复接口及兼容配置格式，失败或未知时非零退出或不返回 compatible:true。旧 hook 应先按本约定增加检查并单独运行，再重做 `--preview`；不能仅为过检固定返回 true。缺动作、不兼容、未知或结果格式不符均以 `REMOTE_ROUTER_ADAPTER_PREFLIGHT_FAILED` 在暂停、关闭交付或停服前拒绝，不静默跳过，也不要求为此先更改当前开启意图。
 
 更新先在服务运行期间执行公开 prepare 检查，然后通过新载荷的公共维护命令持久暂停并排空事务、关闭路由器交付、停止服务并安全退役旧网络，再执行公开升级。安装完成后先凭本次指纹约束的令牌恢复原 runtime 标记，再启动服务；原来没有标记时恢复为缺失，持久恢复未启用时也保持原 flags，不把维护操作变成新的开启意图。已经启用但处于维护暂停的安装拒绝自动更新；停用且核心已停止的安装可以更新并保持停用。暂停标记与仍运行核心同时存在时须先人工审阅，入口不会为启动核心而临时放宽暂停。
 

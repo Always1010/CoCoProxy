@@ -50,6 +50,8 @@ python3 "$HOOK" --config "$SSH_CONFIG" disable
 
 `enable` 检查实际 capabilities/schema，并在提供参数时比较当前保存配置，应用后核对 appliedRevision。`check-config` 比较保存配置，同时分别报告 appliedRevision 与 `appliedConfigurationMatches`；保存草稿相同不等于实际应用相同，active 也不等于端到端通过。既有维护协调的 `status`/`disable`/`enable` 简短 JSON 接口保持兼容；未带参数的 enable 只应用既有已开启候选，不代表完成两端映射校验。关闭优先直接调用 `external_disable`，不先要求 active，不受配置能力或参数文件校验阻断，故障 degraded 时仍可关闭；仍须等待任务并确认最终撤销，失败如实返回。
 
+开始维护前可先执行 `python3 "$HOOK" --config "$SSH_CONFIG" check-adapter`。它复用开启所需的 capabilities、配置 schema/revision 可读性校验，返回 `compatible:true`、固定 `scope:capabilities-and-readable-configuration-schema` 及 `endToEnd:unverified`。该动作不要求路由器参数或候选 enabled:true，不因 degraded 本身拒绝兼容性观察；它不检查两端配置相同、不证明可恢复成功或真实转发。当前意图与状态仍由后续独立 status 检查。远程维护协调在进入暂停或停服前及预览阶段消费该结果；未知、不兼容或缺失动作直接拒绝，不能等停机后才发现无法调用新版 enable。
+
 缺少或不兼容的能力返回 `REMOTE_ROUTER_CAPABILITIES_INCOMPATIBLE`，schema 不兼容返回 `REMOTE_ROUTER_SCHEMA_INCOMPATIBLE`，参数不符返回 `REMOTE_ROUTER_PARAMETERS_INVALID`，保存配置与参数不同返回 `REMOTE_ROUTER_CONFIGURATION_MISMATCH`。`REMOTE_ROUTER_DISABLE_BEFORE_SAVE` 要求先关闭，`REMOTE_ROUTER_PLAN_REVIEW_REQUIRED` 要求重新预览并使用匹配摘要，`REMOTE_ROUTER_SAVE_UNCONFIRMED` 要求检查实际保存内容。通用 RPC/SSH、任务超时或最终状态失败都不表示远端任务已取消；不要反复覆盖配置。
 
 ## 必须满足的行为

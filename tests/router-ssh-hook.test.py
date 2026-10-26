@@ -156,14 +156,29 @@ console.log(JSON.stringify(routerParameters(parseSetupEnvironment(input))));"""
                 else:
                     raise AssertionError('Unexpected mutation: ' + method)
                 return SimpleNamespace(returncode=0, stdout=json.dumps(reply).encode())
-            def invoke(requested_action=action, flags=None):
-                argv = ['router-ssh-hook.py', '--config', str(config), '--parameters', str(params), *(flags or []), requested_action]
+            def invoke(requested_action=action, flags=None, include_parameters=True):
+                argv = ['router-ssh-hook.py', '--config', str(config),
+                        *(['--parameters', str(params)] if include_parameters else []), *(flags or []), requested_action]
                 with patch('sys.argv', argv), contextlib.redirect_stdout(io.StringIO()) as output:
                     adapter.main()
                 return json.loads(output.getvalue())
             with patch.object(adapter.os, 'geteuid', lambda: config.stat().st_uid, create=True), \
                  patch.object(adapter.stat, 'S_IMODE', lambda _: 0o600), patch.object(adapter.subprocess, 'run', run):
                 yield invoke, replies, calls, config, params
+
+    def test_adapter_check_only_observes_capabilities_and_schema_for_disabled_candidate_or_degraded_state(self):
+        with self.scenario('check-adapter') as (invoke, replies, calls, _, params):
+            replies['state'].update(phase='degraded', desiredEnabled=True)
+            params.write_text('not used by adapter compatibility check')
+            result = invoke(include_parameters=False)
+            self.assertTrue(result['compatible'])
+            self.assertEqual(result['scope'], 'capabilities-and-readable-configuration-schema')
+            self.assertEqual(result['endToEnd'], 'unverified')
+            self.assertFalse(replies['current']['enabled'])
+            self.assertEqual([method for method, _ in calls], ['capabilities', 'external_get'])
+            replies['capabilities']['externalProxy']['schema'] = 2
+            with self.assertRaisesRegex(RuntimeError, 'REMOTE_ROUTER_CAPABILITIES_INCOMPATIBLE'):
+                invoke(include_parameters=False)
 
     def test_preview_and_save_bind_target_revision_and_full_replacement_without_enabling(self):
         with self.scenario('preview-config') as (invoke, replies, calls, config, _):
