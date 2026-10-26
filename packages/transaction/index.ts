@@ -44,6 +44,9 @@ type State = {
 type LockOwner = { pid: number; token: string; bootId: string | null; startTime: string | null };
 const digestPattern = /^[a-f0-9]{64}$/;
 const phases = new Set(['validating', 'activating', 'confirming', 'restoring', 'recovering-target', 'fault', 'committed']);
+// Only remember canonicality, never file trust: every lookup still securely
+// reads and hashes the current bytes. A digest proves the same validated bytes.
+const canonicalCandidates = new Set<string>();
 const emptyState = (): State => ({ version: 1, desired: null, active: null, pending: null, fault: null, checkedAt: null });
 const errno = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 const validId = (value: unknown): value is string => typeof value === 'string' && digestPattern.test(value);
@@ -176,9 +179,12 @@ export class FileTransactionStore {
     try { bytes = await privateRead(path); }
     catch (error) { if (errno(error) === 'ENOENT') fail('CANDIDATE_NOT_FOUND'); throw error; }
     if (createHash('sha256').update(bytes).digest('hex') !== id) fail('CANDIDATE_TAMPERED');
+    if (canonicalCandidates.has(id)) return path;
     let value: unknown;
     try { value = JSON.parse(bytes); } catch { fail('CANDIDATE_TAMPERED'); }
     if (value === null || typeof value !== 'object' || Array.isArray(value) || canonicalJson(value as Candidate['config']) !== bytes) fail('CANDIDATE_TAMPERED');
+    if (canonicalCandidates.size >= 4) canonicalCandidates.delete(canonicalCandidates.values().next().value!);
+    canonicalCandidates.add(id);
     return path;
   }
 

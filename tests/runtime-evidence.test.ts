@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createReadStream } from 'node:fs';
-import { chmod, lstat, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -82,13 +82,27 @@ test('binary verification pins bytes, executable mode and ownership permissions'
   const root = await directory(t);
   const path = join(root, 'core-fixture');
   const bytes = '#!/bin/sh\nexit 0\n';
+  const timestamp = new Date('2020-01-01T00:00:00Z');
   await writeFile(path, bytes, { mode: 0o700 });
+  await utimes(path, timestamp, timestamp);
   const settings = { ...base(), serviceUid: process.geteuid!() || 1001, binaryPath: path,
     binarySha256: createHash('sha256').update(bytes).digest('hex') };
   assert.equal(await verifyBinary(settings), await realpath(path));
+  assert.equal(await verifyBinary(settings), await realpath(path));
+  await assert.rejects(verifyBinary({ ...settings, binarySha256: '0'.repeat(64) }), code('BINARY_UNTRUSTED'));
+  await verifyBinary(settings);
   await writeFile(path, '#!/bin/sh\nexit 1\n');
+  await utimes(path, timestamp, timestamp);
   await assert.rejects(verifyBinary(settings), code('BINARY_UNTRUSTED'));
   await writeFile(path, bytes);
+  await verifyBinary(settings);
+  const replacement = join(root, 'replacement');
+  await writeFile(replacement, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+  await utimes(replacement, timestamp, timestamp);
+  await rename(replacement, path);
+  await assert.rejects(verifyBinary(settings), code('BINARY_UNTRUSTED'));
+  await writeFile(path, bytes);
+  await verifyBinary(settings);
   await chmod(path, 0o720);
   await assert.rejects(verifyBinary(settings), code('BINARY_UNTRUSTED'));
   await chmod(path, 0o600);
@@ -107,6 +121,16 @@ test('candidate recompile preserves proxies and policy while rejecting forged de
   assert.equal(loaded.candidate.id, good.id);
   assert.deepEqual(loaded.candidate.config.proxies, good.config.proxies);
   assert.deepEqual(loaded.controller, { port: 19090, secret });
+  // Neither the first return value nor a warm-cache return can poison the
+  // private compiled proof or the controller credentials of a later lookup.
+  for (const result of [loaded, await loadRuntimeCandidate(settings, good.id)]) {
+    result.candidate.config.secret = 'caller-modified';
+    (result.candidate.config.rules as string[]).push('MATCH,REJECT');
+    result.controller.secret = 'caller-modified';
+  }
+  const isolated = await loadRuntimeCandidate(settings, good.id);
+  assert.deepEqual(isolated.candidate.config, good.config);
+  assert.deepEqual(isolated.controller, { port: 19090, secret });
   const modifications: Candidate['config'][] = [{ tun: { enable: true } }, { listeners: [] }, { 'allow-lan': true },
     { 'external-controller': '0.0.0.0:19090' }, { dns: { ...(good.config.dns as object), nameserver: ['198.51.100.53'] } },
     { 'rule-providers': {} }];
@@ -116,7 +140,19 @@ test('candidate recompile preserves proxies and policy while rejecting forged de
     await assert.rejects(loadRuntimeCandidate(settings, forged.id), code('CANDIDATE_UNTRUSTED'));
   }
   await assert.rejects(loadRuntimeCandidate(settings, '../' + secret), code('INVALID_RUNTIME_GENERATION'));
+  await loadRuntimeCandidate(settings, good.id);
+  await writeFile(staged.path, canonicalJson({ ...good.config, secret: 'changed-in-place' }));
+  await assert.rejects(loadRuntimeCandidate(settings, good.id), code('CANDIDATE_UNTRUSTED'));
+  await writeFile(staged.path, canonicalJson(good.config));
+  await loadRuntimeCandidate(settings, good.id);
   await chmod(staged.path, 0o644);
+  await assert.rejects(loadRuntimeCandidate(settings, good.id), code('CANDIDATE_UNTRUSTED'));
+  await chmod(staged.path, 0o600);
+  await loadRuntimeCandidate(settings, good.id);
+  await rm(staged.path);
+  const replacement = join(root, 'replacement.json');
+  await writeFile(replacement, canonicalJson(good.config), { mode: 0o600 });
+  await symlink(replacement, staged.path);
   await assert.rejects(loadRuntimeCandidate(settings, good.id), code('CANDIDATE_UNTRUSTED'));
 });
 

@@ -232,6 +232,9 @@ test('runtime accepts native candidates only with matching explicit deployment o
   await assert.rejects(loadRuntimeCandidate(runtime, candidate.id),
   (error: unknown) => error instanceof Error && error.message === 'CANDIDATE_UNTRUSTED');
   assert.equal((await loadRuntimeCandidate({ ...runtime, automaticGateway: parseAutomaticGatewaySettings(settings()) }, candidate.id)).candidate.id, candidate.id);
+  // A compiled native proof cannot authorize a later explicit deployment.
+  await assert.rejects(loadRuntimeCandidate(runtime, candidate.id),
+    (error: unknown) => error instanceof Error && error.message === 'CANDIDATE_UNTRUSTED');
   await assert.rejects(loadRuntimeCandidate({ ...runtime, automaticGateway: parseAutomaticGatewaySettings({ ...settings(), clientIPv4: '192.0.2.4' }) }, candidate.id),
     (error: unknown) => error instanceof Error && error.message === 'CANDIDATE_UNTRUSTED');
 });
