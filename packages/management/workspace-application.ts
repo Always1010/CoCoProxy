@@ -24,6 +24,7 @@ const settingsOf = ({ revision: _revision, ...settings }: Workspace) => settings
 const hash = (value: unknown) => createHash('sha256').update(canonicalJson(value as JsonObject)).digest('hex');
 const scopeOf = (workspace: Workspace) => JSON.stringify([workspace.mode, workspace.mode === 'subscription' ? workspace.subscriptionId : workspace.sourceIds]);
 const editsOf = (workspace: Workspace) => workspace.mode === 'local' ? workspace.local : workspace.subscriptionOverrides[workspace.mode === 'legacy' ? 'legacy' : workspace.subscriptionId ?? ''] ?? emptyOverrides();
+const activePolicies = (workspace: Workspace) => Object.fromEntries(Object.entries(editsOf(workspace).automatic ?? {}).filter(([, policy]) => policy.enabled !== false));
 
 /** Check group references before a candidate reaches the runtime validator. */
 function checkReferences(policy: JsonObject): void {
@@ -135,7 +136,7 @@ export function createWorkspaceApplication(options: {
   function build(workspace: Workspace, repair = false): Promise<Plan> {
     // Bindings may change without changing user intent/revision.
     return readAutomaticBindings(options.stateDirectory).catch(error => {
-      if (Object.keys(editsOf(workspace).automatic ?? {}).length) throw error;
+      if (Object.keys(activePolicies(workspace)).length) throw error;
       return null; // Corrupt automatic state must not prevent an explicit manual recovery.
     }).then(bindings => buildWithBindings(workspace, repair, bindings));
   }
@@ -194,7 +195,7 @@ export function createWorkspaceApplication(options: {
         policy = overridePolicy({ ...base, proxies }, workspace.subscriptionOverrides.legacy ?? emptyOverrides(), workspace.runMode, workspace.revision > 0, repair);
       }
     }
-    const scope = scopeOf(workspace), policies = editsOf(workspace).automatic ?? {};
+    const scope = scopeOf(workspace), policies = activePolicies(workspace);
     const signatures: Record<string, string> = Object.create(null);
     const nodes = asNodes(policy), groups = asGroups(policy);
     const choices = Object.fromEntries(groups.map(group => [String(group.name), Array.isArray(group.proxies) ? [...group.proxies] as string[] : []]));
@@ -288,7 +289,7 @@ export function createWorkspaceApplication(options: {
   async function automaticSnapshot(fresh = false): Promise<AutoSnapshot | null> {
     if (automaticChanging) return null;
     const workspace = await load();
-    if (workspace.runMode === 'direct' || !Object.keys(editsOf(workspace).automatic ?? {}).length) return null;
+    if (workspace.runMode === 'direct' || !Object.keys(activePolicies(workspace)).length) return null;
     const state = await store.status();
     if (!state.active || state.transaction || state.fault || !options.observeSelections) return null;
     // The 1 s decision timer normally reads only small state files. Compiling
@@ -465,7 +466,7 @@ export function createWorkspaceApplication(options: {
       if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
       const settings = await seedLegacyChoices(current, parseWorkspaceSettings(body.settings));
       // Validate automatic pools and probe permissions before persisting any settings.
-      if (Object.keys(editsOf({ ...settings, revision: current.revision }).automatic ?? {}).length || settings.autoProbes) {
+      if (Object.keys(activePolicies({ ...settings, revision: current.revision })).length || settings.autoProbes) {
         await build({ ...settings, revision: current.revision });
       }
       if (settings.mode !== 'subscription' && settings.sourceIds.length !== 1 &&
@@ -488,7 +489,8 @@ export function createWorkspaceApplication(options: {
       if (compile(plan).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
       const settings = await seedLegacyChoices(current, settingsOf(current), plan);
       const edits = current.mode === 'local' ? settings.local : settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] ?? emptyOverrides();
-      if (edits.automatic) delete edits.automatic[body.group];
+      const automatic = edits.automatic?.[body.group];
+      if (automatic) edits.automatic![body.group] = { ...automatic, enabled: false };
       if (current.mode !== 'local') settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] = edits;
       const group = asGroups((await build({ ...settings, revision: current.revision })).policy).find(group => group.name === body.group);
       if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(body.name)) invalid('GROUP_SELECTION_CONFLICT');

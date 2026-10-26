@@ -2,6 +2,7 @@ import type { CoCoProxySource } from './useCoCoProxy'
 import { CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy } from './useCoCoProxy'
 
 export interface AutoGroupPolicy {
+  enabled?: boolean
   preferred: string[]
   fallback: string[]
   returnToPreferred: boolean
@@ -125,7 +126,8 @@ export function useWorkspace() {
       await save(settings => {
         const overrides = editOverrides(settings)
         overrides.selections[group] = name
-        if (overrides.automatic) delete overrides.automatic[group]
+        const automatic = overrides.automatic?.[group]
+        if (automatic) overrides.automatic![group] = { ...automatic, enabled: false }
       }, '')
       const observed = await api.request<{ proxies: Record<string, { now?: string }> }>('/api/clash/proxies')
       if (observed.proxies[group]?.now !== name) throw new CoCoProxyError('SELECTION_UNCONFIRMED')

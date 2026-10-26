@@ -1,4 +1,5 @@
-export type AutoGroupPolicy = { preferred: string[]; fallback: string[]; returnToPreferred: boolean };
+// Older policies omit enabled and remain active.
+export type AutoGroupPolicy = { enabled?: boolean; preferred: string[]; fallback: string[]; returnToPreferred: boolean };
 export type ProbeTarget = { url: string; expectedStatus: number };
 export type AutoProbeSettings = { primary: ProbeTarget; secondary: ProbeTarget; timeoutMs: number; slowMs: number };
 
@@ -23,7 +24,8 @@ function record(value: unknown, keys: string[]): Record<string, unknown> {
 
 /** Node existence and group aliases are checked against the active configuration by the adapter. */
 export function parseAutoGroupPolicy(value: unknown): AutoGroupPolicy {
-  const input = record(value, ['preferred', 'fallback', 'returnToPreferred']);
+  const input = record(value, ['enabled', 'preferred', 'fallback', 'returnToPreferred']);
+  if ('enabled' in input && typeof input.enabled !== 'boolean') return invalid();
   const names = (value: unknown): string[] => {
     if (!Array.isArray(value) || value.some(name => typeof name !== 'string' || !name.trim()
       || name !== name.trim() || name.length > 256 || /[\u0000-\u001f\u007f]/u.test(name)
@@ -32,8 +34,8 @@ export function parseAutoGroupPolicy(value: unknown): AutoGroupPolicy {
   };
   const preferred = names(input.preferred), fallback = names(input.fallback);
   const all = [...preferred, ...fallback];
-  if (!preferred.length || all.length > 32 || new Set(all).size !== all.length || typeof input.returnToPreferred !== 'boolean') return invalid();
-  return { preferred, fallback, returnToPreferred: input.returnToPreferred };
+  if ((!preferred.length && input.enabled !== false) || all.length > 32 || new Set(all).size !== all.length || typeof input.returnToPreferred !== 'boolean') return invalid();
+  return { ...('enabled' in input ? { enabled: input.enabled as boolean } : {}), preferred, fallback, returnToPreferred: input.returnToPreferred };
 }
 
 export function parseAutoProbeSettings(value: unknown): AutoProbeSettings {
