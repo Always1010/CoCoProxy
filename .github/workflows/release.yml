@@ -44,7 +44,6 @@ jobs:
         run: |
           npm run typecheck
           npm run test:git-tree
-          node --test tests/release-metadata.test.mjs
           npm run test:overlay
           npm run test:gateway
           npm run test:release-stage

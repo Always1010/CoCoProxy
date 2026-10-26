@@ -60,7 +60,7 @@ manifest.json
 
 选择 apps/packages 运行源码、根包元数据及存在的 LICENSE/NOTICE、明确的运维文档／样本与来源记录，以及安装配置和部署维护入口。可信部署选项说明 `examples/deployment-options.md` 随载荷提供。规则数据、旧候选兼容数据及许可随运行源码保留，规则生成器留在源码仓库。开发约定、发布 workflow、开发／构建／压测说明、协议夹具与构建 README、时延测量工具不进入运行包；运维文档需要的开发参考链接到官方源码仓库。排除 .local、.git、缓存、测试与协议对端；不遍历本地共享链接。受跟踪源码含任意 `.local` 路径时，源码归档和装配都拒绝。
 
-装配在固定白名单内验证所有 Markdown 的本地链接、图片、引用式链接和 HTML src/href 目标；缺失、越界或不安全目标均拒绝并清理本次暂存。检查不按文档链接自动扩大白名单，也不验证远程地址或 Markdown 页内锚点。CI 的 `node --test tests/release-metadata.test.mjs` 使用同一检查提前验证仓库导航闭包。
+装配在固定白名单内验证所有 Markdown 的本地链接、图片、引用式链接和 HTML src/href 目标；缺失、越界或不安全目标均拒绝并清理本次暂存。检查不按文档链接自动扩大白名单，也不验证远程地址或 Markdown 页内锚点。CI 的 `npm run test:release-stage` 同时运行装配、离线文档及发行元数据测试，使用同一检查验证仓库导航闭包。
 
 ## 依赖与构建产物
 
