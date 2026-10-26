@@ -17,7 +17,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=...):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -98,7 +98,7 @@ class RemoteDeploymentTests(unittest.TestCase):
             if '--operation' in args:
                 operation = args[args.index('--operation') + 1]
                 if operation == 'prepare':
-                    return b'{"readiness":"prepared-not-applied","review":{"configurationChanged":false}}'
+                    return json.dumps(preparation_report or {'readiness': 'prepared-not-applied', 'review': {'configurationChanged': False}}).encode()
                 if operation == 'inspect':
                     return json.dumps({'installed': True, 'release': 'matches-receipt', 'receipt': {'status': 'complete', 'manifestSha256': 'b' * 64},
                         'files': [{'status': 'matches-receipt'}], 'lock': {'present': False}}).encode()
@@ -182,6 +182,23 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertTrue(router['enabled'])
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['preservation'], report['preservation'])
+
+    def test_rejected_preparation_retains_reason_codes_without_private_values_or_maintenance(self):
+        report = {'readiness': 'compatibility-evidence-incomplete', 'review': {'configurationChanged': False, 'changedFiles': ['/private/synthetic-path']},
+            'compatibilityAssessment': {'assessments': {'historyCandidates': {'status': 'unknown', 'code': 'UPGRADE_HISTORY_FORMAT_ASSESSED',
+                'reason': 'synthetic-private-value', 'checks': [{'status': 'unknown', 'code': 'UPGRADE_CANDIDATE_READER_NOT_DECLARED'}]}}}}
+        temporary, stack, private, _, events, router, args = self.scenario(preparation_report=report)
+        with temporary, stack, contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaisesRegex(RuntimeError, 'REMOTE_UPGRADE_NOT_READY_OR_CONFIGURATION_CHANGED'):
+                deploy.main_locked(args)
+            diagnostic = json.loads(errors.getvalue())
+            self.assertIn('UPGRADE_CANDIDATE_READER_NOT_DECLARED', diagnostic['codes'])
+            self.assertFalse(diagnostic['configurationChanged'])
+            self.assertNotIn('synthetic-private-value', errors.getvalue())
+            self.assertNotIn('/private/synthetic-path', errors.getvalue())
+            self.assertFalse(any(any(action in command for action in ['runtime-maintenance-pause', 'disable', 'stop', '--apply']) for command in events))
+            self.assertFalse((private / 'remote-last.json').exists())
+            self.assertTrue(router['enabled'])
 
     def test_adapter_unknown_incompatible_or_missing_action_fails_before_any_maintenance_in_preview_and_apply(self):
         for preview in [False, True]:
