@@ -23,8 +23,8 @@ sh ./cocoproxy doctor
 | --- | --- |
 | `foundation` | Linux、架构、运行时、systemd及环境字段格式 |
 | `components` | 已有工具版本、polkit目录及指定Node版本；不证明全部运行能力 |
-| `identity` | 已有账户、UID及运行工具文件；普通路径祖先与完整归属仍由安装预检核验 |
-| `network` | TUN、转发、指定地址及规则JSON可读性；当前报告不判断资源冲突或路由器已验收 |
+| `identity` | 账户、UID、可信工具链接链、普通部署目录归属与祖先遍历；最终安装按实际输入与载荷复核 |
+| `network` | TUN、转发、指定地址，以及策略优先级/mark、路由表、nft表、TUN名称与网络回执；路由器实际行为另验 |
 | `management` | 受管HTTPS静态条件及终端信任待验提示；不证明监听端口、外部反代或实际登录可用 |
 | `installation` | 当前为未检查；已有安装的收据、文件漂移及维护状态另用 `inspect`，最终安装仍重新核验 |
 
@@ -45,6 +45,10 @@ sh ./cocoproxy doctor
 可信路径检查与最终安装器共享同一组只读判定。所有版本、账户和网络查询在执行前先检查工具及链接链：允许 root 所有的发行版工具链接，逐层检查链接目标，拒绝可写祖先、错误归属和非普通可执行文件。`node-path`、`systemctl-path` 还要求服务账户能遍历祖先并读取、执行工具；`release-parent` 要求发行父目录已存在。`deployment-directory-N` 按当前生成计划的目录顺序分别检查 root 或服务 UID 的归属和权限；缺失目录只在安装计划明确允许创建时接受。`receipt-directory` 检查已有收据目录的 root:0700 条件，`service-paths` 检查普通部署路径的服务遍历条件。缺少服务 UID 或文件类型等观察字段时返回 `unknown`。
 
 这些检查保留安装器原因码：`INSTALL_TOOL_UNTRUSTED`、`INSTALL_ROOT_OWNERSHIP_REQUIRED` 表示工具或祖先的链接、归属、可写权限不符；`INSTALL_REQUIRED_SYSTEM_TOOL_MISSING`、`INSTALL_TOOL_NOT_EXECUTABLE`、`INSTALL_TOOL_LINK_LIMIT` 分别表示工具缺失、文件不可执行、链接链超限；`INSTALL_DIRECTORY_REQUIRED`、`INSTALL_DIRECTORY_OWNERSHIP_CONFLICT`、`INSTALL_SERVICE_TRAVERSE_REQUIRED` 分别要求准备对应目录、核对目录归属与权限、核对服务遍历条件。报告不打印实际路径，也不修复权限；最终安装会按实际载荷和输入重新核验全部路径。
+
+网络资源判定也由 doctor 与最终安装器共享。`policy-rules` 拒绝所选三项策略优先级、核心保留的 9000–9010 优先级，以及与出口或核心保留 mark 有重叠的规则；`routes` 检查出口表、对应回程表及核心表；`firewall` 检查项目保护表和核心 nft 表，`tun-name` 检查核心 TUN 名称。`conflicts` 数组保留同项中全部已发现的固定原因码，不含原始规则。`network-receipt` 只接受缺失回执或可信 root:0600 单链接文件明确记录的 `removed` 状态；完整或中断回执需要通过维护流程显式退役。
+
+`INSTALL_RULE_CONFLICT`、`INSTALL_ROUTE_CONFLICT`、`INSTALL_NFT_CONFLICT`、`INSTALL_TUN_CONFLICT` 分别表示上述资源占用；`INSTALL_NETWORK_REMOVE_REQUIRED` 表示回执尚未退役。新增 `INSTALL_RULE_MARK_CONFLICT` 采用保守检查：支持数值/十六进制 mark、独立 mask 或 `mark/mask`，并识别 iproute2 实际输出的 `"not": null`。只有可识别的纯 mark 逆规则才反转匹配；逆规则还含非平凡地址或其他选择器时返回 `unknown`，避免将整条规则的反转误当成只反转 mark。不会求解接口、源地址、goto、suppress 等完整策略路由语义，可能要求操作者审阅更窄的规则。观察形状或 mark 表达式无法可靠解析时 doctor 返回 `SETUP_OBSERVATION_INVALID` / `unknown`，安装器拒绝并保留 `INSTALL_NETWORK_OBSERVATION_INVALID`。存在同名资源时不因它看似属于本项目就当作空闲；doctor 不运行网络 helper、不删除规则，也不自动接管资源。
 
 ## 2. 填写一次环境事实
 

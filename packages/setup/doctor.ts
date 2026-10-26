@@ -4,10 +4,12 @@ import { arch, platform } from 'node:os';
 import { createSetupDeployment, parseSetupEnvironment, SetupError, type SetupEnvironment } from './input.ts';
 import { ManagedWebError, verifyManagedWeb, type ManagedWebInput } from './https.ts';
 import { inspectServiceAccount } from '../deployment/service-account.ts';
-import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory,
+import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory, assertPrivatePath,
   PathEvidenceError, type PathEvidenceHost } from '../deployment/path-evidence.ts';
 import { renderDeploymentPlan } from '../deployment/plan.ts';
 import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../gateway/profile.ts';
+import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, networkReceiptRemoved,
+  NetworkObservationError } from '../deployment/network-evidence.ts';
 import type { EvidenceResult, EvidenceStatus } from './check-result.ts';
 
 export const DOCTOR_LAYERS = [
@@ -19,6 +21,7 @@ export type DoctorLayer = typeof DOCTOR_LAYERS[number]['id'];
 type DoctorStatus = Extract<EvidenceStatus, 'pass' | 'fail' | 'unknown'>;
 export interface Check extends EvidenceResult {
   layer: DoctorLayer; status: DoctorStatus; required: boolean; message: string;
+  conflicts?: string[];
 }
 const checkLayers = {
   linux: 'foundation', architecture: 'foundation', node: 'foundation', systemd: 'foundation', environment: 'foundation',
@@ -27,6 +30,7 @@ const checkLayers = {
   'release-parent': 'identity', 'receipt-directory': 'identity', 'service-paths': 'identity',
   'configured-node-version': 'components', tun: 'network', forwarding: 'network', 'interface-address': 'network',
   'policy-rules': 'network', routes: 'network', firewall: 'network', 'router-contract': 'network',
+  'tun-name': 'network', 'network-receipt': 'network',
   'managed-https': 'management', 'https-client-trust': 'management',
 } as const satisfies Record<string, DoctorLayer>;
 type CheckId = keyof typeof checkLayers | `deployment-directory-${number}`;
@@ -60,7 +64,7 @@ function observationFailure(error: unknown): { code: string; status: DoctorStatu
   if (code === 'ENOENT' || error instanceof SetupError && code === 'SETUP_REQUIRED_COMPONENT_MISSING') {
     return { code: 'SETUP_REQUIRED_COMPONENT_MISSING', status: 'fail', reason: '只读观察确认所需路径或命令不存在。' };
   }
-  if (error instanceof SyntaxError || error instanceof SetupError && code === 'SETUP_OBSERVATION_INVALID') {
+  if (error instanceof SyntaxError || error instanceof NetworkObservationError || error instanceof SetupError && code === 'SETUP_OBSERVATION_INVALID') {
     return { code: 'SETUP_OBSERVATION_INVALID', status: 'unknown', reason: '查询结果格式无法识别，未取得可靠观察证据。' };
   }
   return { code: 'SETUP_CHECK_UNAVAILABLE', status: 'unknown', reason: '查询未成功或访问受限，未取得可靠观察证据。' };
@@ -212,15 +216,40 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
       recognized(version, /^v\d+\.\d+\.\d+$/);
       return supportedNode(version.slice(1));
     }, '安装设置指定的 Node 路径必须同样满足版本要求。', '不能用当前入口运行时的版本替代目标 nodePath 的版本。');
-    for (const [id, path, args, field] of [
-      ['policy-rules', '/usr/sbin/ip', ['-j', 'rule', 'show'], null],
-      ['routes', '/usr/sbin/ip', ['-j', 'route', 'show', 'table', 'all'], null],
-      ['firewall', '/usr/sbin/nft', ['-j', 'list', 'ruleset'], 'nftables'],
-    ] as const) await probe(id, async () => {
-      const value = JSON.parse(await trustedRun(path, [...args]));
-      if (!Array.isArray(field === null ? value : value?.[field])) throw new SetupError('SETUP_OBSERVATION_INVALID');
+    const resources = { ...environment.resources, clientCIDR: environment.network.clientCIDR };
+    const conflictReasons: Record<string, string> = {
+      INSTALL_RULE_CONFLICT: '所选策略优先级或核心保留优先级已被占用。',
+      INSTALL_RULE_MARK_CONFLICT: '现有 mark/mask 规则与出口或核心保留 mark 存在保守重叠。',
+      INSTALL_ROUTE_CONFLICT: '出口表、回程表或核心保留路由表已被占用。',
+      INSTALL_NFT_CONFLICT: '项目保护表或核心 nft 表已存在，需先核验归属并完成退役。',
+      INSTALL_TUN_CONFLICT: '核心使用的 TUN 名称已存在，不能自动接管。',
+    };
+    for (const [id, path, args, assess] of [
+      ['policy-rules', '/usr/sbin/ip', ['-j', '-4', 'rule', 'show'], (value: unknown) => policyRuleConflicts(value, resources)],
+      ['routes', '/usr/sbin/ip', ['-N', '-j', '-4', 'route', 'show', 'table', 'all'], (value: unknown) => routeConflicts(value, resources)],
+      ['firewall', '/usr/sbin/nft', ['-j', 'list', 'tables'], firewallConflicts],
+      ['tun-name', '/usr/sbin/ip', ['-j', 'link', 'show'], tunConflicts],
+    ] as const) {
+      const message = '实际网络资源必须未被占用；合法 JSON 本身不能证明没有冲突。';
+      const remedy = '先核对资源归属并按维护流程完成停机退役；不要清空规则或删除未知资源。';
+      try {
+        const conflicts = assess(JSON.parse(await trustedRun(path, [...args])));
+        add(id, conflicts.length ? 'fail' : 'pass', message, remedy, true, conflicts.length ? {
+          code: conflicts[0], reason: conflicts.map(code => conflictReasons[code]).join(' '),
+        } : undefined);
+        checks[checks.length - 1].conflicts = conflicts;
+      } catch (error) { const failure = observationFailure(error); add(id, failure.status, message, remedy, true, failure); }
+    }
+    await probe('network-receipt', async () => {
+      const path = '/var/lib/cocoproxy-gateway-network/network-receipt.json';
+      if (!await pathHost.info(path)) return true;
+      await assertRootControlledPath(path, pathHost); await assertPrivatePath(path, 0, pathHost);
+      if (!networkReceiptRemoved(JSON.parse(await host.read(path)))) {
+        throw new PathEvidenceError('INSTALL_NETWORK_REMOVE_REQUIRED');
+      }
       return true;
-    }, '可读取策略路由或防火墙 JSON；资源归属与冲突由安装预检进一步核验。', '核对权限与工具 JSON 能力，不能清空现有规则。');
+    }, '已有网络回执必须明确记录已退役；缺失回执也不能免除实时资源检查。',
+    '按维护入口核对完整或中断的网络资源并显式退役；doctor 不执行 prepare 或 remove。');
   }
   if (environment?.https?.mode === 'managed') {
     const remedies: Record<string, string> = {

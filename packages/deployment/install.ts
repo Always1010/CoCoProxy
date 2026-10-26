@@ -8,8 +8,9 @@ import { renderDeploymentPlan, type DeploymentPlan } from './plan.ts';
 import { assessStateSchema, DEPLOYMENT_STATE_FILES, type StateStore } from './compatibility.ts';
 import { verifyManagedWeb } from '../setup/https.ts';
 import { inspectServiceAccount, validServiceAccountRequest } from './service-account.ts';
-import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory,
+import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory, assertPrivatePath,
   PathEvidenceError, type PathEvidenceHost } from './path-evidence.ts';
+import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, networkReceiptRemoved, NetworkObservationError } from './network-evidence.ts';
 
 // This is deliberately an offline file installer. Service lifecycle, router
 // activation and the existing root network helper remain separate operations.
@@ -282,9 +283,7 @@ export async function assertDeploymentAccount(serviceUser: string, serviceUid: n
   require(identity.status === 'valid', 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
 }
 async function privateFile(path: string, uid: number) {
-  const stat = await info(path);
-  require(stat && stat.isFile() && stat.nlink === 1 && stat.uid === uid && (stat.mode & 0o7777) === 0o600,
-    'INSTALL_PRIVATE_FILE_OWNERSHIP');
+  await pathCheck(() => assertPrivatePath(path, uid, pathHost));
 }
 async function serviceAncestors(path: string) { await pathCheck(() => assertServiceAncestors(path, pathHost)); }
 async function stopped(systemctl: string, units: string[], allowReload = false) {
@@ -312,23 +311,28 @@ async function networkClear(input: any) {
   require((await readFile('/proc/sys/net/ipv4/ip_forward', 'utf8')).trim() === '1', 'INSTALL_IPV4_FORWARDING_REQUIRED');
   const ip = (args: string[]) => run('/usr/sbin/ip', args).then(JSON.parse);
   const links = await ip(['-j', 'link', 'show']);
-  require(!links.some((l: any) => l.ifname === 'cocoproxy-tun'), 'INSTALL_TUN_CONFLICT');
+  require(networkObservation(() => tunConflicts(links)).length === 0, 'INSTALL_TUN_CONFLICT');
   const addresses = await ip(['-j', '-4', 'address', 'show', 'dev', n.ingressInterface]);
   require(addresses.length === 1 && addresses[0].flags.includes('UP') && addresses[0].addr_info.some((a: any) =>
     a.local === n.gatewayIPv4 && a.prefixlen === n.prefixLength), 'INSTALL_INGRESS_ADDRESS_REQUIRED');
   const rules = await ip(['-j', '-4', 'rule', 'show']);
-  require(!rules.some((r: any) => [n.egressPriority, n.egressPriority + 1, n.egressPriority + 2].includes(r.priority) ||
-    r.priority >= 9000 && r.priority <= 9010), 'INSTALL_RULE_CONFLICT');
+  const ruleConflicts = networkObservation(() => policyRuleConflicts(rules, n));
+  require(ruleConflicts.length === 0, ruleConflicts[0]);
   const routes = await ip(['-N', '-j', '-4', 'route', 'show', 'table', 'all']);
-  require(!routes.some((r: any) => [String(n.egressTable), ...(n.clientCIDR ? [String(n.egressTable + 20000)] : []), '2022'].includes(String(r.table)) ||
-    (r.table === 'main' || r.table === 254 || r.table === undefined) && [n.clientIPv4, n.clientIPv4 + '/32'].includes(r.dst)), 'INSTALL_ROUTE_CONFLICT');
+  require(networkObservation(() => routeConflicts(routes, n)).length === 0, 'INSTALL_ROUTE_CONFLICT');
   const tables = JSON.parse(await run('/usr/sbin/nft', ['-j', 'list', 'tables']));
-  require(!tables.nftables.some((t: any) => ['cocoproxy_auto_guard', 'mihomo'].includes(t.table?.name)), 'INSTALL_NFT_CONFLICT');
+  require(networkObservation(() => firewallConflicts(tables)).length === 0, 'INSTALL_NFT_CONFLICT');
   const receiptPath = '/var/lib/cocoproxy-gateway-network/network-receipt.json';
   if (await info(receiptPath)) {
     await trusted(receiptPath); await privateFile(receiptPath, 0);
     const previous = JSON.parse((await regular(receiptPath)).toString());
-    require(previous.schemaVersion === 1 && previous.status === 'removed', 'INSTALL_NETWORK_REMOVE_REQUIRED');
+    require(networkObservation(() => networkReceiptRemoved(previous)), 'INSTALL_NETWORK_REMOVE_REQUIRED');
+  }
+}
+function networkObservation<T>(action: () => T): T {
+  try { return action(); } catch (error) {
+    if (error instanceof NetworkObservationError) throw new InstallError(error.code);
+    throw error;
   }
 }
 function owned(plan: DeploymentPlan): Owned[] {
