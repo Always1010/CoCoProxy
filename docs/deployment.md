@@ -6,9 +6,11 @@
 
 安装器部署独立的 CoCoProxy Linux 服务。透明代理还需协同路由器提供流量交付、DNS 和独立关闭，设备条件及两端参数见[路由器协作](cooperating-router-requirements.md)。
 
-`apps/deployment/main.ts` 是离线、单目标的安装入口。它复用[发行载荷](release-staging.md)及 `renderDeploymentPlan`；自动网关模式安装八个文件及目录，显式代理模式为五个文件。默认只读核验并输出不含文件内容的预览，只有 `--apply` 写入目标。工具不通过 SSH 控制另一台设备，不探测或推断地址，不安装依赖、账户、HTTPS 代理或证书，不改默认路由、系统 DNS、sysctl，不启动或启用服务。完整部署还包括下面明确列出的准备、配置、启动和终端验收。
+`apps/deployment/main.ts` 是离线、单目标的安装入口。它复用[发行载荷](release-staging.md)及 `renderDeploymentPlan`；自动网关默认安装八个文件及目录，显式代理模式为五个文件，可选受管 HTTPS 为原生网关追加两个文件并引用既有证书。默认只读核验并输出不含文件内容的预览，只有 `--apply` 写入目标。工具不通过 SSH 控制另一台设备，不探测或推断地址，不安装依赖、账户、nginx 软件或证书，不改默认路由、系统 DNS、sysctl，不启动或启用服务。完整部署还包括下面明确列出的准备、配置、启动和终端验收。
 
 ## 支持边界与前置审阅
+
+[统一部署入口](setup.md)提供环境汇总检查、配置生成和相同安装器的调用方式，可减少手工搬运核心摘要、release 路径及重复端口。[生命周期入口](setup-lifecycle.md)组织初始化、启动、持久运行和停机退役；运行期间的升级准备与安装中断检查见[维护恢复](maintenance-recovery.md)。底层入口及本页的明确参数方式继续保留。
 
 安装支持 Linux/systemd、固定审核的 ARM64 或 x86-64 ELF64 little-endian 核心，入口核对实际架构；其他系统与架构拒绝。目标须独立验收，当前已验证范围统一见[发行说明](release-notes.md)。
 

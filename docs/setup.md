@@ -58,10 +58,55 @@ sh ./cocoproxy configure --environment "$ENVIRONMENT" \
   --existing-input "$INPUT" --output /etc/cocoproxy-install/deployment-next.json
 ```
 
-升级必须提供原输入，保留内部 secret、已支持的解析配置和下载策略。服务身份改变会拒绝；旧安装使用自定义状态、设置或凭据布局时继续使用底层安装器。origin 或许可变化仍需安装器显式配置审阅，不能绕过收据。
+升级必须提供原输入，保留内部 secret、已支持的解析配置和下载策略。环境文件省略的端口、网络资源、探测许可、服务身份和系统路径沿用旧输入；明确填写的字段表示待审阅的新值。服务身份改变会拒绝；旧安装使用自定义状态、设置或凭据布局时继续使用底层安装器。origin 或许可变化仍需安装器显式配置审阅，不能绕过收据。
 
 `upgrade`、`uninstall` 参数与 `install` 相同，前置及顺序见[维护流程](deployment.md#关闭升级与卸载)。旧 release 保留不等于任意状态格式都可降级；入口不自动复制凭据或创建备份。
+
+在关闭服务之前可以准备新版本，并检查安装归属与持久状态的读取格式：
+
+```sh
+sh ./cocoproxy prepare --payload /srv/cocoproxy-staging/new-release \
+  --manifest-sha256 '<新可信manifest摘要>' --input /etc/cocoproxy-install/deployment-next.json
+sh ./cocoproxy inspect
+sh ./cocoproxy recover
+```
+
+`prepare` 允许服务仍运行，但不表示已经可以执行升级；应用阶段会重新要求暂停、停用服务和退役网络。`inspect` 读取收据、锁和文件证据。`recover` 默认仅预览：只有新事务已写完全部预期字节、原进程已退出且当前状态满足约束时，才允许用返回的审阅摘要显式收尾。它不重试部分写入，不删除未知锁，不进行程序降级。详细步骤见[安装中断检查与恢复](maintenance-recovery.md)。
+
+## 6. 可选的受管 HTTPS
+
+已有反向代理可以继续按[HTTPS 配方](management-https.md)管理。若希望本项目安装收据统一管理独立 nginx 配置及 unit，在环境输入增加：
+
+```json
+{
+  "https": {
+    "mode": "managed",
+    "certificatePath": "/etc/cocoproxy/web/server.crt",
+    "privateKeyPath": "/etc/cocoproxy/web/server.key"
+  }
+}
+```
+
+这是环境文件的可选片段，不是完整输入。nginx 需预置，默认路径 `/usr/sbin/nginx`，可以通过 `nginxPath` 指定可信系统路径。管理 origin 必须使用 HTTPS 及非特权端口，证书覆盖该主机并与私钥匹配；证书和密钥须按配方准备好归属与权限。工具只引用既有证书/密钥，不申请、复制或删除它们，不修改终端信任。
+
+生成后安装计划包含本项目专用 nginx 配置和网页 unit，其升级/卸载纳入同一收据。已有手工同名文件不能自动接管，必须先核对归属。`https` 省略时，升级生成保留旧输入的受管模式；首次生成沿用外部 HTTPS。明确设置 `{"mode":"external"}` 表示外部管理，受管模式的撤销不能绕过安装器的文件集合与迁移约束。
+
+## 7. 初始化、启动与持久运行
+
+[生命周期入口](setup-lifecycle.md)把初始化、管理启动、持久运行启用、暂停及停机退役组织为可预览步骤：
+
+```sh
+sh ./cocoproxy lifecycle --action start-management --input "$INPUT"
+sh ./cocoproxy lifecycle --action start-management --input "$INPUT" \
+  --apply --reviewed-plan-sha256 '<本次预览返回的摘要>'
+```
+
+入口核对当前完整安装收据、输入和文件字节，执行时与安装/恢复共用互斥条件。初始化另外指定私有 `--admin-input`；完整步骤及各动作的条件见生命周期说明。`--terminal-path-verified`、`--router-disabled` 记录操作者已完成实际验收或关闭的确认，不是工具自己观测到的网络证据。
+
+从另一台电脑安装或更新时使用[SSH 部署入口](remote-deployment.md)，由该入口协调目标上的安装、服务和已有路由器适配器；它不要求在本机执行 Linux 服务命令。
 
 ## 输出边界
 
 环境、部署输入及路由器参数含真实网络或秘密，保留在目标私有位置；仓库内调试材料只放被忽略的 `.local/`，不进入发行、同步或公开附件。命令默认只打印固定结果与必要状态，不打印内部秘密或环境 JSON。
+
+`configure` 的部署输出与可选路由器输出分别使用独占新建，并非跨文件原子事务。如果第二个输出失败，第一个私有部署输入可能已经生成；检查已有文件后选择新的输出路径，不覆盖或反复生成内部秘密。

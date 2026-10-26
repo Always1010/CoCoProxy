@@ -38,6 +38,9 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm ci --prefix tooling --ignore-scripts --no-audit --no-fund
       - name: Check release components
+        env:
+          COCOPROXY_TEST_OPENSSL: /usr/bin/openssl
+          COCOPROXY_TEST_PYTHON: /usr/bin/python3
         run: |
           npm run typecheck
           npm run test:git-tree
@@ -46,6 +49,10 @@ jobs:
           npm run test:gateway
           npm run test:release-stage
           npm run test:setup
+          node --experimental-strip-types --test tests/runtime-lifecycle.test.ts tests/remote-deploy.test.mjs
+          python3 -B tests/remote-deploy.test.py
+          python3 -B tests/remote-staging.test.py
+          python3 -B tests/router-ssh-hook.test.py
           npm run test:deployment
       - name: Build UI, server and both reviewed Linux payloads
         run: node scripts/build-github-release.mjs
