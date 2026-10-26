@@ -138,6 +138,25 @@ export function assertFinalizableReceipt(receipt: Receipt, lock: DeploymentLock)
     ['pending', 'complete'].includes(receipt.status), 'INSTALL_RECOVERY_NOT_FINALIZABLE');
 }
 
+/** The same credential evidence is required before review and after taking the recovery lock. */
+type RecoveryCredentialEvidence = { status: 'preserved' | 'initialization-required'; sha256: string | null };
+export async function assessRecoveryCredential(receipt: Receipt, host = {
+  info: deploymentPathInfo, rootPath: assertRootPath, privateFile: assertPrivateDeploymentFile, read: readRegularDeploymentFile,
+}, reviewed?: RecoveryCredentialEvidence): Promise<RecoveryCredentialEvidence> {
+  await host.rootPath(posix.dirname(receipt.credentialPath));
+  const present = Boolean(await host.info(receipt.credentialPath));
+  let evidence: RecoveryCredentialEvidence;
+  if (!present) {
+    require(receipt.transaction?.operation === 'install', 'INSTALL_RECOVERY_CREDENTIAL_REQUIRED');
+    evidence = { status: 'initialization-required', sha256: null };
+  } else {
+    await host.privateFile(receipt.credentialPath, receipt.serviceUid);
+    evidence = { status: 'preserved', sha256: digest(await host.read(receipt.credentialPath, 16384)) };
+  }
+  if (reviewed) require(evidence.status === reviewed.status && evidence.sha256 === reviewed.sha256, 'INSTALL_RECOVERY_EVIDENCE_CHANGED');
+  return evidence;
+}
+
 /** Finish an already copied deployment. Never retry writes, delete releases, or restore state. */
 export async function recoverDeployment(options: { apply?: boolean; reviewedRecoverySha256?: string } = {}) {
   rootHost();
@@ -148,15 +167,15 @@ export async function recoverDeployment(options: { apply?: boolean; reviewedReco
   require(deploymentOwnerGone(owner.lock, await deploymentProcessIdentity(owner.lock.pid)), 'INSTALL_RECOVERY_OWNER_ALIVE');
   await assertOwnedDeploymentFiles(previous.receipt.files);
   await releaseEvidence(previous.receipt);
-  await assertPrivateDeploymentFile(previous.receipt.credentialPath, previous.receipt.serviceUid);
-  await assertRootPath(posix.dirname(previous.receipt.credentialPath));
+  const credential = await assessRecoveryCredential(previous.receipt);
   await assertDeploymentLifecycle(previous.receipt.stateDirectory, previous.receipt.serviceUid);
   const systemctl = '/usr/bin/systemctl';
   await assertDeploymentExecutable(systemctl);
   await assertDeploymentStopped(systemctl, units, true);
-  const reviewedRecoverySha256 = digest(Buffer.concat([previous.bytes, Buffer.from('\n'), owner.bytes]));
+  const reviewedRecoverySha256 = digest(Buffer.concat([previous.bytes, Buffer.from('\n'), owner.bytes, Buffer.from('\n' + JSON.stringify(credential))]));
   const result = { operation: 'recover', apply: Boolean(options.apply), action: 'finalize-installed-files', reviewedRecoverySha256,
-    receiptStatus: previous.receipt.status, services: 'remain stopped and disabled', state: 'preserved-in-place',
+    receiptStatus: previous.receipt.status, credential: credential.status, administratorInitializationRequired: credential.status === 'initialization-required',
+    services: 'remain stopped and disabled', state: 'preserved-in-place',
     automaticProgramRollback: false, actions: ['systemd daemon-reload', 'mark receipt complete', 'remove matching abandoned install lock'] };
   if (!options.apply) return result;
   require(options.reviewedRecoverySha256 === reviewedRecoverySha256, 'INSTALL_RECOVERY_REVIEW_REQUIRED');
@@ -171,7 +190,7 @@ export async function recoverDeployment(options: { apply?: boolean; reviewedReco
     require(deploymentOwnerGone(owner.lock, await deploymentProcessIdentity(owner.lock.pid)), 'INSTALL_RECOVERY_OWNER_ALIVE');
     await assertOwnedDeploymentFiles(previous.receipt.files);
     await releaseEvidence(previous.receipt);
-    await assertPrivateDeploymentFile(previous.receipt.credentialPath, previous.receipt.serviceUid);
+    await assessRecoveryCredential(previous.receipt, undefined, credential);
     await assertDeploymentLifecycle(previous.receipt.stateDirectory, previous.receipt.serviceUid);
     await assertDeploymentStopped(systemctl, units, true);
     await runDeploymentTool(systemctl, ['daemon-reload']);

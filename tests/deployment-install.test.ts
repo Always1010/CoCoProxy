@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, compatibleOwnedFiles, configurationReviewDigest, deployRelease,
   parseDeploymentLock, prepareUpgrade, releaseTarget, validateReceipt, verifyRelease, type Receipt } from '../packages/deployment/install.ts';
-import { assertFinalizableReceipt, deploymentOwnerGone, inspectDeployment, recoverDeployment } from '../packages/deployment/maintenance.ts';
+import { assessRecoveryCredential, assertFinalizableReceipt, deploymentOwnerGone, inspectDeployment, recoverDeployment } from '../packages/deployment/maintenance.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
@@ -171,5 +171,47 @@ test('maintenance CLI rejects apply on read-only operations and unrelated recove
     assert.equal(result.stdout, '');
     assert.equal(result.stderr.trim(), 'INSTALL_ARGUMENTS_INVALID');
   }
+});
+
+test('recovery permits an uninitialized first install but never bypasses existing credential trust checks', async () => {
+  const receipt: Receipt = { schemaVersion: 1, status: 'pending', release: '/opt/cocoproxy/releases/' + 'a'.repeat(64),
+    manifestSha256: 'a'.repeat(64), files: [], serviceUid: 12345, stateDirectory: '/var/lib/cocoproxy',
+    credentialPath: '/etc/cocoproxy/admin.json', transaction: { id: '12345678-1234-1234-1234-123456789abc', operation: 'install' } };
+  let present = false, trustError = '', parentError = '', bytes = 'synthetic credential';
+  const checked: string[] = [];
+  const host = {
+    info: async (path: string) => { assert.equal(path, receipt.credentialPath); return present ? {} as any : null; },
+    rootPath: async (path: string) => { checked.push('parent'); assert.equal(path, '/etc/cocoproxy'); if (parentError) throw { code: parentError }; },
+    privateFile: async (path: string, uid: number) => {
+      checked.push('private'); assert.equal(path, receipt.credentialPath); assert.equal(uid, receipt.serviceUid);
+      if (!present) throw { code: 'ENOENT' };
+      if (trustError) throw { code: trustError };
+    },
+    read: async () => Buffer.from(bytes),
+  };
+  assert.deepEqual(await assessRecoveryCredential(receipt, host), { status: 'initialization-required', sha256: null });
+  assert.deepEqual(checked, ['parent']);
+  for (const transaction of [undefined, { ...receipt.transaction!, operation: 'upgrade' as const },
+    { ...receipt.transaction!, operation: 'uninstall' as const }]) {
+    await assert.rejects(assessRecoveryCredential({ ...receipt, transaction }, host), code('INSTALL_RECOVERY_CREDENTIAL_REQUIRED'));
+  }
+  parentError = 'INSTALL_PATH_UNTRUSTED';
+  await assert.rejects(assessRecoveryCredential(receipt, host), code(parentError));
+  parentError = ''; present = true; checked.length = 0;
+  const existing = await assessRecoveryCredential(receipt, host);
+  assert.deepEqual(existing, { status: 'preserved', sha256: digest('synthetic credential') });
+  assert.deepEqual(checked, ['parent', 'private']);
+  for (const failure of ['INSTALL_PRIVATE_FILE_OWNERSHIP', 'INSTALL_PATH_UNTRUSTED']) {
+    trustError = failure;
+    await assert.rejects(assessRecoveryCredential(receipt, host), code(failure));
+  }
+  trustError = '';
+  const absent = { status: 'initialization-required' as const, sha256: null };
+  await assert.rejects(assessRecoveryCredential(receipt, host, absent), code('INSTALL_RECOVERY_EVIDENCE_CHANGED'));
+  bytes = 'changed credential';
+  await assert.rejects(assessRecoveryCredential(receipt, host, existing), code('INSTALL_RECOVERY_EVIDENCE_CHANGED'));
+  present = false;
+  await assert.rejects(assessRecoveryCredential(receipt, host, existing), code('INSTALL_RECOVERY_EVIDENCE_CHANGED'));
+  assert.deepEqual(await assessRecoveryCredential(receipt, host, absent), absent);
 });
 
