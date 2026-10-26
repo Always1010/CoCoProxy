@@ -2,13 +2,16 @@
 """Release-bundled SSH deployment coordinator. No downloads or dependency installs."""
 import argparse
 import copy
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 import hashlib
 import json
 import os
 from pathlib import Path
-import pwd
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -16,6 +19,7 @@ import time
 
 PRIVATE = Path('/etc/cocoproxy-install')
 RECEIPT = Path('/var/lib/cocoproxy-deployment/receipt.json')
+INCOMING = Path('/opt/cocoproxy/incoming')
 
 
 def need(value, code):
@@ -23,14 +27,19 @@ def need(value, code):
         raise RuntimeError(code)
 
 
-def regular(path, private=False):
+def regular(path, private=False, maximum=256 * 1024 * 1024):
     path = Path(path)
     info = path.lstat()
-    need(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, 'REMOTE_REGULAR_FILE_REQUIRED')
+    need(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= maximum, 'REMOTE_REGULAR_FILE_REQUIRED')
     if private:
         need(info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o600, 'REMOTE_PRIVATE_FILE_REQUIRED')
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
-        return stream.read()
+        opened = os.fstat(stream.fileno())
+        need(stat.S_ISREG(opened.st_mode) and opened.st_nlink == 1 and opened.st_dev == info.st_dev and opened.st_ino == info.st_ino and
+             opened.st_uid == info.st_uid and opened.st_mode == info.st_mode, 'REMOTE_REGULAR_FILE_CHANGED')
+        data = stream.read(maximum + 1)
+        need(len(data) <= maximum, 'REMOTE_REGULAR_FILE_REQUIRED')
+        return data
 
 
 def trusted(path):
@@ -94,32 +103,82 @@ def new_input(previous, manifest_sha, core_sha):
     return value
 
 
-def stage_payload(source, manifest_sha):
-    raw = regular(source / 'manifest.json')
+def payload_manifest(raw, manifest_sha):
     need(hashlib.sha256(raw).hexdigest() == manifest_sha, 'REMOTE_MANIFEST_MISMATCH')
     manifest = json.loads(raw)
-    need(manifest['schemaVersion'] == 1 and isinstance(manifest['files'], list), 'REMOTE_MANIFEST_INVALID')
-    stage = directory('/opt/cocoproxy/incoming') / manifest_sha
-    if stage.exists():
-        trusted(stage)
-        return stage, manifest
-    stage.mkdir(mode=0o755)
-    names = set()
+    need(isinstance(manifest, dict) and manifest.get('schemaVersion') == 1 and isinstance(manifest.get('files'), list) and
+         0 < len(manifest['files']) <= 12000, 'REMOTE_MANIFEST_INVALID')
+    names = {'manifest.json'}
+    total = 0
     for entry in manifest['files']:
-        relative = Path(entry['path'])
-        need(not relative.is_absolute() and not set(relative.parts) & {'..', '.', '.local', '.git'} and str(relative) not in names, 'REMOTE_PAYLOAD_PATH_INVALID')
-        names.add(str(relative))
-        # Reject source directory links as well as leaf links.
-        current = source
-        for part in relative.parts:
-            current = current / part
-            need(not current.is_symlink(), 'REMOTE_PAYLOAD_LINK')
-        data = regular(current)
-        need(len(data) == entry['size'] and hashlib.sha256(data).hexdigest() == entry['sha256'] and entry['mode'] in ['0644', '0755'], 'REMOTE_PAYLOAD_CHANGED')
-        target = stage / relative
-        directory(target.parent)
-        put(target, data, int(entry['mode'], 8))
-    put(stage / 'manifest.json', raw, 0o644)
+        need(isinstance(entry, dict), 'REMOTE_MANIFEST_INVALID')
+        name = entry.get('path')
+        need(isinstance(name, str) and len(name) <= 1024 and not name.startswith(('/', '-')) and not re.search(r'[\\:\x00-\x1f\x7f]', name) and
+             not any(part.lower() in ['', '..', '.', '.local', '.git'] for part in name.split('/')) and name.lower() not in names,
+             'REMOTE_PAYLOAD_PATH_INVALID')
+        names.add(name.lower())
+        need(type(entry.get('size')) is int and 0 <= entry['size'] <= 256 * 1024 * 1024 and
+             isinstance(entry.get('sha256'), str) and re.fullmatch('[a-f0-9]{64}', entry['sha256']) and
+             entry.get('mode') in ['0644', '0755'], 'REMOTE_MANIFEST_INVALID')
+        total += entry['size']
+        need(total <= 512 * 1024 * 1024, 'REMOTE_PAYLOAD_LIMIT')
+    return manifest
+
+
+def verify_staged_payload(stage, raw, manifest):
+    trusted(stage)
+    need(stage.is_dir() and regular(stage / 'manifest.json', maximum=4 * 1024 * 1024) == raw, 'REMOTE_CACHED_PAYLOAD_INVALID')
+    expected = {entry['path']: entry for entry in manifest['files']}
+    parents = {str(parent.as_posix()) for name in expected for parent in Path(name).parents if str(parent) != '.'}
+    found = set()
+    for current, directories, files in os.walk(stage, followlinks=False):
+        for name in directories:
+            path = Path(current) / name
+            need(not path.is_symlink() and path.relative_to(stage).as_posix() in parents, 'REMOTE_CACHED_PAYLOAD_INVALID')
+            trusted(path)
+        for name in files:
+            path = Path(current) / name
+            relative = path.relative_to(stage).as_posix()
+            need(relative == 'manifest.json' or relative in expected, 'REMOTE_CACHED_PAYLOAD_INVALID')
+            trusted(path)
+            if relative != 'manifest.json':
+                data = regular(path)
+                entry = expected[relative]
+                need(len(data) == entry['size'] and hashlib.sha256(data).hexdigest() == entry['sha256'], 'REMOTE_CACHED_PAYLOAD_INVALID')
+            found.add(relative)
+    need(found == set(expected) | {'manifest.json'}, 'REMOTE_CACHED_PAYLOAD_INVALID')
+
+
+def stage_payload(source, manifest_sha):
+    source = Path(source)
+    need(source.is_absolute() and not source.is_symlink() and source.is_dir(), 'REMOTE_PAYLOAD_PATH_INVALID')
+    raw = regular(source / 'manifest.json', maximum=4 * 1024 * 1024)
+    manifest = payload_manifest(raw, manifest_sha)
+    parent = directory(INCOMING)
+    stage = parent / manifest_sha
+    if stage.exists() or stage.is_symlink():
+        verify_staged_payload(stage, raw, manifest)
+        return stage, manifest
+    temporary = Path(tempfile.mkdtemp(prefix='.staging-', dir=parent))
+    try:
+        temporary.chmod(0o755)
+        for entry in manifest['files']:
+            current = source
+            for part in entry['path'].split('/'):
+                current = current / part
+                need(not current.is_symlink(), 'REMOTE_PAYLOAD_LINK')
+            data = regular(current)
+            need(len(data) == entry['size'] and hashlib.sha256(data).hexdigest() == entry['sha256'], 'REMOTE_PAYLOAD_CHANGED')
+            target = temporary / entry['path']
+            directory(target.parent)
+            put(target, data, int(entry['mode'], 8))
+        put(temporary / 'manifest.json', raw, 0o644)
+        verify_staged_payload(temporary, raw, manifest)
+        need(not stage.exists() and not stage.is_symlink(), 'REMOTE_STAGE_CONCURRENTLY_CREATED')
+        temporary.rename(stage)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
     return stage, manifest
 
 
@@ -131,7 +190,7 @@ def main(argv=None):
         parser.add_argument('--' + key)
     parser.add_argument('--preview', action='store_true')
     options = parser.parse_args(argv)
-    need(os.geteuid() == 0 and os.uname().sysname == 'Linux', 'REMOTE_LINUX_ROOT_REQUIRED')
+    need(fcntl is not None and os.name == 'posix' and os.uname().sysname == 'Linux' and os.geteuid() == 0, 'REMOTE_LINUX_ROOT_REQUIRED')
     need(re.fullmatch('[a-f0-9]{64}', options.manifest_sha256), 'REMOTE_MANIFEST_SHA_INVALID')
     os.umask(0o077)
     directory(PRIVATE, 0o700)
