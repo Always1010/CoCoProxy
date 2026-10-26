@@ -34,9 +34,14 @@ def main():
     ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10',
            '-o', 'UserKnownHostsFile=' + config['knownHostsFile'], '-i', config['identityFile'], '-p', str(config['port']), config['user'] + '@' + config['host']]
 
-    def rpc(method, body=None):
+    def rpc(method, body=None, deadline=None):
         command = shlex.join(['ubus', 'call', 'alwayroute', method, json.dumps(body or {}, separators=(',', ':'))])
-        result = subprocess.run([*ssh, command], capture_output=True, timeout=30)
+        remaining = 30 if deadline is None else deadline - time.monotonic()
+        need(remaining > 0, 'REMOTE_ROUTER_JOB_TIMEOUT')
+        try:
+            result = subprocess.run([*ssh, command], capture_output=True, timeout=min(30, remaining))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('REMOTE_ROUTER_JOB_TIMEOUT' if deadline is not None else 'REMOTE_ROUTER_SSH_TIMEOUT') from None
         need(result.returncode == 0, 'REMOTE_ROUTER_SSH_FAILED')
         reply = json.loads(result.stdout)
         need(reply.get('ok') is True, 'REMOTE_ROUTER_RPC_FAILED')
@@ -61,12 +66,13 @@ def main():
             reply = rpc('external_apply' if options.action == 'enable' else 'external_disable', body)
             if reply.get('job'):
                 job_id = reply['job']['id']
-                for _ in range(120):
-                    current = rpc('job_status')['job']
+                deadline = time.monotonic() + 120
+                while time.monotonic() < deadline:
+                    current = rpc('job_status', deadline=deadline)['job']
                     need(current['id'] == job_id and current['status'] in ['running', 'succeeded'], 'REMOTE_ROUTER_JOB_FAILED')
                     if current['status'] == 'succeeded':
                         break
-                    time.sleep(1)
+                    time.sleep(min(1, max(0, deadline - time.monotonic())))
                 else:
                     raise RuntimeError('REMOTE_ROUTER_JOB_TIMEOUT')
     result = status()

@@ -343,7 +343,7 @@ def main_locked(options):
                 os.chown(token_path, runtime['serviceUid'], 0)
                 os.chmod(token_path, 0o600)
                 if gateway:
-                    run([*router_command, 'disable'])
+                    run([*router_command, 'disable'], timeout=300)
                     need(json.loads(run([*router_command, 'status']))['enabled'] is False, 'REMOTE_ROUTER_NOT_DISABLED')
                     record_phase('router-disabled')
                 for unit in ['cocoproxy-web.service', 'cocoproxy-management.service', 'cocoproxy-mihomo.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']:
@@ -404,7 +404,7 @@ def main_locked(options):
                 need(not previous['active'] or unit_value(unit, 'ActiveState') == 'active', 'REMOTE_SERVICE_NOT_RESTORED')
                 need(unit_value(unit, 'UnitFileState') == previous['enableState'], 'REMOTE_SERVICE_ENABLE_INTENT_CHANGED')
             if router_enabled:
-                run([*router_command, 'enable'])
+                run([*router_command, 'enable'], timeout=300)
                 need(json.loads(run([*router_command, 'status']))['enabled'] is True, 'REMOTE_ROUTER_NOT_RESTORED')
             replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit']})
             print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256,
