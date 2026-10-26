@@ -10,6 +10,14 @@
 
 CoCoProxy 原生输入允许同一 /1–/29 子网，不允许与保留 TUN 网段冲突；`clientCIDR` 必须精确等于外设接口子网。路由器应拒绝无法表达同一范围或无法排除自身/外设的配置，不能静默缩小或扩大接管。
 
+### AlwayRoute 参数映射
+
+统一入口从一份 `SetupEnvironment` 生成外设部署输入与路由器参数；环境字段、MAC/接口/端口各自含义和缺项错误见[配置生成说明](setup.md#3-生成私有安装输入)。路由器事实必须明确输入，不能由外设网口或默认路由猜测。参数中的 `configTemplate` 对应 AlwayRoute 外部配置 schema1 的全 LAN 模式，包含已确认的 link、clientCIDR、DNS、本地域、enabled 及空 clients/bypass4；不输出选定终端模式或额外目的例外。`revision` 由读取目标当前配置后绑定，保存使用 expectedRevision/CAS，不能把模板当作任意当前版本的保存请求。
+
+该实现的本地域及无点名称固定交给路由器 `127.0.0.1:53`，公网 DNS 转至外设 `ports.dns`；路由器专用监听端口单独填写。外设 bootstrap 只取 `management.bootstrapResolvers`，不会额外写入不存在的路由器 bootstrap 字段。`baseDNSIndependentConfirmed` 只记录操作者对独立解析前提的确认；DNS UDP/TCP、基础解析和实际路径仍需分项验收。
+
+适配声明保存在随包的 [router-adapter.json](../packages/setup/router-adapter.json)，标识 `alwayroute-ubus/v1` / 适配器版本 `1.0.0`。声明列出所审阅 AlwayRoute 源码提交、配置 schema、组件包和能力接口要求；这些属于实现来源和静态兼容条件，不表示指定固件或包已部署，也不增加组合实测结论。现有组合证据仍以[支持矩阵](support-matrix.md)与发行说明为准。
+
 ## 必须满足的行为
 
 | ID | 要求 | 最低验收证据 |
