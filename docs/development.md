@@ -42,8 +42,9 @@ stage 只保存不可变候选，draft-stage 捕获指定保存版本；均不�
 | 编译、草稿、来源 | `test:config`、`test:drafts`、`test:subscriptions`、`test:subscription-yaml` |
 | 应用事务与运行 | `test:transaction`、`test:runtime`；校验包装器另用 `test:mihomo` |
 | 工作区、规则、管理 | `test:workspace`、`test:management`；UI 适配另用 `test:overlay` 和独立 UI 类型检查 |
-| 原生网关与部署 | `test:gateway`、`test:deployment` |
-| 载荷与源码装配 | `test:release-stage`、`test:git-tree` |
+| 原生网关与部署 | `test:gateway`、`test:deployment`（含状态兼容检查） |
+| 载荷与源码装配 | `test:release-stage`（含离线文档与发行元数据）、`test:git-tree` |
+| 时延与网络诊断工具 | `test:diagnostics`；仅检查时延基线时用 `test:latency-baseline` |
 | 通知 | `test:notifications`；`test:notifications-browser` 需显式现成 UI/Playwright/浏览器输入，模拟推送，不证明公网送达或系统显示 |
 | CLI | `test:cli` |
 
