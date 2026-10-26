@@ -5,7 +5,8 @@ import { posix, resolve } from 'node:path';
 import { arch, machine, platform } from 'node:os';
 import { execFile } from 'node:child_process';
 import { renderDeploymentPlan, type DeploymentPlan } from './plan.ts';
-import { assessStateSchema, DEPLOYMENT_STATE_FILES, type StateStore } from './compatibility.ts';
+import { createUpgradeAssessment, inspectStateCompatibility, stateDirectoryExists, type UpgradeStateHost } from './upgrade-assessment.ts';
+import { parseRuntimeSettings } from '../runtime/settings.ts';
 import { verifyManagedWeb } from '../setup/https.ts';
 import { inspectServiceAccount, validServiceAccountRequest } from './service-account.ts';
 import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory, assertPrivatePath,
@@ -168,40 +169,45 @@ async function regular(path: string, limit = 8 * 1024 * 1024) {
     return bytes;
   } finally { await handle.close(); }
 }
-export async function assessDeploymentState(stateDirectory: string, serviceUid: number, declaration: unknown) {
-  const findings: { store: StateStore; status: string }[] = [];
-  if (!(await info(stateDirectory))) return findings;
-  await trusted(posix.dirname(stateDirectory));
-  async function statePath(path: string) {
+function deploymentStateHost(stateDirectory: string, serviceUid: number): UpgradeStateHost {
+  async function statePath(path: string, allowMissing = false) {
+    await trusted(posix.dirname(stateDirectory));
     let current = stateDirectory;
     for (const part of ['', ...posix.relative(stateDirectory, posix.dirname(path)).split('/').filter(Boolean)]) {
       if (part) current += '/' + part;
       const stat = await info(current);
+      if (!stat && allowMissing) return;
       require(stat && stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === serviceUid &&
         (stat.mode & 0o7777) === 0o700, 'INSTALL_STATE_OWNERSHIP_REQUIRED');
     }
   }
-  const files = [...DEPLOYMENT_STATE_FILES];
-  const subscriptions = stateDirectory + '/subscriptions';
-  if (await info(subscriptions)) {
-    await statePath(subscriptions + '/placeholder');
-    const names = await readdir(subscriptions);
-    require(names.length <= 128, 'INSTALL_STATE_LIMIT');
-    for (const name of names) {
-      if (/^\.write-[a-f0-9-]{36}$/.test(name)) { await privateFile(subscriptions + '/' + name, serviceUid); continue; }
-      require(/^[A-Za-z0-9_-]{1,64}\.json$/.test(name), 'INSTALL_STATE_UNRECOGNIZED');
-      files.push({ store: 'subscription', path: 'subscriptions/' + name, key: 'version', limit: 4 * 1024 * 1024 });
-    }
-  }
-  for (const file of files) {
-    const path = stateDirectory + '/' + file.path;
-    if (!(await info(path))) { findings.push({ store: file.store, status: 'absent' }); continue; }
-    await statePath(path); await privateFile(path, serviceUid);
-    const value = JSON.parse((await regular(path, file.limit)).toString());
-    const envelope = file.nested ? value?.[file.nested] : value;
-    findings.push({ store: file.store, status: assessStateSchema(file.store, envelope?.[file.key], declaration) });
-  }
-  return findings;
+  return {
+    read: async (relative, limit) => {
+      if (!await stateDirectoryExists(stateDirectory, { info, rootPath: trusted })) return null;
+      const path = posix.join(stateDirectory, relative);
+      await statePath(path, true);
+      if (!await info(path)) return null;
+      await statePath(path); await privateFile(path, serviceUid);
+      return (await regular(path, limit)).toString('utf8');
+    },
+    list: async relative => {
+      if (!await stateDirectoryExists(stateDirectory, { info, rootPath: trusted })) return null;
+      const path = posix.join(stateDirectory, relative);
+      await statePath(path + '/placeholder', true);
+      if (!await info(path)) return null;
+      await statePath(path + '/placeholder');
+      return readdir(path);
+    },
+  };
+}
+export async function assessDeploymentState(stateDirectory: string, serviceUid: number, declaration: unknown) {
+  return (await inspectStateCompatibility(deploymentStateHost(stateDirectory, serviceUid), declaration)).findings;
+}
+export function assertDeploymentStateCompatibility(files: Awaited<ReturnType<typeof inspectStateCompatibility>>['findings']) {
+  require(!files.some(file => file.status === 'unsupported-version' || file.contentCompatibility.code === 'DEPLOYMENT_STATE_VERSION_UNSUPPORTED'), 'INSTALL_STATE_SCHEMA_UNSUPPORTED');
+  require(!files.some(file => file.contentCompatibility.status === 'unsupported'), 'INSTALL_STATE_CONTENT_UNSUPPORTED');
+  require(!files.some(file => file.status === 'unavailable'), 'INSTALL_STATE_INSPECTION_UNAVAILABLE');
+  require(!files.some(file => file.status === 'not-declared' || file.contentCompatibility.status === 'unknown'), 'INSTALL_STATE_COMPATIBILITY_NOT_DECLARED');
 }
 /** No links, sockets, devices, private areas or unlisted files enter a release. */
 export async function verifyRelease(payload: string, expected: string): Promise<{ files: Entry[]; coreSHA: string }> {
@@ -477,11 +483,43 @@ async function deployment(options: InstallOptions, preparing: boolean) {
     else configurationReviewed = assertReviewedUpgradeConfiguration(configuration, options.reviewedConfigurationSha256, unchanged);
   }
   const declaration = JSON.parse((await regular(payload + '/manifest.json')).toString()).compatibility;
-  const stateCompatibility = options.operation === 'upgrade' ?
-    await assessDeploymentState(input.runtime.stateDirectory, input.runtime.serviceUid, declaration) : [];
-  require(!stateCompatibility.some(file => ['invalid', 'unsupported-version'].includes(file.status)), 'INSTALL_STATE_SCHEMA_UNSUPPORTED');
-  if (!preparing && options.operation === 'upgrade') require(!stateCompatibility.some(file => file.status === 'not-declared'),
-    'INSTALL_STATE_COMPATIBILITY_NOT_DECLARED');
+  const stateHost = deploymentStateHost(input.runtime.stateDirectory, input.runtime.serviceUid);
+  const inspectedState = options.operation === 'upgrade' ? await inspectStateCompatibility(stateHost, declaration) : undefined;
+  const stateCompatibility = inspectedState?.findings ?? [];
+  if (!preparing && options.operation === 'upgrade') assertDeploymentStateCompatibility(stateCompatibility);
+  let compatibilityAssessment: Awaited<ReturnType<typeof createUpgradeAssessment>> | undefined;
+  if (options.operation === 'upgrade') {
+    const oldRuntime = parseRuntimeSettings(JSON.parse((await regular(input.runtime.settingsPath, 65536)).toString()));
+    const newRuntime = parseRuntimeSettings(JSON.parse(plan.files.find(file => file.path === input.runtime.settingsPath)!.content));
+    const oldManagement = JSON.parse((await regular(input.management.settingsPath, 65536)).toString());
+    const newManagement = JSON.parse(plan.files.find(file => file.path === input.management.settingsPath)!.content);
+    let credential: unknown, credentialObserved = false;
+    if (await info(input.management.credentialPath)) {
+      await privateFile(input.management.credentialPath, input.runtime.serviceUid);
+      const bytes = await regular(input.management.credentialPath, 16384); credentialObserved = true;
+      try { credential = JSON.parse(bytes.toString()); } catch { credential = null; }
+    }
+    const networkReceiptPath = '/var/lib/cocoproxy-gateway-network/network-receipt.json';
+    let networkReceipt: { observation: 'absent' | 'read' | 'unavailable'; value?: unknown };
+    try {
+      if (!await info(networkReceiptPath)) networkReceipt = { observation: 'absent' };
+      else {
+        await trusted(networkReceiptPath); await privateFile(networkReceiptPath, 0);
+        const bytes = await regular(networkReceiptPath, 4 * 1024 * 1024);
+        try { networkReceipt = { observation: 'read', value: JSON.parse(bytes.toString()) }; }
+        catch { networkReceipt = { observation: 'read', value: null }; }
+      }
+    } catch { networkReceipt = { observation: 'unavailable' }; }
+    compatibilityAssessment = await createUpgradeAssessment({ previousDeclaration: JSON.parse((await regular(previous!.release + '/manifest.json')).toString()).compatibility,
+      targetDeclaration: declaration, currentRuntime: oldRuntime, targetRuntime: newRuntime,
+      currentManagement: oldManagement, targetManagement: newManagement, credential, credentialObserved, networkReceipt }, stateHost, inspectedState);
+    if (!preparing) {
+      require(compatibilityAssessment.assessments.historyCandidates.status !== 'unsupported', 'INSTALL_HISTORY_CANDIDATE_UNSUPPORTED');
+      require(compatibilityAssessment.assessments.historyCandidates.status !== 'unknown', 'INSTALL_HISTORY_COMPATIBILITY_NOT_DECLARED');
+      require(compatibilityAssessment.assessments.configuration.status !== 'unsupported', 'INSTALL_CONFIGURATION_FORMAT_UNSUPPORTED');
+      require(compatibilityAssessment.assessments.configuration.status !== 'unknown', 'INSTALL_CONFIGURATION_COMPATIBILITY_NOT_DECLARED');
+    }
+  }
   if (options.operation === 'uninstall') {
     require(previous!.release === target && previous!.manifestSha256 === options.manifestSha256 &&
       currentFiles.every(file => previous!.files.some(old => old.path === file.path && old.sha256 === file.sha256)), 'INSTALL_UNINSTALL_INPUT_MISMATCH');
@@ -494,12 +532,17 @@ async function deployment(options: InstallOptions, preparing: boolean) {
     preserved: [input.runtime.stateDirectory, input.management.credentialPath, '/var/lib/cocoproxy-gateway-network'],
     services: preparing ? 'running services allowed; apply still requires stopped and disabled units' : 'remain stopped and disabled',
     network: 'unchanged', configurationReviewed, ...(review ? { review } : {}),
-    ...(preparing ? { readiness: stateCompatibility.some(file => file.status === 'not-declared') ? 'compatibility-not-declared' : 'prepared-not-applied',
-    stateCompatibility, compatibilityLimitations: ['schema versions only; full store content validation remains with runtime readers',
-      'candidate configuration must pass candidate core validation', 'additional network resource journals are not assessed', 'no downgrade or automatic program rollback guarantee'],
+    ...(preparing ? { readiness: [compatibilityAssessment!.assessments.state, compatibilityAssessment!.assessments.configuration,
+      compatibilityAssessment!.assessments.historyCandidates].some(item => item.status === 'unsupported') ? 'compatibility-unsupported' :
+      [compatibilityAssessment!.assessments.state, compatibilityAssessment!.assessments.configuration,
+        compatibilityAssessment!.assessments.historyCandidates].some(item => item.status === 'unknown') ? 'compatibility-evidence-incomplete' : 'prepared-not-applied',
+    readinessScope: 'required-static-formats-ready-for-maintenance-preparation',
+    stateCompatibility, compatibilityAssessment, compatibilityLimitations: ['supported results cover observed content and explicit reader formats only',
+      'candidate core syntax and actual runtime remain separately unverified', 'full network receipt resources and live ownership require old helper validation',
+      'future state writes must be reassessed before program rollback'],
     applyPrerequisites: ['explicit operator authorization',
       'pause automatic lifecycle', 'stop and disable deployment units', 'remove owned gateway network resources', 'repeat complete apply preflight'],
-    state: { action: 'preserve-in-place', rollback: 'not-assessed', automaticProgramRollback: false } } : {}) };
+    state: { action: 'preserve-in-place', rollback: compatibilityAssessment!.rollback, automaticProgramRollback: false } } : {}) };
   if (!options.apply) return preview;
   if (!(await info(STORE))) { await mkdir(STORE, { mode: 0o700 }); await chown(STORE, 0, 0); await chmod(STORE, 0o700); }
   // Exclusive intent lock survives errors/crashes. An operator must inspect the
@@ -519,6 +562,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
     if (previous) await checkOwned(previous.files);
     require(digest(await regular(inputPath, 128 * 1024)) === digest(inputBytes), 'INSTALL_INPUT_CHANGED');
     await assertDeploymentLifecycle(input.runtime.stateDirectory, input.runtime.serviceUid);
+    if (options.operation === 'upgrade') assertDeploymentStateCompatibility((await inspectStateCompatibility(stateHost, declaration)).findings);
     await stopped(input.runtime.systemctlPath, units);
     await networkClear(input);
   } catch (error) { await unlink(lock); throw error; }
