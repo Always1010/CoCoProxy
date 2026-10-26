@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,7 +17,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=...):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -66,6 +67,14 @@ class RemoteDeploymentTests(unittest.TestCase):
                     'runtime': {'coherent': True, 'active': 'a' * 64 if core_active else None, 'selection': 'a' * 64 if core_active else None,
                         'automaticBindingsReadable': True}, 'ready': True}).encode()
             if args[0] == str(hook):
+                if args[1] == 'check-adapter':
+                    if adapter_report is None:
+                        raise RuntimeError('SYNTHETIC_MISSING_ADAPTER_ACTION')
+                    if adapter_report == 'timeout':
+                        raise subprocess.TimeoutExpired(args, 120)
+                    if adapter_report == 'invalid-json':
+                        return b'not JSON'
+                    return json.dumps({'schemaVersion': 1, 'compatible': True} if adapter_report is ... else adapter_report).encode()
                 if args[1] != 'status':
                     router['enabled'] = args[1] == 'enable'
                 return json.dumps(router).encode()
@@ -151,6 +160,8 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertEqual(after['runtime']['stateDirectory'], before['runtime']['stateDirectory'])
             self.assertIn('b' * 64, after['runtime']['sourceDirectory'])
             find = lambda word: next(index for index, command in enumerate(events) if word in command)
+            self.assertLess(find('check-adapter'), find('status'))
+            self.assertLess(find('check-adapter'), find('runtime-maintenance-pause'))
             self.assertLess(find('prepare'), find('runtime-maintenance-pause'))
             self.assertLess(find('disable'), find('remove'))
             self.assertLess(find('remove'), find('--apply'))
@@ -177,6 +188,35 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.assertEqual(report['status'], 'not-applicable')
         self.assertEqual(report['code'], 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE')
         self.assertTrue(all(item['status'] == 'not-applicable' for item in report['checks']))
+
+    def test_adapter_unknown_incompatible_or_missing_action_fails_before_any_maintenance_in_preview_and_apply(self):
+        for preview in [False, True]:
+            for report in [None, 'timeout', 'invalid-json', {}, {'schemaVersion': 1, 'compatible': False}, {'schemaVersion': 1, 'compatible': 'unknown'}]:
+                with self.subTest(preview=preview, report=report):
+                    temporary, stack, private, _, events, router, args = self.scenario(adapter_report=report)
+                    args.preview = preview
+                    with temporary, stack:
+                        with self.assertRaisesRegex(RuntimeError, 'REMOTE_ROUTER_ADAPTER_PREFLIGHT_FAILED'):
+                            deploy.main_locked(args)
+                        self.assertTrue(any('check-adapter' in command for command in events))
+                        self.assertFalse(any(any(action in command for action in ['runtime-maintenance-pause', 'disable', 'stop', '--apply'])
+                                             for command in events))
+                        self.assertFalse((private / 'remote-last.json').exists())
+                        self.assertTrue(router['enabled'])
+
+    def test_adapter_preflight_accepts_disabled_installation_and_preview_still_does_not_pause_or_stop(self):
+        temporary, stack, private, _, events, router, args = self.scenario(router_enabled=False, core_active=False,
+            lifecycle={'schemaVersion': 1, 'enabled': False, 'paused': False})
+        args.preview = True
+        with temporary, stack:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                deploy.main_locked(args)
+            self.assertTrue(json.loads(output.getvalue())['prepared'])
+            self.assertTrue(any('check-adapter' in command for command in events))
+            self.assertFalse(any('runtime-maintenance-pause' in command or 'stop' in command for command in events))
+            self.assertFalse(router['enabled'])
+            self.assertFalse((private / 'remote-last.json').exists())
 
     def test_changed_install_window_blocks_service_and_router_restoration(self):
         temporary, stack, private, before, events, router, args = self.scenario(change_during_install=True)

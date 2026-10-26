@@ -94,7 +94,7 @@ def main():
     parser.add_argument('--parameters', help='Private output from configure --router-output')
     parser.add_argument('--apply', action='store_true', help='Explicitly save the reviewed configuration; never enables it')
     parser.add_argument('--reviewed-plan-sha256')
-    parser.add_argument('action', choices=['status', 'disable', 'enable', 'preview-config', 'check-config', 'save-config'])
+    parser.add_argument('action', choices=['status', 'disable', 'enable', 'check-adapter', 'preview-config', 'check-config', 'save-config'])
     options = parser.parse_args()
     need(not (options.apply or options.reviewed_plan_sha256) or options.action == 'save-config', 'REMOTE_ROUTER_ARGUMENTS_INVALID')
     need(not options.reviewed_plan_sha256 or options.apply, 'REMOTE_ROUTER_ARGUMENTS_INVALID')
@@ -165,11 +165,16 @@ def main():
          and type(capabilities.get('schema')) is int and capabilities['schema'] == 1 and capabilities.get('backend') == 'external'
          and all(proxy.get(key) == value for key, value in required.items() if key != 'clientMode')
          and required['clientMode'] in proxy.get('clientModes', []), 'REMOTE_ROUTER_CAPABILITIES_INCOMPATIBLE')
-    parameters = private_json(options.parameters) if options.parameters else None
-    template = validate_parameters(parameters, adapter) if options.parameters else None
     current = rpc('external_get')['config']
     need(isinstance(current, dict) and type(current.get('schema')) is int and current['schema'] == adapter['configurationSchema']
          and type(current.get('revision')) is int and 0 <= current['revision'] <= 2147483645, 'REMOTE_ROUTER_SCHEMA_INCOMPATIBLE')
+    if options.action == 'check-adapter':
+        print(json.dumps({'schemaVersion': 1, 'adapter': {'id': adapter['id'], 'version': adapter['version']},
+                          'compatible': True, 'configurationSchema': current['schema'],
+                          'scope': 'capabilities-and-readable-configuration-schema', 'endToEnd': 'unverified'}))
+        return
+    parameters = private_json(options.parameters) if options.parameters else None
+    template = validate_parameters(parameters, adapter) if options.parameters else None
     state = observed_state()
     candidate = {**template, 'revision': current['revision']} if template else None
 

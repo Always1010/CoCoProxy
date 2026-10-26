@@ -363,6 +363,13 @@ def main_locked(options):
         need(not installed or not gateway or router_command, 'REMOTE_ROUTER_HOOK_REQUIRED')
         router_enabled = False
         if installed and gateway:
+            try:
+                adapter_check = json.loads(run([*router_command, 'check-adapter']))
+            except (RuntimeError, ValueError, TypeError, OSError, subprocess.TimeoutExpired):
+                raise RuntimeError('REMOTE_ROUTER_ADAPTER_PREFLIGHT_FAILED') from None
+            need(isinstance(adapter_check, dict) and type(adapter_check.get('schemaVersion')) is int and
+                 adapter_check['schemaVersion'] == 1 and adapter_check.get('compatible') is True,
+                 'REMOTE_ROUTER_ADAPTER_PREFLIGHT_FAILED')
             router_state = json.loads(run([*router_command, 'status']))
             need(type(router_state.get('enabled')) is bool, 'REMOTE_ROUTER_STATUS_INVALID')
             router_enabled = router_state['enabled']
