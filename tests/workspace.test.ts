@@ -12,6 +12,8 @@ import { WorkspaceStore, parseWorkspaceSettings } from '../packages/management/w
 import { memoizePolicyCompiler } from '../packages/management/shared-work.ts';
 import { compileConfig } from '../packages/config/index.ts';
 import type { Workspace, WorkspaceSettings } from '../packages/management/workspace.ts';
+import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts';
+import { setRuntimeLifecycle } from '../packages/runtime/lifecycle.ts';
 
 const deployment = { mixedPort: 17890, controllerPort: 19090, dnsPort: 15353,
   controllerSecret: 'EXAMPLE_ONLY_DEPLOYMENT_SECRET', bootstrapResolvers: ['192.0.2.53'] };
@@ -21,6 +23,118 @@ const profile: JsonObject = { proxies: [node],
     { name: 'Provider', type: 'select', proxies: ['Auto', 'synthetic-node', 'DIRECT', 'REJECT'] },
     { name: 'Auto', type: 'url-test', proxies: ['synthetic-node'], url: 'https://probe.example/generate_204', interval: 300, tolerance: 50 },
   ], rules: ['DOMAIN-SUFFIX,provider.example,Provider', 'MATCH,Provider'], 'tcp-concurrent': true };
+
+test('automatic selections preserve manual intent, use confirmed transactions, persist across reads and reject stale decisions', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }] });
+  const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: {
+    Proxy: { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true },
+  } } });
+  const saved = await f.save(initial, 0), applied = await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node' });
+  const snapshot = await f.action.automaticSnapshot();
+  assert.ok(snapshot);
+  assert.equal(await f.action.automaticSwitch(snapshot, 'Proxy', 'outside', 'failure-recovery'), false);
+  const attempts = await Promise.all([
+    f.action.automaticSwitch(snapshot, 'Proxy', 'spare', 'failure-recovery'),
+    f.action.automaticSwitch(snapshot, 'Proxy', 'spare', 'failure-recovery'),
+  ]);
+  assert.deepEqual(attempts.sort(), [false, true]);
+  f.observe({ Proxy: 'spare' });
+  const after = await f.view();
+  assert.equal(after.pending, false);
+  assert.notEqual(after.active, applied.active);
+  assert.equal(after.workspace.revision, saved.revision);
+  assert.deepEqual(JSON.parse(JSON.stringify(after.workspace.local)), initial.local);
+  assert.equal(after.groups.find(group => group.name === 'Proxy')?.activeSelected, 'spare');
+  assert.ok(after.groups.find(group => group.name === 'Proxy')?.options.includes('outside'));
+  assert.equal(await f.action.automaticSwitch(snapshot, 'Proxy', 'synthetic-node', 'preferred-restored'), false);
+  const fresh = await f.action.automaticSnapshot();
+  assert.ok(fresh); assert.equal(fresh.key, snapshot.key);
+  const file = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
+  assert.equal(file.targets.Proxy.target, 'spare');
+  assert.equal(file.events.length, 1);
+  assert.equal((await f.call<{ events: unknown[] }>('/automatic/status')).events.length, 1);
+  const activeConfig = await f.candidate(after.active!);
+  const proxyGroup = (activeConfig['proxy-groups'] as JsonObject[]).find(group => group.name === 'Proxy')!;
+  assert.deepEqual(proxyGroup.proxies, ['spare', 'synthetic-node', 'REJECT']);
+  // Simulate process loss after writing a proposed return, before apply commits.
+  const interrupted = structuredClone(file);
+  interrupted.targets.Proxy.target = 'synthetic-node';
+  await writeFile(join(f.state, 'automatic-selections.json'), JSON.stringify(interrupted), { mode: 0o600 });
+  const activationCount = f.events.length;
+  assert.equal((await f.view()).pending, true);
+  const recovered = await f.action.automaticSnapshot(true);
+  assert.equal(recovered?.groups[0].current, 'spare');
+  assert.equal((await f.view()).pending, false);
+  assert.equal(f.events.length, activationCount);
+  assert.equal(JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8')).targets.Proxy.target, 'spare');
+  await setRuntimeLifecycle(f.state, { enabled: true, paused: true });
+  await assert.rejects(f.action.automaticSwitch(recovered!, 'Proxy', 'synthetic-node', 'preferred-restored'), { code: 'AUTO_PAUSED' });
+  assert.equal((await f.view()).pending, false);
+  await setRuntimeLifecycle(f.state, { enabled: true, paused: false });
+  // Real pending edits outside automatic groups must never be auto-applied.
+  const edited = structuredClone((await f.view()).workspace);
+  edited.local.selections.OpenAI = 'DIRECT';
+  await f.save(withoutRevision(edited), edited.revision);
+  assert.equal(await f.action.automaticSnapshot(true), null);
+  assert.equal((await f.view()).pending, true);
+});
+
+test('automatic activation failure rolls back only its private binding and manual takeover remains available', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node, { ...node, name: 'spare' }] });
+  const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: {
+    Proxy: { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true },
+  } } });
+  const saved = await f.save(initial, 0), active = await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node' });
+  const snapshot = await f.action.automaticSnapshot(); assert.ok(snapshot);
+  f.fail();
+  assert.equal(await f.action.automaticSwitch(snapshot, 'Proxy', 'spare', 'failure-recovery'), false);
+  const after = await f.view();
+  assert.equal(after.active, active.active); assert.equal(after.pending, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(after.workspace.local)), initial.local);
+  assert.deepEqual(JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8')).targets, {});
+  // Remove automatic policy before persisting an explicit manual target.
+  const manual = structuredClone(after.workspace);
+  delete manual.local.automatic;
+  manual.local.selections.Proxy = 'DIRECT';
+  const updated = await f.save(withoutRevision(manual), manual.revision);
+  assert.equal(updated.local.selections.Proxy, 'DIRECT');
+  assert.equal(await f.action.automaticSnapshot(), null);
+});
+
+test('automatic configuration rejects group aliases, foreign candidates, native algorithms and unpermitted probes before saving', async t => {
+  const f = await fixture(t);
+  await f.source('pool', profile);
+  const invalid = (target: string) => settings({ sourceIds: ['pool'], local: { selections: {}, rules: [], automatic: {
+    Proxy: { preferred: [target], fallback: [], returnToPreferred: true },
+  } } });
+  for (const name of ['OpenAI', 'not-in-pool']) await assert.rejects(f.save(invalid(name), 0), { code: 'AUTO_GROUP_INVALID' });
+  const unpermitted = invalid('synthetic-node');
+  unpermitted.autoProbes = { ...DEFAULT_AUTO_PROBES, secondary: { url: 'https://unpermitted.example/check', expectedStatus: 204 } };
+  await assert.rejects(f.save(unpermitted, 0), { code: 'AUTO_PROBE_DENIED', status: 400 });
+  await assert.rejects(f.save(settings({ mode: 'subscription', subscriptionId: 'pool', subscriptionOverrides: { pool: {
+    selections: {}, rules: [], automatic: { Auto: { preferred: ['synthetic-node'], fallback: [], returnToPreferred: true } },
+  } } }), 0), { code: 'AUTO_GROUP_INVALID' });
+  assert.equal((await f.view()).workspace.revision, 0);
+});
+
+test('automatic probe settings are validated through active concrete nodes without persisting failed or stale settings', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node] });
+  const saved = await f.save(settings({ sourceIds: ['pool'] }), 0), applied = await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node' });
+  const checked = await f.call<{ ok: boolean }>('/automatic/test', 'POST', {
+    expectedRevision: saved.revision, expectedActive: applied.active, probes: DEFAULT_AUTO_PROBES,
+  });
+  assert.equal(checked.ok, true);
+  assert.equal((await f.view()).workspace.autoProbes, undefined);
+  await assert.rejects(f.call('/automatic/test', 'POST', {
+    expectedRevision: 0, expectedActive: applied.active, probes: DEFAULT_AUTO_PROBES,
+  }), { code: 'WORKSPACE_CONFLICT' });
+});
 
 test('compiled policy reuse is immutable and invalidates on content even at the same workspace revision', () => {
   let compilations = 0;
@@ -80,6 +194,8 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }),
   };
   const action = createManagementApplication({ stateDirectory: state, deployment: { ...deployment, ...deploymentOverrides }, runtime,
+    allowedProbeOrigins: ['https://www.gstatic.com', 'https://cp.cloudflare.com'],
+    automaticProbe: async () => ({ ok: true, delay: 25 }),
     observeSelections: async () => {
       const generation = (await new FileTransactionStore(state).status()).active;
       if (!generation || !observedChoices) throw new Error('Synthetic core unavailable');
@@ -105,7 +221,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
   const save = async (value: WorkspaceSettings, expectedRevision: number) => (await call<{ workspace: Workspace }>('/workspace', 'PUT', { settings: value, expectedRevision })).workspace;
   const apply = (workspace: Workspace, expectedActive: string | null) => call<{ active: string; workspaceRevision: number }>('/workspace/apply', 'POST', { expectedRevision: workspace.revision, expectedActive });
   const candidate = async (id: string) => JSON.parse(await readFile(await new FileTransactionStore(state).readCandidate(id), 'utf8')) as JsonObject;
-  return { state, events, call, view, save, apply, source, candidate, payloads, fail: () => { failActivation = true; },
+  return { state, events, call, view, save, apply, source, candidate, payloads, action, fail: () => { failActivation = true; },
     observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
 

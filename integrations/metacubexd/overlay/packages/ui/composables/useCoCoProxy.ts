@@ -44,6 +44,13 @@ export interface CoCoProxyStatus {
 }
 
 const messages: Record<string, string> = {
+  AUTO_SETTINGS_INVALID: '自动选择设置无效，请检查候选节点和检测参数。',
+  AUTO_GROUP_INVALID: '此策略组不支持自动选择，或候选节点已变化，请刷新后重试。',
+  AUTO_STATE_CONFLICT: '自动选择运行状态已变化，请刷新后重试。',
+  AUTO_STATE_CORRUPT: '自动选择运行记录无法读取，请检查服务存储。',
+  AUTO_PROBE_DENIED: '检测网址来源未获当前部署许可，请联系管理员配置。',
+  AUTO_PROBE_UNAVAILABLE: '当前无法通过具体节点检测，请先选择可用节点并确认核心就绪。',
+  AUTO_PROBE_BUSY: '另一项检测正在执行，请稍后重试。',
   RULE_TEST_TARGET_INVALID: '请输入有效的域名或 IP，不要包含网址路径或端口。',
   RULE_TEST_INPUT_INVALID: '请检查协议、IP 和端口；端口范围为 1–65535。',
   RULE_TEST_UNAVAILABLE: '当前核心或生效规则暂不可用，请稍后重试。',

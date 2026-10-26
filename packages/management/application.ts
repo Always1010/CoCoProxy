@@ -14,6 +14,8 @@ import { compileAutomaticGatewayConfig, parseAutomaticGatewaySettings, automatic
 import type { AutomaticGatewaySettings } from '../gateway/profile.ts';
 import { createWorkspaceApplication } from './workspace-application.ts';
 import { WorkspaceError, WorkspaceStore, initialWorkspace } from './workspace.ts';
+import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
+import type { ProbeTarget } from './automatic-policy.ts';
 
 export interface ManagementRuntime extends RuntimeAdapter { observe(generation: string): Promise<CoreObservation> }
 const protectedKeys = ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer'];
@@ -23,7 +25,10 @@ const revision = (value: unknown): value is number => Number.isSafeInteger(value
 /** Routes only CoCoProxy operations; the stock upstream write router is not used. */
 export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient; sourceDecoder?: SnapshotDecoder; automaticGateway?: AutomaticGatewaySettings;
   ruleTest?: (request: Request) => Promise<unknown>;
-  observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }> }): ManagementAction {
+  observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
+  allowedProbeOrigins?: readonly string[];
+  automaticStatus?: () => unknown;
+  automaticProbe?: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult> }) {
   // Compile before cloning so getters and non-JSON values cannot run here.
   compileConfig({ schemaVersion: 1, deployment: options.deployment, policy: { rules: ['MATCH,REJECT'] } });
   const deployment = structuredClone(options.deployment) as JsonObject;
@@ -42,6 +47,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
   }
   const workspace = createWorkspaceApplication({ stateDirectory: options.stateDirectory, subscriptions, store, manager,
     observeSelections: options.observeSelections,
+    allowedProbeOrigins: options.allowedProbeOrigins, automaticStatus: options.automaticStatus, automaticProbe: options.automaticProbe,
     compile: (policy, nodeDnsPolicy) => compile({ schemaVersion: 1, deployment: nodeDnsPolicy ? {
       ...deployment, nodeNameserverPolicy: { ...nodeDnsPolicy, ...(deployment.nodeNameserverPolicy as JsonObject | undefined) },
     } : deployment, policy }),
@@ -55,9 +61,10 @@ export function createManagementApplication(options: { stateDirectory: string; d
       for (const key of protectedKeys) delete policy[key];
       return upgradeCompilerRulePolicy(policy);
     } });
-  return async request => {
+  const action: ManagementAction = async request => {
     try {
       const path = new URL(request.url).pathname;
+      if (path.startsWith('/api/cocoproxy/automatic/')) return await workspace.automaticRoute(request);
       if (path === '/api/cocoproxy/rules/test' && request.method === 'POST') {
         if (!options.ruleTest) throw new ManagementError('RULE_TEST_UNAVAILABLE', 503);
         return await options.ruleTest(request);
@@ -159,10 +166,11 @@ export function createManagementApplication(options: { stateDirectory: string; d
         const code = error.code;
         const status = /CONFLICT|STORE_LOCKED|RECOVERY_REQUIRED|DEPLOYMENT_MISMATCH|SOURCE_IN_USE/.test(code) ? 409
           : /NOT_FOUND/.test(code) ? 404
-          : /INVALID|PROTECTED|NAME_CONFLICT|LIMIT|SOURCE_PENDING|SOURCE_REQUIRED|PROFILE_REQUIRED|PROFILE_RULES_REQUIRED|PROFILE_NO_PROXY|GROUP_REFERENCE|GROUP_SELECTION_UNSUPPORTED/.test(code) ? 400 : 503;
+          : /INVALID|PROTECTED|NAME_CONFLICT|LIMIT|SOURCE_PENDING|SOURCE_REQUIRED|PROFILE_REQUIRED|PROFILE_RULES_REQUIRED|PROFILE_NO_PROXY|GROUP_REFERENCE|GROUP_SELECTION_UNSUPPORTED|AUTO_PROBE_DENIED/.test(code) ? 400 : 503;
         throw new ManagementError(code, status);
       }
       throw new ManagementError('MANAGEMENT_UNAVAILABLE', 503);
     }
   };
+  return Object.assign(action, { automaticSnapshot: workspace.automaticSnapshot, automaticSwitch: workspace.automaticSwitch });
 }

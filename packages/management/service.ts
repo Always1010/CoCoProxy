@@ -14,6 +14,8 @@ import { createManagementLifecycle, recoverManagementStartup } from './startup.t
 import { createManagementApplication } from './application.ts';
 import { createManagementGateway, exactRecord, managementOrigin, ManagementError } from './http.ts';
 import { createRuleTestHandler, type RoutingSnapshot } from './rule-test.ts';
+import { createAutomaticSelector } from './automatic-selector.ts';
+import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
 
 export function stripControllerMount(request: Request): Request {
   const url = new URL(request.url);
@@ -110,7 +112,11 @@ export async function loadManagementGateway(path: string) {
         }
         return addresses;
       } });
+    let automatic: ReturnType<typeof createAutomaticSelector> | undefined;
     const action = createManagementApplication({ stateDirectory: runtimeSettings.stateDirectory, deployment: settings.deployment, ruleTest,
+      allowedProbeOrigins: controllerPolicy.allowedProbeOrigins as string[] | undefined,
+      automaticStatus: () => automatic?.status() ?? { groups: [], events: [] },
+      automaticProbe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
       runtime, sourceClient, sourceDecoder: decodeSubscriptionProfile, automaticGateway: runtimeSettings.automaticGateway,
       observeSelections: async () => {
         const response = await controller.fetch(new Request(settings.origin + '/proxies'));
@@ -121,12 +127,18 @@ export async function loadManagementGateway(path: string) {
         for (const [name, value] of Object.entries(body.proxies)) if (typeof value.now === 'string') selections[name] = value.now;
         return { generation, selections };
       } });
+    automatic = createAutomaticSelector({
+      snapshot: async () => (await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused ? null : action.automaticSnapshot(),
+      probe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
+      switch: (snapshot, group, node, reason) => action.automaticSwitch(snapshot, group, node, reason),
+    });
     const trustedDevices = await TrustedDeviceStore.load(runtimeSettings.stateDirectory, credential, settings.origin);
     const gateway = createManagementGateway({ origin: settings.origin, credential, trustedDevices }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
     const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,
       () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'));
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
-      startLifecycle: lifecycle.start, closeLifecycle: lifecycle.close };
+      startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); return recovered; },
+      closeLifecycle: async () => { await automatic!.close(); await lifecycle.close(); } };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }

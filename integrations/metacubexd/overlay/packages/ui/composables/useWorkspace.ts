@@ -1,9 +1,28 @@
 import type { CoCoProxySource } from './useCoCoProxy'
 import { CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy } from './useCoCoProxy'
 
+export interface AutoGroupPolicy {
+  preferred: string[]
+  fallback: string[]
+  returnToPreferred: boolean
+}
+
+export interface AutoProbeSettings {
+  primary: { url: string; expectedStatus: number }
+  secondary: { url: string; expectedStatus: number }
+  timeoutMs: number
+  slowMs: number
+}
+
+export interface AutomaticStatus {
+  groups: { name: string; phase: string; current: string | null; nextAt: number | null; reason: string | null }[]
+  events: { at: number; group: string; from: string | null; to: string | null; reason: string }[]
+}
+
 export interface WorkspaceOverrides {
   selections: Record<string, string>
   rules: string[]
+  automatic?: Record<string, AutoGroupPolicy>
 }
 
 export interface WorkspaceSettings {
@@ -13,6 +32,7 @@ export interface WorkspaceSettings {
   runMode: 'rule' | 'global' | 'direct'
   local: WorkspaceOverrides
   subscriptionOverrides: Record<string, WorkspaceOverrides>
+  autoProbes?: AutoProbeSettings
 }
 
 export interface WorkspaceSource extends CoCoProxySource {
@@ -36,6 +56,8 @@ export interface WorkspaceView {
   active: string | null
   error?: string
   invalidSelections?: string[]
+  automatic?: AutomaticStatus
+  allowedProbeOrigins?: string[]
 }
 
 export function useWorkspace() {
@@ -100,7 +122,11 @@ export function useWorkspace() {
 
   async function select(group: string, name: string) {
     await execute(async () => {
-      await save(settings => { editOverrides(settings).selections[group] = name }, '')
+      await save(settings => {
+        const overrides = editOverrides(settings)
+        overrides.selections[group] = name
+        if (overrides.automatic) delete overrides.automatic[group]
+      }, '')
       const observed = await api.request<{ proxies: Record<string, { now?: string }> }>('/api/clash/proxies')
       if (observed.proxies[group]?.now !== name) throw new CoCoProxyError('SELECTION_UNCONFIRMED')
       feedback.value = `已切换：${group} → ${name}`

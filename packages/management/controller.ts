@@ -94,7 +94,7 @@ function httpRoute(request: Request, origins: ReadonlySet<string>): { path: stri
   return { path: '/' + p.map(part => encodeURIComponent(part)).join('/') + url.search, mutation, deadlineMs, probe: delay };
 }
 
-async function upstream(target: ControllerTarget, path: string, method: string, deadlineMs: number, probe: boolean, body?: string, signal?: AbortSignal): Promise<Response> {
+async function upstream(target: ControllerTarget, path: string, method: string, deadlineMs: number, probe: boolean, body?: string, signal?: AbortSignal, rateLimit = false): Promise<Response> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), deadlineMs);
   try {
@@ -103,6 +103,11 @@ async function upstream(target: ControllerTarget, path: string, method: string, 
       ...(body === undefined ? {} : { body }) });
     if (result.status >= 300 || result.status < 200) {
       await result.body?.cancel();
+      if (rateLimit && result.status === 429) {
+        const retry = result.headers.get('retry-after');
+        const wait = retry && /^\d+$/.test(retry) ? Number(retry) * 1000 : retry ? Date.parse(retry) - Date.now() : NaN;
+        return response({ retryAfterMs: Math.min(3_600_000, Math.max(1000, Number.isFinite(wait) ? wait : 30_000)) }, 429, target.generation);
+      }
       if (probe && result.status === 504)
         return response({ error: { code: 'CONTROLLER_PROBE_TIMEOUT' } }, 504, target.generation);
       return response({ error: { code: 'CONTROLLER_UPSTREAM_FAILED' } }, 502, target.generation);
@@ -135,6 +140,7 @@ async function upstream(target: ControllerTarget, path: string, method: string, 
 /** The caller supplies authenticated requests and serializes mutations with config apply. */
 export function createControllerProxy(options: ControllerProxyOptions): {
   fetch: (request: Request) => Promise<Response>;
+  probeNode: (generation: string, name: string, target: { url: string; expectedStatus: number }, timeoutMs: number) => Promise<{ ok: boolean; delay: number | null; retryAfterMs?: number }>;
   queryDns: (name: string, type: 'A' | 'AAAA', generation: string, signal: AbortSignal) => Promise<unknown>;
   relay: (request: Request, client: ControllerClient, authorized: () => boolean) => Promise<() => void>;
 } {
@@ -150,12 +156,53 @@ export function createControllerProxy(options: ControllerProxyOptions): {
     });
   };
   let probing = 0;
+  let automaticProbing = 0;
+  const automaticProbeKeys = new Set<string>();
   const origins = new Set((options.allowedProbeOrigins ?? []).map(input => {
     const url = new URL(input);
     if (url.protocol !== 'https:' || url.origin !== input || url.username || url.password) throw new ManagementError('CONTROLLER_PROBE_ORIGIN_INVALID');
     return url.origin;
   }));
   return {
+    /** Internal automatic probe: expected-status is not a browser-controlled controller parameter. */
+    async probeNode(generation: string, name: string, target: { url: string; expectedStatus: number }, timeoutMs: number) {
+      const url = new URL(target.url);
+      if (url.protocol !== 'https:' || url.username || url.password || url.hash || !origins.has(url.origin) ||
+          !Number.isInteger(target.expectedStatus) || target.expectedStatus < 100 || target.expectedStatus > 599 ||
+          !Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 10000 ||
+          !name || name === '.' || name === '..' || name.length > 256 || /[\x00-\x1f\x7f]/.test(name)) throw new ManagementError('AUTO_PROBE_DENIED', 400);
+      const probeKey = JSON.stringify([generation, name, target.url]);
+      // A manual probe must not overwrite per-URL expected-status evidence
+      // between our request and readback. Automatic callers sharing a URL wait.
+      if (probing > automaticProbing || automaticProbeKeys.has(probeKey) || probing >= 16) return { ok: false, delay: null, retryAfterMs: 5000 };
+      probing++; automaticProbing++; automaticProbeKeys.add(probeKey);
+      try {
+        const current = validateTarget(await readTarget());
+        if (current.generation !== generation || !await options.isCurrent(generation)) throw new ManagementError('ACTIVE_CONFLICT', 409);
+        const path = `/proxies/${encodeURIComponent(name)}`;
+        const response = await upstream(current, path + '/delay?' + new URLSearchParams({ url: target.url,
+          timeout: String(timeoutMs), expected: String(target.expectedStatus) }), 'GET', timeoutMs + 2000, true, undefined, undefined, true);
+        if (!await options.isCurrent(generation)) throw new ManagementError('ACTIVE_CONFLICT', 409);
+        if (response.status === 429) {
+          const limited = await response.json() as { retryAfterMs: number };
+          return { ok: false, delay: null, retryAfterMs: limited.retryAfterMs };
+        }
+        if (!response.ok) return { ok: false, delay: null };
+        const result = await response.json() as { delay?: unknown };
+        if (typeof result.delay !== 'number' || !Number.isFinite(result.delay) || result.delay <= 0) return { ok: false, delay: null };
+        // This core version can return a positive delay even when expected status
+        // mismatches. Its per-URL alive flag is the authoritative success signal.
+        const details = await upstream(current, path, 'GET', 2000, false, undefined, undefined, true);
+        if (!await options.isCurrent(generation)) throw new ManagementError('ACTIVE_CONFLICT', 409);
+        if (details.status === 429) {
+          const limited = await details.json() as { retryAfterMs: number };
+          return { ok: false, delay: null, retryAfterMs: limited.retryAfterMs };
+        }
+        if (!details.ok) return { ok: false, delay: null };
+        const value = await details.json() as { extra?: Record<string, { alive?: unknown }> };
+        return value.extra?.[target.url]?.alive === true ? { ok: true, delay: result.delay } : { ok: false, delay: null };
+      } finally { probing--; automaticProbing--; automaticProbeKeys.delete(probeKey); }
+    },
     async queryDns(name, type, generation, signal) {
       // Internal diagnostic only: the browser controller allowlist stays closed.
       if (name.length > 253 || !/^[a-z0-9_.-]+$/i.test(name) || !['A', 'AAAA'].includes(type)) throw new ManagementError('RULE_TEST_TARGET_INVALID');
@@ -172,7 +219,7 @@ export function createControllerProxy(options: ControllerProxyOptions): {
       try {
         const route = httpRoute(request, origins);
         if (route.probe) {
-          if (probing >= 16) throw new ManagementError('CONTROLLER_PROBE_BUSY', 429);
+          if (automaticProbing > 0 || probing >= 16) throw new ManagementError('CONTROLLER_PROBE_BUSY', 429);
           probing++; probeSlot = true;
         }
         let body: string | undefined;

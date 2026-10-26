@@ -3,8 +3,9 @@ import { types } from 'node:util';
 import { canonicalJson, type JsonObject } from '../config/index.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { atomicWrite, inspectPrivateDirectory, privateRead, PrivateFileError } from '../storage/private-files.ts';
+import { parseAutoGroupPolicy, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings } from './automatic-policy.ts';
 
-export type RoutingOverrides = { selections: Record<string, string>; rules: string[] };
+export type RoutingOverrides = { selections: Record<string, string>; rules: string[]; automatic?: Record<string, AutoGroupPolicy> };
 export type WorkspaceSettings = {
   mode: 'legacy' | 'local' | 'subscription';
   subscriptionId: string | null;
@@ -12,6 +13,7 @@ export type WorkspaceSettings = {
   runMode: 'rule' | 'global' | 'direct';
   local: RoutingOverrides;
   subscriptionOverrides: Record<string, RoutingOverrides>;
+  autoProbes?: AutoProbeSettings;
 };
 export type Workspace = WorkspaceSettings & { revision: number };
 export class WorkspaceError extends Error {
@@ -33,12 +35,23 @@ function string(value: unknown, max = 1024): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 }
 function overrides(value: unknown): RoutingOverrides {
-  const record = exact(value, ['selections', 'rules']);
+  const record = object(value);
+  if (!Object.hasOwn(record, 'selections') || !Object.hasOwn(record, 'rules') || Object.keys(record).some(key => !['selections', 'rules', 'automatic'].includes(key))) fail();
   const selections = object(record.selections);
   if (Object.keys(selections).length > 100 || Object.entries(selections).some(([key, target]) =>
     !string(key) || ['__proto__', 'prototype', 'constructor'].includes(key) || !string(target))) fail();
   if (!Array.isArray(record.rules) || record.rules.length > 512 || record.rules.some(rule => !string(rule, 8192))) fail();
-  return { selections: { ...selections } as Record<string, string>, rules: [...record.rules] as string[] };
+  let automatic: Record<string, AutoGroupPolicy> | undefined;
+  if (record.automatic !== undefined) {
+    const policies = object(record.automatic);
+    if (Object.keys(policies).length > 100) fail();
+    automatic = Object.create(null) as Record<string, AutoGroupPolicy>;
+    for (const [key, policy] of Object.entries(policies)) {
+      if (!string(key) || ['__proto__', 'prototype', 'constructor'].includes(key)) fail();
+      try { automatic[key] = parseAutoGroupPolicy(policy); } catch { fail('AUTO_SETTINGS_INVALID'); }
+    }
+  }
+  return { selections: { ...selections } as Record<string, string>, rules: [...record.rules] as string[], ...(automatic ? { automatic } : {}) };
 }
 export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {
   let budget = 100_000;
@@ -61,7 +74,9 @@ export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {
     ancestors.delete(value);
   }
   inspect(input, 0);
-  const record = exact(input, ['mode', 'subscriptionId', 'sourceIds', 'runMode', 'local', 'subscriptionOverrides']);
+  const record = object(input);
+  const required = ['mode', 'subscriptionId', 'sourceIds', 'runMode', 'local', 'subscriptionOverrides'];
+  if (required.some(key => !Object.hasOwn(record, key)) || Object.keys(record).some(key => ![...required, 'autoProbes'].includes(key))) fail();
   if (!['legacy', 'local', 'subscription'].includes(record.mode as string) || !['rule', 'global', 'direct'].includes(record.runMode as string)) fail();
   if (!(record.subscriptionId === null || id(record.subscriptionId))) fail();
   if (record.mode === 'subscription' && record.subscriptionId === null) fail('PROFILE_REQUIRED');
@@ -70,8 +85,13 @@ export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {
   if (Object.keys(profiles).length > 101 || Object.keys(profiles).some(key => !id(key))) fail();
   const subscriptionOverrides: Record<string, RoutingOverrides> = Object.create(null);
   for (const [key, value] of Object.entries(profiles)) subscriptionOverrides[key] = overrides(value);
+  let autoProbes: AutoProbeSettings | undefined;
+  if (record.autoProbes !== undefined) {
+    try { autoProbes = parseAutoProbeSettings(record.autoProbes); } catch { fail('AUTO_SETTINGS_INVALID'); }
+  }
   return { mode: record.mode as WorkspaceSettings['mode'], runMode: record.runMode as WorkspaceSettings['runMode'],
-    subscriptionId: record.subscriptionId as string | null, sourceIds: [...record.sourceIds] as string[], local: overrides(record.local), subscriptionOverrides };
+    subscriptionId: record.subscriptionId as string | null, sourceIds: [...record.sourceIds] as string[], local: overrides(record.local), subscriptionOverrides,
+    ...(autoProbes ? { autoProbes } : {}) };
 }
 
 /** Private plan preferences use the same lock and durability boundary as config writes. */
