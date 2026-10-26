@@ -10,6 +10,8 @@ import { renderDeploymentPlan } from '../deployment/plan.ts';
 import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../gateway/profile.ts';
 import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, networkReceiptRemoved,
   NetworkObservationError } from '../deployment/network-evidence.ts';
+import { inspectDeployment } from '../deployment/maintenance.ts';
+import { parseListeningSockets, listenerOverlap, setupListeningTargets, type ListeningSocket, type ListeningTarget } from './listening.ts';
 import type { EvidenceResult, EvidenceStatus } from './check-result.ts';
 
 export const DOCTOR_LAYERS = [
@@ -32,6 +34,11 @@ const checkLayers = {
   'policy-rules': 'network', routes: 'network', firewall: 'network', 'router-contract': 'network',
   'tun-name': 'network', 'network-receipt': 'network',
   'managed-https': 'management', 'https-client-trust': 'management',
+  'management-port': 'management', 'https-port': 'management', 'external-https': 'management',
+  'mixed-port': 'network', 'controller-port': 'network', 'dns-port': 'network',
+  'bound-sockets': 'network',
+  'installation-receipt': 'installation', 'installation-files': 'installation', 'installation-locks': 'installation',
+  'installation-maintenance': 'installation', 'installation-identity': 'installation',
 } as const satisfies Record<string, DoctorLayer>;
 type CheckId = keyof typeof checkLayers | `deployment-directory-${number}`;
 export interface DoctorHost {
@@ -41,15 +48,16 @@ export interface DoctorHost {
   resolve(path: string): Promise<string>;
   run(path: string, args: string[]): Promise<string>;
   managedWeb?(input: ManagedWebInput): Promise<void>;
+  inspection?(): Promise<Awaited<ReturnType<typeof inspectDeployment>>>;
 }
 const nativeHost = (): DoctorHost => ({
   platform: platform(), architecture: arch(), nodeVersion: process.versions.node, uid: process.getuid?.() ?? -1,
-  read: path => readFile(path, 'utf8'), resolve: realpath, managedWeb: verifyManagedWeb,
+  read: path => readFile(path, 'utf8'), resolve: realpath, managedWeb: verifyManagedWeb, inspection: inspectDeployment,
   stat: async path => { const s = await lstat(path); return { directory: s.isDirectory(), characterDevice: s.isCharacterDevice(),
     uid: s.uid, mode: s.mode, link: s.isSymbolicLink(), file: s.isFile(), nlink: s.nlink }; },
   run: (path, args) => new Promise((resolve, reject) => execFile(path, args, {
     timeout: 5000, maxBuffer: 2 * 1024 * 1024, windowsHide: true, env: { PATH: '/usr/sbin:/usr/bin', LC_ALL: 'C' },
-  }, (error, stdout) => error ? reject(new SetupError((error as NodeJS.ErrnoException).code === 'ENOENT'
+  }, (error, stdout, stderr) => error || path.endsWith('/ss') && stderr.trim() ? reject(new SetupError((error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
     ? 'SETUP_REQUIRED_COMPONENT_MISSING' : 'SETUP_CHECK_UNAVAILABLE')) : resolve(stdout))),
 });
 
@@ -250,6 +258,121 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
       return true;
     }, '已有网络回执必须明确记录已退役；缺失回执也不能免除实时资源检查。',
     '按维护入口核对完整或中断的网络资源并显式退役；doctor 不执行 prepare 或 remove。');
+  }
+  let installation: Awaited<ReturnType<typeof inspectDeployment>> | undefined;
+  const installationIds = ['installation-receipt', 'installation-files', 'installation-locks', 'installation-maintenance', 'installation-identity'] as const;
+  const installationAction = '先运行 inspect 审阅收据、漂移和维护状态；不要删除锁或覆盖未知文件。';
+  try {
+    if (!host.inspection || host.uid !== 0) throw new SetupError('SETUP_CHECK_UNAVAILABLE');
+    installation = await host.inspection();
+    if (installation.installed === false) {
+      for (const id of installationIds) add(id, 'pass', '只读检查未发现部署收据目录；按首次安装继续最终预检。');
+    } else if (installation.installed !== true || typeof installation.receipt !== 'object') {
+      for (const id of installationIds) add(id, 'unknown', '已有安装收据缺失、不可信或未取得完整观察证据。', installationAction);
+    } else {
+      const complete = installation.receipt.status === 'complete';
+      add('installation-receipt', complete ? 'pass' : 'fail', '已有安装须有完整收据，pending 或卸载残留须先审阅。', installationAction, true,
+        complete ? undefined : { code: 'SETUP_INSTALLATION_INCOMPLETE', reason: '部署收据记录未完成或已卸载状态。' });
+      const fileStatuses = installation.files?.map(file => file.status) ?? [];
+      const fileUnknown = !fileStatuses.length || fileStatuses.includes('INSTALL_INSPECTION_UNAVAILABLE') || installation.release === 'INSTALL_INSPECTION_UNAVAILABLE';
+      const filesMatch = fileStatuses.length > 0 && fileStatuses.every(status => status === 'matches-receipt') && installation.release === 'matches-receipt';
+      add('installation-files', fileUnknown ? 'unknown' : filesMatch ? 'pass' : 'fail', '收据管理文件的类型、归属、模式、字节及发行内容须与记录一致。', installationAction, true,
+        fileUnknown || filesMatch ? undefined : { code: 'SETUP_INSTALLATION_DRIFT', reason: '安装检查确认文件或发行内容缺失、改变或不符合收据。' });
+      const pending = installation.lifecycleJournal && installation.lifecycleJournal.status !== 'complete';
+      const locked = installation.lock?.present || installation.recoveryLock?.present || installation.lifecycleClaim?.present || pending || installation.temporaryFiles?.length;
+      const locksUnknown = !installation.lock || !installation.recoveryLock || !installation.lifecycleClaim || installation.temporaryFilesComplete !== true;
+      add('installation-locks', locked ? 'fail' : locksUnknown ? 'unknown' : 'pass', '安装、恢复、生命周期锁及未完成 journal 或临时写入须先审阅。', installationAction, true,
+        locked ? { code: installation.lock?.owner === 'alive' ? 'SETUP_INSTALLATION_BUSY' : 'SETUP_INSTALLATION_INCOMPLETE',
+          reason: installation.lock?.owner === 'alive' ? '安装检查确认事务锁所属进程仍存活。' : '观察到锁、未完成生命周期记录或残留临时写入。' } : undefined);
+      const maintenance = installation.maintenance?.status;
+      add('installation-maintenance', maintenance === 'ready' ? 'pass' : maintenance === 'running' || maintenance === 'invalid' ? 'fail' : 'unknown',
+        '已有持久运行须处于允许维护的暂停或关闭状态。', '按维护流程显式暂停；不要由 doctor 改写生命周期状态。', true,
+        maintenance === 'running' || maintenance === 'invalid' ? { code: 'SETUP_MAINTENANCE_REQUIRED', reason: '现有生命周期仍运行或不满足安装器维护状态约束。' } : undefined);
+      const identity = installation.identity;
+      const identityKnown = Boolean(environment && serviceUid !== null && identity);
+      const identityMatches = identityKnown && identity!.serviceUid === serviceUid && identity!.stateDirectory === '/var/lib/cocoproxy' &&
+        identity!.credentialPath === '/etc/cocoproxy/admin.json' && identity!.release.startsWith(environment!.system.releaseParent + '/');
+      add('installation-identity', !identityKnown ? 'unknown' : identityMatches ? 'pass' : 'fail', '当前环境身份与布局须匹配已验证收据。', installationAction, true,
+        identityKnown && !identityMatches ? { code: 'SETUP_INSTALLATION_IDENTITY_MISMATCH', reason: '服务 UID 或安装布局与已有收据不一致。' } : undefined);
+    }
+  } catch (error) {
+    const failure = observationFailure(error);
+    for (const id of installationIds) add(id, 'unknown', '未取得完整的已有安装只读检查证据。', installationAction, true,
+      { code: failure.status === 'fail' ? 'SETUP_CHECK_UNAVAILABLE' : failure.code, reason: '安装观察不可用，不能把查询失败解释成未安装。' });
+  }
+  if (environment) {
+    let sockets: ListeningSocket[] | undefined;
+    let listenerFailure: ReturnType<typeof observationFailure> | undefined;
+    let boundObservation = false;
+    let boundFailed = false;
+    try {
+      let binary: string | undefined;
+      for (const candidate of ['/usr/bin/ss', '/usr/sbin/ss']) {
+        if (!await pathHost.info(candidate)) continue;
+        await assertTrustedExecutable(candidate, pathHost); binary = candidate; break;
+      }
+      if (!binary) throw new SetupError('SETUP_REQUIRED_COMPONENT_MISSING');
+      sockets = [];
+      for (const [family, args] of [[4, ['-H', '-4', '-antup']], [6, ['-H', '-6', '-antup']]] as const) {
+        try { sockets.push(...parseListeningSockets(await trustedRun(binary, [...args]), family)); }
+        catch (error) { listenerFailure = observationFailure(error); }
+      }
+      for (const family of [4, 6] as const) {
+        try {
+          const observed = parseListeningSockets(await trustedRun(binary, ['-H', '-' + family, '-B', '-ntup']), family);
+          sockets.push(...observed); boundObservation ||= observed.length > 0;
+        } catch { boundFailed = true; }
+      }
+    } catch (error) { listenerFailure = observationFailure(error); }
+    add('bound-sockets', boundObservation && !boundFailed ? 'pass' : 'unknown',
+      '可选读取较新 ss 的仅绑定未监听 TCP 范围；空输出也不能证明内核提供此能力。',
+      '按维护流程停止服务后继续最终安装预检；不要为此自动升级工具或尝试绑定端口。', false,
+      boundObservation && !boundFailed ? undefined : { code: 'SETUP_PORT_BOUND_SCOPE_UNAVAILABLE',
+        reason: '本次没有取得完整的仅绑定未监听 TCP 观察证据；此额外范围未覆盖，不要求升级 ss。' });
+    const trustedInstallation = installation?.installed === true && typeof installation.receipt === 'object' && installation.receipt.status === 'complete' &&
+      installation.release === 'matches-receipt' && installation.files?.every(file => file.status === 'matches-receipt') &&
+      installation.identity?.serviceUid === serviceUid;
+    async function socketOwner(socket: ListeningSocket, target: ListeningTarget): Promise<'owned' | 'foreign' | 'unknown'> {
+      if (installation?.installed === false) return 'foreign';
+      if (!trustedInstallation || !installation?.identity || !socket.pids.length ||
+        !installation.files?.some(file => file.path === '/etc/systemd/system/' + target.unit && file.status === 'matches-receipt')) return 'unknown';
+      try {
+        const output = await trustedRun(environment!.system.systemctlPath, ['show', target.unit, '--property=MainPID,FragmentPath,DropInPaths,NeedDaemonReload']);
+        const properties = Object.fromEntries(output.trim().split('\n').map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)]; }));
+        if (!/^[1-9]\d*$/.test(properties.MainPID ?? '') || properties.FragmentPath !== '/etc/systemd/system/' + target.unit ||
+          properties.DropInPaths !== '' || properties.NeedDaemonReload !== 'no') return 'unknown';
+        const expected = target.executable === 'node' ? environment!.system.nodePath : target.executable === 'nginx' && environment!.https?.mode === 'managed'
+          ? environment!.https.nginxPath : installation.identity.release + '/bin/mihomo';
+        const executable = await host.resolve(expected);
+        for (const pid of socket.pids) {
+          const actual = await host.resolve('/proc/' + pid + '/exe');
+          const groups = (await host.read('/proc/' + pid + '/cgroup')).trim().split('\n');
+          if (actual !== executable || !groups.some(group => group.slice(group.lastIndexOf(':') + 1).endsWith('/' + target.unit))) return 'foreign';
+        }
+        return socket.pids.includes(Number(properties.MainPID)) ? 'owned' : 'unknown';
+      } catch { return 'unknown'; }
+    }
+    for (const target of setupListeningTargets(environment)) {
+      const message = '当次可观察 socket 范围须无计划地址、协议和端口重叠，可继续最终安装预检；已有自有占用仍须先停服。';
+      const action = '按端口用途审阅监听及进程归属；显式停服或选择新端口，doctor 不终止进程。';
+      if (!sockets) { const failure = listenerFailure!; add(target.id, failure.status, message, action, true, failure); continue; }
+      const conflicts = sockets.filter(socket => listenerOverlap(socket, target) !== 'no');
+      if (!conflicts.length) { add(target.id, listenerFailure ? 'unknown' : 'pass', message, action, true, listenerFailure ? {
+        code: 'SETUP_PORT_OBSERVATION_INCOMPLETE', reason: '未取得必要的 IPv4/IPv6 监听与已连接 socket 观察证据；不能判定本项通过。',
+      } : undefined); continue; }
+      const owners = await Promise.all(conflicts.map(socket => socketOwner(socket, target)));
+      const definite = conflicts.map((socket, index) => ({ socket, owner: owners[index] })).filter(({ socket }) =>
+        listenerOverlap(socket, target) === 'yes' && ['LISTEN', 'UNCONN'].includes(socket.state));
+      const foreign = definite.some(({ owner }) => owner === 'foreign');
+      const owned = definite.some(({ owner }) => owner === 'owned');
+      add(target.id, foreign || owned ? 'fail' : 'unknown', message, action, true, {
+        code: foreign ? 'SETUP_PORT_CONFLICT' : owned ? 'SETUP_PORT_OWNED_REQUIRES_STOP' : 'SETUP_PORT_OWNERSHIP_UNKNOWN',
+        reason: foreign ? '观察到与计划监听重叠的非自有占用。' : owned ? '收据、unit 主进程、进程可执行文件及 cgroup 共同确认自有占用，须先停服。'
+          : '存在已连接或可能重叠的绑定，但归属、复用或 IPv6 双栈证据不足，不能认定端口可用。',
+      });
+    }
+    if (environment.https?.mode !== 'managed') add('external-https', 'unknown', '外部反向代理的配置、实际转发和 HTTPS 登录须独立验证。',
+      '按外部 HTTPS 配方验证实际入口和转发头。', false, { code: 'SETUP_EXTERNAL_VERIFICATION_REQUIRED', reason: '本次只读安装观察没有取得外部反代的配置与访问证据。' });
   }
   if (environment?.https?.mode === 'managed') {
     const remedies: Record<string, string> = {

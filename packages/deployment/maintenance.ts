@@ -18,17 +18,30 @@ function require(value: unknown, code: string): asserts value { if (!value) thro
 function rootHost() { require(platform() === 'linux' && process.getuid?.() === 0, 'INSTALL_LINUX_ROOT_REQUIRED'); }
 function errorCode(error: unknown) { return error instanceof InstallError ? error.code : 'INSTALL_INSPECTION_UNAVAILABLE'; }
 
-async function readReceipt() {
-  await assertRootPath(STORE);
-  require((await lstat(STORE)).isDirectory() && ((await lstat(STORE)).mode & 0o7777) === 0o700,
+export interface DeploymentInspectionHost {
+  info(path: string): Promise<{ isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; uid: number; mode: number; nlink: number } | null>;
+  rootPath(path: string): Promise<void>; privateFile(path: string, uid: number): Promise<void>;
+  read(path: string, maximum?: number): Promise<Buffer>; list(path: string): Promise<string[]>;
+  release(receipt: Receipt): Promise<void>; maintenance(receipt: Receipt): Promise<void>;
+  processIdentity(pid: number): Promise<{ bootId: string; startTime: string | null }>;
+}
+function nativeInspectionHost(): DeploymentInspectionHost {
+  return { info: deploymentPathInfo, rootPath: assertRootPath, privateFile: assertPrivateDeploymentFile,
+    read: readRegularDeploymentFile, list: readdir, release: releaseEvidence,
+    maintenance: receipt => assertDeploymentLifecycle(receipt.stateDirectory, receipt.serviceUid), processIdentity: deploymentProcessIdentity };
+}
+async function readReceipt(host = nativeInspectionHost()) {
+  await host.rootPath(STORE);
+  const directory = await host.info(STORE);
+  require(directory?.isDirectory() && (directory.mode & 0o7777) === 0o700,
     'INSTALL_RECEIPT_DIRECTORY_PRIVATE_REQUIRED');
-  await assertPrivateDeploymentFile(RECEIPT, 0);
-  const bytes = await readRegularDeploymentFile(RECEIPT, 128 * 1024);
+  await host.privateFile(RECEIPT, 0);
+  const bytes = await host.read(RECEIPT, 128 * 1024);
   return { bytes, receipt: validateReceipt(JSON.parse(bytes.toString())) };
 }
-async function readLock() {
-  await assertPrivateDeploymentFile(LOCK, 0);
-  const bytes = await readRegularDeploymentFile(LOCK, 4096);
+async function readLock(host = nativeInspectionHost()) {
+  await host.privateFile(LOCK, 0);
+  const bytes = await host.read(LOCK, 4096);
   return { bytes, lock: parseDeploymentLock(JSON.parse(bytes.toString())) };
 }
 export function deploymentOwnerGone(lock: DeploymentLock, observed: { bootId: string; startTime: string | null }): boolean {
@@ -64,11 +77,12 @@ export async function loadInstalledDeployment(inputPath: string) {
 }
 
 /** No service operation, lock removal, file writes, or credential contents. */
-export async function inspectDeployment() {
-  rootHost();
-  if (!(await deploymentPathInfo(STORE))) return { installed: false, readOnly: true, findings: [] };
+export async function inspectDeployment(options: { host?: DeploymentInspectionHost } = {}) {
+  if (!options.host) rootHost();
+  const host = options.host ?? nativeInspectionHost();
+  if (!(await host.info(STORE))) return { installed: false, readOnly: true, findings: [] };
   let receipt: Receipt;
-  try { receipt = (await readReceipt()).receipt; }
+  try { receipt = (await readReceipt(host)).receipt; }
   catch (error) { return { installed: 'unknown', readOnly: true, findings: [errorCode(error)],
     receipt: 'missing-or-untrusted', recovery: 'manual-review-required', automaticProgramRollback: false }; }
   const files = [];
@@ -77,31 +91,31 @@ export async function inspectDeployment() {
     let checks: { regularFile: boolean; ownerMatches: boolean; modeMatches: boolean; contentMatches: boolean | null } | undefined;
     try {
       if (receipt.status === 'uninstalled' && !file.sensitive) {
-        status = await deploymentPathInfo(file.path) ? 'unexpected-after-uninstall' : 'removed-as-recorded';
+        status = await host.info(file.path) ? 'unexpected-after-uninstall' : 'removed-as-recorded';
       } else {
-        await assertRootPath(posix.dirname(file.path));
-        const stat = await deploymentPathInfo(file.path);
+        await host.rootPath(posix.dirname(file.path));
+        const stat = await host.info(file.path);
         if (!stat) status = 'missing';
         else {
           const regularFile = stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1;
           checks = { regularFile, ownerMatches: stat.uid === (file.owner === 'root' ? 0 : file.owner),
             modeMatches: (stat.mode & 0o7777) === parseInt(file.mode, 8), contentMatches: regularFile ?
-              digest(await readRegularDeploymentFile(file.path)) === file.sha256 : null };
+              digest(await host.read(file.path)) === file.sha256 : null };
           if (Object.values(checks).some(check => check !== true)) status = 'changed';
         }
       }
     }
-    catch (error) { status = !(await deploymentPathInfo(file.path)) ? 'missing' : errorCode(error); }
+    catch (error) { status = errorCode(error); }
     files.push({ path: file.path, sensitive: file.sensitive, status, ...(checks ? { checks } : {}),
       intendedAction: receipt.transaction?.operation === 'uninstall' ? file.sensitive ? 'preserve' : 'remove' : receipt.transaction ? 'write' : 'unknown-legacy' });
   }
   let release = 'matches-receipt';
-  try { await releaseEvidence(receipt); } catch (error) { release = errorCode(error); }
+  try { await host.release(receipt); } catch (error) { release = errorCode(error); }
   let lifecycleJournal: { status: string; action?: string; id?: string } | undefined;
-  if (await deploymentPathInfo(STORE + '/lifecycle.json')) {
+  if (await host.info(STORE + '/lifecycle.json')) {
     try {
-      await assertPrivateDeploymentFile(STORE + '/lifecycle.json', 0);
-      const j = JSON.parse((await readRegularDeploymentFile(STORE + '/lifecycle.json', 16384)).toString());
+      await host.privateFile(STORE + '/lifecycle.json', 0);
+      const j = JSON.parse((await host.read(STORE + '/lifecycle.json', 16384)).toString());
       require(j.schemaVersion === 1 && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(j.id) &&
         ['pending', 'complete'].includes(j.status) && ['initialize', 'start-management', 'enable-persistence', 'pause-maintenance', 'stop-maintenance', 'resume-persistence'].includes(j.action),
       'INSTALL_LIFECYCLE_JOURNAL_INVALID');
@@ -109,26 +123,33 @@ export async function inspectDeployment() {
     } catch (error) { lifecycleJournal = { status: errorCode(error) }; }
   }
   let lock: { present: boolean; owner?: 'gone' | 'alive'; status?: string } = { present: false };
-  if (await deploymentPathInfo(LOCK)) {
+  if (await host.info(LOCK)) {
     lock = { present: true };
     try {
-      const parsed = await readLock();
-      lock.owner = deploymentOwnerGone(parsed.lock, await deploymentProcessIdentity(parsed.lock.pid)) ? 'gone' : 'alive';
+      const parsed = await readLock(host);
+      lock.owner = deploymentOwnerGone(parsed.lock, await host.processIdentity(parsed.lock.pid)) ? 'gone' : 'alive';
       lock.status = receipt.transaction?.id === parsed.lock.id ? 'matches-receipt' : lifecycleJournal?.id === parsed.lock.id ?
         'matches-lifecycle-journal' : 'INSTALL_LOCK_RECEIPT_MISMATCH';
     } catch (error) { lock.status = errorCode(error); }
   }
+  let maintenance: { status: string; code?: string };
+  try { await host.maintenance(receipt); maintenance = { status: 'ready' }; }
+  catch (error) { const code = errorCode(error); maintenance = { status: code === 'INSTALL_LIFECYCLE_MUST_BE_PAUSED' ? 'running'
+    : code === 'INSTALL_INSPECTION_UNAVAILABLE' ? 'unavailable' : 'invalid', code }; }
   const temporaryFiles: string[] = [];
+  let temporaryFilesComplete = true;
   for (const directory of new Set([STORE, ...receipt.files.map(file => posix.dirname(file.path))])) {
     try {
-      await assertRootPath(directory);
-      for (const name of await readdir(directory)) if (/^\.cocoproxy-install-[a-f0-9-]{36}$/.test(name)) temporaryFiles.push(directory + '/' + name);
-    } catch { /* File evidence above carries failures; never follow untrusted directories. */ }
+      await host.rootPath(directory);
+      for (const name of await host.list(directory)) if (/^\.cocoproxy-install-[a-f0-9-]{36}$/.test(name)) temporaryFiles.push(directory + '/' + name);
+    } catch { temporaryFilesComplete = false; /* Never follow untrusted directories. */ }
   }
   return { installed: true, readOnly: true, receipt: { status: receipt.status, manifestSha256: receipt.manifestSha256,
     operation: receipt.transaction?.operation ?? 'unknown-legacy' }, files, release, lock,
+    identity: { serviceUid: receipt.serviceUid, release: receipt.release, stateDirectory: receipt.stateDirectory, credentialPath: receipt.credentialPath },
     ...(lifecycleJournal ? { lifecycleJournal: { status: lifecycleJournal.status, action: lifecycleJournal.action } } : {}),
-    recoveryLock: { present: Boolean(await deploymentPathInfo(STORE + '/recovery.lock')) }, temporaryFiles,
+    recoveryLock: { present: Boolean(await host.info(STORE + '/recovery.lock')) }, lifecycleClaim: { present: Boolean(await host.info(STORE + '/lifecycle-claim.lock')) },
+    maintenance, temporaryFiles, temporaryFilesComplete,
     recovery: 'Only an abandoned transaction with every intended byte already installed can be finalized; partial writes and legacy locks require manual review.',
     preservedState: true, automaticProgramRollback: false };
 }

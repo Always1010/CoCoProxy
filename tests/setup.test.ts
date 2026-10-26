@@ -8,6 +8,11 @@ import { ManagedWebError } from '../packages/setup/https.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
 import { assertDeploymentAccount } from '../packages/deployment/install.ts';
+import { inspectDeployment, type DeploymentInspectionHost } from '../packages/deployment/maintenance.ts';
+import { assertMaintenanceLifecycle, InstallError, type Receipt } from '../packages/deployment/install.ts';
+import { createHash } from 'node:crypto';
+import { parseListeningSockets, listenerOverlap, setupListeningTargets } from '../packages/setup/listening.ts';
+import { assertPrivatePath, assertRootControlledPath, type PathEvidenceHost } from '../packages/deployment/path-evidence.ts';
 import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, NetworkObservationError } from '../packages/deployment/network-evidence.ts';
 
 const sample = JSON.parse(await readFile(new URL('../examples/setup-environment.json', import.meta.url), 'utf8'));
@@ -173,9 +178,8 @@ test('doctor keeps six partial layers and reports independent failures with fixe
     },
   });
   assert.deepEqual(result.layers.map(layer => layer.id), ['foundation', 'components', 'identity', 'network', 'management', 'installation']);
-  assert.deepEqual(result.layers.find(layer => layer.id === 'installation'), {
-    id: 'installation', label: '已有安装', checkIds: [], coverage: 'not-assessed',
-  });
+  assert.equal(result.layers.find(layer => layer.id === 'installation')?.coverage, 'partial');
+  assert.ok(result.layers.find(layer => layer.id === 'installation')!.checkIds.includes('installation-receipt'));
   assert.ok(result.layers.every(layer => ['partial', 'not-assessed'].includes(layer.coverage)));
   for (const check of result.checks) {
     assert.ok(result.layers.some(layer => layer.id === check.layer && layer.checkIds.includes(check.id)));
@@ -216,21 +220,23 @@ test('doctor only treats explicit missing-tool observations as failure and keeps
   const complete = await inspectSetup(sample, host);
   assert.equal(complete.schemaVersion, 1);
   assert.equal(complete.readyForInstallPreflight, true);
-  assert.equal(complete.layers.find(layer => layer.id === 'installation')?.coverage, 'not-assessed');
+  assert.equal(complete.layers.find(layer => layer.id === 'installation')?.coverage, 'partial');
 });
 function readyDoctorHost(): DoctorHost {
   return { platform: 'linux', architecture: 'arm64', uid: 0, nodeVersion: '22.18.0',
     read: async () => '1', resolve: async path => path,
+    inspection: async () => ({ installed: false, readOnly: true, findings: [] }),
     stat: async path => {
       if (['/var/lib/cocoproxy', '/var/lib/cocoproxy-gateway-network', '/var/lib/cocoproxy-deployment', '/etc/cocoproxy'].includes(path) ||
         path.startsWith('/var/lib/cocoproxy-gateway-network/') || path.startsWith('/var/lib/cocoproxy-web-') || path.startsWith('/run/cocoproxy-web') ||
         path.startsWith('/opt/cocoproxy/releases/')) throw Object.assign(new Error('synthetic absent'), { code: 'ENOENT' });
-      const file = ['/usr/bin/node', '/usr/bin/systemctl', '/usr/bin/python3', '/usr/bin/getent', '/usr/sbin/ip', '/usr/sbin/nft'].includes(path);
+      const file = ['/usr/bin/node', '/usr/bin/systemctl', '/usr/bin/python3', '/usr/bin/getent', '/usr/sbin/ip', '/usr/sbin/nft', '/usr/bin/ss'].includes(path);
       return { directory: !file && path !== '/dev/net/tun', file,
         characterDevice: path === '/dev/net/tun', uid: 0, mode: 0o755, link: false, nlink: 1 };
     },
     run: async (path, args) => {
       if (path.endsWith('getent')) return 'cocoproxy:x:12345:12345::/nonexistent:/usr/sbin/nologin';
+      if (path.endsWith('/ss')) return '';
       if (path.endsWith('node')) return 'v22.18.0';
       if (path.endsWith('python3')) return 'Python 3.11.0';
       if (path.endsWith('systemctl')) return 'systemd 252';
@@ -354,6 +360,131 @@ test('doctor reports conflicts in valid network JSON and retained network receip
     });
     assert.equal(observed.checks.find(check => check.id === 'network-receipt')?.status, expected);
   }
+});
+
+function installationFixture() {
+  const bytes = Buffer.from('synthetic managed settings');
+  const receipt: Receipt = { schemaVersion: 1, status: 'complete', manifestSha256: 'b'.repeat(64),
+    release: '/opt/cocoproxy/releases/' + 'b'.repeat(64), serviceUid: 12345, stateDirectory: '/var/lib/cocoproxy',
+    credentialPath: '/etc/cocoproxy/admin.json', files: [{ path: '/etc/cocoproxy/runtime.json', owner: 'root', mode: '0600',
+      sensitive: true, sha256: createHash('sha256').update(bytes).digest('hex') }] };
+  const records = new Map<string, Buffer>([['/etc/cocoproxy/runtime.json', bytes]]);
+  const unit = Buffer.from('synthetic management unit');
+  records.set('/etc/systemd/system/cocoproxy-management.service', unit);
+  receipt.files.push({ path: '/etc/systemd/system/cocoproxy-management.service', owner: 'root', mode: '0644', sensitive: false,
+    sha256: createHash('sha256').update(unit).digest('hex') });
+  const options = { releaseMatches: true, lifecycle: { schemaVersion: 1, enabled: false, paused: false }, unreadable: false };
+  const store = '/var/lib/cocoproxy-deployment';
+  const pathHost: PathEvidenceHost = { resolve: async path => path, info: async path => {
+    const file = path === store + '/receipt.json' || records.has(path);
+    if (!file && /\.(?:json|lock)$/.test(path)) return null;
+    return { file, directory: !file, link: false, uid: 0, mode: file ? path.endsWith('.service') ? 0o644 : 0o600 : path === store ? 0o700 : 0o755, nlink: 1 };
+  } };
+  const host: DeploymentInspectionHost = {
+    info: async path => { const stat = await pathHost.info(path); return stat ? { ...stat,
+      isFile: () => stat.file, isDirectory: () => stat.directory, isSymbolicLink: () => stat.link } : null; },
+    rootPath: path => assertRootControlledPath(path, pathHost), privateFile: (path, uid) => assertPrivatePath(path, uid, pathHost),
+    read: async path => {
+      if (path === store + '/receipt.json') return Buffer.from(JSON.stringify(receipt));
+      if (options.unreadable && path === '/etc/cocoproxy/runtime.json') throw Object.assign(new Error('PRIVATE READ'), { code: 'EACCES' });
+      const value = records.get(path); if (!value) throw Object.assign(new Error('PRIVATE ABSENT'), { code: 'ENOENT' }); return value;
+    },
+    list: async () => [], release: async () => { if (!options.releaseMatches) throw new InstallError('INSTALL_PAYLOAD_HASH_MISMATCH'); },
+    maintenance: async () => assertMaintenanceLifecycle(options.lifecycle),
+    processIdentity: async () => ({ bootId: '11111111-1111-1111-1111-111111111111', startTime: '100' }),
+  };
+  return { host, receipt, records, options, store };
+}
+
+test('shared installation inspection reads receipt, byte drift, maintenance and lifecycle claims through a read-only host', async () => {
+  const fixture = installationFixture();
+  const clean = await inspectDeployment({ host: fixture.host });
+  assert.equal(clean.installed, true);
+  assert.equal(clean.files?.[0].status, 'matches-receipt');
+  assert.equal(clean.maintenance?.status, 'ready');
+  assert.equal(clean.lifecycleClaim?.present, false);
+  fixture.records.set('/etc/cocoproxy/runtime.json', Buffer.from('changed bytes'));
+  fixture.records.set(fixture.store + '/lifecycle-claim.lock', Buffer.from('private claim'));
+  fixture.options.lifecycle = { schemaVersion: 1, enabled: true, paused: false };
+  const changed = await inspectDeployment({ host: fixture.host });
+  assert.equal(changed.files?.[0].status, 'changed');
+  assert.equal(changed.lifecycleClaim?.present, true);
+  assert.equal(changed.maintenance?.status, 'running');
+  fixture.options.unreadable = true;
+  assert.equal((await inspectDeployment({ host: fixture.host })).files?.[0].status, 'INSTALL_INSPECTION_UNAVAILABLE');
+});
+
+test('doctor aggregates installed drift, pending transactions, live locks and maintenance instead of treating inspection failure as absence', async () => {
+  const fixture = installationFixture(), base = readyDoctorHost();
+  const clean = await inspectSetup(sample, { ...base, inspection: () => inspectDeployment({ host: fixture.host }) });
+  assert.ok(clean.checks.filter(check => check.layer === 'installation').every(check => check.status === 'pass'));
+  fixture.receipt.status = 'pending';
+  fixture.receipt.transaction = { operation: 'upgrade', id: '22222222-2222-2222-2222-222222222222' };
+  fixture.records.set('/etc/cocoproxy/runtime.json', Buffer.from('private drift'));
+  fixture.records.set(fixture.store + '/install.lock', Buffer.from(JSON.stringify({ schemaVersion: 1, id: fixture.receipt.transaction.id,
+    pid: 123, bootId: '11111111-1111-1111-1111-111111111111', startTime: '100' })));
+  fixture.records.set(fixture.store + '/lifecycle.json', Buffer.from(JSON.stringify({ schemaVersion: 1,
+    id: '33333333-3333-3333-3333-333333333333', status: 'pending', action: 'pause-maintenance' })));
+  fixture.options.lifecycle = { schemaVersion: 1, enabled: true, paused: false };
+  const broken = await inspectSetup(sample, { ...base, inspection: () => inspectDeployment({ host: fixture.host }) });
+  for (const [id, code] of [['installation-receipt', 'SETUP_INSTALLATION_INCOMPLETE'], ['installation-files', 'SETUP_INSTALLATION_DRIFT'],
+    ['installation-locks', 'SETUP_INSTALLATION_BUSY'], ['installation-maintenance', 'SETUP_MAINTENANCE_REQUIRED']]) {
+    assert.equal(broken.checks.find(check => check.id === id)?.code, code, id);
+    assert.equal(broken.checks.find(check => check.id === id)?.status, 'fail', id);
+  }
+  assert.doesNotMatch(JSON.stringify(broken), /private drift|runtime\.json|22222222/);
+  const unavailable = await inspectSetup(sample, { ...base, inspection: async () => { throw new Error('PRIVATE INSPECTION'); } });
+  assert.ok(unavailable.checks.filter(check => check.layer === 'installation').every(check => check.status === 'unknown'));
+  assert.equal(unavailable.readyForInstallPreflight, false);
+});
+
+test('listener parsing preserves address and protocol distinctions and leaves ambiguous IPv6 wildcard binding unresolved', () => {
+  const targets = setupListeningTargets(parseSetupEnvironment(sample));
+  const controller = targets.find(target => target.id === 'controller-port')!;
+  const sockets = parseListeningSockets('tcp LISTEN 0 4096 192.0.2.99:19090 0.0.0.0:*\nudp UNCONN 0 0 127.0.0.1:19090 0.0.0.0:*', 4);
+  assert.ok(sockets.every(socket => listenerOverlap(socket, controller) === 'no'));
+  assert.equal(listenerOverlap(parseListeningSockets('tcp LISTEN 0 4096 [::]:19090 [::]:*', 6)[0], controller), 'possible');
+  assert.equal(listenerOverlap(parseListeningSockets('tcp LISTEN 0 4096 [::ffff:7f00:1]:19090 *:*', 6)[0], controller), 'yes');
+  assert.equal(parseListeningSockets('udp UNCONN 0 0 [fe80::1]%enp1s0:19090 *:*', 6)[0].address, 'fe80::1');
+  assert.equal(listenerOverlap(parseListeningSockets('tcp LISTEN 0 4096 0.0.0.0:19090 0.0.0.0:* users:(("foreign",pid=42,fd=3))', 4)[0], controller), 'yes');
+  assert.throws(() => parseListeningSockets('PRIVATE MALFORMED LISTENERS', 4), { code: 'SETUP_OBSERVATION_INVALID' });
+});
+
+test('doctor distinguishes free, foreign, verified owned and unproven occupied ports without exposing process details', async () => {
+  const fixture = installationFixture(), base = readyDoctorHost();
+  const listening = 'tcp LISTEN 0 4096 127.0.0.1:13000 0.0.0.0:* users:(("node",pid=42,fd=3))';
+  const listenerHost: DoctorHost = { ...base, run: async (path, args) => path.endsWith('/ss') ? args.includes('-4') && !args.includes('-B') ? listening : '' : base.run(path, args) };
+  const foreign = await inspectSetup(sample, listenerHost);
+  assert.equal(foreign.checks.find(check => check.id === 'management-port')?.code, 'SETUP_PORT_CONFLICT');
+  assert.equal(foreign.checks.find(check => check.id === 'dns-port')?.status, 'pass');
+  const ownedHost: DoctorHost = { ...listenerHost, inspection: () => inspectDeployment({ host: fixture.host }),
+    resolve: async path => path === '/proc/42/exe' ? '/usr/bin/node' : base.resolve(path),
+    read: async path => path === '/proc/42/cgroup' ? '0::/system.slice/cocoproxy-management.service' : base.read(path),
+    run: async (path, args) => args.includes('show') && args.includes('cocoproxy-management.service')
+      ? 'MainPID=42\nFragmentPath=/etc/systemd/system/cocoproxy-management.service\nDropInPaths=\nNeedDaemonReload=no' : listenerHost.run(path, args),
+  };
+  const owned = await inspectSetup(sample, ownedHost);
+  assert.equal(owned.checks.find(check => check.id === 'management-port')?.code, 'SETUP_PORT_OWNED_REQUIRES_STOP');
+  const unknown = await inspectSetup(sample, { ...ownedHost, read: async path => {
+    if (path.includes('/proc/')) throw new Error('PRIVATE PROCESS'); return base.read(path);
+  } });
+  assert.equal(unknown.checks.find(check => check.id === 'management-port')?.code, 'SETUP_PORT_OWNERSHIP_UNKNOWN');
+  const unowned = await inspectSetup(sample, { ...ownedHost, resolve: async path => path === '/proc/42/exe' ? '/usr/bin/foreign' : base.resolve(path) });
+  assert.equal(unowned.checks.find(check => check.id === 'management-port')?.code, 'SETUP_PORT_CONFLICT');
+  const connected = await inspectSetup(sample, { ...base, run: async (path, args) => path.endsWith('/ss')
+    ? args.includes('-4') && !args.includes('-B') ? 'udp ESTAB 0 0 192.0.2.2:15353 192.0.2.3:12345' : '' : base.run(path, args) });
+  assert.equal(connected.checks.find(check => check.id === 'dns-port')?.status, 'unknown');
+  const oldSs = await inspectSetup(sample, { ...base, run: async (path, args) => {
+    if (path.endsWith('/ss') && args.includes('-B')) throw new Error('unsupported capability'); return base.run(path, args);
+  } });
+  assert.equal(oldSs.checks.find(check => check.id === 'dns-port')?.status, 'pass');
+  assert.equal(oldSs.checks.find(check => check.id === 'bound-sockets')?.code, 'SETUP_PORT_BOUND_SCOPE_UNAVAILABLE');
+  assert.equal(oldSs.readyForInstallPreflight, true);
+  const bound = await inspectSetup(sample, { ...base, run: async (path, args) => path.endsWith('/ss')
+    ? args.includes('-4') && args.includes('-B') ? 'tcp UNDEF 0 0 127.0.0.1:13000 0.0.0.0:*' : '' : base.run(path, args) });
+  assert.equal(bound.checks.find(check => check.id === 'management-port')?.status, 'unknown');
+  assert.equal(bound.readyForInstallPreflight, false);
+  assert.doesNotMatch(JSON.stringify(owned) + JSON.stringify(unknown), /PRIVATE PROCESS|pid=42|\/proc\/42/);
 });
 
 test('doctor blocks managed HTTPS on failed or unavailable evidence and keeps private details out of its report', async () => {
