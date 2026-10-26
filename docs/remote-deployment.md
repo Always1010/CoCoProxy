@@ -53,7 +53,7 @@ IP 不能确定接口、路由器 MAC、LAN 范围、HTTPS、管理员身份或�
 }
 ```
 
-这些路径指向目标网关上原有的密钥与主机指纹文件，工具不会复制密钥。首次更新增加 `--router-config /absolute/private/router-ssh.json`，以后复用目标上的 root:0600 配置。适配器通过公开 ubus API 查询、关闭、等待任务并恢复原开启意图，不安装或更新路由器软件。其他协同路由器可配置 `--router-hook /absolute/root-owned/executable`：它依次接受 `status`、`disable`、`enable`，`status` 只返回 `{"enabled":true}` 或 `{"enabled":false}`，执行操作须等待结果确认。适配器及全部祖先须 root 控制、不可被其他身份写入。
+这些路径指向目标网关上原有的密钥与主机指纹文件，工具不会复制密钥。首次更新增加 `--router-config /absolute/private/router-ssh.json`，以后复用目标上的 root:0600 配置。适配器通过公开 ubus API 查询、关闭、等待任务并恢复原开启意图，不安装或更新路由器软件。异步任务轮询按 120 秒总时限计入 RPC 耗时，每次 RPC 最多 30 秒；协调器为包含前后状态核验的操作保留 300 秒上限，超时返回失败并要求审阅，不推断远端任务已经取消。其他协同路由器可配置 `--router-hook /absolute/root-owned/executable`：它依次接受 `status`、`disable`、`enable`，`status` 只返回 `{"enabled":true}` 或 `{"enabled":false}`，执行操作须等待结果确认。适配器及全部祖先须 root 控制、不可被其他身份写入。
 
 更新先在服务运行期间执行公开 prepare 检查，然后通过新载荷的公共维护命令持久暂停并排空事务、关闭路由器交付、停止服务并安全退役旧网络，再执行公开升级。安装完成后先凭本次指纹约束的令牌恢复原 runtime 标记，再启动服务；原来没有标记时恢复为缺失，持久恢复未启用时也保持原 flags，不把维护操作变成新的开启意图。已经启用但处于维护暂停的安装拒绝自动更新；停用且核心已停止的安装可以更新并保持停用。暂停标记与仍运行核心同时存在时须先人工审阅，入口不会为启动核心而临时放宽暂停。
 
