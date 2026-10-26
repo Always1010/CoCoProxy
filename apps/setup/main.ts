@@ -6,8 +6,8 @@ import { inspectDeployment, recoverDeployment } from '../../packages/deployment/
 import { createSetupDeployment, parseSetupEnvironment, routerParameters, SetupError } from '../../packages/setup/input.ts';
 import { inspectSetup, resolveServiceUid } from '../../packages/setup/doctor.ts';
 import { runSetupLifecycle, type SetupLifecycleAction } from '../../packages/setup/lifecycle.ts';
-import { createManagementEvidenceReport } from '../../packages/setup/management-evidence.ts';
-import { createFirstDeploymentObservations, createFirstDeploymentReport } from '../../packages/setup/first-deployment.ts';
+import { createManagementHttpsReport } from '../../packages/setup/management-evidence.ts';
+import { createFirstDeploymentReport } from '../../packages/setup/first-deployment.ts';
 import { privateRead, inspectPrivateDirectory, syncDirectory } from '../../packages/storage/private-files.ts';
 
 const help = `CoCoProxy 部署与维护入口
@@ -28,12 +28,10 @@ const help = `CoCoProxy 部署与维护入口
   lifecycle --action ACTION --input PRIVATE_JSON [--apply --reviewed-plan-sha256 SHA]
             [--admin-input PRIVATE_JSON] [--router-disabled] [--terminal-path-verified]
                                          默认预览初始化、启动、持久运行与维护步骤
-  management-report --input PRIVATE_JSON [--evidence PRIVATE_JSON] [--probe-https]
-                                         分列管理入口五项证据；默认不联网、不写文件
-  status --input PRIVATE_JSON [--evidence PRIVATE_JSON]
-                                         只读汇总首次部署完成、等待和下一步；含本机核心观察
-  record-observations --input PRIVATE_JSON --facts PRIVATE_JSON --output PRIVATE_JSON
-                                         录入实际人工观察；自动绑定当前部署，独占创建私有证据
+  management-report --input PRIVATE_JSON [--probe-https]
+                                         检查调用端管理 HTTPS；默认不联网、不写文件
+  status --input PRIVATE_JSON
+                                         只读查询安装、服务、核心和持久状态及下一步
 
 configure 会从载荷生成 release 路径、核心摘要和一致的端口，首次生成内部随机秘密。
 升级生成必须提供 --existing-input 保留内部秘密；自定义旧布局使用原安装入口。
@@ -85,35 +83,22 @@ try {
       uninstall: ['--payload', '--manifest-sha256', '--input'],
       prepare: ['--payload', '--manifest-sha256', '--input'], inspect: [], recover: ['--reviewed-recovery-sha256'],
       lifecycle: ['--input', '--action', '--admin-input', '--reviewed-plan-sha256'],
-      'management-report': ['--input', '--evidence'],
-      status: ['--input', '--evidence'],
-      'record-observations': ['--input', '--facts', '--output'],
+      'management-report': ['--input'],
+      status: ['--input'],
     };
     if (!allowed[command] || Object.keys(options).some(key => !allowed[command].includes(key)) ||
         apply && !['install', 'upgrade', 'uninstall', 'recover', 'lifecycle'].includes(command) ||
         (routerDisabled || terminalPathVerified) && command !== 'lifecycle' ||
         probeHttps && command !== 'management-report') throw new SetupError('SETUP_ARGUMENTS_INVALID');
     const required = ['doctor', 'inspect', 'recover'].includes(command) ? [] : ['management-report', 'status'].includes(command) ? ['--input'] : command === 'lifecycle' ? ['--input', '--action']
-      : command === 'record-observations' ? ['--input', '--facts', '--output']
-        : command === 'configure' ? ['--environment', '--payload', '--manifest-sha256', '--output'] : ['--payload', '--manifest-sha256', '--input'];
+      : command === 'configure' ? ['--environment', '--payload', '--manifest-sha256', '--output'] : ['--payload', '--manifest-sha256', '--input'];
     if (required.some(key => !options[key])) throw new SetupError('SETUP_ARGUMENTS_INVALID');
-    if (command === 'record-observations') {
-      if (!isAbsolute(options['--output'])) throw new SetupError('SETUP_ABSOLUTE_OUTPUT_REQUIRED');
-      await inspectPrivateDirectory(dirname(options['--output']));
-      try { await lstat(options['--output']); throw new SetupError('SETUP_OUTPUT_EXISTS'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-      const observations = await createFirstDeploymentObservations(await jsonInput(options['--input']), {
-        inputPath: options['--input'], facts: await jsonInput(options['--facts']) });
-      await writePrivate(options['--output'], observations);
-      process.stdout.write(JSON.stringify({ schemaVersion: 1, observationsWritten: true, source: 'operator-record',
-        next: 'status --input <原私有部署输入> --evidence <本次私有输出>' }) + '\n');
-    } else if (command === 'status') {
-      const result = await createFirstDeploymentReport(await jsonInput(options['--input']), { inputPath: options['--input'],
-        evidence: options['--evidence'] ? await jsonInput(options['--evidence']) : undefined });
+    if (command === 'status') {
+      const result = await createFirstDeploymentReport(await jsonInput(options['--input']), { inputPath: options['--input'] });
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     } else if (command === 'management-report') {
-      const result = await createManagementEvidenceReport(await jsonInput(options['--input']), {
-        evidence: options['--evidence'] ? await jsonInput(options['--evidence']) : undefined, probeHttps,
+      const result = await createManagementHttpsReport(await jsonInput(options['--input']), {
+        probeHttps,
       });
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     } else if (command === 'lifecycle') {
