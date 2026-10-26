@@ -34,8 +34,8 @@ export interface FirstDeploymentHost {
   unchanged(installed: Installed, inputPath: string, binding: Binding, state?: RuntimeStatus): Promise<boolean>;
 }
 export class FirstDeploymentError extends Error {
-  readonly code = 'SETUP_FIRST_DEPLOYMENT_EVIDENCE_INVALID';
-  constructor() { super('SETUP_FIRST_DEPLOYMENT_EVIDENCE_INVALID'); }
+  readonly code: string;
+  constructor(code = 'SETUP_FIRST_DEPLOYMENT_EVIDENCE_INVALID') { super(code); this.code = code; }
 }
 function need(value: unknown): asserts value { if (!value) throw new FirstDeploymentError(); }
 function object(value: unknown, required: string[], optional: string[] = []): Record<string, any> {
@@ -204,11 +204,12 @@ export async function createFirstDeploymentReport(deploymentInput: unknown, opti
     } catch { unavailable('core', '在目标机以服务身份运行 runtime-status；核对 unit、候选、进程与控制器只读观察后重新运行 status。'); }
   } else { unavailable('configuration', '完成安装后在后台配置并应用首次候选。'); unavailable('core', '安装核验通过并应用候选后运行 runtime-status。'); }
   const current = !!installed && !!state && binding.administratorSha256 !== null && operator !== undefined && canonicalJson(operator.binding as unknown as JsonObject) === canonicalJson(binding as unknown as JsonObject);
+  const recordAction = ' 完成实际观察后运行 record-observations --input <原私有部署输入> --facts <本次事实私有JSON> --output <新私有证据>，再用 status --evidence <新私有证据> 复核。';
   const manual = (id: string, observation: Recorded | undefined, passed: boolean, action: string) => {
     const bound = current && binding.activeGeneration !== null;
     const check = add(id, observation ? bound ? passed ? 'pass' : 'fail' : 'unknown' : 'not-run',
       !observation ? 'SETUP_FIRST_OPERATOR_WAIT' : !bound ? 'SETUP_FIRST_EVIDENCE_BINDING_CHANGED' : passed ? 'SETUP_FIRST_OPERATOR_CONFIRMED' : 'SETUP_FIRST_OPERATOR_REPORTED_FAILURE',
-      !observation ? '等待操作者完成当前部署范围的观察并提供记录。' : !bound ? '记录的安装、部署配置、活跃候选或管理员绑定已变化或尚不可核对，需要复验。' : passed ? '操作者记录此范围已通过；这是记录时的人工观察。' : '操作者记录此范围仍有检查未通过。', action, observation ? 'operator-record' : 'none');
+      !observation ? '等待操作者完成当前部署范围的观察并提供记录。' : !bound ? '记录的安装、部署配置、活跃候选或管理员绑定已变化或尚不可核对，需要复验。' : passed ? '操作者记录此范围已通过；这是记录时的人工观察。' : '操作者记录此范围仍有检查未通过。', action + recordAction, observation ? 'operator-record' : 'none');
     check.observedAt = observation?.observedAt ?? null;
     check.scope = id === 'router' ? 'configured-lan' : 'managed-clients'; check.binding = operator?.binding ?? binding;
     if (id === 'terminal') check.subjects = operator?.terminal?.terminalIds ?? [];
@@ -218,7 +219,7 @@ export async function createFirstDeploymentReport(deploymentInput: unknown, opti
   manual('terminal', operator?.terminal, !!operator?.terminal?.proxy && !!operator?.terminal?.direct && !!operator?.terminal?.dns && !!operator?.terminal?.localAccess,
     '在记录的终端范围验证代理、直连、DNS 和本地访问，记录 managed-clients 观察及终端别名；新增或变化的终端另验。');
   for (const item of management.checks) {
-    const check = add(item.id, item.status, item.code, item.reason, item.action, item.source === 'operator-record' ? 'operator-record' : 'none');
+    const check = add(item.id, item.status, item.code, item.reason, item.action + recordAction, item.source === 'operator-record' ? 'operator-record' : 'none');
     check.observedAt = item.observedAt;
     check.scope = item.scope; check.subjects = item.subject ? [item.subject] : []; check.binding = item.binding;
     if (['browser-notification-capability', 'test-notification-displayed'].includes(item.id)) check.action +=
@@ -262,4 +263,64 @@ export async function createFirstDeploymentReport(deploymentInput: unknown, opti
     checks, completed, pending: pending.map(check => check.id), evidenceComplete: !next,
     currentWait: next ? { step: next.id, code: next.code, kind: next.source === 'operator-record' || next.code === 'SETUP_FIRST_OPERATOR_WAIT' || next.code === 'SETUP_MANAGEMENT_NOT_RUN' ? 'operator' : next.status === 'fail' ? 'repair' : 'observation-or-action' } : null,
     next: next ? { step: next.id, action: next.action } : { step: 'external-acceptance', action: '按部署验收清单完成干净首装、多终端、冷启动、断线恢复及长期运行的独立验收；本报告不替代这些观察。' } };
+}
+
+/** Human event time with an explicit timezone; recording time is generated separately. */
+function eventTime(value: unknown, maximum: number): number {
+  need(typeof value === 'string');
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  need(match);
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const milliseconds = Number((match[7] ?? '').padEnd(3, '0'));
+  const local = new Date(Date.UTC(year, month - 1, day, hour, minute, second, milliseconds));
+  need(year >= 1970 && local.getUTCFullYear() === year && local.getUTCMonth() === month - 1 && local.getUTCDate() === day &&
+    local.getUTCHours() === hour && local.getUTCMinutes() === minute && local.getUTCSeconds() === second);
+  const zone = match[8], zoneHours = zone === 'Z' ? 0 : Number(zone.slice(1, 3)), zoneMinutes = zone === 'Z' ? 0 : Number(zone.slice(4, 6));
+  need(zoneHours <= 23 && zoneMinutes <= 59);
+  const offset = (zoneHours * 60 + zoneMinutes) * 60000 * (zone.startsWith('-') ? -1 : 1);
+  const result = local.getTime() - offset; time(result, maximum); return result;
+}
+
+/** Bind newly stated facts only. Never import or relabel previous evidence as a new observation. */
+export async function createFirstDeploymentObservations(deploymentInput: unknown, options: { inputPath: string; facts: unknown },
+  host: FirstDeploymentHost = nativeHost): Promise<OperatorEvidence> {
+  const facts = object(cloneConfigJson(options.facts), ['schemaVersion'], ['observedAt', 'management', 'router', 'terminal']);
+  need(facts.schemaVersion === 1);
+  const current = await createFirstDeploymentReport(deploymentInput, { inputPath: options.inputPath }, host);
+  const verified = (report: typeof current) => ['installation', 'administrator'].every(id => report.checks.find(check => check.id === id)?.status === 'pass');
+  if (!verified(current)) throw new FirstDeploymentError('SETUP_FIRST_RECORD_DEPLOYMENT_UNVERIFIED');
+  const recordedAt = host.now();
+  const observedAt = Object.hasOwn(facts, 'observedAt') ? eventTime(facts.observedAt, recordedAt) : undefined;
+  const observationTime = () => { need(observedAt !== undefined); return observedAt; };
+  const evidence: OperatorEvidence = { schemaVersion: 1, binding: current.binding, recordedAt };
+  if (Object.hasOwn(facts, 'router')) {
+    const value = object(facts.router, ['parametersMatched', 'deliveryEnabled', 'independentDisableVerified']);
+    evidence.router = { ...value, scope: 'configured-lan', observedAt: observationTime() } as OperatorEvidence['router'];
+  }
+  if (Object.hasOwn(facts, 'terminal')) {
+    const value = object(facts.terminal, ['terminalIds', 'proxy', 'direct', 'dns', 'localAccess']);
+    evidence.terminal = { ...value, scope: 'managed-clients', observedAt: observationTime() } as OperatorEvidence['terminal'];
+  }
+  if (Object.hasOwn(facts, 'management')) {
+    const value = object(facts.management, ['terminalId', 'notifications'], ['https', 'login', 'certificate', 'browser', 'notification']);
+    const management: Record<string, unknown> = { schemaVersion: 1, binding: current.managementBinding, recordedAt,
+      terminalId: value.terminalId, notifications: value.notifications };
+    for (const [key, fields] of [
+      ['https', ['pageLoaded']], ['login', ['authenticated', 'logoutCompleted', 'anonymousApiDenied']],
+      ['certificate', ['warningShown', 'exceptionUsed']],
+      ['browser', ['secureContext', 'notificationApi', 'serviceWorker', 'pushManager', 'permission', 'requiresInstalledApp', 'installedApp']],
+    ] as const) if (Object.hasOwn(value, key)) management[key] = { ...object(value[key], [...fields]), observedAt: observationTime() };
+    if (Object.hasOwn(value, 'notification')) {
+      const notification = object(value.notification, ['testRequestedAt', 'providerAccepted', 'displayedAt', 'notDisplayed']);
+      management.notification = { ...notification, observedAt: observationTime(), testRequestedAt: eventTime(notification.testRequestedAt, observedAt!),
+        displayedAt: notification.displayedAt === null ? null : eventTime(notification.displayedAt, observedAt!) };
+    }
+    evidence.management = management;
+  }
+  // Reuse the consuming parser, then re-observe the deployment. Missing facts stay missing.
+  const reviewed = await createFirstDeploymentReport(deploymentInput, { inputPath: options.inputPath, evidence }, host);
+  if (!verified(reviewed) || canonicalJson(current.binding as unknown as JsonObject) !== canonicalJson(reviewed.binding as unknown as JsonObject)) {
+    throw new FirstDeploymentError('SETUP_FIRST_RECORD_BINDING_CHANGED');
+  }
+  return evidence;
 }

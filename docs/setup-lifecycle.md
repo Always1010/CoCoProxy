@@ -23,32 +23,57 @@ node --experimental-strip-types "$SOURCE/apps/setup/main.ts" status \
 
 ## 记录当前部署范围的人工观察
 
-`--evidence` 使用下面的私有外层结构；这与单独 `management-report` 的证据文件有别。四项 `binding` 必须复制当前 `status` 的对应摘要，不能用真实地址或秘密代替。`management` 直接放入[原五项管理观察结构](setup-management-evidence.md#记录指定终端的观察)，其内层 `binding` 复制报告的 `managementBinding`；保留该结构的原校验，不可改成任填的 pass 布尔值。
+实际完成观察后，将事实填写到私有 JSON，再用 `record-observations` 生成可交给 `status` 的完整证据。工具自动读取当前可信部署，处理安装、配置、管理员和活跃候选指纹，以及管理入口的绑定；不需要手抄摘要、内部字段或 Unix 毫秒。
+
+```sh
+node --experimental-strip-types "$SOURCE/apps/setup/main.ts" record-observations \
+  --input /absolute/private/deployment.json --facts /absolute/private/observed-facts.json \
+  --output /absolute/private/first-observations.json
+node --experimental-strip-types "$SOURCE/apps/setup/main.ts" status \
+  --input /absolute/private/deployment.json --evidence /absolute/private/first-observations.json
+```
+
+输出父目录须已经私有，路径必须绝对；输出使用 `0600` 独占创建，已有文件返回 `SETUP_OUTPUT_EXISTS`，不会覆盖或自动另存备份。安装或管理员未知时返回 `SETUP_FIRST_RECORD_DEPLOYMENT_UNVERIFIED`；生成期间绑定变化则返回 `SETUP_FIRST_RECORD_BINDING_CHANGED`，需重新观察再录入。生成器本身只读取本机状态并创建这一个输出文件，不操作路由器、发送通知、打开浏览器或修改信任。
+
+以下是事实输入示例，布尔值必须据实际观察填写，未做的整项省略。工具不会把省略项补成 true，也不从现有成功记录复制事实。`observedAt` 是实际完成这组观察的可读 ISO 时间，须带 `Z` 或时区偏移；它不是工具录入时间。例如 `2026-10-26T10:30:00+08:00` 表示北京时间。工具转换事件时间，并另外生成实际录入时刻；不能为了让旧结论通过，把过去的观察改写成当前时间。
 
 ```json
 {
   "schemaVersion": 1,
-  "binding": {
-    "deploymentSha256": "<当前安装收据摘要>",
-    "configurationSha256": "<当前部署输入摘要>",
-    "activeGeneration": "<当前活跃候选摘要，首次配置前为 null>",
-    "administratorSha256": "<当前管理员文件摘要，未初始化时为 null>"
+  "observedAt": "2026-10-26T10:30:00+08:00",
+  "management": {
+    "terminalId": "terminalA", "notifications": "declined",
+    "https": { "pageLoaded": true },
+    "login": { "authenticated": true, "logoutCompleted": true, "anonymousApiDenied": true },
+    "certificate": { "warningShown": false, "exceptionUsed": false }
   },
-  "recordedAt": 1700000005000,
   "router": {
-    "scope": "configured-lan", "observedAt": 1700000003000,
     "parametersMatched": true, "deliveryEnabled": true,
     "independentDisableVerified": true
   },
   "terminal": {
-    "scope": "managed-clients", "terminalIds": ["terminalA", "terminalB"],
-    "observedAt": 1700000004000,
+    "terminalIds": ["terminalA", "terminalB"],
     "proxy": true, "direct": true, "dns": true, "localAccess": true
   }
 }
 ```
 
-示例只表示格式，必须实际观察后填写。时间为真实 Unix 毫秒，不能填未来值，观察时间不能晚于记录时间；未做的整项省略。`router` 表示已人工核对当前配置对应 LAN 的两端参数、开启交付并验证独立关闭入口；它不证明适配器机器查询或通用路由器配置能力。`terminal` 只覆盖列出的短别名及四项检查，不覆盖所有终端。范围变化或增加终端须重新观察；终端真名、IP、MAC、口令、Cookie、订阅和自由文本均不应填入文件。
+示例只表示格式，必须实际观察后填写，不能填未来时间。只录入了 HTTPS 时，登录、证书和其他项目仍为未验；空事实不会生成任何通过项。`router` 表示已人工核对当前配置对应 LAN 的两端参数、开启交付并验证独立关闭入口；工具固定记录这一范围，不证明适配器机器查询或通用路由器配置能力。`terminal` 只覆盖列出的短别名及四项检查，不覆盖所有终端。范围变化或增加终端须重新观察；终端真名、IP、MAC、口令、Cookie、订阅和自由文本均不应填入文件。
+
+使用通知时，`management.browser` 填写 `secureContext`、`notificationApi`、`serviceWorker`、`pushManager`、`permission`（`default/granted/denied`）、`requiresInstalledApp` 和 `installedApp`；含义与[五项管理观察](setup-management-evidence.md)一致，事实输入不填写它的内部观察时间。`management.notification` 必须分别填写实际请求与显示的事件时间，例如：
+
+```json
+{
+  "testRequestedAt": "2026-10-26T10:29:00+08:00",
+  "providerAccepted": true,
+  "displayedAt": null,
+  "notDisplayed": false
+}
+```
+
+这表示服务接受但尚未确认显示，结果为 `unknown`；实际看到后才能填写真实 `displayedAt`，不能用录入时刻代替显示事件。请求和显示不能晚于这组观察结束时间，显示不能早于请求；尚未检查服务接受情况时 `providerAccepted` 为 `null`。明确检查后未显示可填 `notDisplayed: true`，结果为 `fail`。
+
+事实入口拒绝 `binding`、`recordedAt`、`status`、内部摘要、完整旧证据或额外字段，不提供自动合并旧结果的功能。换配置后应重新核验实际事实，再生成新的私有记录；不能将旧事实不复验就套到新部署。生成后还会复用 `status` 的原证据解析和绑定检查。人工录入仍是操作者自报，工具不能证明事实真实性；录入成功不代表机器完成了这些检查。直接消费完整证据的 `status --evidence` 接口继续保留，普通部署无需手工编写其内部结构。
 
 首次尚无 active 候选时，匹配的 HTTPS、登录和证书观察可以先通过，`next` 随后指向首次配置；路由器与业务终端观察必须绑定非空的当前 active 候选。安装收据、部署输入、活跃候选或管理员字节任一改变，旧人工记录降为 `unknown` 并要求复验。报告结束前还会复核安装与绑定状态，观察期间有变化则取消受影响的通过结论。旧单 action journal、`--terminal-path-verified` 或上次的成功布尔值都不能把整条流程标为完成。
 

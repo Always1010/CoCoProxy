@@ -10,7 +10,7 @@
 
 可以先使用[统一部署入口](setup.md)盘点环境并生成私有输入，自动填写载荷摘要、release 路径和重复端口；本指南继续说明实际接线、系统准备、HTTPS、启用及终端验收。
 
-安装前后都可用 `./cocoproxy status --input /absolute/private/deployment.json` 查询已完成、待办、当前等待与具体下一步。报告重新观察安装、管理员、管理服务、当前候选、核心与持久意图，继续列出尚无人工证据的路由器和终端项目；使用[首次部署状态及人工记录](setup-lifecycle.md#查询首次部署进度与下一步)提交绑定当前安装和业务候选的限定观察。它复用本机核心只读探针，不向管理 origin 或路由器发探测；管理 HTTPS、登录、终端信任和通知仍分别验收。通知未选择可明确记录为 `declined`，不必启用可选通知才能使用其他功能。报告齐全与第 9 节的真实完整验收分开。
+安装前后都可用 `./cocoproxy status --input /absolute/private/deployment.json` 查询已完成、待办、当前等待与具体下一步。报告重新观察安装、管理员、管理服务、当前候选、核心与持久意图，继续列出尚无人工证据的路由器和终端项目。实际观察后，用 `./cocoproxy record-observations --input /absolute/private/deployment.json --facts /absolute/private/observed-facts.json --output /absolute/private/first-observations.json` 录入实际事实、终端别名、通知选择和可读事件时间；工具自动填写内部绑定及录入时间，不必手抄摘要或计算 Unix 毫秒。然后用 `status --evidence` 消费该私有文件，格式见[首次部署状态及人工记录](setup-lifecycle.md#记录当前部署范围的人工观察)。入口复用本机核心只读探针，不向管理 origin 或路由器发探测；管理 HTTPS、登录、终端信任和通知仍分别验收。通知未选择可明确记录为 `declined`，不必启用可选通知才能使用其他功能。报告齐全与第 9 节的真实完整验收分开。
 
 | 阶段 | 在哪里操作 | 完成后应看到什么 |
 | --- | --- | --- |
