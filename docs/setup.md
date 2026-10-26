@@ -43,7 +43,7 @@ check 只检查基础工具，不依赖 Node。doctor 只读汇总 Linux/架构�
 
 ## 2. 填写一次环境事实
 
-将随包 `source/examples/setup-environment.json` 作为合成参考，在已存在的私有目录创建自己的 0600 文件。不要直接使用文档地址。
+将源码仓库中的[环境配置示例](../examples/setup-environment.json)作为合成参考，在已存在的私有目录创建自己的 0600 文件。示例不随安装包提供，不要直接使用文档地址。
 
 必填内容为接口、外设/路由器 IPv4、路由器交付 MAC、精确 LAN CIDR、管理 origin、纯 IP 引导 DNS 和订阅 HTTPS origin 许可。端口、网络资源编号和安装位置有默认值，可通过 `ports`、`resources`、`system` 覆盖；生成器继续调用完整部署校验。`system.serviceUser` 默认 `cocoproxy`。目标 Linux 从唯一的非登录账户读取 UID；离线生成时必须提供 `system.serviceUid`，目标安装仍重新核验。
 

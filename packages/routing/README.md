@@ -12,7 +12,7 @@
 
 国内资源由 `sources.lock.json` 固定的 MetaCubeX/meta-rules-dat 上游 `geo/geosite/geolocation-cn.json`、`geo/geosite/cn.json` 和 `geo/geoip/cn.json` 输入派生。`geolocation-cn` 的 5390 条规则覆盖地理分类，无法单独覆盖常用国内网站和静态资源；上游说明 `cn` 使用 ChinaMax_Domain 完整聚合，此固定版本包含 110446 条后缀规则。两者仅去除完全相同的规则后得到 111813 条域名规则，保留原地理分类的 44 条精确域名和三个正则，不将精确域名扩大为后缀，也不因已有父后缀而删改来源规则。此处使用完整 `geo` 资产；上游注明可能不全的 `geo-lite` 国内集合不作为替代。国内 IP 保持原来的 6525 条 IPv4，与当前部署范围一致。
 
-完整域名块的展开 JSON 约 4.21 MB，编译器 `inline` 域名集合的 payload 约 1.86 MB；域名条数和来源摘要均固定，更新时必须重新评估编译输入、输出体积及值数量预算。源版本、SHA-256、来源及合并后的计数和许可证地址见 `sources.lock.json`；第三方许可证为 `LICENSE.domestic`。维护时使用源码仓库中的[规则生成器](https://github.com/Always1010/CoCoProxy/blob/main/packages/routing/generate-assets.mjs)，在内存下载并校验固定输入，生成原生规则数组，并将原有 5390 条域名规则保存在 `legacy-domestic-data.ts`，供旧候选的兼容校验使用。生成过程不保存第三方原始 JSON、二进制 SRS 或缓存。运行使用随包生成的离线资源，不依赖远端规则下载。新增字段、前导点后缀、哈希或数量变化均拒绝生成，需单独审阅转换语义。
+完整域名块的展开 JSON 约 4.21 MB，编译器 `inline` 域名集合的 payload 约 1.86 MB；域名条数和来源摘要均固定，更新时必须重新评估编译输入、输出体积及值数量预算。源版本、SHA-256、来源及合并后的计数和许可证地址见 `sources.lock.json`；第三方许可证为 `LICENSE.domestic`。维护时使用源码仓库中的[规则生成器](generate-assets.mjs)，在内存下载并校验固定输入，生成原生规则数组，并将原有 5390 条域名规则保存在 `legacy-domestic-data.ts`，供旧候选的兼容校验使用。生成过程不保存第三方原始 JSON、二进制 SRS 或缓存。运行使用随包生成的离线资源，不依赖远端规则下载。新增字段、前导点后缀、哈希或数量变化均拒绝生成，需单独审阅转换语义。
 
 境外资源采用同一 MetaCubeX 固定版本的 `geo/geosite/geolocation-!cn.json`，由 `overseas-data.ts` 保存 27268 条域名规则，其中 762 条精确域名、26506 条后缀域名，覆盖 Figma、Notion、Docker、npm、Wikipedia 等。精确主机不会扩大到子域；原始资源的 151 条正则不属于此次域名集合接入，数量单独锁定并明确排除，不转换成后缀。未收录的域名和无法识别域名的连接继续按国内 IP／Other 匹配；`geolocation-!cn` 是维护的名单，不是国内名单的逻辑反集，也不表示域名一定被封锁。含三个集合的合成单节点候选约 2.49 MB，仍在现有 4 MiB 读取及网关校验预算内；运行不下载规则。
 

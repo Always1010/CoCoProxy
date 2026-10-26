@@ -151,11 +151,11 @@ install -d -o root -g root -m 0700 /etc/cocoproxy-install
 
 在可信下载目录核对所选附件的 SHA-256 与发布值一致；将安装包解压到目标的 root 控制专用暂存目录。解压后结构应包含 `manifest.json`、`source/`、`server/`、`bin/mihomo`。核对包内 manifest 与已核验的包外 manifest 一致，记录可信的 manifest SHA-256。只对未知来源文件自算摘要不能建立信任。
 
-若没有可用 Release，由构建者按[开发说明](https://github.com/Always1010/CoCoProxy/blob/main/docs/development.md)和[发行装配说明](https://github.com/Always1010/CoCoProxy/blob/main/docs/release-staging.md)提供载荷及单独核验的 manifest 摘要；普通部署者不必重新构建。传输只选择载荷目录，显式排除 `.local/`，不要整体复制工作区、父目录或跟随本地链接。
+若没有可用 Release，由构建者按[开发说明](development.md)和[发行装配说明](release-staging.md)提供载荷及单独核验的 manifest 摘要；普通部署者不必重新构建。传输只选择载荷目录，显式排除 `.local/`，不要整体复制工作区、父目录或跟随本地链接。
 
 ### 4.2 生成私有部署输入
 
-将随包 `source/examples/setup-environment.json` 作为结构参考，在第3节准备的私有目录创建自己的0600环境文件，填入第2节核实的接口、地址、MAC、精确 LAN、origin、bootstrap 和订阅/探测许可。服务账号必须已存在，不能直接使用合成地址。完整字段和可选受管 HTTPS 见[配置参考](setup.md#2-填写一次环境事实)。
+将源码仓库中的[环境配置示例](../examples/setup-environment.json)作为结构参考，在第3节准备的私有目录创建自己的0600环境文件，填入第2节核实的接口、地址、MAC、精确 LAN、origin、bootstrap 和订阅/探测许可。示例不随安装包提供；服务账号必须已存在，不能直接使用合成地址。完整字段和可选受管 HTTPS 见[配置参考](setup.md#2-填写一次环境事实)。
 
 以下变量均替换为实际角色值，Node 须为 root 控制的系统路径：
 
@@ -227,7 +227,7 @@ chmod 0600 "$CREDENTIAL"
 
 ### 5.2 配置网页入口并启动
 
-按[HTTPS 完整配方](management-https.md#证书与安装)，使用载荷中的 `source/examples/nginx-management.conf` 和 `source/examples/cocoproxy-web.service` 配置独立 nginx 服务。该配方包含证书生成、目录权限、配置校验、安装与启动命令。配置前核对以下对应关系：
+按[HTTPS 完整配方](management-https.md#证书与安装)，使用源码仓库中的 [nginx 配置示例](../examples/nginx-management.conf)和[服务示例](../examples/cocoproxy-web.service)配置独立 nginx 服务；示例不随安装包提供。该配方包含证书生成、目录权限、配置校验、安装与启动命令。配置前核对以下对应关系：
 
 | 访问方式 | 必须准备的内容 |
 | --- | --- |
