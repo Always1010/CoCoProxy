@@ -15,6 +15,23 @@ npm run cli -- help
 
 管理 Server/UI 按[MetaCubeXD 构建说明](../integrations/metacubexd/README.md)准备固定源码、核验 Git 树并应用 overlay；完成后按[发行装配](release-staging.md)生成载荷。合成样本不能直接联网或安装，真实输入和输出保持私有。
 
+### Ubuntu 纯克隆仓库的本地构建
+
+在 ARM64 或 x86-64 Ubuntu 上克隆仓库后，不需要其他机器的私有目录、源码同步回执或已有构建配置。先准备 Node.js ≥22.18、npm、Git、Python 3、tar、flock；首次下载还需要 curl。构建以普通用户执行，首次明确允许准备项目依赖及固定构建输入：
+
+```sh
+bash scripts/build-release.sh --prepare
+sudo bash scripts/deploy-local.sh
+```
+
+`--prepare` 只按根和 tooling 的锁安装项目依赖，并下载组件清单固定的上游源码与当前机器架构的 Mihomo；限定上游 Server/UI 依赖使用固定 pnpm、`--frozen-lockfile --ignore-scripts`。它不安装系统软件、不使用全局 pnpm、不更新到 latest。默认不联网安装依赖，缺失或锁不一致时提示重新运行 `--prepare`。后续日常构建使用 `bash scripts/build-release.sh`；部署行为及首次安装引导见[部署与维护](deployment.md#ubuntu-源码本机部署入口)。
+
+构建要求干净且已提交的 Git 根目录。默认工作目录是仓库旁的 `<仓库名>-build/`，包含 `cache/`、`work/`、`releases/` 和 `build-result.json`；也可用 `--workspace /absolute/build-directory` 指定，部署时传相同参数。不能放在仓库内部、经过目录链接，或占用其他项目的目录。根和 tooling 的 `node_modules` 是项目内被 Git 忽略的依赖。构建不依赖任何预先存在的本机私有资料目录。
+
+新入口自动为固定提交准备必要的临时源码、镜像和 Git 装配快照，复用下面已有编译与装配校验。上游依赖缓存同时按固定上游源码和当前 overlay 身份区分，防止 pnpm workspace 链接引用旧适配源码。中间目录结束时清理；成功发行保留在独立的新目录中。每次构建先撤销上一份可部署记录，失败不回退旧包。构建与部署共用工作目录锁；部署还核对当前干净 HEAD、完整文件集合和摘要，源码改变后须重新构建。
+
+仅验证本地输入交接和失败门禁时执行 `node --test tests/build-local.test.mjs`；Linux 子项使用无私有资料目录的临时 Git 仓库、真实文件和锁，编译步骤使用替身，不下载依赖或部署系统。
+
 ### 已准备工作区的一步构建
 
 Linux 开发工作区可使用通用入口，前提是同步流程已经核验源码，并准备现成的 Node、npm、Git、tar、flock、运行依赖、tooling、上游限定依赖、固定上游源码包和已审阅核心。入口只接受一份绝对路径的私有配置：

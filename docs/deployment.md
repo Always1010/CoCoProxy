@@ -2,6 +2,36 @@
 
 首次部署按[从零部署指南](getting-started.md)完成系统准备、HTTPS、路由器接入和终端验收；环境字段及逐步命令见[配置参考](setup.md)，证书/nginx 配方见[HTTPS 配置](management-https.md)，设备范围见[支持矩阵](support-matrix.md)。本文集中本机／SSH 部署、已有安装维护和中断处理。
 
+## Ubuntu 源码本机部署入口
+
+在目标 Ubuntu/systemd 的 ARM64 或 x86-64 主机克隆源码后，可使用仓库内的本机入口，不需要预先存在 `.local/` 或手写部署 JSON。Node.js ≥22.18 必须事先位于 root 控制、服务可访问的系统路径；入口不会下载或替换 Node，也不修改网口地址。先按照[开发说明](development.md)准备构建条件，再以普通用户构建、以 root 部署：
+
+```sh
+bash scripts/build-release.sh --prepare
+sudo bash scripts/deploy-local.sh
+```
+
+构建使用仓库外同级 `<源码目录名>-build` 工作区；自定义位置时，两步都传相同的 `--workspace /absolute/build-directory`。部署入口在整个输入、准备及安装期间持有与构建相同的工作区锁，核对成功构建回执、当前干净 Git HEAD、完整 manifest 及载荷字节。Git 更新、脏工作区、上次构建失败、缺失或损坏回执均拒绝部署；不会选用目录里残留的旧版本。交互结束后还会再次核验构建与源码。这里更新当前源码对应的载荷；它不会自行拉取 Git。
+
+首次安装须在交互终端运行。向导要求部署者输入实际网口、稳定 IPv4、路由器 LAN IPv4、交付接口 MAC、规范 LAN CIDR、HTTPS origin、独立引导 DNS，以及订阅和探测 HTTPS 来源许可；不会根据默认路由或邻居缓存猜测网络。账户默认 `cocoproxy`，自动分配空闲系统 UID；既有账户必须是唯一非 root 非登录身份，冲突时停止。HTTPS 可以引用满足安装权限要求的既有证书和私钥，或显式选择为已填写的管理主机生成 365 天自签名证书；自签名证书仍须在浏览器所在终端单独核验和信任。管理员密码输入两次且不回显，不进入命令行参数或普通日志。
+
+向导先列出完整变更范围，再要求输入 `INSTALL` 确认。确认范围包括：缺少时用固定 Ubuntu 包列表安装 Python、iproute2、nftables、polkitd、nginx、OpenSSL、账户及 sysctl 工具；创建专用非登录账户和缺失的安装父目录；缺少时新建固定 sysctl 文件持久设置 `net.ipv4.ip_forward=1`；选定时生成证书。自动系统包准备以 Ubuntu 24.04 及更新版本的包名为基线，Ubuntu 包维护脚本可能启动其发行版系统服务。入口不清空防火墙、改网口地址或设置路由器。需要 TUN、稳定接口地址和原有独立 DNS 等内核与网络前提；最终公开安装器仍执行完整检查，发现冲突不会自动删除资源。既有文件和目录权限不通过时不会递归修正。
+
+环境及管理员输入只在 `/run` 下本次新建的 root:0700 临时目录内生成，文件 root:0600，调用公开 `deploy --local --environment --admin-input` 协调器后清理。协调器经公开 configure 生成正式部署输入，保存为 `/etc/cocoproxy-install/deployment.json`，初始化管理员并启动管理和受管 HTTPS 服务。随后应完成浏览器信任、首次配置及终端验收，再显式启用持久运行与路由器交付。系统准备和安装发生失败时不自动回滚已经完成的步骤；准备新建的账户、sysctl 和证书可能已存在，应先核验失败阶段，不能将部分安装当作新安装覆盖。
+
+后续 Git 更新和构建完成后，再运行相同的 `sudo bash scripts/deploy-local.sh`，入口直接使用保存的部署输入并交给既有协调器维护更新，不再询问管理员或重新初始化。自动网关更新即使尚未开启交付，也必须具备可核验的路由器维护适配器；首次向导未提供适配器时，第一次实际升级会交互引导选择已有私有 SSH 配置、填写已核验的 AlwayRoute SSH 参数或指定可信 hook。SSH 模式只引用目标网关上现存的密钥和已核验 `known_hosts`，不生成密钥或接受未知指纹；填写的新配置仅临时 root:0600 保存，协调器成功后持久保存并复用。没有终端时须显式传 `--router-config` 或 `--router-hook`，否则返回 `LOCAL_ROUTER_ADAPTER_REQUIRED`，不会绕过维护检查。检测到不完整收据、遗留业务文件、输入缺失或中断日志时返回 `LOCAL_INSTALL_STATE_REQUIRES_REVIEW`，先按下文 inspect/recover 流程审阅；旧安装首次纳管使用下节公开入口及原输入，不能靠首次向导接管。
+
+```sh
+bash scripts/deploy-local.sh --check
+sudo bash scripts/deploy-local.sh --preview
+# 非交互首次安装：系统、账户、目录、网络及证书须已准备，输入文件须私有。
+sudo bash scripts/deploy-local.sh \
+  --environment /absolute/private/environment.json \
+  --admin-input /absolute/private/administrator.json
+```
+
+`--check` 只盘点基础本机条件，不要求已有构建。首次交互 `--preview` 收集并显示准备范围后结束，不执行系统准备或安装；显式输入及既有安装 `--preview` 使用公开协调器预检，私有暂存/锁语义见本文末尾。无终端且没有显式输入时拒绝提示密码。需要路由器维护适配器或独立网页服务时，可继续传入 `--router-config`、`--router-hook`、`--web-unit`；其安全及更新约束与下文一致。首次向导不会自动配置这些凭据或开启交付。
+
 ## 本机与 SSH 部署
 
 从可信发行来源核对 SHA256SUMS 和独立 manifest 摘要，解压匹配目标架构的发行包。入口部署当前解压版本，不下载最新版本、不构建源码、不安装依赖或创建账户。目标须已具备指南要求的软件、服务身份、网络及证书；SSH 调用电脑还需 Node.js ≥22.18、OpenSSH 和 tar。
