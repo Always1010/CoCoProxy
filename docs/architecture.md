@@ -11,12 +11,12 @@ CoCoProxy 使用 Mihomo 作为唯一运行代理核心，复用 MetaCubeXD UI／
 | 组件 | 职责与来源 |
 | --- | --- |
 | Mihomo | 协议、加密、DNS、分流和原生 TUN 自动接管。固定 v1.19.33，资产及摘要见[审阅数据](../integrations/metacubexd/review.json) |
-| MetaCubeXD UI／Server | 页面与同源 API 宿主。固定 v1.273.1，通过 overlay 接入自有管理；上游 Agent、自动拉核和刷新应用入口禁用。见[构建说明](https://github.com/Always1010/CoCoProxy/blob/main/integrations/metacubexd/README.md) |
+| MetaCubeXD UI／Server | 页面与同源 API 宿主。固定 v1.273.1，通过 overlay 接入自有管理；上游 Agent、自动拉核和刷新应用入口禁用。见[构建说明](../integrations/metacubexd/README.md) |
 | Node.js、ws、yaml | 管理和 CLI 运行环境、实时流及订阅解析；版本由[包元数据](../package.json)与锁文件固定 |
 | Linux/systemd、polkit、Python、ip/nft | 服务监管、精确启停授权及网络外围集成；条件见[部署](deployment.md) |
 | HTTPS 反向代理 | 局域网管理入口的 TLS 终止与 HTTP／WebSocket 转交，见[HTTPS 配置](management-https.md) |
 
-sing-box 只作为[协议测试对端](https://github.com/Always1010/CoCoProxy/blob/main/integrations/protocol-fixture/README.md)，不进入生产载荷。项目不自行实现代理协议或密码算法。
+sing-box 只作为[协议测试对端](../integrations/protocol-fixture/README.md)，不进入生产载荷。项目不自行实现代理协议或密码算法。
 
 ![服务启动、监管与权限检查](images/runtime-relations.svg)
 
@@ -111,6 +111,6 @@ sequenceDiagram
 | [gateway](../packages/gateway/README.md) | 原生接管配置及独立 guard／出口／回程 |
 | [routing](../packages/routing/README.md) | 本地分流模板与固定资源生成 |
 | [deployment](../packages/deployment/README.md) | 服务、权限与文件计划；安装器位于 `apps/deployment/` |
-| [MetaCubeXD overlay](https://github.com/Always1010/CoCoProxy/blob/main/integrations/metacubexd/README.md) | UI、Nitro 路由和构建 |
+| [MetaCubeXD overlay](../integrations/metacubexd/README.md) | UI、Nitro 路由和构建 |
 
 `packages/storage/private-files.ts` 提供私有原子文件，`packages/mihomo/validator.ts` 包装核心语法校验，`apps/cli/` 复用模块提供命令。当前原生方案的运行与网络证据边界见 [gateway](../packages/gateway/README.md)。
