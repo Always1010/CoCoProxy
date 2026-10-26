@@ -10,6 +10,7 @@ import {
   IconActivity,
   IconBrandSpeedtest,
   IconChevronRight,
+  IconLink,
   IconRefresh,
   IconRouter,
   IconTarget,
@@ -59,6 +60,9 @@ const { activeName, scrollTop } = useProxyWorkbench(scope, groupNames)
 const activeGroup = computed(
   () => props.groups.find((g) => g.name === activeName.value) ?? null,
 )
+const groupRole = (name: string) => view.value?.groups.find(group => group.name === name)?.role ?? 'service'
+const isSharedGroup = (group: ProxyType) => groupRole(group.name) === 'shared'
+const resolvedNode = (group: ProxyType) => proxiesStore.getNowProxyNodeName(group.name)
 function isAutomaticGroup(group: ProxyType) {
   const policy = overrides.value.automatic?.[group.name]
   return group.type === 'Selector' && !!policy && policy.enabled !== false
@@ -230,7 +234,7 @@ function aliveCount(group: ProxyType) {
         v-for="group in groups"
         :key="group.name"
         type="button"
-        :aria-label="`策略组 ${group.name}${isAutomaticGroup(group) ? '，自动选择' : ''}`"
+        :aria-label="`${isSharedGroup(group) ? '共享出口组' : '策略组'} ${group.name}${isAutomaticGroup(group) ? '，自动选择' : ''}`"
         :aria-pressed="group.name === activeName"
         class="flex w-44 shrink-0 flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-all duration-200 sm:w-auto sm:shrink"
         :class="
@@ -244,6 +248,13 @@ function aliveCount(group: ProxyType) {
           <span class="flex min-w-0 items-center gap-1">
             <span class="truncate text-sm font-semibold">{{ group.name }}</span>
             <span
+              v-if="isSharedGroup(group)"
+              class="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded border border-info/25 bg-info/10 px-1 py-0.5 text-[0.65rem] leading-none text-info"
+            >
+              <IconLink :size="12" aria-hidden="true" />
+              <span>共享</span>
+            </span>
+            <span
               v-if="isAutomaticGroup(group)"
               class="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[0.65rem] leading-none text-primary"
             >
@@ -255,9 +266,9 @@ function aliveCount(group: ProxyType) {
             {{ aliveCount(group) }}/{{ group.all?.length ?? 0 }}
           </span>
         </span>
-        <span class="hidden truncate text-xs text-base-content/45 sm:block">{{
-          group.now
-        }}</span>
+        <span class="hidden truncate text-xs text-base-content/45 sm:block">
+          {{ group.now }}<template v-if="resolvedNode(group) !== group.now"> → {{ resolvedNode(group) }}</template>
+        </span>
       </button>
     </div>
 
@@ -275,6 +286,7 @@ function aliveCount(group: ProxyType) {
             <span class="truncate text-lg font-semibold text-base-content">{{
               activeGroup.name
             }}</span>
+            <span v-if="isSharedGroup(activeGroup)" class="badge badge-sm badge-info gap-1"><IconLink :size="12" aria-hidden="true" /><span>共享出口</span></span>
             <span
               class="badge inline-flex min-w-0 items-center gap-1 badge-sm badge-primary"
             >
@@ -285,6 +297,10 @@ function aliveCount(group: ProxyType) {
               <template v-if="activeGroup.now?.length">
                 <IconChevronRight :size="16" class="shrink-0" />
                 <span class="min-w-0 truncate">{{ activeGroup.now }}</span>
+                <template v-if="resolvedNode(activeGroup) !== activeGroup.now">
+                  <IconChevronRight :size="16" class="shrink-0" />
+                  <span class="min-w-0 truncate">{{ resolvedNode(activeGroup) }}</span>
+                </template>
               </template>
             </span>
           </div>
@@ -451,6 +467,7 @@ function aliveCount(group: ProxyType) {
             v-if="canSelect"
             :proxy-name="name"
             :group-name="activeGroup.name"
+            :kind-label="groupRole(name) === 'shared' ? '共享出口' : ''"
             :test-url="activeGroup.testUrl || null"
             :timeout="activeGroup.timeout ?? null"
             :is-selected="activeGroup.now === name"

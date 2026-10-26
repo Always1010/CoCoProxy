@@ -67,11 +67,13 @@ function sortedNames(names: string[], testUrl: string | null) {
     latencyQualityMap: configStore.latencyQualityMap, urlForLatencyTest: configStore.urlForLatencyTest,
     performanceData: recommendationStore.performanceData,
   })
-  return filterProxiesByName(filterProxiesByAvailability({
+  const visible = filterProxiesByName(filterProxiesByAvailability({
     proxyNames: sorted, enabled: configStore.hideUnAvailableProxies, testUrl,
     getLatencyByName: proxiesStore.getLatencyByName, isProxyGroup: proxiesStore.isProxyGroup,
     latencyQualityMap: configStore.latencyQualityMap, urlForLatencyTest: configStore.urlForLatencyTest,
   }), configStore.proxiesGroupNameFilter)
+  const shared = new Set(workspace.view.value?.groups.filter(group => group.role === 'shared').map(group => group.name) ?? [])
+  return [...visible.filter(name => shared.has(name)), ...visible.filter(name => !shared.has(name))]
 }
 const sortedNamesByGroup = computed(() => Object.fromEntries(renderProxies.value.map(group =>
   [group.name, sortedNames(group.all ?? [], group.testUrl || null)],
