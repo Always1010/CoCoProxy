@@ -2,18 +2,20 @@ import { execFile } from 'node:child_process';
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { parseSetupEnvironment, SetupError, type SetupEnvironment } from './input.ts';
+import { ManagedWebError, verifyManagedWeb, type ManagedWebInput } from './https.ts';
 
-export interface Check { id: string; status: 'pass' | 'fail' | 'unknown'; required: boolean; message: string; action?: string }
+export interface Check { id: string; status: 'pass' | 'fail' | 'unknown'; required: boolean; message: string; action?: string; code?: string }
 export interface DoctorHost {
   platform: string; architecture: string; nodeVersion: string; uid: number;
   read(path: string): Promise<string>;
   stat(path: string): Promise<{ directory: boolean; characterDevice: boolean; uid: number; mode: number; link: boolean }>;
   resolve(path: string): Promise<string>;
   run(path: string, args: string[]): Promise<string>;
+  managedWeb?(input: ManagedWebInput): Promise<void>;
 }
 const nativeHost = (): DoctorHost => ({
   platform: platform(), architecture: arch(), nodeVersion: process.versions.node, uid: process.getuid?.() ?? -1,
-  read: path => readFile(path, 'utf8'), resolve: realpath,
+  read: path => readFile(path, 'utf8'), resolve: realpath, managedWeb: verifyManagedWeb,
   stat: async path => { const s = await lstat(path); return { directory: s.isDirectory(), characterDevice: s.isCharacterDevice(),
     uid: s.uid, mode: s.mode, link: s.isSymbolicLink() }; },
   run: (path, args) => new Promise((resolve, reject) => execFile(path, args, {
@@ -98,6 +100,34 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
       return Array.isArray(field === null ? value : value[field]);
     }, '可读取策略路由或防火墙 JSON；资源归属与冲突由安装预检进一步核验。', '核对权限与工具 JSON 能力，不能清空现有规则。');
   } else add('environment', 'unknown', '尚未提供环境输入，未检查账户、地址与具体运行工具路径。', '使用 --environment 提供私有环境文件。');
+  if (environment?.https?.mode === 'managed') {
+    const remedies: Record<string, string> = {
+      SETUP_HTTPS_INVALID: '核对受管 HTTPS 的 origin、非特权端口和证书路径。',
+      SETUP_HTTPS_PATH_UNTRUSTED: '核对证书、私钥和 nginx 的全部祖先目录归属、权限及服务账户遍历条件。',
+      SETUP_HTTPS_FILE_UNTRUSTED: '核对 nginx、证书和私钥的归属、权限、文件类型及链接；私钥必须由服务 UID 所有且为 0600。',
+      SETUP_HTTPS_CERTIFICATE_EXPIRED: '证书尚未生效或已过期；核对系统时间和证书有效期。',
+      SETUP_HTTPS_CERTIFICATE_NAME_MISMATCH: '证书 SAN 必须覆盖管理 origin 的主机名或 IP，不能仅依靠 CN。',
+      SETUP_HTTPS_KEY_MISMATCH: '准备与证书匹配的私钥，再重新检查。',
+      SETUP_HTTPS_PREFLIGHT_FAILED: '核对证书及私钥的格式和可读性，再重新检查。',
+    };
+    const message = '受管 HTTPS 需要可信 nginx、有效且覆盖 origin 的证书，以及匹配的私有密钥。';
+    if (host.uid !== 0 || serviceUid === null || !host.managedWeb) {
+      checks.push({ id: 'managed-https', status: 'unknown', required: true, message,
+        code: 'SETUP_HTTPS_PREFLIGHT_UNAVAILABLE', action: '使用目标 root 身份、有效服务账户和完整检查器重跑。' });
+    } else {
+      try {
+        await host.managedWeb({ web: { schemaVersion: 1, nginxPath: environment.https.nginxPath,
+          certificatePath: environment.https.certificatePath, privateKeyPath: environment.https.privateKeyPath },
+          gatewayIPv4: environment.network.gatewayIPv4, origin: environment.management.origin,
+          listenPort: environment.ports.management, serviceUid });
+        add('managed-https', 'pass', message);
+      } catch (error) {
+        const code = error instanceof ManagedWebError && Object.hasOwn(remedies, error.code) ? error.code : 'SETUP_HTTPS_PREFLIGHT_UNAVAILABLE';
+        checks.push({ id: 'managed-https', status: code === 'SETUP_HTTPS_PREFLIGHT_UNAVAILABLE' ? 'unknown' : 'fail', required: true,
+          message, code, action: remedies[code] ?? '检查器未取得完整证据；使用目标 root 身份重跑安装预检。' });
+      }
+    }
+  }
   add('router-contract', 'unknown', '路由器协作条件仍须通过适配说明及两端验收确认。', '按路由器协作约定核对交付、DNS、保护与独立关闭。', false);
   add('https-client-trust', 'unknown', '服务器只读检查不能证明浏览器信任证书或通知实际送达。', '在实际终端验证 HTTPS 登录和可选通知。', false);
   return { schemaVersion: 1, readyForInstallPreflight: checks.filter(c => c.required).every(c => c.status === 'pass'), serviceUid, checks };

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { parseSetupEnvironment, createSetupDeployment, routerParameters } from '../packages/setup/input.ts';
 import { inspectSetup, parseServiceIdentity, type DoctorHost } from '../packages/setup/doctor.ts';
+import { ManagedWebError } from '../packages/setup/https.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
 
@@ -96,8 +97,8 @@ test('doctor aggregates independent failures without invoking mutation commands 
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE RAW ERROR|192\.0\.2|subscription\.example/);
   assert.ok(calls.every(call => !/prepare|remove|restart|enable|sysctl\s+-w/.test(call)));
 });
-test('doctor requires every necessary check including the configured Node executable to pass', async () => {
-  const host: DoctorHost = { platform: 'linux', architecture: 'arm64', uid: 0, nodeVersion: '22.18.0',
+function readyDoctorHost(): DoctorHost {
+  return { platform: 'linux', architecture: 'arm64', uid: 0, nodeVersion: '22.18.0',
     read: async () => '1', resolve: async path => path,
     stat: async path => ({ directory: ['/run/systemd/system', '/etc/polkit-1/rules.d'].includes(path),
       characterDevice: path === '/dev/net/tun', uid: 0, mode: 0o755, link: false }),
@@ -111,6 +112,10 @@ test('doctor requires every necessary check including the configured Node execut
       if (args.includes('address')) return JSON.stringify([{ flags: ['UP'], addr_info: [{ family: 'inet', local: '192.0.2.2', prefixlen: 24 }] }]);
       return '[]';
     } };
+}
+
+test('doctor requires every necessary check including the configured Node executable to pass', async () => {
+  const host = readyDoctorHost();
   assert.equal((await inspectSetup(sample, host)).readyForInstallPreflight, true);
   const oldNode = { ...host, run: async (path: string, args: string[]) => path.endsWith('node') ? 'v18.20.0' : host.run(path, args) };
   const old = await inspectSetup(sample, oldNode);
@@ -122,6 +127,45 @@ test('doctor requires every necessary check including the configured Node execut
   const failed = await inspectSetup(sample, { ...host, read: async () => '0' });
   assert.equal(failed.readyForInstallPreflight, false);
   assert.equal(failed.checks.find(c => c.id === 'forwarding')?.status, 'fail');
+});
+
+test('doctor blocks managed HTTPS on failed or unavailable evidence and keeps private details out of its report', async () => {
+  const environment = { ...sample, https: { mode: 'managed', certificatePath: '/etc/cocoproxy/tls/server.crt',
+    privateKeyPath: '/etc/cocoproxy/tls/server.key' } };
+  const host = readyDoctorHost();
+  let calls = 0;
+  const managedWeb: NonNullable<DoctorHost['managedWeb']> = async input => {
+    calls++;
+    assert.equal(input.serviceUid, 12345);
+    assert.equal(input.origin, sample.management.origin);
+    assert.equal(input.gatewayIPv4, sample.network.gatewayIPv4);
+    assert.equal(input.listenPort, 13000);
+    assert.deepEqual(input.web, { schemaVersion: 1, nginxPath: '/usr/sbin/nginx',
+      certificatePath: environment.https.certificatePath, privateKeyPath: environment.https.privateKeyPath });
+  };
+  const success = await inspectSetup(environment, { ...host, managedWeb });
+  assert.equal(success.readyForInstallPreflight, true);
+  assert.equal(success.checks.find(c => c.id === 'managed-https')?.status, 'pass');
+  assert.equal(calls, 1);
+  await inspectSetup(sample, { ...host, managedWeb });
+  assert.equal(calls, 1);
+  for (const code of ['SETUP_HTTPS_CERTIFICATE_EXPIRED', 'SETUP_HTTPS_CERTIFICATE_NAME_MISMATCH',
+    'SETUP_HTTPS_KEY_MISMATCH', 'SETUP_HTTPS_FILE_UNTRUSTED', 'SETUP_HTTPS_PATH_UNTRUSTED']) {
+    const failed = await inspectSetup(environment, { ...host, managedWeb: async () => { throw new ManagedWebError(code); } });
+    assert.equal(failed.readyForInstallPreflight, false);
+    assert.equal(failed.checks.find(c => c.id === 'managed-https')?.status, 'fail');
+    assert.equal(failed.checks.find(c => c.id === 'managed-https')?.code, code);
+    assert.ok(failed.checks.find(c => c.id === 'router-contract'));
+  }
+  const unavailable = async () => { throw new Error('PRIVATE RAW ERROR /etc/private/server.key'); };
+  for (const unavailableHost of [host, { ...host, uid: 1000, managedWeb }, { ...host, managedWeb: unavailable },
+    { ...host, run: async () => { throw new Error('PRIVATE RAW ERROR'); }, managedWeb }]) {
+    const result = await inspectSetup(environment, unavailableHost);
+    assert.equal(result.readyForInstallPreflight, false);
+    assert.equal(result.checks.find(c => c.id === 'managed-https')?.status, 'unknown');
+    assert.equal(result.checks.find(c => c.id === 'managed-https')?.code, 'SETUP_HTTPS_PREFLIGHT_UNAVAILABLE');
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE RAW ERROR|\/etc\/private|gateway\.example|server\.key/);
+  }
 });
 test('unified entry rejects mutation flags on read-only commands before reading private inputs', () => {
   for (const args of [['doctor', '--apply'], ['inspect', '--router-disabled'], ['prepare', '--apply'],
