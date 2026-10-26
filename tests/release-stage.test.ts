@@ -28,6 +28,8 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'apps/setup/main.ts'), 'console.log("synthetic setup");\n');
   await put(join(sourceDir, 'apps/runtime/launch-core.ts'), 'console.log("synthetic core launcher");\n');
   await put(join(sourceDir, 'packages/runtime/start.ts'), 'export const fixture = true;\n');
+  await put(join(sourceDir, 'packages/runtime/README.md'), '[Repository-only reference](../../docs/not-shipped.md)\n');
+  await put(join(sourceDir, 'apps/setup/README.md'), '[Repository-only reference](../../examples/not-shipped.json)\n');
   for (const name of routingFiles) await put(join(sourceDir, 'packages/routing', name), 'synthetic offline rule asset\n');
   await put(join(sourceDir, 'LICENSE'), 'Synthetic project license\n');
   await put(join(sourceDir, 'packages/deployment/state-compatibility.mjs'), await readFile(new URL('../packages/deployment/state-compatibility.mjs', import.meta.url), 'utf8'));
@@ -105,15 +107,8 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.ok(manifest.files.some(file => file.path === 'source/node_modules/yaml/dist/index.js'));
   assert.ok(manifest.files.some(file => file.path === 'server/.output/server/node_modules/ws/dist/index.js'));
   assert.ok(manifest.files.some(file => file.path === 'source/integrations/mihomo/LICENSE'));
-  assert.ok(manifest.files.some(file => file.path === 'source/docs/deployment.md'));
-  assert.ok(manifest.files.some(file => file.path === 'source/docs/support-matrix.md'));
-  assert.ok(manifest.files.some(file => file.path === 'source/docs/release-notes.md'));
-  for (const path of ['setup.md', 'getting-started.md', 'usage.md', 'architecture.md', 'management-https.md', 'router-contract.md', 'images/architecture-overview.svg',
-    'images/runtime-relations.svg', 'images/proxy-traffic-flow.svg']) {
-    assert.ok(manifest.files.some(file => file.path === `source/docs/${path}`));
-  }
-  assert.ok(manifest.files.some(file => file.path === 'source/examples/nginx-management.conf'));
-  assert.ok(manifest.files.some(file => file.path === 'source/examples/deployment-options.md'));
+  assert.ok(manifest.files.every(file => !/^source\/(?:docs|examples)\//u.test(file.path)
+    && !/^source\/(?:apps|packages)\/.*\.md$/iu.test(file.path)));
   assert.ok(manifest.files.some(file => file.path === 'source/LICENSE'));
   for (const path of routingFiles) assert.ok(manifest.files.some(file => file.path === `source/packages/routing/${path}`));
   for (const path of developmentFiles) assert.ok(!manifest.files.some(file => file.path === `source/${path}`), path);
@@ -122,6 +117,9 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   }
   assert.ok(manifest.files.some(file => file.path === 'cocoproxy' && file.mode === '0755'));
   assert.ok(manifest.files.some(file => file.path === 'README.md'));
+  const guide = await readFile(join(options.output, 'README.md'), 'utf8');
+  assert.ok(guide.includes(`/blob/${receipt.commit}/docs/getting-started.md`));
+  assert.ok(!guide.includes('source/docs/') && !guide.includes('source/examples/'));
   assert.ok(manifest.files.some(file => file.path === 'source/integrations/metacubexd/components.json'));
   for (const path of ['LICENSE', 'review.json', 'source-tree.json']) {
     assert.ok(manifest.files.some(file => file.path === `source/integrations/metacubexd/${path}`));
@@ -181,10 +179,10 @@ test('rejects source drift and nonignored untracked input while leaving ignored 
   await rejects(stageExplicitRelease(options), 'SOURCE_DIRTY');
 });
 
-test('rejects mismatched release metadata, missing bootstrap and broken offline navigation before publishing output', async t => {
+test('rejects mismatched release metadata and missing bootstrap before publishing output', async t => {
   for (const [variant, expected] of [
     ['metadata', 'COMPONENT_REVIEW_MISMATCH'], ['compatibility', 'COMPATIBILITY_SOURCE_MISMATCH'],
-    ['bootstrap', 'SOURCE_REQUIRED_FILE_MISSING'], ['documentation', 'DOCUMENT_LINK_MISSING'],
+    ['bootstrap', 'SOURCE_REQUIRED_FILE_MISSING'],
   ] as const) {
     await t.test(variant, async t => {
       const options = await fixture(t);
@@ -196,7 +194,6 @@ test('rejects mismatched release metadata, missing bootstrap and broken offline 
       }
       if (variant === 'compatibility') await writeFile(join(options.sourceDir, 'packages/deployment/state-compatibility.mjs'), 'export const unsupported = true;\n');
       if (variant === 'bootstrap') await rm(join(options.sourceDir, 'scripts/cocoproxy-setup.sh'));
-      if (variant === 'documentation') await writeFile(join(options.sourceDir, 'docs/deployment.md'), '[missing](private-not-shipped.md)\n');
       await execute('git', ['-C', options.sourceDir, 'add', '-u']);
       await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'invalid release fixture']);
       await rejects(stageExplicitRelease(options), expected);

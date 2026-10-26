@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:p
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { validateReleaseMetadata } from './release-metadata.mjs';
-import { assertReleaseSourcePaths, releaseIntegrationFiles, releaseLauncher, releaseReadme, selectedReleaseSource, verifyOfflineDocumentation } from './release-layout.mjs';
+import { assertReleaseSourcePaths, releaseIntegrationFiles, releaseLauncher, releaseReadme, selectedReleaseSource, verifyDocumentationLinks } from './release-layout.mjs';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/state-compatibility.mjs';
 
 const execute = promisify(execFile);
@@ -220,7 +220,7 @@ export async function stageExplicitRelease(options) {
       files.push({ path, sha256: sha256(bytes), size: bytes.length, mode });
       documents.set(path, path.endsWith('.md') ? bytes : Buffer.alloc(0));
     }
-    await write('README.md', releaseReadme(pkg.version));
+    await write('README.md', releaseReadme(pkg.version, commit));
     await write('cocoproxy', releaseLauncher, '0755');
     for (const entry of tree) {
       if (!allowed(entry.path)) continue;
@@ -270,10 +270,10 @@ export async function stageExplicitRelease(options) {
     if (!files.some(file => file.path === 'server/.output/server/index.mjs')) fail('SERVER_ENTRY_MISSING');
     if (sha256(coreBytes) !== reviewedHash) fail('CORE_HASH_MISMATCH');
     await write('bin/mihomo', coreBytes, '0755');
-    // Upstream package READMEs may link to repository-only images and tests;
-    // validate the product's offline guide without expanding dependency scope.
+    // Check the short install guide without pulling repository documentation
+    // or upstream dependency documentation into the runtime payload.
     const productDocuments = new Map([...documents].filter(([path]) => !path.split('/').includes('node_modules')));
-    try { verifyOfflineDocumentation(productDocuments); }
+    try { verifyDocumentationLinks(productDocuments); }
     catch (error) { if (error?.code) fail(error.code); throw error; }
     const manifest = {
       schemaVersion: 1, scope: 'local-explicit-proxy-payload', commit,
@@ -281,7 +281,7 @@ export async function stageExplicitRelease(options) {
       components: { cocoproxy: { version: pkg.version, lockSha256: sha256(lockBytes), componentCatalogSha256: sha256(componentsBytes) },
         metacubexd: { version: uiTag, commit: uiCommit }, mihomo: { version: coreTag, commit: coreCommit, binarySha256: reviewedHash, ...(corePlatform ? { platform: corePlatform } : {}) },
         runtimeDependencies: dependencyVersions },
-      sourceSelection: 'HEAD blobs: apps, packages, selected deployment docs/examples, root package metadata and license/source notices; no links or local/build data',
+      sourceSelection: 'HEAD blobs: runtime apps/packages, deployment scripts, root package metadata and license/source notices; no project docs/examples, links or local/build data',
       files: files.sort((a, b) => a.path.localeCompare(b.path, 'en')),
     };
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
