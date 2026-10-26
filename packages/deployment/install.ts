@@ -281,10 +281,20 @@ async function executable(path: string) {
   }
   throw new InstallError('INSTALL_TOOL_LINK_LIMIT');
 }
-async function run(binary: string, args: string[]) {
-  return new Promise<string>((accept, reject) => execFile(binary, args, { encoding: 'utf8', timeout: 15000,
+async function run(binary: string, args: string[], timeoutMs = 15000) {
+  require(Number.isSafeInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 90000, 'INSTALL_TOOL_TIMEOUT_INVALID');
+  return new Promise<string>((accept, reject) => execFile(binary, args, { encoding: 'utf8', timeout: timeoutMs,
     maxBuffer: 8 * 1024 * 1024, windowsHide: true, env: { PATH: '/usr/sbin:/usr/bin', LC_ALL: 'C' } },
   (error, stdout) => error ? reject(new InstallError('INSTALL_SYSTEM_QUERY_FAILED')) : accept(stdout)));
+}
+export async function assertDeploymentAccount(serviceUser: string, serviceUid: number) {
+  require(typeof serviceUser === 'string' && /^[a-z_][a-z0-9_-]{0,31}$/.test(serviceUser) && !['root', 'nobody'].includes(serviceUser) &&
+    Number.isSafeInteger(serviceUid) && serviceUid > 0, 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
+  await executable('/usr/bin/getent');
+  const accounts = (await run('/usr/bin/getent', ['passwd'])).trim().split('\n').map(line => line.split(':'));
+  require(accounts.filter(a => a[0] === serviceUser).length === 1 && accounts.filter(a => Number(a[2]) === serviceUid).length === 1 &&
+    accounts.some(a => a[0] === serviceUser && Number(a[2]) === serviceUid &&
+      ['/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false'].includes(a[6])), 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
 }
 async function privateFile(path: string, uid: number) {
   const stat = await info(path);
@@ -421,11 +431,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
   await trusted('/etc/polkit-1/rules.d');
   require((await run(input.runtime.systemctlPath, ['show', 'polkit.service', '--property=LoadState', '--value'])).trim() === 'loaded',
     'INSTALL_POLKIT_REQUIRED');
-  const accounts = (await run('/usr/bin/getent', ['passwd'])).trim().split('\n').map(line => line.split(':'));
-  require(accounts.filter(a => a[0] === input.management.serviceUser).length === 1 &&
-    accounts.filter(a => Number(a[2]) === input.runtime.serviceUid).length === 1 &&
-    accounts.some(a => a[0] === input.management.serviceUser && Number(a[2]) === input.runtime.serviceUid &&
-      ['/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false'].includes(a[6])), 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
+  await assertDeploymentAccount(input.management.serviceUser, input.runtime.serviceUid);
   const units = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service',
     ...(input.web ? ['cocoproxy-web.service'] : [])];
   await assertDeploymentLifecycle(input.runtime.stateDirectory, input.runtime.serviceUid, preparing);
