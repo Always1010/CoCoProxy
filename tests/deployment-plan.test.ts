@@ -34,6 +34,37 @@ function automaticInput() {
       egressMark: 65536, egressTable: 2024, egressPriority: 8000, tunMtu: 1500 } } };
 }
 
+test('optional managed HTTPS adds only owned config and unit with private independent temp directories', () => {
+  const old = automaticInput();
+  old.management.origin = 'https://gateway.example:13443';
+  const value = { ...old, web: { schemaVersion: 1, nginxPath: '/usr/sbin/nginx',
+    certificatePath: '/etc/cocoproxy/tls/server.crt', privateKeyPath: '/etc/cocoproxy/tls/server.key' } };
+  const base = renderDeploymentPlan(old), plan = renderDeploymentPlan(value);
+  assert.equal(plan.files.length, 10);
+  assert.deepEqual(plan.files.slice(0, 8), base.files);
+  assert.deepEqual(plan.files.slice(8).map(file => file.path), ['/etc/cocoproxy/web/nginx.conf', '/etc/systemd/system/cocoproxy-web.service']);
+  assert.equal(plan.directories.length, new Set(plan.directories.map(d => d.path)).size);
+  const unit = plan.files.find(f => f.path.endsWith('/cocoproxy-web.service'))!.content;
+  assert.match(unit, /^User=12345$/m);
+  assert.doesNotMatch(unit, /^Group=|AmbientCapabilities|CAP_NET_BIND_SERVICE/m);
+  assert.match(unit, /^StateDirectoryMode=0700$/m);
+  const nginx = plan.files.find(f => f.path.endsWith('/nginx.conf'))!.content;
+  assert.match(nginx, /listen 192\.0\.2\.2:13443 ssl;/);
+  assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:13000;/);
+  assert.match(nginx, /proxy_set_header Host "gateway\.example:13443";/);
+  assert.match(nginx, /error_page 497 =308 https:\/\/gateway\.example:13443\$request_uri;/);
+  assert.doesNotMatch(nginx, /SYNTHETIC_CONTROLLER_SECRET/);
+  for (const name of ['client', 'proxy', 'fastcgi', 'uwsgi', 'scgi']) {
+    assert.ok(plan.directories.some(d => d.path === '/var/lib/cocoproxy-web-' + name && d.mode === '0700' && d.owner === 12345));
+  }
+  assert.ok(!plan.files.some(f => f.path === value.web.privateKeyPath || f.path === value.web.certificatePath));
+  assert.equal(renderDeploymentPlan(input()).files.length, 5);
+  assert.throws(() => renderDeploymentPlan({ ...value, management: { ...value.management, origin: 'https://gateway.example' } }), DeploymentPlanError);
+  assert.throws(() => renderDeploymentPlan({ ...value, runtime: { ...value.runtime, stateDirectory: '/var/lib/cocoproxy-web-client' } }), DeploymentPlanError);
+  assert.throws(() => renderDeploymentPlan({ ...value, web: { ...value.web, privateKeyPath: value.runtime.settingsPath } }), DeploymentPlanError);
+  assert.throws(() => renderDeploymentPlan({ ...value, management: { ...value.management, origin: 'https://gateway.example:17890' } }), DeploymentPlanError);
+});
+
 test('installer renders optional encrypted resolvers without altering bootstrap inputs', () => {
   const value = input();
   (value.management.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];

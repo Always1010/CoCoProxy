@@ -7,6 +7,7 @@ import { HttpsSnapshotClient } from '../subscriptions/http.ts';
 import { DEFAULT_LATENCY_PROBE_ORIGIN } from '../management/controller.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
 import { renderAutomaticGatewayHostPlan } from '../gateway/host-plan.ts';
+import { renderManagedWeb } from '../setup/https.ts';
 
 export class DeploymentPlanError extends Error {
   readonly code = 'DEPLOYMENT_PLAN_INVALID';
@@ -123,7 +124,7 @@ function origins(input: JsonValue | undefined, maximum: number): void {
 }
 
 function render(input: unknown): DeploymentPlan {
-  const envelope = record(jsonData(input), ['schemaVersion', 'runtime', 'management']);
+  const envelope = record(jsonData(input), ['schemaVersion', 'runtime', 'management'], ['web']);
   if (envelope.schemaVersion !== 1) fail();
   const runtime = record(envelope.runtime, ['schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256',
     'systemctlPath', 'nodePath', 'sourceDirectory', 'settingsPath', 'unitPath', 'serviceUid'], ['automaticGateway']);
@@ -157,6 +158,9 @@ function render(input: unknown): DeploymentPlan {
   if (typeof management.listenPort !== 'number' || !Number.isInteger(management.listenPort) ||
     management.listenPort < 1024 || management.listenPort > 65535) fail();
   const managementOrigin = origin(management.origin, false);
+  const webPlan = envelope.web === undefined ? null : renderManagedWeb({ web: envelope.web,
+    gatewayIPv4: core.settings.automaticGateway?.gatewayIPv4 ?? '', origin: managementOrigin,
+    listenPort: management.listenPort, serviceUid });
   // A same-origin HTTP deployment reaches the fixed IPv4 listener directly.
   // IPv6 loopback is valid through an explicitly configured local proxy.
   if (managementOrigin.startsWith('http:') && Number(new URL(managementOrigin).port || 80) !== management.listenPort) fail();
@@ -167,6 +171,16 @@ function render(input: unknown): DeploymentPlan {
     ...(networkPlan ? [networkSettingsPath, '/etc/systemd/system/cocoproxy-gateway-network.service',
       posix.join(sourceDirectory, 'apps/gateway/network.py'), '/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft',
       '/usr/bin/ip', '/usr/bin/nft'] : [])];
+  if (webPlan) {
+    const webFiles = [webPlan.settings.nginxPath, webPlan.settings.certificatePath, webPlan.settings.privateKeyPath,
+      ...webPlan.files.map(file => file.path)];
+    if (webFiles.some(file => controlledFiles.some(existing => overlap(file, existing)) ||
+      overlap(file, sourceDirectory) || overlap(file, stateDirectory) || overlap(file, networkStateDirectory)) ||
+      webPlan.directories.some(directory => [stateDirectory, sourceDirectory, networkStateDirectory, ...controlledFiles].some(existing => overlap(directory.path, existing)))) fail();
+    if ([management.deployment && (management.deployment as JsonObject).mixedPort,
+      management.deployment && (management.deployment as JsonObject).controllerPort,
+      management.deployment && (management.deployment as JsonObject).dnsPort].includes(webPlan.port)) fail();
+  }
   if (networkPlan && (overlap(networkStateDirectory, stateDirectory) || overlap(networkStateDirectory, sourceDirectory) ||
       controlledFiles.some(file => overlap(networkStateDirectory, file)) || overlap(networkSettingsPath, sourceDirectory))) fail();
   if (overlap(stateDirectory, sourceDirectory) || controlledFiles.some(file => overlap(stateDirectory, file))) fail();
@@ -244,6 +258,7 @@ function render(input: unknown): DeploymentPlan {
       { path: '/etc/systemd/system/cocoproxy-gateway-network.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.unit },
       { path: networkSettingsPath, mode: '0600' as const, owner: 'root' as const, sensitive: true, content: JSON.stringify(networkPlan.settings, null, 2) + '\n' },
     ] : []),
+    ...(webPlan?.files ?? []),
   ];
   const parents = [...new Set(files.map(file => posix.dirname(file.path)).concat(posix.dirname(credentialPath)))];
   if (parents.some(parent => parent === '/' || inside(parent, stateDirectory))) fail();
@@ -251,8 +266,11 @@ function render(input: unknown): DeploymentPlan {
     schemaVersion: 1, sensitive: true, files,
     directories: [{ path: stateDirectory, mode: '0700', owner: serviceUid },
       ...(networkPlan ? [{ path: networkStateDirectory, mode: '0700' as const, owner: 'root' as const }] : []),
-      ...parents.map(parent => ({ path: parent, mode: '0755' as const, owner: 'root' as const }))],
+      ...parents.filter(parent => !webPlan?.directories.some(directory => directory.path === parent))
+        .map(parent => ({ path: parent, mode: '0755' as const, owner: 'root' as const })),
+      ...(webPlan?.directories ?? [])],
     requirements: [
+      ...(webPlan ? ['托管 HTTPS 只引用既有匹配 SAN 且未过期的证书及服务 UID 的 0600 单链接私钥；不会生成、复制或轮换证书、安装 nginx 或修改证书信任。配置与 unit 由同一部署收据管理；启动仍须显式执行。'] : []),
       ...(networkPlan ? [
         '自动网关模式另含 root 网络 oneshot：独立阻断规则、一张带 mark 的出口表和终端回程路由；Mihomo 独占自动接管资源。需要另行审阅并授权真实网络变更，不能按显式代理安装范围执行。',
         '网络设置及其祖先必须为 root 控制，网络回执目录 root:0700；不得交给管理服务 UID 写入。Python 3 与 ip/nft 使用系统现有受信路径；本计划不安装工具。',

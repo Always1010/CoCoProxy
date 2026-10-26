@@ -1,6 +1,37 @@
 # 局域网 HTTPS 网页部署
 
-这是[角色部署流程](deployment.md)中网页入口的具体配方，复用已有 nginx、OpenSSL 与系统服务，不要求特定路由器、外设型号或处理器架构。软件和专用服务账户是明确的系统前置条件；部署工具不会自行安装系统包、证书信任或修改已有站点。
+这是[角色部署流程](deployment.md)中网页入口的具体配方，复用已有 nginx、证书与系统服务，不要求特定路由器、外设型号或处理器架构。软件和专用服务账户是明确的系统前置条件；部署工具不会自行安装系统包、证书信任或修改已有站点。
+
+## 由部署收据管理 HTTPS
+
+原生网关部署输入可增加可选顶层 `web`，将 HTTPS 配置与 unit 纳入同一安装、升级、卸载及恢复归属检查：
+
+```json
+{
+  "web": {
+    "schemaVersion": 1,
+    "nginxPath": "/usr/sbin/nginx",
+    "certificatePath": "/etc/cocoproxy/tls/server.crt",
+    "privateKeyPath": "/etc/cocoproxy/tls/server.key"
+  }
+}
+```
+
+该片段加入已有完整部署输入；管理 `origin` 需为带非特权端口的 HTTPS 地址，例如 `https://gateway.example:13443`，且端口不与内部管理、Controller、DNS 或混合代理端口重复。监听地址来自 `runtime.automaticGateway.gatewayIPv4`，后端端口来自 `management.listenPort`，固定 authority 与管理 origin 同源。当前托管模式需要原生网关输入，拒绝默认 443 等低于 1024 的端口，以保持服务无网络 capability。
+
+安装器只增加 `/etc/cocoproxy/web/nginx.conf` 与 `/etc/systemd/system/cocoproxy-web.service` 两个受收据管理的文件。已有同名文件不能自动认领；此前手工安装的实例仍先按其归属停用、审阅和迁移。添加托管 HTTPS 的升级须显式审阅配置变化。未提供 `web` 时保持原有安装文件集。
+
+nginx 和证书/私钥必须已经存在。路径使用规范绝对路径，不含目录链接、用户可写祖先、空格或配置特殊字符；nginx 与证书由 root 所有且服务身份可读取，nginx 可执行，证书不可由组或其他用户写入。私钥为部署服务 UID 所有的 0600 单链接普通文件，父目录由 root 控制且允许服务身份遍历。工具不复制、生成、备份或轮换证书/私钥，也不安装 nginx、改系统信任或申请证书。
+
+只读预检使用 Node 检查证书 SAN 与 origin 主机名/IP、有效期和私钥公钥匹配；CN 不能替代 SAN。自签名证书可以满足这些字节检查，但浏览器信任仍需真实终端核验。域名解析到实际 LAN 地址、端口占用、nginx 编译能力及系统安全策略也需在目标验收。
+
+生成的 unit 只指定数字 `User=<serviceUid>`，不要求同名服务组。运行目录 `/run/cocoproxy-web` 和五个独立临时目录 `/var/lib/cocoproxy-web-{client,proxy,fastcgi,uwsgi,scgi}` 均为服务 UID 的 0700 目录，由计划及 systemd 的 RuntimeDirectory/StateDirectory 管理；root 安装器不在服务可写目录下创建子文件。nginx 启动前执行配置检查，认证和 WebSocket 授权继续由回环管理后端负责。
+
+安装/升级默认只读，`--apply` 仍不启动或启用 HTTPS。按[统一入口](setup.md)完成安装，再显式启动管理及 `cocoproxy-web.service` 并执行本文的验证。维护与卸载使用当前完整输入及收据；证书、私钥和业务状态保持原位。
+
+## 手工独立实例
+
+以下样本流程适用于单独维护的实例，其配置、unit 和证书由操作者记录归属；它不自动加入部署收据。若已选择托管模式，使用上节生成的配置和 unit，不重复手工安装同名文件。
 
 ## 输入与边界
 
@@ -70,4 +101,4 @@ sudo systemctl start cocoproxy-web.service
 
 确认接口地址稳定并完成验证后，按[总指南的持久运行步骤](getting-started.md#8-启用持久运行与自动恢复)显式启用自动恢复、早期保护以及网页／管理开机服务；核心由已提交配置的恢复流程启动，不需要单独 enable。网页可在核心停止时访问，地址尚未就绪时独立服务会按失败重试。升级前先 runtime-pause，再停止并禁用网页、管理及早期保护；完成维护后按总指南恢复。
 
-撤销时先停用并禁用此独立服务，再按记录的归属处理 unit、配置与证书；保留其他站点、代理业务状态和管理员凭据。origin 变化时同步审阅管理设置，旧会话需重新登录。通用主安装器不自动卸载这个独立反代实例。
+撤销时先停用并禁用此独立服务，再按记录的归属处理 unit、配置与证书；保留其他站点、代理业务状态和管理员凭据。origin 变化时同步审阅管理设置，旧会话需重新登录。未纳入收据的手工独立实例由操作者自行卸载；托管 HTTPS 则由当前部署收据处理其两个受管文件，仍保留外部证书和私钥。
