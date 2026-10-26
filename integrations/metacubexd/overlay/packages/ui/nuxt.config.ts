@@ -7,6 +7,10 @@ import pkg from './package.json'
 const pwaDisabled = true
 
 export default defineNuxtConfig({
+  // Keep generated imports under this source tree when dependencies are reused
+  // through directory links; a shared node_modules cache can resolve them into
+  // another checkout and emit invalid prerender modules on Windows.
+  buildDir: '.nuxt',
   // Workspace move: the Nuxt app is the package root. Pin srcDir explicitly
   // so the legacy root layout (top-level pages/, components/, no app/ dir)
   // never depends on Nuxt 4 auto-detection.
