@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
@@ -21,7 +22,7 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'docs/deployment.md'), 'Synthetic role deployment instructions\n');
   await put(join(sourceDir, 'docs/cooperating-router-requirements.md'), 'Synthetic independent product and router capabilities\n');
   await put(join(sourceDir, 'docs/release-notes.md'), 'Synthetic fixed-version release scope and known limitations\n');
-  for (const name of ['getting-started.md', 'usage.md', 'architecture.md', 'development.md']) {
+  for (const name of ['getting-started.md', 'usage.md', 'notifications.md', 'architecture.md', 'development.md']) {
     await put(join(sourceDir, 'docs', name), 'Synthetic documentation\n');
   }
   for (const name of ['architecture-overview.svg', 'runtime-relations.svg', 'proxy-traffic-flow.svg']) {
@@ -31,10 +32,10 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'examples/deployment-options.md'), 'Synthetic trusted performance options\n');
   await put(join(sourceDir, 'scripts/measure-latency.mjs'), 'console.log("synthetic latency baseline");\n');
   await put(join(sourceDir, '.gitignore'), '.local/\n');
-  const dependencies = { ws: '1.0.0', yaml: '1.0.0' };
+  const dependencies = { 'web-push': '1.0.0', ws: '1.0.0', yaml: '1.0.0' };
   const pkg = { name: 'synthetic-cocoproxy', version: '0.0.0', dependencies };
   const packages: Record<string, unknown> = { '': pkg };
-  for (const name of ['ws', 'yaml']) {
+  for (const name of ['web-push', 'ws', 'yaml']) {
     packages[`node_modules/${name}`] = { version: '1.0.0', integrity: `sha512-${Buffer.from(name).toString('base64')}` };
     for (const base of [runtimeDependencies, join(serverDir, 'server/node_modules')]) {
       await put(join(base, name, 'package.json'), JSON.stringify({ name, version: '1.0.0' }));
@@ -74,11 +75,12 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.equal(manifest.commit, receipt.commit);
   assert.equal(receipt.fileCount, manifest.files.length);
   assert.ok(manifest.files.some(file => file.path === 'source/node_modules/yaml/dist/index.js'));
+  assert.ok(manifest.files.some(file => file.path === 'server/.output/server/node_modules/web-push/dist/index.js'));
   assert.ok(manifest.files.some(file => file.path === 'source/integrations/mihomo/LICENSE'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/deployment.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/cooperating-router-requirements.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/release-notes.md'));
-  for (const path of ['getting-started.md', 'usage.md', 'architecture.md', 'development.md', 'images/architecture-overview.svg',
+  for (const path of ['getting-started.md', 'usage.md', 'notifications.md', 'architecture.md', 'development.md', 'images/architecture-overview.svg',
     'images/runtime-relations.svg', 'images/proxy-traffic-flow.svg']) {
     assert.ok(manifest.files.some(file => file.path === `source/docs/${path}`));
   }
@@ -97,6 +99,37 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.equal(digest(await readFile(join(options.output, 'manifest.json'))), receipt.manifestSha256);
 });
 
+test('real built server traces the complete locked push dependency closure for release assembly', {
+  skip: !process.env.COCOPROXY_TEST_RUNTIME_DEPENDENCIES || !process.env.COCOPROXY_TEST_SERVER_OUTPUT,
+}, async t => {
+  const options = await fixture(t);
+  options.runtimeDependencies = process.env.COCOPROXY_TEST_RUNTIME_DEPENDENCIES!;
+  options.serverDir = process.env.COCOPROXY_TEST_SERVER_OUTPUT!;
+  for (const name of ['package.json', 'package-lock.json']) {
+    await writeFile(join(options.sourceDir, name), await readFile(new URL(`../${name}`, import.meta.url)));
+  }
+  await mkdir(join(options.sourceDir, 'integrations/http-ece'), { recursive: true });
+  for (const name of ['LICENSE', 'README.md']) await writeFile(join(options.sourceDir, 'integrations/http-ece', name), await readFile(new URL(`../integrations/http-ece/${name}`, import.meta.url)));
+  await execute('git', ['-C', options.sourceDir, 'add', 'package.json', 'package-lock.json', 'integrations/http-ece']);
+  await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'locked production fixture']);
+  await stageExplicitRelease(options);
+  const manifest = JSON.parse(await readFile(join(options.output, 'manifest.json'), 'utf8'));
+  assert.ok(manifest.files.some((file: { path: string }) => file.path === 'server/.output/server/node_modules/web-push/src/index.js'));
+  assert.ok(manifest.files.some((file: { path: string }) => file.path === 'server/.output/server/node_modules/http_ece/ece.js'));
+  assert.equal(digest(await readFile(join(options.output, 'server/.output/server/node_modules/http_ece/LICENSE'))), '7d71f48c474da1de82fbdaac7fea5a1eaa41e4ac998dd44fd2897812812138d9');
+  assert.ok(manifest.files.every((file: { path: string }) => !file.path.endsWith('.yml')));
+  const push = createRequire(join(options.output, 'server/.output/server/package.json'))('web-push');
+  const keys = push.generateVAPIDKeys();
+  const encrypted = push.generateRequestDetails({ endpoint: 'https://fcm.googleapis.com/wp/synthetic-release', keys: {
+    p256dh: keys.publicKey, auth: Buffer.alloc(16, 3).toString('base64url') } }, '合成发行测试', {
+    vapidDetails: { ...keys, subject: 'https://management.example' }, TTL: 300 });
+  assert.ok(encrypted.body.length > 0);
+  await writeFile(join(options.sourceDir, 'integrations/http-ece/LICENSE'), 'tampered synthetic license');
+  await execute('git', ['-C', options.sourceDir, 'add', 'integrations/http-ece/LICENSE']);
+  await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'tampered license fixture']);
+  await rejects(stageExplicitRelease({ ...options, output: options.output + '-rejected' }), 'DEPENDENCY_LICENSE_MISSING');
+});
+
 test('rejects source drift and nonignored untracked input while leaving ignored local material outside the payload', async t => {
   const options = await fixture(t);
   await writeFile(join(options.sourceDir, 'apps/cli/main.ts'), 'drift');
@@ -108,7 +141,7 @@ test('rejects source drift and nonignored untracked input while leaving ignored 
 
 test('accepts pruned Nitro traces with semantically unchanged package metadata and restores full locked packages', async t => {
   const options = await fixture(t);
-  for (const name of ['ws', 'yaml']) {
+  for (const name of ['web-push', 'ws', 'yaml']) {
     const directory = join(options.serverDir, 'server/node_modules', name);
     await rm(join(directory, 'LICENSE'));
     await rm(join(directory, 'dist'), { recursive: true });
@@ -116,7 +149,7 @@ test('accepts pruned Nitro traces with semantically unchanged package metadata a
   }
   await stageExplicitRelease(options);
   const manifest = JSON.parse(await readFile(join(options.output, 'manifest.json'), 'utf8')) as { files: Array<{path: string; sha256: string}> };
-  for (const name of ['ws', 'yaml']) {
+  for (const name of ['web-push', 'ws', 'yaml']) {
     for (const path of ['LICENSE', 'dist/index.js', 'package.json']) {
       const original = await readFile(join(options.runtimeDependencies, name, path));
       for (const base of ['source/node_modules', 'server/.output/server/node_modules']) {

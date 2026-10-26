@@ -6,7 +6,7 @@ import { WorkspaceStore, WorkspaceError, initialWorkspace, parseWorkspaceSetting
 import { ManagementError, exactRecord, readJsonBody } from './http.ts';
 import { describeTcpNode, probeTcpEndpoint, tcpEndpoint } from './tcp-delay.ts';
 import { memoizePolicyCompiler } from './shared-work.ts';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_AUTO_PROBES, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings, type ProbeTarget } from './automatic-policy.ts';
 import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
 import { readAutomaticBindings, writeAutomaticBindings, type AutomaticBindings } from './automatic-bindings.ts';
@@ -323,6 +323,7 @@ export function createWorkspaceApplication(options: {
           if (typeof selected !== 'string' || observed.selections[change.group] !== selected || ![...policy.preferred, ...policy.fallback].includes(selected)) return;
           repaired.targets[change.group] = { signature: currentPlan.automatic.signatures[change.group], target: selected };
         }
+        delete repaired.pendingEvent;
         await writeAutomaticBindings(options.stateDirectory, repaired);
       });
       plan = await build(workspace);
@@ -330,6 +331,19 @@ export function createWorkspaceApplication(options: {
     }
     const observed = await options.observeSelections();
     if (observed.generation !== state.active) return null;
+    // The prepared event shares the durable automatic binding. Recover only
+    // after the full candidate and observed controller agree with committed active.
+    const journal = await readAutomaticBindings(options.stateDirectory);
+    if (journal?.pendingEvent) await store.exclusive(async () => {
+      const current = await readAutomaticBindings(options.stateDirectory), e = current?.pendingEvent;
+      if (!current || !e || e.id !== journal.pendingEvent!.id || (await store.status()).active !== state.active || (await load()).revision !== workspace.revision) return;
+      if (current.scope === plan.automatic.scope && e.revision === workspace.revision && e.signature === plan.automatic.signatures[e.group] && observed.selections[e.group] === e.to) {
+        const { signature: _signature, revision: _revision, ...confirmed } = e;
+        current.events = [...current.events.filter(event => event.id !== e.id), confirmed].slice(-50);
+      }
+      delete current.pendingEvent;
+      await writeAutomaticBindings(options.stateDirectory, current);
+    });
     const value = { key: plan.automatic.key, generation: state.active, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES,
       groups: Object.entries(plan.automatic.policies).map(([name, policy]) => ({ name, current: observed.selections[name], policy }))
         .filter(group => typeof group.current === 'string' && [...group.policy.preferred, ...group.policy.fallback].includes(group.current)) };
@@ -356,6 +370,8 @@ export function createWorkspaceApplication(options: {
       before = await readAutomaticBindings(options.stateDirectory);
       proposed = before?.scope === plan.automatic.scope ? structuredClone(before) : { version: 1, scope: plan.automatic.scope, targets: {}, events: [] };
       proposed.targets[name] = { signature: plan.automatic.signatures[name], target };
+      proposed.pendingEvent = { id: randomUUID(), at: Date.now(), group: name, from: source.current, to: target,
+        reason: /^[a-z_-]{1,80}$/i.test(reason) ? reason : 'automatic', signature: plan.automatic.signatures[name], revision: workspace.revision };
       await writeAutomaticBindings(options.stateDirectory, proposed);
     });
     try {
@@ -371,9 +387,10 @@ export function createWorkspaceApplication(options: {
     }
     await store.exclusive(async () => {
       const current = await readAutomaticBindings(options.stateDirectory);
-      if (current?.scope === plan.automatic.scope) {
-        current.events = [...current.events, { at: Date.now(), group: name, from: source.current, to: target,
-          reason: /^[a-z_-]{1,80}$/i.test(reason) ? reason : 'automatic' }].slice(-50);
+      if (current?.scope === plan.automatic.scope && current.pendingEvent?.id === proposed.pendingEvent?.id) {
+        const { signature: _signature, revision: _revision, ...confirmed } = current.pendingEvent!;
+        current.events = [...current.events, { ...confirmed, at: Date.now() }].slice(-50);
+        delete current.pendingEvent;
         await writeAutomaticBindings(options.stateDirectory, current);
       }
     }).catch(() => { /* A confirmed switch must not be retried when event storage alone fails. */ });

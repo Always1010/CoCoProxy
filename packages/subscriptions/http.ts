@@ -55,7 +55,7 @@ function checkedUrl(text: string, allowHttp = false): URL {
   return url;
 }
 
-function addressAllowed(address: Address, privateAllowed: boolean): boolean {
+export function addressAllowed(address: Address, privateAllowed: boolean): boolean {
   const family = isIP(address.address);
   if (family !== address.family || (family !== 4 && family !== 6) || address.address.includes('%')) return false;
   const type = family === 4 ? 'ipv4' : 'ipv6';

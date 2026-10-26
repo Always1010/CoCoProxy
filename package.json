@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Linux 代理网关的配置与可靠性集成",
   "engines": { "node": ">=22.18.0" },
-  "dependencies": { "ws": "8.22.0", "yaml": "2.9.0" },
+  "dependencies": { "web-push": "3.6.7", "ws": "8.22.0", "yaml": "2.9.0" },
   "devDependencies": { "@types/node": "22.18.13", "@types/ws": "8.18.2" },
   "scripts": {
     "test:gateway": "node --experimental-strip-types --test tests/gateway-profile.test.ts tests/gateway-host-plan.test.ts",
@@ -23,6 +23,8 @@
     "test:rule-test": "node --experimental-strip-types --test tests/rule-test.test.ts",
     "test:workspace": "node --experimental-strip-types --test tests/workspace.test.ts tests/routing.test.ts tests/tcp-delay.test.ts tests/workspace-ui.test.ts",
     "test:automatic": "node --experimental-strip-types --test tests/automatic-selector.test.ts",
+    "test:notifications": "node --experimental-strip-types --test tests/notifications.test.ts",
+    "test:notifications-browser": "node --experimental-strip-types --test tests/notifications-browser-live.test.mjs",
     "test:deployment": "node --experimental-strip-types --test tests/deployment-plan.test.ts tests/deployment-install.test.ts",
     "test:release-stage": "node --experimental-strip-types --test tests/release-stage.test.ts",
     "test:network-plan": "node --experimental-strip-types --test tests/network-plan.test.ts",

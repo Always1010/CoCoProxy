@@ -54,13 +54,26 @@ test('automatic selections preserve manual intent, use confirmed transactions, p
   const file = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
   assert.equal(file.targets.Proxy.target, 'spare');
   assert.equal(file.events.length, 1);
+  assert.equal(file.pendingEvent, undefined);
   assert.equal((await f.call<{ events: unknown[] }>('/automatic/status')).events.length, 1);
+  // Simulate process loss after commit but before the confirmation journal write.
+  const committedWithoutEvent = structuredClone(file);
+  const confirmed = committedWithoutEvent.events.pop();
+  committedWithoutEvent.pendingEvent = { ...confirmed, signature: file.targets.Proxy.signature, revision: saved.revision };
+  await writeFile(join(f.state, 'automatic-selections.json'), JSON.stringify(committedWithoutEvent), { mode: 0o600 });
+  await f.action.automaticSnapshot(true);
+  const journal = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
+  assert.equal(journal.pendingEvent, undefined);
+  assert.deepEqual(journal.events, file.events);
+  await f.action.automaticSnapshot(true);
+  assert.equal(JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8')).events.length, 1);
   const activeConfig = await f.candidate(after.active!);
   const proxyGroup = (activeConfig['proxy-groups'] as JsonObject[]).find(group => group.name === 'Proxy')!;
   assert.deepEqual(proxyGroup.proxies, ['spare', 'synthetic-node', 'REJECT']);
   // Simulate process loss after writing a proposed return, before apply commits.
   const interrupted = structuredClone(file);
   interrupted.targets.Proxy.target = 'synthetic-node';
+  interrupted.pendingEvent = { ...confirmed, id: '11111111-1111-4111-8111-111111111111', from: 'spare', to: 'synthetic-node', signature: file.targets.Proxy.signature, revision: saved.revision };
   await writeFile(join(f.state, 'automatic-selections.json'), JSON.stringify(interrupted), { mode: 0o600 });
   const activationCount = f.events.length;
   assert.equal((await f.view()).pending, true);
@@ -68,7 +81,10 @@ test('automatic selections preserve manual intent, use confirmed transactions, p
   assert.equal(recovered?.groups[0].current, 'spare');
   assert.equal((await f.view()).pending, false);
   assert.equal(f.events.length, activationCount);
-  assert.equal(JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8')).targets.Proxy.target, 'spare');
+  const rolledBack = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
+  assert.equal(rolledBack.targets.Proxy.target, 'spare');
+  assert.equal(rolledBack.pendingEvent, undefined);
+  assert.equal(rolledBack.events.length, 1);
   await setRuntimeLifecycle(f.state, { enabled: true, paused: true });
   await assert.rejects(f.action.automaticSwitch(recovered!, 'Proxy', 'synthetic-node', 'preferred-restored'), { code: 'AUTO_PAUSED' });
   assert.equal((await f.view()).pending, false);

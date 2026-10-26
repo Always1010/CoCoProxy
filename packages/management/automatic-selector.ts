@@ -23,7 +23,7 @@ type Returning = {
 type Group = {
   name: string; current: string; policy: AutoGroupPolicy; identity: string;
   monitorAt: number; secondaryAt: number | null; failureTarget: ProbeTarget | null; slowCount: number; slowDelay: number;
-  slowCooldown: number; residenceUntil: number; reason: string | null;
+  slowCooldown: number; residenceUntil: number; reason: string | null; health: 'unknown' | 'healthy' | 'unavailable';
   search?: Search; returning?: Returning; returnAt: number | null; returnRound: number;
   returnCursor: number; outageRound: number; outageCursor: number;
   returnedAt: number | null; flapCount: number; returnNotBefore: number;
@@ -66,7 +66,7 @@ export function createAutomaticSelector(options: Options) {
       else next.set(item.name, {
         name: item.name, current: item.current, policy: item.policy, identity: id,
         monitorAt: at, secondaryAt: null, failureTarget: null, slowCount: 0, slowDelay: 0, slowCooldown: 0,
-        residenceUntil: at, reason: null, returnAt: item.policy.returnToPreferred && !item.policy.preferred.includes(item.current) ? at + 300_000 : null,
+        residenceUntil: at, reason: null, health: 'unknown', returnAt: item.policy.returnToPreferred && !item.policy.preferred.includes(item.current) ? at + 300_000 : null,
         returnRound: 0, returnCursor: 0, outageRound: 0, outageCursor: 0,
         returnedAt: null, flapCount: 0, returnNotBefore: 0,
       });
@@ -99,7 +99,7 @@ export function createAutomaticSelector(options: Options) {
     }
     g.current = node; g.search = undefined; g.returning = undefined; g.secondaryAt = null; g.failureTarget = null;
     g.slowCount = 0; g.monitorAt = at + 30_000; g.residenceUntil = at + 120_000;
-    g.outageRound = 0; g.reason = reason; g.returnRound = 0;
+    g.outageRound = 0; g.reason = reason; g.health = 'healthy'; g.returnRound = 0;
     if (reason === 'preferred-restored') g.returnedAt = at;
     scheduleReturn(g, at);
     return true;
@@ -113,6 +113,7 @@ export function createAutomaticSelector(options: Options) {
     const all = [...g.policy.preferred, ...g.policy.fallback].filter(node => node !== g.current);
     g.search = { kind, queue: all, index: 0, due: at, baseline: g.slowDelay };
     g.reason = kind === 'slow' ? 'current-slow' : 'current-unavailable';
+    if (kind === 'failure') g.health = 'unavailable';
   }
 
   function outage(g: Group, at: number) {
@@ -122,7 +123,7 @@ export function createAutomaticSelector(options: Options) {
     g.outageCursor = (g.outageCursor + count) % all.length;
     const delay = AUTO_INTERVALS.outage[Math.min(g.outageRound++, 3)];
     g.search = { kind: 'outage', queue, index: 0, due: at + delay, baseline: 0 };
-    g.returning = undefined; g.reason = 'all-unavailable';
+    g.returning = undefined; g.reason = 'all-unavailable'; g.health = 'unavailable';
   }
 
   function finishSearch(g: Group, at: number) {
@@ -146,7 +147,7 @@ export function createAutomaticSelector(options: Options) {
           else { g.secondaryAt = end + 2000; g.failureTarget = isPrimary(s, target) ? s.probes.secondary : s.probes.primary; }
           return;
         }
-        g.secondaryAt = null; g.monitorAt = end + 30_000;
+        g.secondaryAt = null; g.health = 'healthy'; g.monitorAt = end + 30_000;
         if (secondary) {
           g.slowCount = 0; g.failureTarget = null;
           usePrimary = isPrimary(s, target);
@@ -322,7 +323,7 @@ export function createAutomaticSelector(options: Options) {
     status() {
       return {
         groups: [...groups.values()].map(g => ({ name: g.name, current: g.current,
-          phase: g.search?.kind === 'outage' ? 'outage' : g.search ? g.search.kind === 'slow' ? 'slow-search' : 'failure-search'
+          health: g.health, phase: g.search?.kind === 'outage' ? 'outage' : g.search ? g.search.kind === 'slow' ? 'slow-search' : 'failure-search'
             : g.secondaryAt !== null ? 'failure-confirmation' : g.returning ? 'return-confirmation' : isBackup(g) ? 'backup' : 'monitoring',
           nextAt: g.search ? g.search.confirming?.due ?? g.search.due
             : Math.min(g.secondaryAt ?? g.monitorAt, g.returning?.due ?? g.returnAt ?? Infinity), reason: g.reason })),

@@ -2,14 +2,8 @@
 import tailwindcss from '@tailwindcss/vite'
 import pkg from './package.json'
 
-// `nuxt dev` sets NODE_ENV=development; `nuxt build`/`nuxt generate` set
-// production. Used to skip head tags that point at build-only PWA artifacts.
-const isDev = process.env.NODE_ENV === 'development'
-
-// Desktop (Electron) builds set MCXD_DISABLE_PWA=true (see ui `generate:desktop`).
-// A service worker is pointless in the packaged app (loaded from the in-process
-// loopback server, no offline benefit) and only adds stale-cache risk + console
-// noise, so the whole PWA/SW layer is disabled for that target.
+// Keep upstream Workbox/app-shell caching disabled. The notification-only
+// worker and manifest are explicit public assets, registered on user opt-in.
 const pwaDisabled = true
 
 export default defineNuxtConfig({
@@ -55,12 +49,8 @@ export default defineNuxtConfig({
     '@vite-pwa/nuxt',
   ],
 
-  // PWA configuration
-  // Restores the PWA support that existed before the Nuxt migration (#1777)
-  // so the dashboard can be installed to the home screen (#1986).
-  // `prompt` + skipWaiting/clientsClaim disabled mirrors the pre-migration
-  // setup that avoids the iOS Safari refresh loop (#1740). Only built static
-  // assets are precached; the cross-origin Mihomo backend API is never cached.
+  // Retain upstream module options for compatibility, with generation disabled.
+  // The explicit public manifest/worker provide opt-in notifications only.
   pwa: {
     disable: pwaDisabled,
     registerType: 'prompt',
@@ -182,18 +172,8 @@ export default defineNuxtConfig({
           sizes: '180x180',
           href: 'apple-touch-icon-180x180.png',
         },
-        // @vite-pwa/nuxt emits this file from the `pwa.manifest` config; we
-        // link it here (instead of via <VitePwaManifest />) so it lands in the
-        // static HTML shell. With ssr: false, component-injected head tags only
-        // appear at runtime — too late for reliable install detection on mobile
-        // Chrome. Relative href keeps subdirectory deployments working.
-        //
-        // Build-only: @vite-pwa/nuxt does not serve manifest.webmanifest under
-        // `nuxt dev`, so in dev the link would resolve to the SPA fallback HTML
-        // and log "Manifest: Line 1, column 1, Syntax error" in the console.
-        ...(isDev || pwaDisabled
-          ? []
-          : [{ rel: 'manifest' as const, href: 'manifest.webmanifest' }]),
+        // Static public asset: available in development and generated output.
+        { rel: 'manifest' as const, href: '/manifest.webmanifest' },
       ],
       script: [
         {

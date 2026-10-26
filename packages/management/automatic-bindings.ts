@@ -2,12 +2,13 @@ import { join } from 'node:path';
 import { privateRead, atomicWrite } from '../storage/private-files.ts';
 import { WorkspaceError } from './workspace.ts';
 
-export type AutomaticEvent = { at: number; group: string; from: string; to: string; reason: string };
+export type AutomaticEvent = { id?: string; at: number; group: string; from: string; to: string; reason: string };
 export type AutomaticBindings = {
   version: 1;
   scope: string;
   targets: Record<string, { signature: string; target: string }>;
   events: AutomaticEvent[];
+  pendingEvent?: AutomaticEvent & { id: string; signature: string; revision: number };
 };
 
 /** Runtime choices are private and separate from the user's manual settings. */
@@ -22,6 +23,12 @@ export async function readAutomaticBindings(root: string): Promise<AutomaticBind
         !Array.isArray(value.events) || value.events.length > 50 || value.events.some((event: AutomaticEvent) => !event ||
           !Number.isFinite(event.at) || event.at < 0 || !name(event.group) || !name(event.from) || !name(event.to) || !name(event.reason))) {
       throw new Error();
+    }
+    if (value.events.some((e: AutomaticEvent) => e.id !== undefined && (typeof e.id !== 'string' || !/^[a-f0-9-]{36}$/.test(e.id)))) throw new Error();
+    if (value.pendingEvent !== undefined) {
+      const e = value.pendingEvent;
+      if (!e || !/^[a-f0-9-]{36}$/.test(e.id) || !Number.isSafeInteger(e.at) || e.at < 0 || !name(e.group) || !name(e.from) || !name(e.to) || !name(e.reason) ||
+          !/^[a-f0-9]{64}$/.test(e.signature) || !Number.isSafeInteger(e.revision) || e.revision < 0) throw new Error();
     }
     return value as AutomaticBindings;
   } catch (error) {

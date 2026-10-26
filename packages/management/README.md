@@ -22,6 +22,30 @@ node --experimental-strip-types apps/cli/main.ts admin-init --input /absolute/pr
 
 HTTPS 使用 `__Host-cocoproxy_session` 和受信任设备的 `__Host-cocoproxy_device`，固定 `Secure; HttpOnly; SameSite=Strict; Path=/`。仅精确 loopback origin 可以使用 HTTP 测试 cookie；其他部署 origin 必须为 HTTPS。写操作要求精确匹配 Origin，跨站 Fetch、URL 查询令牌、Bearer 兼容入口与重复同名认证 cookie 均拒绝。所有 JSON 响应禁止缓存，错误只含固定码。JSON 请求有限量、严格 UTF-8 和读取时限；读取完成后才分派业务操作，不通过超时竞赛打断正在应用的事务。
 
+## 通知事件与 Web Push
+
+通知复用已确认的自动选择事件和自动选择状态，不新增健康探测。切换事件在准备绑定时持久记录为待确认；事务成功后写入确认日志，进程中断后仅在候选、活跃代次和核心实际选择一致时补记，未生效的提议不通知。
+
+通知状态独立保存在私有目录 `notifications/state.json`，绑定管理员凭据与管理 origin，包含首次订阅时生成的 VAPID 密钥、最近 200 条事件、最多 128 个设备订阅和 256 项待发任务。订阅绑定服务端已认证的可信设备 ID，浏览器不能指定接收者。临时会话可读事件，但不能开启后台通知；短期会话自然到期不撤销可信设备订阅，主动退出、设备撤销或授权到期后停止新发送。
+
+同设备同策略组的待发消息等待 10 秒并合并为最新状态；事件历史保留每次变化。发送最多两个并行，每项有效期 5 分钟，网络／服务限流失败按退避重试；404/410 标为失效，认证或配置错误明确显示。发送在配置事务锁之外进行；故障不阻塞切换。2xx 只记为推送服务已接受，不表示终端已显示。已被推送服务接受的通知无法保证撤回。
+
+生产发送使用锁定版本 `web-push` 负责 RFC 8291 加密和 VAPID 签名；自有 HTTPS 传输限定已知推送服务域名、验证并固定公网 DNS 地址、拒绝重定向，单次总预算 5 秒并限制响应大小。管理 API 不返回订阅端点、auth secret 或 VAPID 私钥。默认锁屏文案隐藏节点名称，各设备可独立配置事件类别和关注组。
+
+以下路径位于 `/api/cocoproxy/notifications`，继承同源认证、CSRF、请求限量和禁止缓存边界：
+
+| 方法与后缀 | 请求或结果 |
+| --- | --- |
+| GET `/status` | 能力、可信设备状态、公钥、偏好与发送状态 |
+| GET `/events` | 最近 100 条事件，按新到旧返回 |
+| POST `/initialize` | `{}`；可信设备主动开启时生成／读取公钥 |
+| POST `/subscription` | `{subscription:{endpoint,keys:{p256dh,auth}}}`；绑定当前可信设备 |
+| PUT `/preferences` | `{groups:null或组名数组,switches,recovery,outage,showNodes}` |
+| POST `/unsubscribe` | `{}`；取消本设备通知，保留管理登录 |
+| POST `/test` | `{}`；本设备每分钟至多一条测试通知 |
+
+通知存储缺失时，普通读取不创建密钥或订阅；损坏时单独禁用通知，不阻止代理管理。仍只支持单实例服务。网页与设备使用方式见[通知说明](../../docs/notifications.md)。
+
 ## 工作区与来源接口
 
 日常界面使用 `/api/cocoproxy/workspace`：GET 返回当前方案、来源摘要、策略组与规则来源；PUT 接收 `{expectedRevision, settings}` 保存独立的本地／订阅方案设置，POST `/workspace/apply` 接收 `{expectedRevision, expectedActive}`，统一编译、校验并应用。POST `/workspace/select` 接收相同版本条件及 `{group, name}`，持久保存手动组选择并应用；存在未应用设置时要求先应用，避免节点操作顺带发布其他编辑。自动组保留原算法。设置使用私有原子文件和运行事务共用锁；旧草稿在明确切换前沿用，不自动替换现有运行配置。
