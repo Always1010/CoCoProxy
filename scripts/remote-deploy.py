@@ -14,6 +14,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -21,19 +22,6 @@ PRIVATE = Path('/etc/cocoproxy-install')
 RECEIPT = Path('/var/lib/cocoproxy-deployment/receipt.json')
 INCOMING = Path('/opt/cocoproxy/incoming')
 NETWORK_RECEIPT = Path('/var/lib/cocoproxy-gateway-network/network-receipt.json')
-
-
-def preservation_report(upgraded, compared_files=0):
-    """Describe exactly the checks performed, never all private state."""
-    status = 'pass' if upgraded else 'not-applicable'
-    return {'schemaVersion': 1, 'scope': 'stopped-baseline-to-restored-file-comparison',
-        'status': status, 'code': 'REMOTE_CHECKED_FILES_UNCHANGED' if upgraded else 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE',
-        'checks': [
-            {'id': 'administrator', 'status': status, 'evidenceScope': 'credential-file-bytes'},
-            {'id': 'configured-business-files', 'status': status,
-             'evidenceScope': 'workspace-site-probes-draft-subscription-file-set-and-bytes', 'comparedFileCount': compared_files}],
-        'notAssessed': ['trusted-devices', 'notification-identity-preferences-and-outbox', 'automatic-runtime-bindings', 'runtime-selection-and-candidate',
-            'restored-authentication-and-business-availability']}
 
 
 def compare_preservation(before, after, frozen=False):
@@ -520,7 +508,7 @@ def main_locked(options):
             if router_enabled:
                 run([*router_command, 'enable'], timeout=300)
                 need(json.loads(run([*router_command, 'status']))['enabled'] is True, 'REMOTE_ROUTER_NOT_RESTORED')
-            preservation = preservation_report(False)
+            preservation = {'schemaVersion': 1, 'status': 'not-applicable', 'code': 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE'}
             if installed:
                 preservation = {'schemaVersion': 1, 'status': 'pass', 'scope': 'verified-install-window-and-restored-stable-state',
                     'windows': preservation_windows, 'notAssessed': ['real-restored-authentication', 'terminal-notification-display', 'long-running-business-availability']}
@@ -538,5 +526,5 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print(str(error) if isinstance(error, RuntimeError) and re.fullmatch('[A-Z][A-Z0-9_]+', str(error)) else 'REMOTE_DEPLOYMENT_FAILED', file=__import__('sys').stderr)
+        print(str(error) if isinstance(error, RuntimeError) and re.fullmatch('[A-Z][A-Z0-9_]+', str(error)) else 'REMOTE_DEPLOYMENT_FAILED', file=sys.stderr)
         raise SystemExit(1)

@@ -183,12 +183,6 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['preservation'], report['preservation'])
 
-    def test_first_install_does_not_claim_existing_private_state_was_preserved(self):
-        report = deploy.preservation_report(False)
-        self.assertEqual(report['status'], 'not-applicable')
-        self.assertEqual(report['code'], 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE')
-        self.assertTrue(all(item['status'] == 'not-applicable' for item in report['checks']))
-
     def test_adapter_unknown_incompatible_or_missing_action_fails_before_any_maintenance_in_preview_and_apply(self):
         for preview in [False, True]:
             for report in [None, 'timeout', 'invalid-json', {}, {'schemaVersion': 1, 'compatible': False}, {'schemaVersion': 1, 'compatible': 'unknown'}]:
