@@ -52,6 +52,12 @@ test('managed HTTPS validates real SAN, validity and key identity with mocked re
   await verifyManagedWeb(spec, { host });
   await verifyManagedWeb({ ...spec, origin: 'https://192.0.2.2:13443' }, { host });
   await assert.rejects(verifyManagedWeb({ ...spec, origin: 'https://wrong.example:13443' }, { host }), { code: 'SETUP_HTTPS_CERTIFICATE_NAME_MISMATCH' });
+  await promisify(execFile)(openssl, ['req', '-x509', '-key', join(directory, 'key.pem'), '-days', '2',
+    '-out', join(directory, 'cn-only.pem'), '-subj', '/CN=gateway.example'],
+  { timeout: 15_000, maxBuffer: 65_536, windowsHide: true });
+  const cnOnly = await readFile(join(directory, 'cn-only.pem'));
+  await assert.rejects(verifyManagedWeb(spec, { host: { ...host, read: async path => path === spec.web.certificatePath ? cnOnly : key } }),
+    { code: 'SETUP_HTTPS_CERTIFICATE_NAME_MISMATCH' });
   await assert.rejects(verifyManagedWeb(spec, { host, now: Date.now() + 7 * 86400_000 }), { code: 'SETUP_HTTPS_CERTIFICATE_EXPIRED' });
   await assert.rejects(verifyManagedWeb(spec, { host, now: Date.now() - 7 * 86400_000 }), { code: 'SETUP_HTTPS_CERTIFICATE_EXPIRED' });
   const wrongKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -65,6 +71,12 @@ test('managed HTTPS validates real SAN, validity and key identity with mocked re
   stats.set('/etc/cocoproxy/tls', { ...directoryStat, mode: 0o777 });
   await assert.rejects(verifyManagedWeb(spec, { host }), { code: 'SETUP_HTTPS_PATH_UNTRUSTED' });
   stats.delete('/etc/cocoproxy/tls');
+  stats.set('/etc/cocoproxy/tls', { ...directoryStat, link: true });
+  await assert.rejects(verifyManagedWeb(spec, { host }), { code: 'SETUP_HTTPS_PATH_UNTRUSTED' });
+  stats.delete('/etc/cocoproxy/tls');
+  stats.set(spec.web.certificatePath, { ...fileStat, mode: 0o664 });
+  await assert.rejects(verifyManagedWeb(spec, { host }), { code: 'SETUP_HTTPS_FILE_UNTRUSTED' });
+  stats.set(spec.web.certificatePath, fileStat);
   await assert.rejects(verifyManagedWeb(spec, { host: { ...host, platform: 'win32' } }), { code: 'SETUP_HTTPS_LINUX_ROOT_REQUIRED' });
   assert.ok(reads.every(path => [spec.web.certificatePath, spec.web.privateKeyPath].includes(path)));
 });
