@@ -20,6 +20,7 @@ import time
 PRIVATE = Path('/etc/cocoproxy-install')
 RECEIPT = Path('/var/lib/cocoproxy-deployment/receipt.json')
 INCOMING = Path('/opt/cocoproxy/incoming')
+NETWORK_RECEIPT = Path('/var/lib/cocoproxy-gateway-network/network-receipt.json')
 
 
 def need(value, code):
@@ -284,6 +285,16 @@ def main_locked(options):
             router_state = json.loads(run([*router_command, 'status']))
             need(type(router_state.get('enabled')) is bool, 'REMOTE_ROUTER_STATUS_INVALID')
             router_enabled = router_state['enabled']
+        def network_receipt():
+            if not installed or not gateway or not (NETWORK_RECEIPT.exists() or NETWORK_RECEIPT.is_symlink()):
+                return {'status': 'absent', 'sha256': None}
+            trusted(NETWORK_RECEIPT)
+            data = regular(NETWORK_RECEIPT, True, maximum=128 * 1024)
+            value = json.loads(data)
+            need(isinstance(value, dict) and type(value.get('schemaVersion')) is int and value['schemaVersion'] == 1 and
+                 value.get('status') in ['complete', 'removed'], 'REMOTE_NETWORK_RECEIPT_REQUIRES_REVIEW')
+            return {'status': value['status'], 'sha256': hashlib.sha256(data).hexdigest()}
+        previous_network = network_receipt()
         if options.preview:
             print(json.dumps({'prepared': True, 'apply': False, 'operation': 'upgrade' if installed else 'install', 'commit': manifest['commit']}))
             return
@@ -319,6 +330,7 @@ def main_locked(options):
         before_business = None
         progress = {'status': 'running', 'phase': 'maintenance', 'manifestSha256': options.manifest_sha256,
                     'previousServices': before_units, 'routerPreviouslyEnabled': router_enabled,
+                    'previousNetworkReceipt': previous_network,
                     'previousLifecycle': {'present': before_lifecycle is not None,
                         'enabled': before_lifecycle['enabled'] if before_lifecycle else False,
                         'paused': before_lifecycle['paused'] if before_lifecycle else False}}
@@ -353,8 +365,10 @@ def main_locked(options):
                 if enabled:
                     run([systemctl, 'disable', *enabled])
                 if gateway:
-                    run(['python3', '-I', Path(receipt['release']) / 'source/apps/gateway/network.py', 'remove',
-                        '--settings', Path(old['runtime']['settingsPath']).parent / 'gateway-network.json'])
+                    need(network_receipt() == previous_network, 'REMOTE_NETWORK_RECEIPT_CHANGED')
+                    if previous_network['status'] == 'complete':
+                        run(['python3', '-I', Path(receipt['release']) / 'source/apps/gateway/network.py', 'remove',
+                            '--settings', Path(old['runtime']['settingsPath']).parent / 'gateway-network.json'])
                 # Snapshot after the manager has stopped: edits completed while
                 # entering maintenance must remain valid, rather than look like
                 # changes caused by the subsequent file installation.
