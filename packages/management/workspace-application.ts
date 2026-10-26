@@ -13,6 +13,7 @@ import { readAutomaticBindings, writeAutomaticBindings, type AutomaticBindings }
 import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
 import { selectionChanges } from '../runtime/selections.ts';
 import { privateRead } from '../storage/private-files.ts';
+import { SiteProbeStore, siteScope } from './site-probes.ts';
 
 type Plan = { workspace: Workspace; policy: JsonObject; nodeDnsPolicy?: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string;
   automatic: { scope: string; key: string; signatures: Record<string, string>; policies: Record<string, AutoGroupPolicy>; choices: Record<string, string[]> }; bindingKey: string };
@@ -85,10 +86,12 @@ export function createWorkspaceApplication(options: {
   legacyPolicy: () => Promise<JsonObject | null>;
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
   allowedProbeOrigins?: readonly string[];
+  siteProbeOrigins?: readonly string[];
   automaticStatus?: () => unknown;
   automaticProbe?: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult>;
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
+  const sites = new SiteProbeStore(options.stateDirectory, options.siteProbeOrigins);
   const { subscriptions, store, manager } = options;
   const cachedCompile = memoizePolicyCompiler(input => options.compile(input.policy as JsonObject, input.nodeDnsPolicy as JsonObject | undefined));
   const compile = (plan: Plan) => cachedCompile({ policy: plan.policy, ...(plan.nodeDnsPolicy ? { nodeDnsPolicy: plan.nodeDnsPolicy } : {}) });
@@ -440,6 +443,44 @@ export function createWorkspaceApplication(options: {
 
   const handler = async (request: Request): Promise<unknown> => {
     const path = new URL(request.url).pathname;
+    if (path === '/api/cocoproxy/workspace/sites') {
+      const describe = async () => {
+        const current = await load();
+        const settings = await sites.read();
+        const scope = siteScope(current);
+        const groups = asGroups((await build(current, true)).policy).map(group => String(group.name));
+        return { revision: settings.revision, scope, workspaceRevision: current.revision,
+          targets: sites.targets(settings).map(target => ({ ...target, permitted: sites.permitted(target), builtin: !target.id.startsWith('custom-') })),
+          selections: settings.groups[scope] ?? {}, groups };
+      };
+      if (request.method === 'GET') return describe();
+      if (request.method === 'PUT') {
+        const body = exactRecord(await readJsonBody(request, 16384), ['expectedRevision', 'expectedWorkspaceRevision', 'scope'], ['group', 'selected', 'add', 'remove']);
+        await sites.update(body.expectedRevision, async settings => {
+          const current = await load();
+          if (current.revision !== body.expectedWorkspaceRevision || siteScope(current) !== body.scope) throw new ManagementError('SITE_SETTINGS_CONFLICT', 409);
+          if (body.remove !== undefined) {
+            if (typeof body.remove !== 'string' || !settings.custom.some(target => target.id === body.remove)) throw new ManagementError('SITE_SETTINGS_INVALID');
+            if (Object.values(settings.groups).some(groups => Object.values(groups).some(ids => ids.includes(body.remove as string)))) throw new ManagementError('SITE_TARGET_IN_USE', 409);
+            settings.custom = settings.custom.filter(target => target.id !== body.remove);
+          }
+          let added: string | undefined;
+          if (body.add !== undefined) {
+            const target = exactRecord(body.add, ['name', 'url']);
+            added = sites.add(settings, target.name, target.url).id;
+          }
+          if (body.group !== undefined) {
+            const groups = asGroups((await build(current, true)).policy);
+            if (typeof body.group !== 'string' || !groups.some(group => group.name === body.group) || !Array.isArray(body.selected)) throw new ManagementError('SITE_SETTINGS_INVALID');
+            const selected = [...body.selected, ...(added ? [added] : [])];
+            const targets = sites.targets(settings);
+            if (selected.some(id => !targets.some(target => target.id === id && sites.permitted(target)))) throw new ManagementError('SITE_TARGET_DENIED');
+            (settings.groups[body.scope as string] ??= Object.create(null))[body.group] = selected as string[];
+          } else if (body.selected !== undefined) throw new ManagementError('SITE_SETTINGS_INVALID');
+        });
+        return describe();
+      }
+    }
     if (path === '/api/cocoproxy/workspace' && request.method === 'GET') return view();
     if (path === '/api/cocoproxy/workspace/tcp-delay' && request.method === 'POST') {
       const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'expectedActive', 'name', 'fingerprint']);
