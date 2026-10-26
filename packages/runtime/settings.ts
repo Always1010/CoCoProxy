@@ -15,18 +15,26 @@ const digest = /^[a-f0-9]{64}$/;
 const settingKeys = ['schemaVersion', 'stateDirectory', 'binaryPath', 'binarySha256', 'systemctlPath', 'unitPath', 'unitSha256', 'serviceUid'];
 const fail: (code: string) => never = code => { throw new RuntimeError(code); };
 // Bounded, process-local proof caches. They cannot bypass current file checks
-// and never expose the private candidate snapshots to callers.
+// and expose shared candidate snapshots only after recursive freezing.
 let verifiedBinary: { key: string; identity: string } | undefined;
 type RuntimeCandidate = {
   candidate: Candidate; path: string; controller: { port: number; secret: string }; home: string;
 };
 const compiledCandidates = new Map<string, RuntimeCandidate>();
 
+function freezeSnapshot(value: object): void {
+  for (const child of Object.values(value)) {
+    if (child !== null && typeof child === 'object') freezeSnapshot(child);
+  }
+  Object.freeze(value);
+}
+
 function rememberCandidate(key: string, loaded: RuntimeCandidate): RuntimeCandidate {
   const snapshot = structuredClone(loaded);
+  freezeSnapshot(snapshot);
   if (compiledCandidates.size >= 2) compiledCandidates.delete(compiledCandidates.keys().next().value!);
   compiledCandidates.set(key, snapshot);
-  return loaded;
+  return snapshot;
 }
 
 function plainRecord(input: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
@@ -120,6 +128,11 @@ export async function verifyBinary(input: RuntimeSettings): Promise<string> {
 }
 
 export async function loadRuntimeCandidate(input: RuntimeSettings, generation: string): Promise<RuntimeCandidate> {
+  return structuredClone(await loadRuntimeCandidateReadonly(input, generation));
+}
+
+/** Internal readers share immutable data, after the same current-file checks. */
+export async function loadRuntimeCandidateReadonly(input: RuntimeSettings, generation: string): Promise<RuntimeCandidate> {
   const settings = parseRuntimeSettings(input);
   if (typeof generation !== 'string' || !digest.test(generation)) fail('INVALID_RUNTIME_GENERATION');
   try {
@@ -133,7 +146,7 @@ export async function loadRuntimeCandidate(input: RuntimeSettings, generation: s
     if (createHash('sha256').update(bytes).digest('hex') !== generation) fail('CANDIDATE_UNTRUSTED');
     const key = JSON.stringify([settings, generation]);
     const cached = compiledCandidates.get(key);
-    if (cached) return structuredClone(cached);
+    if (cached) return cached;
     const config = JSON.parse(bytes) as JsonObject;
     const controller = config['external-controller'];
     const dns = config.dns;

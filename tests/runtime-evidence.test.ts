@@ -11,7 +11,7 @@ import test from 'node:test';
 import { canonicalJson, compileConfig } from '../packages/config/index.ts';
 import type { Candidate } from '../packages/config/index.ts';
 import { assertManagedUnit, observeCore } from '../packages/runtime/observer.ts';
-import { loadRuntimeCandidate, loadRuntimeSettings, parseRuntimeSettings, readSelection, verifyBinary } from '../packages/runtime/settings.ts';
+import { loadRuntimeCandidate, loadRuntimeCandidateReadonly, loadRuntimeSettings, parseRuntimeSettings, readSelection, verifyBinary } from '../packages/runtime/settings.ts';
 import { RuntimeError } from '../packages/runtime/types.ts';
 import type { RuntimeSettings, RuntimeUnitState } from '../packages/runtime/types.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
@@ -131,6 +131,16 @@ test('candidate recompile preserves proxies and policy while rejecting forged de
   const isolated = await loadRuntimeCandidate(settings, good.id);
   assert.deepEqual(isolated.candidate.config, good.config);
   assert.deepEqual(isolated.controller, { port: 19090, secret });
+  const snapshot = await loadRuntimeCandidateReadonly(settings, good.id);
+  assert.equal(await loadRuntimeCandidateReadonly(settings, good.id), snapshot);
+  assert.notEqual(snapshot, isolated);
+  for (const value of [snapshot, snapshot.candidate, snapshot.candidate.config, snapshot.controller,
+    snapshot.candidate.config.rules, snapshot.candidate.config.proxies,
+    (snapshot.candidate.config.proxies as Candidate['config'][])[0]]) assert.ok(Object.isFrozen(value));
+  assert.throws(() => { snapshot.controller.secret = 'caller-modified'; }, TypeError);
+  assert.throws(() => { (snapshot.candidate.config.rules as string[]).push('MATCH,REJECT'); }, TypeError);
+  assert.equal(Object.isFrozen(isolated), false);
+  assert.equal(Object.isFrozen(isolated.candidate.config.rules), false);
   const modifications: Candidate['config'][] = [{ tun: { enable: true } }, { listeners: [] }, { 'allow-lan': true },
     { 'external-controller': '0.0.0.0:19090' }, { dns: { ...(good.config.dns as object), nameserver: ['198.51.100.53'] } },
     { 'rule-providers': {} }];
@@ -143,10 +153,12 @@ test('candidate recompile preserves proxies and policy while rejecting forged de
   await loadRuntimeCandidate(settings, good.id);
   await writeFile(staged.path, canonicalJson({ ...good.config, secret: 'changed-in-place' }));
   await assert.rejects(loadRuntimeCandidate(settings, good.id), code('CANDIDATE_UNTRUSTED'));
+  await assert.rejects(loadRuntimeCandidateReadonly(settings, good.id), code('CANDIDATE_UNTRUSTED'));
   await writeFile(staged.path, canonicalJson(good.config));
   await loadRuntimeCandidate(settings, good.id);
   await chmod(staged.path, 0o644);
   await assert.rejects(loadRuntimeCandidate(settings, good.id), code('CANDIDATE_UNTRUSTED'));
+  await assert.rejects(loadRuntimeCandidateReadonly(settings, good.id), code('CANDIDATE_UNTRUSTED'));
   await chmod(staged.path, 0o600);
   await loadRuntimeCandidate(settings, good.id);
   await rm(staged.path);
@@ -154,6 +166,7 @@ test('candidate recompile preserves proxies and policy while rejecting forged de
   await writeFile(replacement, canonicalJson(good.config), { mode: 0o600 });
   await symlink(replacement, staged.path);
   await assert.rejects(loadRuntimeCandidate(settings, good.id), code('CANDIDATE_UNTRUSTED'));
+  await assert.rejects(loadRuntimeCandidateReadonly(settings, good.id), code('CANDIDATE_UNTRUSTED'));
 });
 
 test('selection lookup is private, exact and read-only when absent', { skip: !linux }, async t => {

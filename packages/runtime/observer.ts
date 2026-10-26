@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, readlink, realpath } from 'node:fs/promises';
 import { request } from 'node:http';
-import { loadRuntimeCandidate, parseRuntimeSettings, readRuntimeSelection, verifyBinary } from './settings.ts';
+import { loadRuntimeCandidate, loadRuntimeCandidateReadonly, parseRuntimeSettings, readRuntimeSelection, verifyBinary } from './settings.ts';
 import { manualSelections, selectionChanges, verifyControllerSelections } from './selections.ts';
 import { RuntimeError } from './types.ts';
 import type { CoreInspection, CoreObservation, RuntimeSettings, RuntimeUnitState } from './types.ts';
@@ -166,7 +166,7 @@ async function probeVersion(port: number, secret: string): Promise<void> {
 }
 
 const liveReader: CoreObserverFixtureReader = { read: boundedRead, realpath, entries: path => readdir(path), link: readlink,
-  unit: assertManagedUnit, binary: verifyBinary, candidate: loadRuntimeCandidate, version: probeVersion,
+  unit: assertManagedUnit, binary: verifyBinary, candidate: loadRuntimeCandidateReadonly, version: probeVersion,
   selection: readRuntimeSelection, selections: verifyControllerSelections };
 
 async function observe(input: RuntimeSettings, generation: string, unit: RuntimeUnitState,
