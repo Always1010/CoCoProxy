@@ -132,14 +132,14 @@ for (const mode of ['local', 'subscription', 'legacy'] as const) {
   });
 }
 
-test('automatic settings off/save/reopen/on retains ordered pools and return preference', async () => {
+test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
-    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred };';
+    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const original = { preferred: ['second', 'first'], fallback: ['backup'], returnToPreferred: false };
   const settings = { local: { selections: {}, automatic: { Stream: structuredClone(original) } } };
-  const view = { value: { nodes: ['first', 'second', 'backup'], groups: [{ name: 'Stream', options: ['first', 'second', 'backup'], activeSelected: 'backup' }] } };
+  const view = { value: { nodes: ['first', 'second', 'backup', 'unused'], groups: [{ name: 'Stream', options: ['first', 'backup', 'second', 'unused'], activeSelected: 'backup' }] } };
   const exports: Record<string, any> = {};
   new Script(code, { filename: 'AutomaticSelectionSettings.js' }).runInNewContext({
     exports, defineProps: () => ({ groupName: 'Stream', selectable: true }), defineExpose: () => {},
@@ -163,4 +163,54 @@ test('automatic settings off/save/reopen/on retains ordered pools and return pre
   exports.enabled.value = true;
   await exports.persist();
   assert.deepEqual(JSON.parse(JSON.stringify(settings.local.automatic.Stream)), { ...original, enabled: true });
+
+  exports.editPool('preferred');
+  assert.deepEqual(Array.from(exports.visibleNodes.value), ['first', 'second', 'unused', 'backup']);
+  assert.equal(exports.nodeDisabled('backup'), true);
+  exports.toggleNode('backup');
+  assert.deepEqual(Array.from(exports.preferred.value), original.preferred);
+  assert.deepEqual(Array.from(exports.fallback.value), original.fallback);
+
+  exports.onlySelected.value = true;
+  exports.toggleNode('second');
+  assert.deepEqual(Array.from(exports.preferred.value), ['first']);
+  assert.deepEqual(Array.from(exports.visibleNodes.value), ['first', 'second']);
+  exports.onlySelected.value = false;
+  exports.search.value = 'UNUSED';
+  assert.deepEqual(Array.from(exports.visibleNodes.value), ['unused']);
+  exports.toggleNode('unused');
+  await exports.persist(); // Editing never submits the draft, including implicit form submission.
+  assert.deepEqual(JSON.parse(JSON.stringify(settings.local.automatic.Stream)), { ...original, enabled: true });
+
+  exports.editPool('fallback');
+  assert.equal(exports.search.value, '');
+  assert.deepEqual(Array.from(exports.visibleNodes.value), ['backup', 'second', 'first', 'unused']);
+  assert.equal(exports.nodeDisabled('first'), true);
+  exports.toggleNode('first');
+  assert.deepEqual(Array.from(exports.fallback.value), original.fallback);
+  exports.toggleNode('second'); // A node can join this pool only after removal from the other pool.
+  exports.editorKind.value = null;
+  await exports.persist();
+  assert.deepEqual(JSON.parse(JSON.stringify(settings.local.automatic.Stream)), {
+    preferred: ['first', 'unused'], fallback: ['backup', 'second'], returnToPreferred: false, enabled: true,
+  });
+
+  exports.editPool('preferred');
+  exports.toggleNode('first');
+  exports.open(); // Discarding and reopening reloads the saved configuration.
+  assert.equal(exports.editorKind.value, null);
+  assert.deepEqual(Array.from(exports.preferred.value), ['first', 'unused']);
+
+  const fullPool = Array.from({ length: 31 }, (_, index) => `candidate-${index}`);
+  view.value.nodes.push(...fullPool);
+  view.value.groups[0].options.push(...fullPool);
+  exports.preferred.value = fullPool;
+  exports.fallback.value = ['backup'];
+  exports.editPool('preferred');
+  assert.equal(exports.nodeDisabled('unused'), true);
+  exports.toggleNode('unused');
+  assert.equal(exports.preferred.value.length, 31);
+  assert.equal(exports.nodeDisabled(fullPool[0]), false);
+  exports.toggleNode(fullPool[0]);
+  assert.equal(exports.nodeDisabled('unused'), false);
 });
