@@ -108,7 +108,7 @@ Node.js 最低版本为 22.18；原生网关还需 Python ≥3.9 及安装文档
 | 跨网段、终端直接用外设作 DHCP 网关、桥接或 VPN 入口 | 尚未交付这些拓扑的完整适配 | 不能仅改地址或放宽来源字段进入当前支持范围 |
 | 任意防火墙停止/全表 flush | 无连续阻断保证 | 与正常受支持的 reload 分开记录，不能宣称零窗口 |
 
-当前原生网关由 [gateway](../packages/gateway/README.md) 与部署入口实现。[network 保留框架](../packages/network/README.md)的独立约束和证据不能直接套用于当前原生部署。
+当前原生网关由 [gateway](../packages/gateway/README.md) 与部署入口实现，运行与网络证据须按当前部署分别核验。
 
 ## 增加一项兼容结论
 

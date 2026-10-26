@@ -10,7 +10,6 @@ import { AUTOMATIC_GATEWAY_CORE_SHA256, AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFOR
 import { validateWithMihomo } from '../packages/mihomo/validator.ts';
 import { loadRuntimeCandidate, parseRuntimeSettings } from '../packages/runtime/settings.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
-import { GATEWAY_CORE_SHA256 } from '../packages/network/config.ts';
 
 function base(): JsonObject {
   return { schemaVersion: 1, deployment: { mixedPort: 17890, controllerPort: 19090,
@@ -209,11 +208,10 @@ test('trusted recompile derives overlay from deployment and requires generation 
   invalid(() => recompileAutomaticGatewayConfig(changed, settings()));
 });
 
-test('native and retained gateway runtime pins agree with the fixed component catalog without trusting deployment-supplied hashes', async () => {
+test('native gateway runtime pins agree with the fixed component catalog without trusting deployment-supplied hashes', async () => {
   const catalog = JSON.parse(await readFile(new URL('../integrations/metacubexd/components.json', import.meta.url), 'utf8'));
   assert.deepEqual(AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM,
     Object.fromEntries(Object.entries(catalog.mihomo.platforms).map(([key, value]) => [key, (value as { binarySha256: string }).binarySha256])));
-  assert.equal(GATEWAY_CORE_SHA256, catalog.mihomo.platforms['linux-arm64'].binarySha256);
   const runtime = { schemaVersion: 1, stateDirectory: '/var/lib/synthetic-proxy', binaryPath: '/opt/synthetic-proxy/bin/mihomo',
     systemctlPath: '/usr/bin/systemctl', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service',
     unitSha256: 'c'.repeat(64), serviceUid: 12345, automaticGateway: settings() };

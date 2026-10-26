@@ -45,7 +45,6 @@ stage 只保存不可变候选，draft-stage 捕获指定保存版本；均不�
 | 原生网关与部署 | `test:gateway`、`test:deployment` |
 | 载荷与源码装配 | `test:release-stage`、`test:git-tree` |
 | CLI | `test:cli` |
-| 旧 network 框架 | 对应 `test:network-*`；该框架不在当前主路径，见[保留框架说明](../packages/network/README.md) |
 
 单元层覆盖输入约束、冲突、权限、锁、持久提交和恢复；显式替身不构成真实服务或网络验收。Linux 文件权限、进程与内核行为须在 Linux 验证。
 
@@ -59,7 +58,7 @@ stage 只保存不可变候选，draft-stage 捕获指定保存版本；均不�
 | `test:protocol-live`、`test:protocol-reality-live` | 再提供 `COCOPROXY_TEST_SING_BOX`：真实协议回环，范围见[协议夹具](../integrations/protocol-fixture/README.md) |
 | `test:management-live` | `COCOPROXY_TEST_SERVER` 指向构建后 Server；浏览器子项另需 `COCOPROXY_TEST_PLAYWRIGHT` 与 `COCOPROXY_TEST_BROWSER` 绝对路径 |
 | `test:gateway`、`test:deployment`、`test:runtime` | 部分子项读取 `COCOPROXY_TEST_MIHOMO` 或 `COCOPROXY_TEST_SYSTEMD_ANALYZE` 执行真实语法解析 |
-| `test:network-kernel` | 固定 Mihomo/sing-box、Linux Python/ip/nft/unshare/TUN；在隔离 namespace 内验证旧框架四角色路径 |
+| `test:gateway` 的隔离内核子项 | 固定 Mihomo，显式设置 `COCOPROXY_TEST_GATEWAY_KERNEL=1`，需要 Linux Python/ip/nft/unshare/TUN；在隔离 namespace 内验证原生网关多终端路径 |
 
 示例：
 
