@@ -174,7 +174,7 @@ async function selectNode(name: string) {
   }
 }
 
-defineExpose({ scrollToTop })
+defineExpose({ scrollToTop, activeName })
 
 // On group switch: reset local filters and reveal the selected node.
 watch(activeName, () => {
