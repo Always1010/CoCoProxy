@@ -4,7 +4,6 @@ import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
 import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
 import AutomaticSelectionSettings from '~/components/AutomaticSelectionSettings.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
-import { useTcpDelay } from '~/composables/useTcpDelay'
 import {
   IconBolt,
   IconBrandSpeedtest,
@@ -29,12 +28,14 @@ interface Props {
   sortedNamesByGroup: Record<string, string[]>
   scrollContainer?: HTMLElement | null
   batchTesting?: boolean
+  tcpTesting?: boolean
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   scroll: [event: Event]
   'test-group': [name: string]
+  'test-tcp': [names: string[], group: string]
 }>()
 
 const proxiesStore = useProxiesStore()
@@ -50,7 +51,6 @@ const automaticEnabled = computed(() => {
   const policy = activeName.value ? overrides.value.automatic?.[activeName.value] : undefined
   return !!policy && policy.enabled !== false
 })
-const { metadata: tcpMetadata, run: runTcp, cancel: cancelTcp, isRunning: tcpRunning, completed: tcpCompleted, total: tcpTotal } = useTcpDelay()
 const scope = `${workspace.value?.mode ?? 'initial'}:${workspace.value?.mode === 'subscription' ? workspace.value.subscriptionId ?? '' : ''}`
 const { activeName, scrollTop } = useProxyWorkbench(scope, groupNames)
 
@@ -116,8 +116,7 @@ const selectedVisible = computed(
     !!activeGroup.value?.now &&
     displayNodes.value.includes(activeGroup.value.now),
 )
-const hasTcpNodes = computed(() => displayNodes.value.some(name => tcpMetadata(name)?.applicable))
-function testAllTcp() { return runTcp(view.value?.tcpNodes?.map(node => node.name) ?? []) }
+const hasTcpNodes = computed(() => displayNodes.value.some(name => view.value?.tcpNodes?.some(node => node.name === name && node.applicable)))
 
 function toggleInSet(set: Ref<Set<string>>, key: string) {
   const next = new Set(set.value)
@@ -264,13 +263,8 @@ function aliveCount(group: ProxyType) {
             {{ displayNodes.length }}/{{ activeNodes.length }}
           </span>
           <AutomaticSelectionSettings :group-name="activeGroup.name" :selectable="canSelect" />
-          <span v-if="tcpRunning" role="status" class="shrink-0 text-xs text-primary">{{ tcpCompleted }}/{{ tcpTotal }}</span>
-          <button type="button" class="btn btn-ghost btn-sm" :disabled="!tcpRunning && (busy || !hasTcpNodes)" :title="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟（从网关建连）'" :aria-label="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟'" @click="tcpRunning ? cancelTcp() : runTcp(displayNodes)"><IconX v-if="tcpRunning" :size="18" /><IconBolt v-else :size="18" /><span>{{ tcpRunning ? '取消 TCP' : '测 TCP' }}</span></button>
-          <details class="dropdown dropdown-end shrink-0">
-            <summary class="btn btn-ghost btn-xs" title="更多 TCP 测试操作" aria-label="更多 TCP 测试操作"><IconChevronRight :size="14" class="rotate-90" /><span>更多 TCP</span></summary>
-            <ul class="dropdown-content z-30 menu mt-1 w-52 rounded-box border border-base-content/10 bg-base-200 shadow-lg"><li><button :disabled="tcpRunning || busy" @click="testAllTcp">测试全部节点 TCP 延迟</button></li></ul>
-          </details>
-          <button type="button" class="btn btn-ghost btn-sm" title="测试当前组代理延迟（访问测试网址）" aria-label="测试当前组代理延迟" :disabled="batchTesting || proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name]" @click="emit('test-group', activeGroup.name)"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-success': batchTesting || proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name] }" /><span>{{ batchTesting ? '测速中' : '测当前组' }}</span></button>
+          <button type="button" class="btn btn-ghost btn-sm" :disabled="tcpTesting || busy || !hasTcpNodes" title="测试本组筛选后可见节点的 TCP 延迟（从网关建连）" aria-label="测本组可见 TCP" @click="emit('test-tcp', [...displayNodes], activeGroup.name)"><IconBolt :size="18" /><span>测本组可见 TCP</span></button>
+          <button type="button" class="btn btn-ghost btn-sm" title="测试本组全部成员的代理延迟（访问测试网址，不受筛选影响）" aria-label="测本组代理延迟" :disabled="batchTesting || proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name]" @click="emit('test-group', activeGroup.name)"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-success': batchTesting || proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name] }" /><span>测本组代理延迟</span></button>
           <button
             type="button"
             class="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-base-content/10 bg-base-100/60 px-2 text-xs text-base-content/70 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
