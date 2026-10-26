@@ -83,6 +83,8 @@ export class TrustedDeviceStore {
 
   has(id: string): boolean { return this.devices.some(item => item.id === id && this.live(item)); }
 
+  bindingFingerprint(): string { return this.fingerprint; }
+
   list(): TrustedDevice[] { return this.devices.filter(item => this.live(item)).map(publicDevice); }
 
   private async mutate<T>(action: () => Promise<T>): Promise<T> {

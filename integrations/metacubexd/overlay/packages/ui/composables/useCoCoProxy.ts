@@ -62,6 +62,10 @@ const messages: Record<string, string> = {
   SESSION_LIMIT: '会话数量已达上限，请稍后重试。',
   DEVICE_LIMIT: '已信任设备数量已达上限，请先撤销不再使用的设备。',
   DEVICE_TRUST_UNAVAILABLE: '此管理入口暂不支持信任设备，请使用临时登录。',
+  NOTIFICATION_TRUST_REQUIRED: '请使用可信设备登录后开启通知。',
+  NOTIFICATIONS_UNAVAILABLE: '通知服务暂不可用，请稍后重试；代理选路不受影响。',
+  NOTIFICATION_RATE_LIMIT: '测试通知发送过于频繁，请一分钟后重试。',
+  PUSH_SUBSCRIPTION_INVALID: '浏览器返回的推送订阅无效，或该推送服务尚不受支持。',
   ORIGIN_DENIED: '当前访问地址未获允许。',
   DRAFT_CONFLICT: '配置已被其他操作修改，请刷新后重试。',
   SOURCE_CONFLICT: '来源版本已变化，请重新读取来源后再操作。',
@@ -198,8 +202,16 @@ export function useCoCoProxy() {
     })
   }
 
+  async function stopLocalNotifications() {
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration().catch(() => undefined)
+      registration?.active?.postMessage({ type: 'NOTIFICATIONS_DISABLED' })
+    }
+  }
+
   async function logout() {
     await request('/api/session/logout', { method: 'POST', body: {} })
+    await stopLocalNotifications()
     clearSession()
     await navigateTo('/login', { replace: true })
   }
@@ -210,5 +222,5 @@ export function useCoCoProxy() {
     return result
   }
 
-  return { session, generation, capture, request, readSession, login, logout, readStatus, clearSession }
+  return { session, generation, capture, request, readSession, login, logout, readStatus, clearSession, stopLocalNotifications }
 }

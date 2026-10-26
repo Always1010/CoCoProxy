@@ -7,7 +7,7 @@ export class ManagementError extends Error {
   readonly status: number;
   constructor(code: string, status = 400) { super(code); this.name = 'ManagementError'; this.code = code; this.status = status; }
 }
-export type Principal = { username: string; expiresAt: number };
+export type Principal = { username: string; expiresAt: number; deviceId?: string };
 export type ManagementAction = (request: Request, principal: Principal) => Promise<unknown>;
 export type ManagementGateway = {
   fetch: (request: Request) => Promise<Response>;
@@ -132,10 +132,10 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
     const presented = token(request);
     const remembered = token(request, deviceName);
     const principal = presented ? sessions.check(presented) : null;
-    if (principal && (!principal.deviceId || trustedDevices?.has(principal.deviceId))) return { username: principal.username, expiresAt: principal.expiresAt };
+    if (principal && (!principal.deviceId || trustedDevices?.has(principal.deviceId))) return { username: principal.username, expiresAt: principal.expiresAt, ...(principal.deviceId ? { deviceId: principal.deviceId } : {}) };
     const device = trustedDevices?.check(remembered);
     if (!device) throw new ManagementError('UNAUTHORIZED', 401);
-    return { username: credential.username, expiresAt: Math.min(now() + 8 * 60 * 60 * 1000, device.expiresAt ?? Infinity) };
+    return { username: credential.username, expiresAt: Math.min(now() + 8 * 60 * 60 * 1000, device.expiresAt ?? Infinity), deviceId: device.id };
   }
   return { authorize, fetch: async request => {
     try {
@@ -198,7 +198,7 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
       if (remembered && (!session || (session.deviceId && !trustedDevices!.has(session.deviceId)))) {
         const issued = sessions.issue(credential.username, remembered.device.id);
         cookies.push(sessionCookie(issued));
-        principal = { username: issued.username, expiresAt: issued.expiresAt };
+        principal = { username: issued.username, expiresAt: issued.expiresAt, deviceId: remembered.device.id };
       }
       if (remembered?.renewed) cookies.push(deviceCookie(rememberedToken!, remembered.device.expiresAt));
       let result: unknown;

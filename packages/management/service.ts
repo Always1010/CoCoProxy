@@ -7,6 +7,8 @@ import { HttpsSnapshotClient } from '../subscriptions/http.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
 import { loadAdminCredential } from './auth.ts';
 import { TrustedDeviceStore } from './trusted-devices.ts';
+import { createNotifications } from './notifications.ts';
+import { readAutomaticBindings } from './automatic-bindings.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { decodeSubscriptionProfile } from '../subscriptions/yaml.ts';
 import { createControllerProxy, DEFAULT_LATENCY_PROBE_ORIGIN } from './controller.ts';
@@ -133,12 +135,18 @@ export async function loadManagementGateway(path: string) {
       switch: (snapshot, group, node, reason) => action.automaticSwitch(snapshot, group, node, reason),
     });
     const trustedDevices = await TrustedDeviceStore.load(runtimeSettings.stateDirectory, credential, settings.origin);
+    const notifications = await createNotifications({ stateDirectory: runtimeSettings.stateDirectory, origin: settings.origin, devices: trustedDevices,
+      source: async () => {
+        const bindings = await readAutomaticBindings(runtimeSettings.stateDirectory);
+        return { scope: bindings?.scope ?? '', events: bindings?.events ?? [], groups: automatic!.status().groups };
+      } });
     const gateway = createManagementGateway({ origin: settings.origin, credential, trustedDevices }, (request, principal) =>
+      new URL(request.url).pathname.startsWith('/api/cocoproxy/notifications/') ? notifications.route(request, principal) :
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
     const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,
       () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'));
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
-      startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); return recovered; },
-      closeLifecycle: async () => { await automatic!.close(); await lifecycle.close(); } };
+      startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); notifications.start(); return recovered; },
+      closeLifecycle: async () => { await notifications.close(); await automatic!.close(); await lifecycle.close(); } };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }
