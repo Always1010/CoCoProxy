@@ -25,6 +25,24 @@ export interface DeploymentInspectionHost {
   release(receipt: Receipt): Promise<void>; maintenance(receipt: Receipt): Promise<void>;
   processIdentity(pid: number): Promise<{ bootId: string; startTime: string | null }>;
 }
+export interface InstalledDeploymentInspection {
+  installed: true; readOnly: true;
+  receipt: { status: Receipt['status']; manifestSha256: string; operation: 'install' | 'upgrade' | 'uninstall' | 'unknown-legacy' };
+  files: { path: string; sensitive: boolean; status: string;
+    checks?: { regularFile: boolean; ownerMatches: boolean; modeMatches: boolean; contentMatches: boolean | null };
+    intendedAction: 'preserve' | 'remove' | 'write' | 'unknown-legacy' }[];
+  release: string; lock: { present: boolean; owner?: 'gone' | 'alive'; status?: string };
+  identity: { serviceUid: number; release: string; stateDirectory: string; credentialPath: string };
+  lifecycleJournal?: { status: string; action?: string };
+  recoveryLock: { present: boolean }; lifecycleClaim: { present: boolean };
+  maintenance: { status: 'ready' | 'running' | 'invalid' | 'unavailable'; code?: string };
+  temporaryFiles: string[]; temporaryFilesComplete: boolean;
+  recovery: string; preservedState: true; automaticProgramRollback: false;
+}
+export type DeploymentInspection = InstalledDeploymentInspection |
+  { installed: false; readOnly: true; findings: string[] } |
+  { installed: 'unknown'; readOnly: true; findings: string[]; receipt: 'missing-or-untrusted';
+    recovery: 'manual-review-required'; automaticProgramRollback: false };
 function nativeInspectionHost(): DeploymentInspectionHost {
   return { info: deploymentPathInfo, rootPath: assertRootPath, privateFile: assertPrivateDeploymentFile,
     read: readRegularDeploymentFile, list: readdir, release: releaseEvidence,
@@ -77,7 +95,7 @@ export async function loadInstalledDeployment(inputPath: string) {
 }
 
 /** No service operation, lock removal, file writes, or credential contents. */
-export async function inspectDeployment(options: { host?: DeploymentInspectionHost } = {}) {
+export async function inspectDeployment(options: { host?: DeploymentInspectionHost } = {}): Promise<DeploymentInspection> {
   if (!options.host) rootHost();
   const host = options.host ?? nativeInspectionHost();
   if (!(await host.info(STORE))) return { installed: false, readOnly: true, findings: [] };
@@ -85,7 +103,7 @@ export async function inspectDeployment(options: { host?: DeploymentInspectionHo
   try { receipt = (await readReceipt(host)).receipt; }
   catch (error) { return { installed: 'unknown', readOnly: true, findings: [errorCode(error)],
     receipt: 'missing-or-untrusted', recovery: 'manual-review-required', automaticProgramRollback: false }; }
-  const files = [];
+  const files: InstalledDeploymentInspection['files'] = [];
   for (const file of receipt.files) {
     let status = 'matches-receipt';
     let checks: { regularFile: boolean; ownerMatches: boolean; modeMatches: boolean; contentMatches: boolean | null } | undefined;
@@ -132,7 +150,7 @@ export async function inspectDeployment(options: { host?: DeploymentInspectionHo
         'matches-lifecycle-journal' : 'INSTALL_LOCK_RECEIPT_MISMATCH';
     } catch (error) { lock.status = errorCode(error); }
   }
-  let maintenance: { status: string; code?: string };
+  let maintenance: InstalledDeploymentInspection['maintenance'];
   try { await host.maintenance(receipt); maintenance = { status: 'ready' }; }
   catch (error) { const code = errorCode(error); maintenance = { status: code === 'INSTALL_LIFECYCLE_MUST_BE_PAUSED' ? 'running'
     : code === 'INSTALL_INSPECTION_UNAVAILABLE' ? 'unavailable' : 'invalid', code }; }

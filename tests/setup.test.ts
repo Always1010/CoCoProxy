@@ -399,19 +399,22 @@ function installationFixture() {
 test('shared installation inspection reads receipt, byte drift, maintenance and lifecycle claims through a read-only host', async () => {
   const fixture = installationFixture();
   const clean = await inspectDeployment({ host: fixture.host });
-  assert.equal(clean.installed, true);
-  assert.equal(clean.files?.[0].status, 'matches-receipt');
-  assert.equal(clean.maintenance?.status, 'ready');
-  assert.equal(clean.lifecycleClaim?.present, false);
+  assert.ok(clean.installed === true);
+  assert.equal(clean.files[0].status, 'matches-receipt');
+  assert.equal(clean.maintenance.status, 'ready');
+  assert.equal(clean.lifecycleClaim.present, false);
   fixture.records.set('/etc/cocoproxy/runtime.json', Buffer.from('changed bytes'));
   fixture.records.set(fixture.store + '/lifecycle-claim.lock', Buffer.from('private claim'));
   fixture.options.lifecycle = { schemaVersion: 1, enabled: true, paused: false };
   const changed = await inspectDeployment({ host: fixture.host });
-  assert.equal(changed.files?.[0].status, 'changed');
-  assert.equal(changed.lifecycleClaim?.present, true);
-  assert.equal(changed.maintenance?.status, 'running');
+  assert.ok(changed.installed === true);
+  assert.equal(changed.files[0].status, 'changed');
+  assert.equal(changed.lifecycleClaim.present, true);
+  assert.equal(changed.maintenance.status, 'running');
   fixture.options.unreadable = true;
-  assert.equal((await inspectDeployment({ host: fixture.host })).files?.[0].status, 'INSTALL_INSPECTION_UNAVAILABLE');
+  const unreadable = await inspectDeployment({ host: fixture.host });
+  assert.ok(unreadable.installed === true);
+  assert.equal(unreadable.files[0].status, 'INSTALL_INSPECTION_UNAVAILABLE');
 });
 
 test('doctor aggregates installed drift, pending transactions, live locks and maintenance instead of treating inspection failure as absence', async () => {
