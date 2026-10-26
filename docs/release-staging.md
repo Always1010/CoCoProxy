@@ -6,7 +6,7 @@
 
 [Release 工作流](../.github/workflows/release.yml) 在推送 `v<package.json 版本>` 的 Tag 时运行，例如首版 `v0.1.0-preview.1`。Tag 必须符合 SemVer，且与根 package.json、package-lock.json 版本一致；带预发布后缀的版本自动标记为 GitHub Pre-release。
 
-GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游源码校验、overlay、发行元数据、离线文档、安装配置、发行装配及部署测试；随后核验固定上游源码与锁文件、构建 UI/Server，并复用现有装配器生成 ARM64 和 x86-64 载荷。构建入口为 `scripts/build-github-release.mjs`，完整构建只允许在 Actions Linux 环境执行。两个平台均不在构建中执行外来 Mihomo；构建成功不替代目标设备验收。
+GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游源码校验、overlay、发行元数据、文档链接、安装配置、发行装配及部署测试；随后核验固定上游源码与锁文件、构建 UI/Server，并复用现有装配器生成 ARM64 和 x86-64 载荷。构建入口为 `scripts/build-github-release.mjs`，完整构建只允许在 Actions Linux 环境执行。两个平台均不在构建中执行外来 Mihomo；构建成功不替代目标设备验收。
 
 固定输入以[组件清单](../integrations/metacubexd/components.json)为准，包括上游 tag、commit、源码及锁摘要、包管理器、两种平台的资产名、下载地址、压缩包摘要与核心摘要；[审核记录](../integrations/metacubexd/review.json)另存实际验证范围。构建和装配拒绝清单与审核、完整源码树之间的身份或摘要分歧，构建还要求 tooling 的包管理器版本与其锁一致。更新验证结论不会自动更改组件版本，下载入口也不查询 latest。
 
@@ -38,8 +38,7 @@ node scripts/stage-explicit-release.mjs \
 
 ```text
 source/
-  apps/、packages/              # HEAD运行源码与模块参考
-  docs/、examples/              # 白名单中的部署、使用及来源说明
+  apps/、packages/              # HEAD运行源码、规则数据及必要资源，不含模块说明
   package.json、package-lock.json
   scripts/cocoproxy-setup.sh    # 安装配置与诊断入口
   node_modules/                # 完整生产依赖
@@ -47,20 +46,20 @@ source/
   integrations/mihomo/LICENSE
 server/.output/{server,public}/
 bin/mihomo
-README.md                     # 解压后的离线导航
+README.md                     # 简短部署说明及对应源码提交的文档入口
 cocoproxy                     # 相对自身目录定位的命令入口
 manifest.json
 ```
 
-解压后从根 `README.md` 或 `./cocoproxy help` 开始，入口按自身位置查找源码，不要求当前目录等于载荷目录。[安装配置与诊断](setup.md)说明 doctor、configure 和后续安装入口；`source/docs/getting-started.md` 提供[从零部署与使用总指南](getting-started.md)。相对链接引用的使用说明、模块说明、图像和合成样本均随载荷保留，可离线阅读。指向上游及源码专用维护说明的 HTTPS 链接仍需联网。
+解压后从根 `README.md` 或 `./cocoproxy help` 开始，入口按自身位置查找源码，不要求当前目录等于载荷目录。根 README 只说明环境前提、部署及更新命令，并链接到此包源提交对应的完整文档。项目说明、配图、模块 README 和配置示例均留在源码仓库，不进入安装包；源码仓库内的文档链接使用相对路径。[安装配置与诊断](setup.md)和[从零部署与使用总指南](getting-started.md)在源码仓库中查看。
 
 在目标 Linux 上直接更新已有安装可运行 `sudo ./cocoproxy deploy --local`，从另一台电脑更新则运行 `./cocoproxy deploy <IP>`。首次安装输入与预览方式见[本机与远程部署更新](deployment.md)。本地入口直接复用安装协调器，无需 SSH 连接本机。
 
 源码必须是干净 Git 工作树根，拒绝受跟踪修改和未忽略的新文件；固定启动HEAD，以 Git blob 读取并在完成前复核。symlink/gitlink 拒绝，不执行 Git hooks 或构建代码。
 
-选择 apps/packages 运行源码、根包元数据及存在的 LICENSE/NOTICE、明确的运维文档／样本与来源记录，以及安装配置和部署维护入口。可信部署选项说明 `examples/deployment-options.md` 随载荷提供。规则数据、旧候选兼容数据及许可随运行源码保留，规则生成器留在源码仓库。开发约定、发布 workflow、开发／构建／压测说明、协议夹具与构建 README、时延测量工具不进入运行包；运维文档需要的开发参考链接到官方源码仓库。排除 .local、.git、缓存、测试与协议对端；不遍历本地共享链接。受跟踪源码含任意 `.local` 路径时，源码归档和装配都拒绝。
+选择 apps/packages 运行源码、根包元数据及存在的 LICENSE/NOTICE、必要来源记录，以及安装配置和部署维护入口。规则数据、旧候选兼容数据及许可随运行源码保留，规则生成器留在源码仓库。不选择 docs/、examples/、项目模块 Markdown、开发约定、发布 workflow、协议夹具或其他开发工具；第三方运行依赖按锁保留完整包及许可。源码压缩包仍保留对应提交的文档、示例和构建资料，与安装包分开提供。排除 .local、.git、缓存、测试与协议对端；不遍历本地共享链接。受跟踪源码含任意 `.local` 路径时，源码归档和装配都拒绝。
 
-装配在固定白名单内验证所有 Markdown 的本地链接、图片、引用式链接和 HTML src/href 目标；缺失、越界或不安全目标均拒绝并清理本次暂存。检查不按文档链接自动扩大白名单，也不验证远程地址或 Markdown 页内锚点。CI 的 `npm run test:release-stage` 同时运行装配、离线文档及发行元数据测试，使用同一检查验证仓库导航闭包。
+装配校验简短随包说明的本地链接，不因源码文档的引用扩大安装包范围。CI 的 `npm run test:release-stage` 检查运行文件、安装入口、许可和摘要，确认项目文档与示例未进入安装包；文档链接检查按源码仓库实际文件解析。链接检查覆盖本地链接、图片、引用式链接和 HTML src/href；不验证远程地址或 Markdown 页内锚点。
 
 ## 依赖与构建产物
 

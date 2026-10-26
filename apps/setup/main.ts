@@ -38,7 +38,7 @@ const help = `CoCoProxy 部署与维护入口
 
 configure 会从载荷生成 release 路径、核心摘要和一致的端口，首次生成内部随机秘密。
 升级生成必须提供 --existing-input 保留内部秘密；自定义旧布局使用原安装入口。
-所有输入输出使用绝对私有路径。实际网络启用、HTTPS 和终端验收见随包 docs/setup.md。
+所有输入输出使用绝对私有路径。实际网络启用、HTTPS 和终端验收见源码仓库 docs/setup.md；安装包 README.md 提供对应版本入口。
 `;
 
 async function writePrivate(path: string, value: unknown): Promise<void> {

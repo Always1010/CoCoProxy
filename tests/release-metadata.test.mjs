@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { validateReleaseMetadata, validateReleaseTooling, validateReleaseVersion } from '../scripts/release-metadata.mjs';
-import { assertReleaseSourcePaths, releaseIntegrationFiles, releaseReadme, selectedReleaseSource, verifyOfflineDocumentation } from '../scripts/release-layout.mjs';
+import { assertReleaseSourcePaths, releaseIntegrationFiles, releaseReadme, selectedReleaseSource, verifyDocumentationLinks } from '../scripts/release-layout.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const metadata = async () => Promise.all(['components', 'review', 'source-tree'].map(name =>
@@ -45,31 +45,31 @@ test('release tag, package lock and build package manager cannot describe differ
     { code: 'COMPONENT_TOOLING_MISMATCH' });
 });
 
-test('offline documentation resolves inline, image and reference links and rejects escaping or missing files', () => {
+test('documentation resolves inline, image and reference links and rejects escaping or missing files', () => {
   assertReleaseSourcePaths(['docs/guide.md']);
   for (const path of ['.local/private.json', 'nested/.LOCAL/private.json']) {
     assert.throws(() => assertReleaseSourcePaths([path]), { code: 'SOURCE_LOCAL_DATA' });
   }
   const files = new Map([
-    ['README.md', Buffer.from('[guide](docs/guide.md)\n![image](docs/diagram.svg)\n[reference]: docs/guide.md\n[web](https://example.invalid/a)\n')],
+    ['README.md', Buffer.from('[guide](docs/guide.md)\n![image](docs/diagram.svg)\n[reference]: docs/guide.md\n[directory](docs/)\n[web](https://example.invalid/a)\n')],
     ['docs/guide.md', Buffer.from('[home](../README.md#heading)')], ['docs/diagram.svg', Buffer.alloc(0)],
   ]);
-  assert.equal(verifyOfflineDocumentation(files).checked, 4);
+  assert.equal(verifyDocumentationLinks(files).checked, 5);
   for (const target of ['absent.md', '../README.md', '%2e%2e/README.md', '/README.md']) {
-    assert.throws(() => verifyOfflineDocumentation(new Map([['README.md', Buffer.from(`[bad](${target})`)]])),
+    assert.throws(() => verifyDocumentationLinks(new Map([['README.md', Buffer.from(`[bad](${target})`)]])),
       { code: 'DOCUMENT_LINK_MISSING' });
   }
-  assert.equal(verifyOfflineDocumentation(new Map([['README.md', Buffer.from('```sh\n[label](absent.md)\n```')]])).checked, 0);
+  assert.equal(verifyDocumentationLinks(new Map([['README.md', Buffer.from('```sh\n[label](absent.md)\n```')]])).checked, 0);
 });
 
-test('repository release whitelist contains the complete offline documentation navigation', async () => {
+test('runtime release excludes project documentation and examples while retaining its short install guide', () => {
   const names = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
     { cwd: project, encoding: 'utf8', windowsHide: true }).split('\0').filter(Boolean);
   const selected = names.filter(path => selectedReleaseSource(path) || releaseIntegrationFiles.includes(path));
   assert.ok(!selected.some(path => path.split('/').includes('.local')));
-  const files = new Map(await Promise.all(selected.map(async path => [`source/${path}`,
-    path.endsWith('.md') ? await readFile(new URL(`../${path}`, import.meta.url)) : Buffer.alloc(0)])));
-  files.set('README.md', releaseReadme('0.0.0'));
-  const result = verifyOfflineDocumentation(files);
-  assert.ok(result.checked > 50);
+  assert.ok(!selected.some(path => /^(?:docs|examples)\//u.test(path) || /^(?:apps|packages)\/.*\.md$/iu.test(path)));
+  assert.ok(selected.includes('apps/setup/main.ts') && selected.includes('scripts/cocoproxy-setup.sh'));
+  const files = new Map(selected.map(path => [`source/${path}`, Buffer.alloc(0)]));
+  files.set('README.md', releaseReadme('0.0.0', '1'.repeat(40)));
+  assert.deepEqual(verifyDocumentationLinks(files), { checked: 0 });
 });
