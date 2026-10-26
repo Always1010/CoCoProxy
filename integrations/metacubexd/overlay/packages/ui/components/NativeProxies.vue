@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ProxyProvider, ProxyNodeWithProvider } from '~/types'
 import type { MobileNavReselectDetail } from '~/constants'
-import { IconArrowUp, IconBrandSpeedtest, IconReload, IconSearch, IconSettings, IconX } from '@tabler/icons-vue'
+import { IconArrowUp, IconBrandSpeedtest, IconReload, IconSearch, IconSettings, IconWorld, IconX } from '@tabler/icons-vue'
 import { MOBILE_NAV_RESELECT_EVENT, ROUTES } from '~/constants'
 import { filterProxiesByAvailability, filterProxiesByName, formatTimeFromNow, sortProxiesByOrderingType } from '~/utils'
 import { useProxyRefresh } from '~/composables/useProxyRefresh'
@@ -178,9 +178,11 @@ function resetDetection() {
     </div>
     <button v-if="showScrollToTop" data-testid="scroll-to-top" class="btn btn-primary absolute right-3 bottom-3 z-30 rounded-full" :title="t('backToTop')" :aria-label="t('backToTop')" @click="scrollToTop"><IconArrowUp :size="20" /><span>回到顶部</span></button>
 
-    <Modal ref="settingsModal" title="代理设置">
+    <Modal ref="settingsModal" title="代理设置" fixed-height>
+      <template #tabs>
+        <div class="flex gap-2" role="tablist" aria-label="代理设置类别"><button v-for="tab in [{ key: 'general', name: '通用', icon: IconSettings }, { key: 'detection', name: '检测', icon: IconBrandSpeedtest }, { key: 'sites', name: '站点目录', icon: IconWorld }]" :key="tab.key" type="button" role="tab" class="btn btn-sm" :class="settingsTab === tab.key ? 'btn-primary' : 'btn-ghost'" :aria-selected="settingsTab === tab.key" @click="settingsTab = tab.key as typeof settingsTab"><component :is="tab.icon" :size="16" aria-hidden="true" /><span>{{ tab.name }}</span></button></div>
+      </template>
       <div class="flex flex-col gap-4">
-        <div class="flex gap-2" role="tablist" aria-label="代理设置类别"><button v-for="tab in [{ key: 'general', name: '通用' }, { key: 'detection', name: '检测' }, { key: 'sites', name: '站点目录' }]" :key="tab.key" type="button" role="tab" class="btn btn-sm" :class="settingsTab === tab.key ? 'btn-primary' : 'btn-ghost'" :aria-selected="settingsTab === tab.key" @click="settingsTab = tab.key as typeof settingsTab">{{ tab.name }}</button></div>
         <template v-if="settingsTab === 'general'">
           <p class="text-xs text-base-content/60">以下页面偏好保存在当前浏览器。</p>
           <label class="flex items-center justify-between gap-3">切换节点时断开连接<input v-model="configStore.autoCloseConns" type="checkbox" class="toggle toggle-primary" /></label>
@@ -196,7 +198,7 @@ function resetDetection() {
           <button type="button" class="btn btn-outline btn-sm self-end" @click="resetDetection"><IconReload :size="16" /><span>恢复基准检测默认值</span></button>
           <AutoProbeSettings />
         </template>
-        <SiteTargetSettings v-else />
+        <SiteTargetSettings v-else :scroll-list="false" />
       </div>
     </Modal>
     <Modal ref="detailsModal" title="站点连通"><SiteProbeDetails :group="detailsGroup" :node="detailsNode" :busy="anyTesting" /></Modal>

@@ -3,7 +3,7 @@ import { IconPlus, IconTrash, IconCheck, IconReload } from '@tabler/icons-vue'
 import { useSiteSettings } from '~/composables/useSiteSettings'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
-const props = defineProps<{ groupName?: string }>()
+const props = withDefaults(defineProps<{ groupName?: string; scrollList?: boolean }>(), { scrollList: true })
 const sites = useSiteSettings()
 const selected = ref<string[]>([])
 const search = ref('')
@@ -51,7 +51,7 @@ onUnmounted(() => { disposed = true })
       <button type="submit" class="btn btn-primary btn-sm self-end" :disabled="sites.pending.value || !name.trim() || !url.trim()"><IconPlus :size="16" /><span>{{ groupName ? '添加并选中' : '添加站点' }}</span></button>
     </form>
     <p v-if="loading" role="status" class="text-sm">正在读取站点目录…</p>
-    <div v-else class="max-h-[48vh] space-y-3 overflow-y-auto">
+    <div v-else class="space-y-3" :class="{ 'max-h-[48vh] overflow-y-auto': scrollList }">
       <section v-for="category in categories" :key="category"><h3 class="mb-1 text-xs font-semibold text-base-content/65">{{ category }}</h3>
         <div v-for="target in targets.filter(item => item.category === category)" :key="target.id" class="flex min-w-0 items-center gap-2 border-b border-base-content/5 py-2">
           <label class="flex min-w-0 flex-1 items-center gap-2">

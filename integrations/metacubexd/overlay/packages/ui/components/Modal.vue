@@ -4,11 +4,13 @@ import { IconX } from '@tabler/icons-vue'
 interface Props {
   title?: string
   size?: 'md' | 'xl'
+  fixedHeight?: boolean
   beforeClose?: () => boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   size: 'md',
+  fixedHeight: false,
   beforeClose: undefined,
 })
 
@@ -94,7 +96,7 @@ defineExpose({ open, close })
   >
     <div
       class="modal-shell flex max-h-[90vh] w-[95%] flex-col overflow-hidden rounded-2xl p-0 sm:w-11/12"
-      :class="[isOpen ? 'is-open' : '', modalSizeClass]"
+      :class="[isOpen ? 'is-open' : '', modalSizeClass, { 'modal-shell-fixed': fixedHeight }]"
       :style="{
         background: 'var(--color-base-100)',
         border: '1px solid var(--modal-border)',
@@ -105,7 +107,7 @@ defineExpose({ open, close })
     >
       <!-- Header -->
       <div
-        class="sticky top-0 z-10 flex items-center justify-between px-5 py-4 max-sm:pt-[max(1rem,env(safe-area-inset-top))]"
+        class="sticky top-0 z-10 flex shrink-0 items-center justify-between px-5 py-4 max-sm:pt-[max(1rem,env(safe-area-inset-top))]"
         :style="{
           background: 'var(--color-base-200)',
           borderBottom: '1px solid var(--modal-border)',
@@ -135,10 +137,16 @@ defineExpose({ open, close })
         </button>
       </div>
 
+      <!-- Navigation stays outside the scrolling content. -->
+      <div v-if="isRendered && $slots.tabs" class="shrink-0 px-5 pt-5">
+        <slot name="tabs" />
+      </div>
+
       <!-- Content -->
       <div
         v-if="isRendered"
-        class="flex-1 overflow-y-auto p-5 max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+        class="min-h-0 flex-1 overflow-y-auto p-5 max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+        :class="{ '[scrollbar-gutter:stable]': fixedHeight }"
       >
         <slot />
       </div>
@@ -146,7 +154,7 @@ defineExpose({ open, close })
       <!-- Actions -->
       <div
         v-if="isRendered && $slots.actions"
-        class="sticky bottom-0 z-10 flex items-center justify-end px-5 py-4 max-sm:pb-[max(1rem,env(safe-area-inset-bottom))]"
+        class="sticky bottom-0 z-10 flex shrink-0 items-center justify-end px-5 py-4 max-sm:pb-[max(1rem,env(safe-area-inset-bottom))]"
         :style="{
           background: 'var(--color-base-200)',
           borderTop: '1px solid var(--modal-border)',
@@ -178,6 +186,18 @@ defineExpose({ open, close })
    desynced fades between daisyUI's curve and ours. */
 .modal {
   background-color: transparent !important;
+}
+
+.modal-shell-fixed {
+  height: min(680px, calc(100dvh - 2rem));
+  max-height: calc(100dvh - 2rem);
+}
+
+@media (width < 640px) {
+  .modal-shell-fixed {
+    height: calc(100dvh - 1rem - env(safe-area-inset-top, 0px));
+    max-height: calc(100dvh - 1rem - env(safe-area-inset-top, 0px));
+  }
 }
 
 /* Modal shell: spring entrance using only composited transform + opacity.
