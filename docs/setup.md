@@ -25,8 +25,8 @@ sh ./cocoproxy doctor
 | `components` | 已有工具版本、polkit目录及指定Node版本；不证明全部运行能力 |
 | `identity` | 账户、UID、可信工具链接链、普通部署目录归属与祖先遍历；最终安装按实际输入与载荷复核 |
 | `network` | TUN、转发、指定地址，以及策略优先级/mark、路由表、nft表、TUN名称与网络回执；路由器实际行为另验 |
-| `management` | 受管HTTPS静态条件及终端信任待验提示；不证明监听端口、外部反代或实际登录可用 |
-| `installation` | 当前为未检查；已有安装的收据、文件漂移及维护状态另用 `inspect`，最终安装仍重新核验 |
+| `management` | 管理与受管HTTPS端口的当次socket观察、受管HTTPS静态条件及终端信任待验提示；外部反代或实际登录另验 |
+| `installation` | 复用 `inspect` 的收据、文件/发行漂移、锁与journal、维护状态及身份布局；最终安装仍重新核验 |
 
 检查状态保留 `pass`、`fail`、`unknown`：`pass` 只确认该项观察；明确条件不符或可信观察确认路径/命令不存在为 `fail`；权限不足、超时、命令失败或无法解析观察结果为 `unknown`，不能把失败命令直接解释为依赖缺失。任一必要项 `fail` 或 `unknown` 都不能继续算作预检准备通过。`readyForInstallPreflight: true` 仅表示已报告的必要项通过，可以继续完整安装预检，不证明未覆盖层、实际网络或整套部署已经就绪。
 
@@ -49,6 +49,14 @@ sh ./cocoproxy doctor
 网络资源判定也由 doctor 与最终安装器共享。`policy-rules` 拒绝所选三项策略优先级、核心保留的 9000–9010 优先级，以及与出口或核心保留 mark 有重叠的规则；`routes` 检查出口表、对应回程表及核心表；`firewall` 检查项目保护表和核心 nft 表，`tun-name` 检查核心 TUN 名称。`conflicts` 数组保留同项中全部已发现的固定原因码，不含原始规则。`network-receipt` 只接受缺失回执或可信 root:0600 单链接文件明确记录的 `removed` 状态；完整或中断回执需要通过维护流程显式退役。
 
 `INSTALL_RULE_CONFLICT`、`INSTALL_ROUTE_CONFLICT`、`INSTALL_NFT_CONFLICT`、`INSTALL_TUN_CONFLICT` 分别表示上述资源占用；`INSTALL_NETWORK_REMOVE_REQUIRED` 表示回执尚未退役。新增 `INSTALL_RULE_MARK_CONFLICT` 采用保守检查：支持数值/十六进制 mark、独立 mask 或 `mark/mask`，并识别 iproute2 实际输出的 `"not": null`。只有可识别的纯 mark 逆规则才反转匹配；逆规则还含非平凡地址或其他选择器时返回 `unknown`，避免将整条规则的反转误当成只反转 mark。不会求解接口、源地址、goto、suppress 等完整策略路由语义，可能要求操作者审阅更窄的规则。观察形状或 mark 表达式无法可靠解析时 doctor 返回 `SETUP_OBSERVATION_INVALID` / `unknown`，安装器拒绝并保留 `INSTALL_NETWORK_OBSERVATION_INVALID`。存在同名资源时不因它看似属于本项目就当作空闲；doctor 不运行网络 helper、不删除规则，也不自动接管资源。
+
+端口检查读取已有受信 `ss`（固定候选为 `/usr/bin/ss`、`/usr/sbin/ss`）的 IPv4/IPv6 `-a` 数字输出，覆盖工具可见的监听及已连接 TCP/UDP。本次没有发现地址、协议和端口重叠时，才报告该快照范围通过；这不是最终绑定保证，也不能排除查询后的竞争。管理、mixed 和 controller 按计划的 loopback 地址判断，DNS 与受管 HTTPS 按指定外设地址判断；不同地址或协议不一概当成冲突。IPv6 wildcard 的双栈行为、已连接 socket 的端口复用或必要查询证据不足时返回 `unknown`。查询出现错误、警告或无法识别输出时不按空列表处理。
+
+已有监听只有在完整可信收据、对应 unit 文件、无 override 的 unit 主进程、进程 executable 和 cgroup 同时匹配时，才认定为自有占用，并以 `SETUP_PORT_OWNED_REQUIRES_STOP` 阻断，要求先走维护停服。确认的新占用使用 `SETUP_PORT_CONFLICT`；归属或绑定语义不明使用 `SETUP_PORT_OWNERSHIP_UNKNOWN`；必要的监听/已连接查询不完整使用 `SETUP_PORT_OBSERVATION_INCOMPLETE`。报告不打印 PID、进程名、地址或原始输出，也不终止进程。
+
+较新 `ss -B` 可额外观察仅绑定未监听 TCP；该能力不是准备环境的强制依赖，工具不支持或空输出无法证明能力时，单列非必要的 `bound-sockets` / `SETUP_PORT_BOUND_SCOPE_UNAVAILABLE`，明确这个额外范围未覆盖。若该查询实际发现与计划端口重叠，仍合并到对应必要端口项并阻断。外部 HTTPS 模式单列 `external-https` 待验证提示；反代配置、实际转发、登录与终端信任按相应指南独立验收。
+
+已有安装的五项检查为 `installation-receipt`、`installation-files`、`installation-locks`、`installation-maintenance`、`installation-identity`。它们直接消费维护检查的只读证据；没有收据目录与查询失败会得到不同结论。`SETUP_INSTALLATION_INCOMPLETE` 要求审阅 pending、卸载残留、锁、未完成journal或临时写入；`SETUP_INSTALLATION_BUSY` 表示锁主进程仍存活；`SETUP_INSTALLATION_DRIFT` 要求核对受管文件或发行内容的缺失与改动；`SETUP_MAINTENANCE_REQUIRED` 要求先暂停持久运行；`SETUP_INSTALLATION_IDENTITY_MISMATCH` 要求核对已有服务 UID 和布局。权限不足、无法读取或检查器能力不足时相应项为 `unknown`；不通过删除锁、清回执或覆盖文件使检查变绿。
 
 ## 2. 填写一次环境事实
 
