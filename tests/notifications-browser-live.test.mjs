@@ -91,10 +91,17 @@ test('generated notification settings and real Service Worker preserve opt-in, h
     const section = page.getByRole('region', { name: '此设备的通知' });
     await section.getByRole('button', { name: '开启此设备通知', exact: true }).click();
     await section.getByRole('button', { name: '发送测试通知', exact: true }).waitFor();
+    await page.waitForFunction(() => {
+      const section = document.querySelector('[aria-labelledby="notifications-title"]');
+      return section && [...section.querySelectorAll('button')].some(button => button.textContent.includes('修复订阅') && !button.disabled);
+    });
+    assert.deepEqual(await section.getByRole('alert').allTextContents(), []);
     await section.getByLabel('在锁屏通知中显示节点名称', { exact: true }).check();
     await section.getByRole('button', { name: '保存通知偏好', exact: true }).click();
     await section.getByRole('button', { name: '发送测试通知', exact: true }).click();
     await section.getByRole('status').waitFor();
+    assert.deepEqual(await section.getByRole('alert').allTextContents(), []);
+    assert.equal(await section.getByLabel('在锁屏通知中显示节点名称', { exact: true }).isChecked(), true);
     for (let attempt = 0; !sent.length; attempt++) { assert.ok(attempt < 50); await new Promise(resolve => setTimeout(resolve, 100)); }
     assert.equal(sent.length, 1);
     const worker = context.serviceWorkers().find(worker => worker.url() === origin + '/cocoproxy-sw.js');

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { IconBell, IconBellOff, IconRefresh, IconSend } from '@tabler/icons-vue'
-import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
+import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import { useNotifications, type NotificationPreferences } from '~/composables/useNotifications'
 
 const notifications = useNotifications()
@@ -12,8 +12,12 @@ const reasonText = (reason: string) => ({ 'failure-recovery': '故障切换', 'p
 async function run(action: () => Promise<void>) {
   if (busy.value) return
   busy.value = true; error.value = ''; feedback.value = ''
-  try { await action(); if (status.value) preferences.value = structuredClone(status.value.preferences) }
-  catch (cause) { error.value = cause instanceof Error && !('code' in cause) ? cause.message : cocoproxyErrorMessage(cause) }
+  try {
+    await action()
+    if (status.value) preferences.value = { ...status.value.preferences,
+      groups: status.value.preferences.groups === null ? null : [...status.value.preferences.groups] }
+  }
+  catch (cause) { error.value = cause instanceof CoCoProxyError ? cocoproxyErrorMessage(cause) : cause instanceof Error ? cause.message : cocoproxyErrorMessage(cause) }
   finally { busy.value = false }
 }
 async function test() { await notifications.test(); feedback.value = '测试通知已排队，请确认此设备是否弹出；可稍后刷新发送状态。' }
