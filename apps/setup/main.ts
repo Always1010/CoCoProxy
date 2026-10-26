@@ -13,6 +13,9 @@ import { privateRead, inspectPrivateDirectory, syncDirectory } from '../../packa
 const help = `CoCoProxy 部署与维护入口
 
   check                                  无 Node 前置条件盘点（使用 shell 入口）
+  deploy --local [--check|--preview]       本机部署／更新；无需本机 SSH（使用 shell 入口）
+  deploy <IP> [--check|--preview]          通过 SSH 部署／更新目标（使用 shell 入口）
+                                         deploy --help 查看输入参数；本机部署及预览需 root
   doctor [--environment PRIVATE_JSON]     汇总目标环境只读检查
   configure --environment PRIVATE_JSON --payload DIR --manifest-sha256 SHA
             --output PRIVATE_JSON [--router-output PRIVATE_JSON] [--existing-input PRIVATE_JSON]

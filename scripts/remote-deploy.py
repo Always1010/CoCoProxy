@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release-bundled SSH deployment coordinator. No downloads or dependency installs."""
+"""Release-bundled local/SSH deployment coordinator. No downloads or dependency installs."""
 import argparse
 import copy
 try:

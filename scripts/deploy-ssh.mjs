@@ -8,6 +8,22 @@ import { fileURLToPath } from 'node:url';
 
 export const quoteRemote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const fail = code => { throw Object.assign(new Error(code), { code }); };
+const inventoryCode = "import json,os,platform,shutil;print(json.dumps({'platform':platform.system(),'architecture':platform.machine(),'root':getattr(os,'geteuid',lambda:-1)()==0,'node':bool(shutil.which('node')),'systemd':os.path.isdir('/run/systemd/system')}))";
+const deploymentValues = ['--payload', '--manifest-sha256', '--environment', '--input', '--admin-input', '--router-config', '--router-hook', '--web-unit'];
+export function parseLocalOptions(args) {
+  const result = { check: false, preview: false };
+  for (let index = 0; index < args.length; index++) {
+    const option = args[index];
+    if (option === '--local' && !result.local) { result.local = true; continue; }
+    if (['--check', '--preview'].includes(option) && !result[option.slice(2)]) { result[option.slice(2)] = true; continue; }
+    if (!deploymentValues.includes(option) || !args[index + 1] || args[index + 1].startsWith('--') || Object.hasOwn(result, option)) fail('LOCAL_ARGUMENTS_INVALID');
+    result[option] = args[++index];
+  }
+  if (!result.local || (result.check && result.preview)) fail('LOCAL_ARGUMENTS_INVALID');
+  if (result['--manifest-sha256'] && !/^[a-f0-9]{64}$/.test(result['--manifest-sha256'])) fail('REMOTE_MANIFEST_SHA_INVALID');
+  if (result['--payload'] && !result['--manifest-sha256']) fail('REMOTE_TRUSTED_MANIFEST_REQUIRED');
+  return result;
+}
 export function parseRemoteOptions(args) {
   const target = args[0];
   if (!isIP(target ?? '')) fail('REMOTE_TARGET_IP_REQUIRED');
@@ -39,6 +55,11 @@ function run(command, args, { input, capture = false } = {}) {
     if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
   });
 }
+async function privateInput(path) {
+  const local = await realpath(resolve(path)), stat = await lstat(local);
+  if (!stat.isFile() || stat.nlink !== 1 || stat.size > 128 * 1024 || process.platform !== 'win32' && (stat.mode & 0o077) !== 0) fail('REMOTE_PRIVATE_INPUT_REQUIRED');
+  return local;
+}
 export async function verifyTransportPayload(directory, expected) {
   const root = await realpath(directory), info = await lstat(join(root, 'manifest.json'));
   if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 4 * 1024 * 1024) fail('REMOTE_MANIFEST_INVALID');
@@ -65,10 +86,34 @@ export async function verifyTransportPayload(directory, expected) {
   return { root, sha256, names: [...names], commit: manifest.commit };
 }
 
+// Local and SSH entry points use the same target coordinator, lock and journal.
+// The injected runner allows orchestration tests without touching system services.
+export async function deployLocal(args, execute = run) {
+  const options = parseLocalOptions(args);
+  const inventory = JSON.parse(await execute('python3', ['-c', inventoryCode], { capture: true }));
+  if (inventory.platform !== 'Linux' || !['aarch64', 'x86_64'].includes(inventory.architecture) || !inventory.node || !inventory.systemd) fail('LOCAL_TARGET_PREREQUISITES_MISSING');
+  if (options.check) { console.log(JSON.stringify({ checked: true, readOnly: true, transport: 'local', ...inventory })); return; }
+  if (!inventory.root) fail('LOCAL_DEPLOY_ROOT_REQUIRED');
+  const bundled = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  const payload = await verifyTransportPayload(options['--payload'] ? resolve(options['--payload']) : bundled, options['--manifest-sha256']);
+  const coordinator = [join(payload.root, 'source/scripts/remote-deploy.py'), '--payload', payload.root, '--manifest-sha256', payload.sha256];
+  for (const flag of ['--environment', '--input', '--admin-input', '--router-config']) {
+    if (options[flag]) coordinator.push(flag, await privateInput(options[flag]));
+  }
+  for (const flag of ['--router-hook', '--web-unit']) if (options[flag]) coordinator.push(flag, options[flag]);
+  if (options.preview) coordinator.push('--preview');
+  console.log(JSON.stringify({ phase: options.preview ? 'preflight' : 'deploy', transport: 'local', sourceCommit: payload.commit, manifestSha256: payload.sha256 }));
+  await execute('python3', coordinator);
+}
+
 export async function deployRemote(args) {
   if (args.length === 0 || args[0] === '--help') {
-    console.log(`CoCoProxy 远程部署／更新\n\n  cocoproxy deploy <IP> [--user USER] [--port PORT]\n  cocoproxy deploy <IP> --check\n  cocoproxy deploy <IP> --preview\n\n在已核验的解压发行包中运行；仅传输该发行包清单中的文件。\n首次安装提供 --environment 私有环境JSON --admin-input 私有管理员JSON。\n首次接入既有安装提供 --input 原私有安装JSON；后续更新复用目标保存的输入。\n自动网关更新另需 --router-config 私有路由器SSH配置，或 --router-hook 可信适配器；后续复用。\n可选：--identity SSH密钥路径 --known-hosts 已核验主机文件 --web-unit 外部HTTPS单元名。\n源码调用另提供 --payload 发行目录 --manifest-sha256 可信摘要。\n不会构建源码、安装系统依赖、猜测拓扑、自动接受SSH指纹或修改本机SSH配置。`);
+    console.log(`CoCoProxy 本地／远程部署与更新\n\n  sudo cocoproxy deploy --local\n  cocoproxy deploy --local --check\n  sudo cocoproxy deploy --local --preview\n  cocoproxy deploy <IP> [--user USER] [--port PORT]\n  cocoproxy deploy <IP> --check\n  cocoproxy deploy <IP> --preview\n\n在已核验的解压发行包中运行；部署当前包的版本。\n--local 直接在当前 Linux/systemd 主机安装或更新，不通过 SSH 连接本机。\n本地部署及预览需要 root；--check 只读盘点基本条件，无需 root。\n首次安装提供 --environment 私有环境JSON --admin-input 私有管理员JSON。\n首次接入既有安装提供 --input 原私有安装JSON；后续更新复用目标保存的输入。\n自动网关更新另需 --router-config 私有路由器SSH配置，或 --router-hook 可信适配器；后续复用。\n远程可选：--identity SSH密钥路径 --known-hosts 已核验主机文件。\n两种模式均可选 --web-unit 外部HTTPS单元名。\n源码调用另提供 --payload 发行目录 --manifest-sha256 可信摘要。\n不会构建源码、安装系统依赖、猜测拓扑、自动接受SSH指纹或修改本机SSH配置。`);
     return;
+  }
+  if (args.includes('--local')) {
+    if (args.length === 2 && args.includes('--help')) return deployRemote(['--help']);
+    return deployLocal(args);
   }
   const options = parseRemoteOptions(args);
   const ssh = ['-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3'];
@@ -81,7 +126,7 @@ export async function deployRemote(args) {
     ssh.push('-o', 'HostKeyAlias=' + options['--host-key-alias']);
   }
   const inventory = JSON.parse(await run('ssh', [...ssh, destination,
-    "python3 -c " + quoteRemote("import json,os,platform,shutil;print(json.dumps({'platform':platform.system(),'architecture':platform.machine(),'root':os.geteuid()==0,'node':bool(shutil.which('node')),'systemd':os.path.isdir('/run/systemd/system')}))")], { capture: true }));
+    "python3 -c " + quoteRemote(inventoryCode)], { capture: true }));
   if (inventory.platform !== 'Linux' || !['aarch64', 'x86_64'].includes(inventory.architecture) || !inventory.node || !inventory.systemd) fail('REMOTE_TARGET_PREREQUISITES_MISSING');
   if (options.check) { console.log(JSON.stringify({ checked: true, readOnly: true, ...inventory })); return; }
   const bundled = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -100,8 +145,7 @@ export async function deployRemote(args) {
     const remoteArgs = [stage + '/source/scripts/remote-deploy.py', '--payload', stage, '--manifest-sha256', payload.sha256];
     for (const [flag, name] of [['--environment', 'environment.json'], ['--input', 'deployment.json'], ['--admin-input', 'administrator.json'], ['--router-config', 'router-ssh.json']]) {
       if (!options[flag]) continue;
-      const local = await realpath(resolve(options[flag])), stat = await lstat(local);
-      if (!stat.isFile() || stat.nlink !== 1 || stat.size > 128 * 1024 || process.platform !== 'win32' && (stat.mode & 0o077) !== 0) fail('REMOTE_PRIVATE_INPUT_REQUIRED');
+      const local = await privateInput(options[flag]);
       const remote = stage + '/' + name;
       const writer = "import os,sys;fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600);f=os.fdopen(fd,'wb');f.write(sys.stdin.buffer.read());f.close()";
       await run('ssh', [...ssh, destination, 'python3 -c ' + quoteRemote(writer) + ' ' + quoteRemote(remote)], { input: await readFile(local) });
