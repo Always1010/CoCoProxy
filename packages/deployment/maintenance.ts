@@ -3,10 +3,11 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir, unlink } from 'node:fs/promises';
 import { platform } from 'node:os';
 import { posix } from 'node:path';
-import { assertDeploymentExecutable, assertDeploymentStopped, assertDeploymentLifecycle, assertOwnedDeploymentFiles,
+import { assertDeploymentAccount, assertDeploymentExecutable, assertDeploymentStopped, assertDeploymentLifecycle, assertOwnedDeploymentFiles,
   assertPrivateDeploymentFile, assertRootPath, deploymentPathInfo, deploymentProcessIdentity, InstallError,
   parseDeploymentLock, readRegularDeploymentFile, runDeploymentTool, validateReceipt, verifyRelease,
-  writeAtomicDeploymentFile, type DeploymentLock, type Receipt } from './install.ts';
+  writeAtomicDeploymentFile, releaseTarget, type DeploymentLock, type Receipt } from './install.ts';
+import { renderDeploymentPlan } from './plan.ts';
 
 const STORE = '/var/lib/cocoproxy-deployment';
 const RECEIPT = STORE + '/receipt.json';
@@ -43,6 +44,24 @@ async function releaseEvidence(receipt: Receipt) {
     require(((await lstat(path)).mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_RELEASE_PERMISSIONS_CHANGED');
   }
 }
+/** Shared lifecycle proof. Private input is returned only to trusted in-process callers. */
+export async function loadInstalledDeployment(inputPath: string) {
+  rootHost();
+  await assertRootPath(inputPath); await assertPrivateDeploymentFile(inputPath, 0);
+  const inputBytes = await readRegularDeploymentFile(inputPath, 128 * 1024);
+  const input = JSON.parse(inputBytes.toString());
+  const plan = renderDeploymentPlan(input), previous = await readReceipt();
+  require(previous.receipt.status === 'complete' && previous.receipt.serviceUid === input.runtime.serviceUid &&
+    previous.receipt.stateDirectory === input.runtime.stateDirectory && previous.receipt.credentialPath === input.management.credentialPath &&
+    previous.receipt.release === releaseTarget(input, previous.receipt.manifestSha256) && previous.receipt.files.length === plan.files.length &&
+    plan.files.every(file => previous.receipt.files.some(old => old.path === file.path && old.mode === file.mode &&
+      old.owner === file.owner && old.sensitive === file.sensitive && old.sha256 === digest(file.content))), 'INSTALL_RECEIPT_MISMATCH_OR_INCOMPLETE');
+  await assertOwnedDeploymentFiles(previous.receipt.files);
+  await releaseEvidence(previous.receipt);
+  await assertDeploymentExecutable(input.runtime.nodePath); await assertDeploymentExecutable(input.runtime.systemctlPath);
+  await assertDeploymentAccount(input.management.serviceUser, input.runtime.serviceUid);
+  return { input, inputBytes, plan, receipt: previous.receipt, receiptBytes: previous.bytes };
+}
 
 /** No service operation, lock removal, file writes, or credential contents. */
 export async function inspectDeployment() {
@@ -78,13 +97,25 @@ export async function inspectDeployment() {
   }
   let release = 'matches-receipt';
   try { await releaseEvidence(receipt); } catch (error) { release = errorCode(error); }
+  let lifecycleJournal: { status: string; action?: string; id?: string } | undefined;
+  if (await deploymentPathInfo(STORE + '/lifecycle.json')) {
+    try {
+      await assertPrivateDeploymentFile(STORE + '/lifecycle.json', 0);
+      const j = JSON.parse((await readRegularDeploymentFile(STORE + '/lifecycle.json', 16384)).toString());
+      require(j.schemaVersion === 1 && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(j.id) &&
+        ['pending', 'complete'].includes(j.status) && ['initialize', 'start-management', 'enable-persistence', 'pause-maintenance', 'stop-maintenance', 'resume-persistence'].includes(j.action),
+      'INSTALL_LIFECYCLE_JOURNAL_INVALID');
+      lifecycleJournal = { status: j.status, action: j.action, id: j.id };
+    } catch (error) { lifecycleJournal = { status: errorCode(error) }; }
+  }
   let lock: { present: boolean; owner?: 'gone' | 'alive'; status?: string } = { present: false };
   if (await deploymentPathInfo(LOCK)) {
     lock = { present: true };
     try {
       const parsed = await readLock();
       lock.owner = deploymentOwnerGone(parsed.lock, await deploymentProcessIdentity(parsed.lock.pid)) ? 'gone' : 'alive';
-      lock.status = receipt.transaction?.id === parsed.lock.id ? 'matches-receipt' : 'INSTALL_LOCK_RECEIPT_MISMATCH';
+      lock.status = receipt.transaction?.id === parsed.lock.id ? 'matches-receipt' : lifecycleJournal?.id === parsed.lock.id ?
+        'matches-lifecycle-journal' : 'INSTALL_LOCK_RECEIPT_MISMATCH';
     } catch (error) { lock.status = errorCode(error); }
   }
   const temporaryFiles: string[] = [];
@@ -96,6 +127,7 @@ export async function inspectDeployment() {
   }
   return { installed: true, readOnly: true, receipt: { status: receipt.status, manifestSha256: receipt.manifestSha256,
     operation: receipt.transaction?.operation ?? 'unknown-legacy' }, files, release, lock,
+    ...(lifecycleJournal ? { lifecycleJournal: { status: lifecycleJournal.status, action: lifecycleJournal.action } } : {}),
     recoveryLock: { present: Boolean(await deploymentPathInfo(STORE + '/recovery.lock')) }, temporaryFiles,
     recovery: 'Only an abandoned transaction with every intended byte already installed can be finalized; partial writes and legacy locks require manual review.',
     preservedState: true, automaticProgramRollback: false };
