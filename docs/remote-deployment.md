@@ -1,0 +1,66 @@
+# 从另一台电脑部署与更新
+
+这个入口随 Linux 发行包提供，供普通部署者使用，不需要开发仓库、构建工具链或特定设备。先从可信发行来源核对 SHA256SUMS，解压匹配目标架构的发行包，再在解压目录运行。它部署当前解压的版本，不自动下载“最新版本”。
+
+```sh
+./cocoproxy deploy 192.0.2.2 --check
+./cocoproxy deploy 192.0.2.2
+```
+
+Windows 也可以直接使用发行包中的 Node 入口：
+
+```powershell
+node source/scripts/deploy-ssh.mjs 192.0.2.2
+```
+
+上述地址为合成示例。IP 是唯一必填位置参数；SSH 用户、端口和密钥由系统已有 SSH 配置提供，或使用 `--user`、`--port`、`--identity`、`--known-hosts` 显式指定。目标的不同接口共用已核验主机身份时可显式指定 `--host-key-alias`。工具不会改本机 SSH 配置、自动接受未知指纹或忽略指纹变化。首次连接应先用原生 SSH 核验身份。目标需具有 Node.js ≥22.18、Python 3、systemd 及[部署指南](getting-started.md)所列运行工具、专用服务账户与网络前提；调用电脑需要 Node、OpenSSH 和 tar。工具不安装依赖或创建系统账户。
+
+## 首次安装
+
+IP 不能确定接口、路由器 MAC、LAN 范围、HTTPS、管理员身份或订阅许可。先按[安装配置说明](setup.md)准备私有环境 JSON、目标上的 HTTPS 证书与服务身份，以及仅用于首次初始化的私有管理员 JSON。然后运行：
+
+```sh
+./cocoproxy deploy 192.0.2.2 --user operator \
+  --environment /absolute/private/environment.json \
+  --admin-input /absolute/private/administrator.json
+```
+
+环境字段使用 `source/examples/setup-environment.json` 的合成结构。管理员文件包含 `username` 和 `password`，不得把真实值写进命令行、源码、发行包或公开日志。Unix 上输入必须是 0600 的单链接普通文件；Windows 上应使用仅当前用户可读的私有目录。SSH 非 root 用户通过目标上的 sudo 授权执行；交互终端可提示 sudo 密码，无终端自动化要求已有 `sudo -n` 权限。
+
+入口核验清单中的文件，传输到专用临时目录，再由目标端公开安装器核验完整载荷、平台、权限、配置及安装归属。安装后初始化唯一管理员并启动管理服务；配置为受管 HTTPS 时也启动网页服务。不自动 enable、不导入订阅、不为路由器开启流量交付。首次应用和端到端验收继续按[部署指南](getting-started.md)完成。
+
+## 后续更新
+
+目标保存 `/etc/cocoproxy-install/deployment.json`，作为唯一的部署输入主本，权限为 root:0600、父目录 root:0700。新版本只更换 release、核心摘要和服务入口，保留网络、内部身份、凭据路径和业务状态。取得并核验下一版发行包后，再运行同一条 `cocoproxy deploy <IP>` 即可。
+
+之前通过底层安装器部署的设备，首次使用此入口时传入原私有安装输入：
+
+```sh
+./cocoproxy deploy 192.0.2.2 --input /absolute/private/previous-deployment.json
+```
+
+它必须与已安装收据及实际配置一致，工具不凭 IP 猜测或接管手工安装，也不绕过配置审阅。自定义输入路径仍按原安装器验证。
+
+自动网关更新需要先关闭协同路由器交付。已验证的 AlwayRoute 可一次性提供路由器 SSH 参数文件：
+
+```json
+{
+  "host": "192.0.2.1",
+  "user": "root",
+  "port": 22,
+  "identityFile": "/absolute/private/router-key",
+  "knownHostsFile": "/absolute/private/router-known-hosts"
+}
+```
+
+这些路径指向目标网关上原有的密钥与主机指纹文件，工具不会复制密钥。首次更新增加 `--router-config /absolute/private/router-ssh.json`，以后复用目标上的 root:0600 配置。适配器通过公开 ubus API 查询、关闭、等待任务并恢复原开启意图，不安装或更新路由器软件。其他协同路由器可配置 `--router-hook /absolute/root-owned/executable`：它依次接受 `status`、`disable`、`enable`，`status` 只返回 `{"enabled":true}` 或 `{"enabled":false}`，执行操作须等待结果确认。适配器及全部祖先须 root 控制、不可被其他身份写入。
+
+更新先在服务运行期间执行公开 prepare 检查，然后持久 pause、关闭路由器交付、停止服务并安全退役旧网络，再执行公开升级。随后恢复原服务启用与活动意图、runtime 和路由器意图，核验核心就绪以及凭据、订阅和工作区未变化。独立外部网页单元如需随维护暂停，可首次传入 `--web-unit cocoproxy-web.service`；受管网页自动纳入。不会改变原有 enable 状态、重启整机或自动回滚业务状态。
+
+## 预览、中断与输出
+
+`--check` 只读检查 SSH 目标基本前提，不传送载荷。`--preview` 会传输并暂存载荷、生成临时私有输入及执行 prepare，但不停止服务或安装自有文件。正常命令才执行安装／更新。
+
+失败不会自动重复系统变更。目标 `/etc/cocoproxy-install/remote-last.json` 记录阶段和摘要；出现失败或未完成记录时停止普通部署，先按[安装与维护](deployment.md)审阅实际状态。安装器收据与锁仍是文件安装的权威证据，不能删除它们重试。远程协调失败涉及 runtime、路由器与服务恢复时，应先核对这些独立状态；不能只依据 SSH 返回值判断成功。
+
+默认只输出固定阶段、提交、摘要和验证结果，不输出配置、口令、原始系统错误或订阅。仅清单中的发行文件进入传输，明确拒绝 `.local/`、`.git/` 和目录链接。运行依赖由发行清单明确列入，不能把开发工作区的 node_modules 整体打包。SSH 临时上传和临时管理员输入在收尾清理；旧正式 release 按安装器规则保留，不称为业务备份。首次提供的私有输入是否继续保留由操作者管理。
