@@ -8,6 +8,7 @@ import {
   IconBolt,
   IconBrandSpeedtest,
   IconChevronRight,
+  IconRefresh,
   IconRouter,
   IconTarget,
   IconWorld,
@@ -47,16 +48,17 @@ const groupNames = computed(() => props.groups.map((g) => g.name))
 // browsing state under the scheme identity instead, including across navigation.
 const { workspace } = useWorkspace()
 const { view, busy, overrides } = useWorkspace()
-const automaticEnabled = computed(() => {
-  const policy = activeName.value ? overrides.value.automatic?.[activeName.value] : undefined
-  return !!policy && policy.enabled !== false
-})
 const scope = `${workspace.value?.mode ?? 'initial'}:${workspace.value?.mode === 'subscription' ? workspace.value.subscriptionId ?? '' : ''}`
 const { activeName, scrollTop } = useProxyWorkbench(scope, groupNames)
 
 const activeGroup = computed(
   () => props.groups.find((g) => g.name === activeName.value) ?? null,
 )
+function isAutomaticGroup(group: ProxyType) {
+  const policy = overrides.value.automatic?.[group.name]
+  return group.type === 'Selector' && !!policy && policy.enabled !== false
+}
+const automaticEnabled = computed(() => !!activeGroup.value && isAutomaticGroup(activeGroup.value))
 const canSelect = computed(() => activeGroup.value?.type === 'Selector')
 const activeNodes = computed(() =>
   activeGroup.value
@@ -211,9 +213,9 @@ function aliveCount(group: ProxyType) {
         v-for="group in groups"
         :key="group.name"
         type="button"
-        :aria-label="`策略组 ${group.name}`"
+        :aria-label="`策略组 ${group.name}${isAutomaticGroup(group) ? '，自动选择' : ''}`"
         :aria-pressed="group.name === activeName"
-        class="flex w-36 shrink-0 flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-all duration-200 sm:w-auto sm:shrink"
+        class="flex w-44 shrink-0 flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-all duration-200 sm:w-auto sm:shrink"
         :class="
           group.name === activeName
             ? 'border-primary/55 bg-primary/12 text-base-content'
@@ -222,7 +224,16 @@ function aliveCount(group: ProxyType) {
         @click="activeName = group.name"
       >
         <span class="flex items-center justify-between gap-2">
-          <span class="truncate text-sm font-semibold">{{ group.name }}</span>
+          <span class="flex min-w-0 items-center gap-1">
+            <span class="truncate text-sm font-semibold">{{ group.name }}</span>
+            <span
+              v-if="isAutomaticGroup(group)"
+              class="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[0.65rem] leading-none text-primary"
+            >
+              <IconRefresh :size="12" aria-hidden="true" />
+              <span>自动</span>
+            </span>
+          </span>
           <span class="shrink-0 text-[0.7rem] text-base-content/50">
             {{ aliveCount(group) }}/{{ group.all?.length ?? 0 }}
           </span>
@@ -250,8 +261,9 @@ function aliveCount(group: ProxyType) {
             <span
               class="badge inline-flex min-w-0 items-center gap-1 badge-sm badge-primary"
             >
+              <IconRefresh v-if="automaticEnabled" :size="14" class="shrink-0" aria-hidden="true" />
               <span class="shrink-0 font-bold">{{
-                formatProxyType(activeGroup.type, t)
+                automaticEnabled ? '自动选择' : formatProxyType(activeGroup.type, t)
               }}</span>
               <template v-if="activeGroup.now?.length">
                 <IconChevronRight :size="16" class="shrink-0" />
@@ -278,7 +290,7 @@ function aliveCount(group: ProxyType) {
           </button>
         </div>
 
-        <p v-if="automaticEnabled" class="text-xs text-primary" role="status">自动选择已启用 · 点击节点将切换为手动</p>
+        <p v-if="automaticEnabled" class="text-xs text-primary" role="status">点击节点可切换为手动选择</p>
 
         <!-- Quick-filter rail: region · protocol · features. Each facet group
              gets its own row so a long region list (many flags) can never push
