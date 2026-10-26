@@ -34,7 +34,9 @@ export function verifyOfflineDocumentation(contents) {
   const names = new Set(contents.keys());
   let checked = 0;
   for (const [path, bytes] of contents) {
-    if (!path.endsWith('.md')) continue;
+    // Dependency README files describe their upstream repositories, not this
+    // offline product guide. Their links can point at tests or sibling packages.
+    if (!path.endsWith('.md') || path.split('/').includes('node_modules')) continue;
     const text = bytes.toString('utf8').replace(/^\s*(```|~~~)[\s\S]*?^\s*\1[^\n]*$/gmu, '')
       .replace(/`[^`\n]*`/gu, '');
     const targets = [
