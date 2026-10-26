@@ -200,9 +200,6 @@ function deploymentStateHost(stateDirectory: string, serviceUid: number): Upgrad
     },
   };
 }
-export async function assessDeploymentState(stateDirectory: string, serviceUid: number, declaration: unknown) {
-  return (await inspectStateCompatibility(deploymentStateHost(stateDirectory, serviceUid), declaration)).findings;
-}
 export function assertDeploymentStateCompatibility(files: Awaited<ReturnType<typeof inspectStateCompatibility>>['findings']) {
   require(!files.some(file => file.status === 'unsupported-version' || file.contentCompatibility.code === 'DEPLOYMENT_STATE_VERSION_UNSUPPORTED'), 'INSTALL_STATE_SCHEMA_UNSUPPORTED');
   require(!files.some(file => file.contentCompatibility.status === 'unsupported'), 'INSTALL_STATE_CONTENT_UNSUPPORTED');
@@ -510,8 +507,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
         catch { networkReceipt = { observation: 'read', value: null }; }
       }
     } catch { networkReceipt = { observation: 'unavailable' }; }
-    compatibilityAssessment = await createUpgradeAssessment({ previousDeclaration: JSON.parse((await regular(previous!.release + '/manifest.json')).toString()).compatibility,
-      targetDeclaration: declaration, currentRuntime: oldRuntime, targetRuntime: newRuntime,
+    compatibilityAssessment = await createUpgradeAssessment({ targetDeclaration: declaration, currentRuntime: oldRuntime, targetRuntime: newRuntime,
       currentManagement: oldManagement, targetManagement: newManagement, credential, credentialObserved, networkReceipt }, stateHost, inspectedState);
     if (!preparing) {
       require(compatibilityAssessment.assessments.historyCandidates.status !== 'unsupported', 'INSTALL_HISTORY_CANDIDATE_UNSUPPORTED');
@@ -542,7 +538,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
       'future state writes must be reassessed before program rollback'],
     applyPrerequisites: ['explicit operator authorization',
       'pause automatic lifecycle', 'stop and disable deployment units', 'remove owned gateway network resources', 'repeat complete apply preflight'],
-    state: { action: 'preserve-in-place', rollback: compatibilityAssessment!.rollback, automaticProgramRollback: false } } : {}) };
+    state: { action: 'preserve-in-place', automaticProgramRollback: false } } : {}) };
   if (!options.apply) return preview;
   if (!(await info(STORE))) { await mkdir(STORE, { mode: 0o700 }); await chown(STORE, 0, 0); await chmod(STORE, 0o700); }
   // Exclusive intent lock survives errors/crashes. An operator must inspect the

@@ -93,35 +93,23 @@ function upgradeFixture() {
   const host: UpgradeStateHost = { read: async (path, maximum) => { calls.push('read:' + path);
     const value = files.get(path); if (value !== undefined && Buffer.byteLength(value) > maximum) throw new Error('bounded'); return value ?? null; },
     list: async path => { calls.push('list:' + path); return [...files.keys()].filter(key => key.startsWith(path + '/')).map(key => key.slice(path.length + 1)); } };
-  const context: UpgradeAssessmentContext = { previousDeclaration: DEPLOYMENT_STATE_COMPATIBILITY, targetDeclaration: DEPLOYMENT_STATE_COMPATIBILITY,
+  const context: UpgradeAssessmentContext = { targetDeclaration: DEPLOYMENT_STATE_COMPATIBILITY,
     currentRuntime: runtime, targetRuntime: { ...runtime, binaryPath: '/synthetic/new-core' }, currentManagement: management, targetManagement: management,
     credential, credentialObserved: true, networkReceipt: { observation: 'absent' } };
-  return { context, host, files, active, previous, calls };
+  return { context, host, files, active, calls };
 }
 
-test('upgrade preparation evaluates five formats and three rollback routes with checked facts and outstanding core or external evidence', async () => {
+test('upgrade preparation checks observed formats and identity without running a core or disclosing private values', async () => {
   const fixture = upgradeFixture();
   const result = await createUpgradeAssessment(fixture.context, fixture.host);
   assert.deepEqual(Object.keys(result.assessments), ['state', 'configuration', 'historyCandidates', 'network', 'identity']);
   for (const assessment of Object.values(result.assessments)) assert.equal(assessment.status, 'supported', assessment.code);
-  assert.deepEqual(Object.keys(result.rollback), ['configuration', 'program', 'directConnectivity']);
-  assert.equal(result.rollback.configuration.status, 'unknown');
-  assert.equal(result.rollback.configuration.code, 'ROLLBACK_CONFIGURATION_CORE_VALIDATION_REQUIRED');
-  assert.equal(result.rollback.program.status, 'unknown');
-  assert.ok(result.rollback.program.checks!.some(item => item.code === 'UPGRADE_CORE_SYNTAX_NOT_RUN'));
-  assert.equal(result.rollback.directConnectivity.code, 'ROLLBACK_DIRECT_CONNECTIVITY_EXTERNAL_EVIDENCE_REQUIRED');
-  assert.ok(Object.values(result.rollback).every(item => item.conditions.length > 0));
   assert.ok(fixture.calls.every(call => /^(read|list):/.test(call)));
   assert.doesNotMatch(JSON.stringify(result), /EXAMPLE_ONLY|subscription\.example|gateway\.example|\/synthetic\/|"salt"|"hash"/);
 });
 
 test('synthetic legacy declarations, broken complete data, missing history references and unavailable observations remain distinct', async () => {
-  const old = upgradeFixture(); old.context.previousDeclaration = { schemaVersion: 1, stateSchemas: DEPLOYMENT_STATE_COMPATIBILITY.stateSchemas };
-  const legacy = await createUpgradeAssessment(old.context, old.host);
-  assert.equal(legacy.assessments.state.status, 'supported');
-  assert.equal(legacy.rollback.program.status, 'unknown');
-  assert.equal(legacy.rollback.program.checks![0].status, 'unknown');
-  assert.ok(legacy.rollback.program.checks!.some(item => item.code === 'ROLLBACK_OLD_CONFIGURATION_READER_UNKNOWN'));
+  const old = upgradeFixture();
   old.context.targetDeclaration = { schemaVersion: 1, stateSchemas: DEPLOYMENT_STATE_COMPATIBILITY.stateSchemas };
   const undeclared = await createUpgradeAssessment(old.context, old.host);
   assert.equal(undeclared.assessments.state.status, 'unknown');
@@ -139,22 +127,16 @@ test('synthetic legacy declarations, broken complete data, missing history refer
     if (path.startsWith('candidates/')) throw new Error('PRIVATE PATH EACCES'); return unavailable.host.read(path, maximum);
   } });
   assert.equal(unreadable.assessments.historyCandidates.status, 'unknown');
-  assert.equal(unreadable.rollback.configuration.status, 'unknown');
-  assert.ok(unreadable.rollback.program.checks!.some(item => item.code === 'ROLLBACK_OLD_CANDIDATE_FORMAT_ASSESSED' && item.status === 'unknown'));
   assert.doesNotMatch(JSON.stringify(unreadable), /PRIVATE PATH|EACCES/);
 });
 
-test('configuration and program rollback reject incompatible readers while valid origin changes require reauthorization rather than damaged-state handling', async () => {
+test('valid origin changes require reauthorization rather than damaged-state handling', async () => {
   const fixture = upgradeFixture();
   fixture.context.targetManagement = { ...fixture.context.currentManagement, origin: 'https://next.example:8443' };
   const changedOrigin = await createUpgradeAssessment(fixture.context, fixture.host);
   assert.equal(changedOrigin.assessments.state.status, 'supported');
   assert.equal(changedOrigin.assessments.identity.status, 'unsupported');
   assert.ok(changedOrigin.assessments.identity.checks!.some(item => item.code === 'UPGRADE_IDENTITY_REAUTHORIZATION_REQUIRED'));
-  fixture.context.previousDeclaration = { ...DEPLOYMENT_STATE_COMPATIBILITY, stateSchemas: { ...DEPLOYMENT_STATE_COMPATIBILITY.stateSchemas, transaction: 2 } };
-  assert.equal((await createUpgradeAssessment(fixture.context, fixture.host)).rollback.program.status, 'unsupported');
-  const noAlternative = upgradeFixture(); noAlternative.files.delete('candidates/' + noAlternative.previous.id + '.json');
-  assert.equal((await createUpgradeAssessment(noAlternative.context, noAlternative.host)).rollback.configuration.code, 'ROLLBACK_ALTERNATIVE_CONFIGURATION_ABSENT');
 });
 
 test('gateway assessment separates static bindings and trusted receipt headers from unverified complete resources and live ownership', async () => {
