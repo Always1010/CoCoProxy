@@ -85,6 +85,10 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
         return !s.directory && !s.link && s.uid === 0 && (s.mode & 0o022) === 0 && (s.mode & 0o005) === 0o005;
       }, '运行工具应为 root 控制且服务账户可读取和执行。', '使用系统安装的工具，最终安装预检仍会核对全部祖先。');
     }
+    await probe('configured-node-version', async () => {
+      const version = (await host.run(environment.system.nodePath, ['--version'])).trim();
+      return /^v\d+\.\d+\.\d+$/.test(version) && supportedNode(version.slice(1));
+    }, '安装设置指定的 Node 路径必须同样满足版本要求。', '不能用当前入口运行时的版本替代目标 nodePath 的版本。');
     for (const [id, path, args, field] of [
       ['policy-rules', '/usr/sbin/ip', ['-j', 'rule', 'show'], null],
       ['routes', '/usr/sbin/ip', ['-j', 'route', 'show', 'table', 'all'], null],

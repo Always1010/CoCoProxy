@@ -82,7 +82,7 @@ export function createSetupDeployment(environment: SetupEnvironment, release: Se
   if (!/^[a-f0-9]{64}$/.test(release.manifestSha256) || !/^[a-f0-9]{64}$/.test(release.binarySha256)) fail();
   integer(release.serviceUid, 1, 4_294_967_294);
   const old = previous === undefined ? undefined : cloneConfigJson(previous) as any;
-  if (old) {
+  if (previous !== undefined) {
     renderDeploymentPlan(old);
     if (old.runtime.serviceUid !== release.serviceUid || old.management.serviceUser !== environment.system.serviceUser) {
       throw new SetupError('SETUP_SERVICE_IDENTITY_CHANGED');
@@ -95,7 +95,9 @@ export function createSetupDeployment(environment: SetupEnvironment, release: Se
     schemaVersion: 1, stateDirectory: '/var/lib/cocoproxy', binaryPath: target + '/bin/mihomo', binarySha256: release.binarySha256,
     systemctlPath: environment.system.systemctlPath, nodePath: environment.system.nodePath, sourceDirectory: target + '/source',
     settingsPath: '/etc/cocoproxy/runtime.json', unitPath: '/etc/systemd/system/cocoproxy-mihomo.service', serviceUid: release.serviceUid,
-    automaticGateway: { schemaVersion: 1, ...network, prefixLength: Number(network.clientCIDR.split('/')[1]), dnsPort: environment.ports.dns, ...environment.resources },
+    automaticGateway: { schemaVersion: 1, ...network, prefixLength: Number(network.clientCIDR.split('/')[1]), dnsPort: environment.ports.dns, ...environment.resources,
+      ...(old?.runtime.automaticGateway?.tunStack === undefined ? {} : { tunStack: old.runtime.automaticGateway.tunStack }),
+      ...(old?.runtime.automaticGateway?.tunGso === undefined ? {} : { tunGso: old.runtime.automaticGateway.tunGso }) },
   }, management: {
     origin: environment.management.origin, listenPort: environment.ports.management, serviceUser: environment.system.serviceUser,
     serverEntry: target + '/server/.output/server/index.mjs', settingsPath: '/etc/cocoproxy/management.json',
@@ -116,7 +118,7 @@ export function createSetupDeployment(environment: SetupEnvironment, release: Se
 }
 
 export function routerParameters(environment: SetupEnvironment) {
-  return { schemaVersion: 1, contract: 'cocoproxy-router-v1', managedIPv4: environment.network.clientCIDR,
+  return { schemaVersion: 1, contract: 'cocoproxy-router-contract/v1', managedIPv4: environment.network.clientCIDR,
     nextHopIPv4: environment.network.gatewayIPv4, routerIPv4: environment.network.routerIPv4,
     deliveryMAC: environment.network.routerMAC.toLowerCase(), dnsPort: environment.ports.dns,
     preserveClientSource: true, managedPublicIPv6: 'block', independentDisableRequired: true };

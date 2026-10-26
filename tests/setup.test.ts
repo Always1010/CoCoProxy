@@ -21,12 +21,19 @@ test('setup derives matching release paths, DNS ports and a private random secre
   assert.notEqual(input.management.deployment.controllerSecret, second.management.deployment.controllerSecret);
   assert.equal(renderDeploymentPlan(input).files.length, 8);
   assert.equal(routerParameters(environment).dnsPort, input.management.deployment.dnsPort);
+  assert.equal(routerParameters(environment).contract, 'cocoproxy-router-contract/v1');
 });
 test('setup preserves an existing internal identity and refuses silent custom-layout changes', () => {
   const environment = parseSetupEnvironment(sample), previous = createSetupDeployment(environment, release) as any;
   const input = createSetupDeployment(environment, { ...release, manifestSha256: 'c'.repeat(64) }, previous) as any;
   assert.equal(input.management.deployment.controllerSecret, previous.management.deployment.controllerSecret);
   assert.notEqual(input.runtime.sourceDirectory, previous.runtime.sourceDirectory);
+  previous.runtime.automaticGateway.tunStack = 'mixed';
+  previous.runtime.automaticGateway.tunGso = true;
+  const tuned = createSetupDeployment(environment, release, previous) as any;
+  assert.equal(tuned.runtime.automaticGateway.tunStack, 'mixed');
+  assert.equal(tuned.runtime.automaticGateway.tunGso, true);
+  assert.throws(() => createSetupDeployment(environment, release, null));
   assert.throws(() => createSetupDeployment(environment, { ...release, serviceUid: 12346 }, previous), { code: 'SETUP_SERVICE_IDENTITY_CHANGED' });
   previous.runtime.stateDirectory = '/var/lib/cocoproxy-custom';
   assert.throws(() => createSetupDeployment(environment, release, previous), { code: 'SETUP_CUSTOM_LAYOUT_REQUIRES_EXISTING_INSTALLER' });
