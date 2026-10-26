@@ -2,86 +2,31 @@
 
 统一入口提供本机生命周期操作，远程部署器也可在目标主机调用相同入口。每次操作都需要原安装的 root 私有部署输入；入口重新生成文件计划，与完成状态的安装收据逐项核对路径、UID、权限和内容摘要，并验证整个已安装发布。未知安装、文件变化、额外 unit 覆盖或未完成安装均拒绝接管。
 
-管理入口验收可使用[五项独立证据报告](setup-management-evidence.md)的 `management-report` 命令，分别记录 HTTPS、登录、终端证书信任、浏览器通知能力和测试通知实际显示。机器观察与人工记录分开，缺少证据不视为通过；该报告不替代下列动作的原有确认条件。
-
-## 查询首次部署进度与下一步
+## 查询当前机器状态与下一步
 
 在目标 Linux 的 root shell，用原安装私有输入查询；`SOURCE` 指已核验载荷或已安装发布内的 `source` 目录：
 
 ```sh
 node --experimental-strip-types "$SOURCE/apps/setup/main.ts" status \
   --input /absolute/private/deployment.json
-node --experimental-strip-types "$SOURCE/apps/setup/main.ts" status \
-  --input /absolute/private/deployment.json --evidence /absolute/private/first-observations.json
 ```
 
-`status` 不创建目录、写记录、初始化管理员、恢复事务、启动/启用服务或操作路由器。它重新核验安装收据、文件、发布和账号，以服务 UID 调用现有 CLI 的只读状态入口，并查询 systemd 当前状态及开机启用意图。核心观察复用 `runtime-status`，包含固定的本机回环控制器只读请求和本机核心版本检查；因此它不是绝对零 socket 操作。它不会向管理 origin、路由器或外网发送探测，也不会自动打开浏览器、发送测试通知或更改信任库。单独需要管理 origin 的机器 HTTPS 检查时，仍使用 `management-report --probe-https`。
+`status` 分列安装、管理员、管理服务、当前配置、核心和持久运行六项机器状态，`currentWait` 和 `next` 给出需要处理的项目与操作。后续独立项目仍继续观察，例如核心读取失败不会遮蔽持久意图。报告结束前复核安装、管理员和配置状态；期间有变化则将原通过项改为 `unknown`，要求重新查询。
 
-报告分列安装、管理员、管理服务、首次配置、核心、路由器、终端和持久运行，并保留管理入口的五项独立结果。`completed` 是当前机器观察与匹配人工记录满足的项目，`pending` 是仍待处理的项目；`currentWait` 给出首个等待项及固定原因码，`next` 给出具体操作。后续独立项目仍继续观察，例如核心读取失败不会遮蔽持久意图。管理员合法不证明能登录，active 候选不证明核心健康，服务 active 不证明 HTTPS 或证书信任，持久 enabled 不证明冷启动稳定。
+入口不创建目录、写记录、初始化管理员、恢复事务、启动/启用服务或操作路由器。它重新核验安装收据、文件、发布和账号，以服务 UID 调用现有 CLI 的只读状态入口，并查询 systemd 当前状态及开机启用意图。核心观察复用 `runtime-status`，包含固定的本机回环控制器只读请求和本机核心版本检查；不会向管理 origin、路由器或外网发送探测。需要调用端的管理 HTTPS 检查时，使用[可选 HTTPS 探测](setup-management-evidence.md)的 `management-report --probe-https`。
 
-没有安装时，下一步指向 `install` 预检；发现中断、锁或未完成记录时先 `inspect`，只有已经写齐的安装事务才可审阅 `recover`。文件/输入/归属漂移则要求核对，不自动接管。已有自动生命周期处于 enabled 且未暂停时，启动管理服务的指引会先要求预览并显式执行 `pause-maintenance`，再处理管理服务，最后重新验收与恢复，避免直接调用被原约束拒绝的启动动作。所有动作仍遵守下面的摘要审阅和显式实施规则。
+没有安装时，下一步指向 `install` 预检；发现中断、锁或未完成记录时先 `inspect`，只有已经写齐的安装事务才可审阅 `recover`。文件/输入/归属漂移则要求核对，不自动接管。已有自动生命周期处于 enabled 且未暂停时，启动管理服务的指引会先要求预览并显式执行 `pause-maintenance`，再处理管理服务，最后验收与恢复。
 
-## 记录当前部署范围的人工观察
+## 实际验收
 
-实际完成观察后，将事实填写到私有 JSON，再用 `record-observations` 生成可交给 `status` 的完整证据。工具自动读取当前可信部署，处理安装、配置、管理员和活跃候选指纹，以及管理入口的绑定；不需要手抄摘要、内部字段或 Unix 毫秒。
+机器状态通过后，直接在实际设备上完成下列检查，无需录入 JSON、摘要或时间戳：
 
-```sh
-node --experimental-strip-types "$SOURCE/apps/setup/main.ts" record-observations \
-  --input /absolute/private/deployment.json --facts /absolute/private/observed-facts.json \
-  --output /absolute/private/first-observations.json
-node --experimental-strip-types "$SOURCE/apps/setup/main.ts" status \
-  --input /absolute/private/deployment.json --evidence /absolute/private/first-observations.json
-```
+- 在电脑和手机通过 HTTPS 打开管理入口，确认无证书警告或临时例外，完成登录、操作和退出，核对匿名访问受保护 API 被拒绝。
+- 核对路由器与外设参数、指定 LAN 的交付和独立关闭入口；在受管终端验证代理、直连、DNS 和本地访问。
+- 需要通知时，在使用的浏览器开启并发送测试，确认操作系统实际显示；未使用通知无需开启此功能。
+- 按[完整部署验收清单](getting-started.md#9-部署验收与交给使用者)检查多终端、冷启动、断线恢复和持续使用。
 
-输出父目录须已经私有，路径必须绝对；输出使用 `0600` 独占创建，已有文件返回 `SETUP_OUTPUT_EXISTS`，不会覆盖或自动另存备份。安装或管理员未知时返回 `SETUP_FIRST_RECORD_DEPLOYMENT_UNVERIFIED`；生成期间绑定变化则返回 `SETUP_FIRST_RECORD_BINDING_CHANGED`，需重新观察再录入。生成器本身只读取本机状态并创建这一个输出文件，不操作路由器、发送通知、打开浏览器或修改信任。
-
-以下是事实输入示例，布尔值必须据实际观察填写，未做的整项省略。工具不会把省略项补成 true，也不从现有成功记录复制事实。`observedAt` 是实际完成这组观察的可读 ISO 时间，须带 `Z` 或时区偏移；它不是工具录入时间。例如 `2026-10-26T10:30:00+08:00` 表示北京时间。工具转换事件时间，并另外生成实际录入时刻；不能为了让旧结论通过，把过去的观察改写成当前时间。
-
-```json
-{
-  "schemaVersion": 1,
-  "observedAt": "2026-10-26T10:30:00+08:00",
-  "management": {
-    "terminalId": "terminalA", "notifications": "declined",
-    "https": { "pageLoaded": true },
-    "login": { "authenticated": true, "logoutCompleted": true, "anonymousApiDenied": true },
-    "certificate": { "warningShown": false, "exceptionUsed": false }
-  },
-  "router": {
-    "parametersMatched": true, "deliveryEnabled": true,
-    "independentDisableVerified": true
-  },
-  "terminal": {
-    "terminalIds": ["terminalA", "terminalB"],
-    "proxy": true, "direct": true, "dns": true, "localAccess": true
-  }
-}
-```
-
-示例只表示格式，必须实际观察后填写，不能填未来时间。只录入了 HTTPS 时，登录、证书和其他项目仍为未验；空事实不会生成任何通过项。`router` 表示已人工核对当前配置对应 LAN 的两端参数、开启交付并验证独立关闭入口；工具固定记录这一范围，不证明适配器机器查询或通用路由器配置能力。`terminal` 只覆盖列出的短别名及四项检查，不覆盖所有终端。范围变化或增加终端须重新观察；终端真名、IP、MAC、口令、Cookie、订阅和自由文本均不应填入文件。
-
-使用通知时，`management.browser` 填写 `secureContext`、`notificationApi`、`serviceWorker`、`pushManager`、`permission`（`default/granted/denied`）、`requiresInstalledApp` 和 `installedApp`；含义与[五项管理观察](setup-management-evidence.md)一致，事实输入不填写它的内部观察时间。`management.notification` 必须分别填写实际请求与显示的事件时间，例如：
-
-```json
-{
-  "testRequestedAt": "2026-10-26T10:29:00+08:00",
-  "providerAccepted": true,
-  "displayedAt": null,
-  "notDisplayed": false
-}
-```
-
-这表示服务接受但尚未确认显示，结果为 `unknown`；实际看到后才能填写真实 `displayedAt`，不能用录入时刻代替显示事件。请求和显示不能晚于这组观察结束时间，显示不能早于请求；尚未检查服务接受情况时 `providerAccepted` 为 `null`。明确检查后未显示可填 `notDisplayed: true`，结果为 `fail`。
-
-事实入口拒绝 `binding`、`recordedAt`、`status`、内部摘要、完整旧证据或额外字段，不提供自动合并旧结果的功能。换配置后应重新核验实际事实，再生成新的私有记录；不能将旧事实不复验就套到新部署。生成后还会复用 `status` 的原证据解析和绑定检查。人工录入仍是操作者自报，工具不能证明事实真实性；录入成功不代表机器完成了这些检查。直接消费完整证据的 `status --evidence` 接口继续保留，普通部署无需手工编写其内部结构。
-
-首次尚无 active 候选时，匹配的 HTTPS、登录和证书观察可以先通过，`next` 随后指向首次配置；路由器与业务终端观察必须绑定非空的当前 active 候选。安装收据、部署输入、活跃候选或管理员字节任一改变，旧人工记录降为 `unknown` 并要求复验。报告结束前还会复核安装与绑定状态，观察期间有变化则取消受影响的通过结论。旧单 action journal、`--terminal-path-verified` 或上次的成功布尔值都不能把整条流程标为完成。
-
-人工记录保留原绑定、限定范围、终端别名和观察时间，属于历史自报观察。工具不因经过一天就要求重复验收；同样，摘要未变不能证明浏览器权限、终端信任或外部路由器此刻没有变化。证书轮换、终端/浏览器/系统或交付范围发生变化后，应重新观察并替换相应记录，不继续借用旧结论。
-
-通知是可选能力：选择使用时，必须分别观察浏览器能力和操作系统实际显示测试通知；服务接受不算显示。不使用通知时，在 `management.notifications` 中明确填 `"declined"` 并省略 `notification`，两项未执行的通知检查可以为 `not-applicable`。若提供了真实 browser 失败观察，报告仍保留失败，不能以未选通知掩盖它。无需先启用通知才能使用其他部署功能；`status` 的证据报告不改变持久运行原有的终端确认门槛。
-
-`evidenceComplete: true` 只表示这份报告要求的当前机器观察与绑定人工记录齐全；`next` 随后指向独立外部验收。它不宣称干净首装、冷启动、断线恢复、所有终端或长期稳定已经验证，也不自动授权持久启用。真实结果文件只保存在操作者选定的私有位置，默认不保存或复制；报告不输出 origin、私有配置、凭据内容或真实网络目标。
+管理员文件合法不证明能登录，active 候选不证明核心健康，服务 active 不证明浏览器信任，持久 enabled 不证明冷启动稳定。`status` 不保存或评定人工验收结果，也不授权生命周期动作；下列实际确认和摘要审阅仍须完成。
 
 ## 预览与显式实施生命周期动作
 
