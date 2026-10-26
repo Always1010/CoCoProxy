@@ -58,3 +58,8 @@ export function localGroupNameError(name: string, view: { groups: { name: string
   if (view.catalog?.some(service => service.id === value)) return shared ? '共享出口不能使用预置服务名称。' : '这是预置服务名称，请在上方启用对应服务组。'
   return ''
 }
+
+/** Local user-shared exits are reached through service groups; Proxy remains a legal built-in target. */
+export function customRuleTargets(mode: string | undefined, groups: { name: string; role: 'service' | 'shared' }[] = []): string[] {
+  return [...new Set(['DIRECT', 'REJECT', ...groups.filter(group => mode !== 'local' || group.role !== 'shared' || group.name === 'Proxy').map(group => group.name)])]
+}

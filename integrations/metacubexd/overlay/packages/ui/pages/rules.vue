@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { IconChevronDown, IconChevronUp, IconDeviceFloppy, IconPlus, IconTrash } from '@tabler/icons-vue'
-import { ruleTarget } from '~/utils/group-rules'
+import { customRuleTargets, ruleTarget } from '~/utils/group-rules'
 useHead({ title: '规则 · CoCoProxy' })
 const { view, workspace, overrides, busy, load, run, save, editOverrides } = useWorkspace()
 const route = useRoute()
@@ -9,18 +9,19 @@ const groupFilter = ref(typeof route.query.group === 'string' ? route.query.grou
 const entries = ref<string[]>([])
 const visibleEntries = computed(() => entries.value.map((value, index) => ({ value, index })).filter(entry => !groupFilter.value || ruleTarget(entry.value) === groupFilter.value))
 const dirty = computed(() => JSON.stringify(entries.value) !== JSON.stringify(overrides.value.rules))
-const targets = computed(() => [...new Set(['DIRECT', 'REJECT', ...(view.value?.groups.map(group => group.name) ?? [])])])
+const targets = computed(() => customRuleTargets(workspace.value?.mode, view.value?.groups))
 const targetName = (name: string) => workspace.value?.mode === 'local' ? view.value?.catalog?.find(service => service.id === name)?.name ?? name : name
 const type = ref('DOMAIN-SUFFIX')
 const payload = ref('')
 const target = ref('DIRECT')
+watch(targets, available => { if (!available.includes(target.value)) target.value = 'DIRECT' })
 const ruleTypes = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'IP-CIDR', 'IP-CIDR6', 'SRC-IP-CIDR', 'SRC-IP-CIDR6', 'DST-PORT', 'SRC-PORT', 'NETWORK']
 const payloadHint = computed(() => type.value.includes('CIDR') ? (type.value.endsWith('6') ? '2001:db8::/32' : '192.0.2.0/24') : type.value.endsWith('PORT') ? '443' : type.value === 'NETWORK' ? 'tcp / udp' : 'example.com')
 
 watch(() => workspace.value?.revision, () => { entries.value = [...overrides.value.rules] }, { immediate: true })
 
 function add() {
-  if (!payload.value.trim()) return
+  if (!payload.value.trim() || !targets.value.includes(target.value)) return
   entries.value.push(`${type.value},${payload.value.trim()},${target.value}`)
   payload.value = ''
 }
