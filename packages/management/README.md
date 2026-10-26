@@ -42,7 +42,7 @@ HTTPS 使用 `__Host-cocoproxy_session` 和受信任设备的 `__Host-cocoproxy_
 | POST `/subscription` | `{subscription:{endpoint,keys:{p256dh,auth}}}`；绑定当前可信设备 |
 | PUT `/preferences` | `{groups:null或组名数组,switches,recovery,outage,showNodes}` |
 | POST `/unsubscribe` | `{}`；取消本设备通知，保留管理登录 |
-| POST `/test` | `{}`；本设备每分钟至多一条测试通知 |
+| POST `/test` | `{}`；本设备每分钟至多一条测试通知；等待首次有界发送尝试并返回 `{queued,delivery,pending}` |
 
 通知存储缺失时，普通读取不创建密钥或订阅；损坏时单独禁用通知，不阻止代理管理。仍只支持单实例服务。网页与设备使用方式见[通知说明](../../docs/notifications.md)。
 

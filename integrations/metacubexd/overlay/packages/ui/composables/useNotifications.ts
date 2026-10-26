@@ -1,6 +1,7 @@
 export type NotificationPreferences = { groups: string[] | null; switches: boolean; recovery: boolean; outage: boolean; showNodes: boolean }
 export type NotificationStatus = { supported: boolean; trusted: boolean; publicKey: string | null; subscribed: boolean; preferences: NotificationPreferences; delivery: string; pending: number; lastAt: number | null; groups: string[]; error: string | null }
 export type NotificationEvent = { id: string; at: number; group: string; reason: string }
+export type NotificationTestResult = { queued: boolean; delivery: string; pending: number }
 
 export function useNotifications() {
   const api = useCoCoProxy()
@@ -43,7 +44,13 @@ export function useNotifications() {
     if (granted !== 'granted') throw new Error('系统尚未允许通知，请在浏览器或系统通知设置中开启。')
     const { publicKey } = await api.request<{ publicKey: string }>('/api/cocoproxy/notifications/initialize', { method: 'POST', body: {} })
     const workerUrl = new URL('/cocoproxy-sw.js', location.origin).href
-    const registration = await navigator.serviceWorker.register(workerUrl, { scope: '/', updateViaCache: 'none' })
+    let registration: ServiceWorkerRegistration
+    try { registration = await navigator.serviceWorker.register(workerUrl, { scope: '/', updateViaCache: 'none' }) }
+    catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause)
+      if (/certificate|ssl|证书/i.test(detail)) throw new Error('当前 HTTPS 证书未被此设备的系统完全信任。仅忽略浏览器证书警告无法开启通知，请先安装并信任管理证书。')
+      throw new Error(`通知组件注册失败：${detail}`)
+    }
     await new Promise<void>((resolve, reject) => {
       const deadline = setTimeout(() => { clearInterval(check); reject(new Error('通知组件尚未生效，请关闭后台的所有窗口后重新打开，再重试。')) }, 10_000)
       const check = setInterval(() => {
@@ -71,7 +78,8 @@ export function useNotifications() {
     await api.request('/api/cocoproxy/notifications/preferences', { method: 'PUT', body: preferences }); await refresh()
   }
   async function test() {
-    await api.request('/api/cocoproxy/notifications/test', { method: 'POST', body: {} }); await refresh()
+    const result = await api.request<NotificationTestResult>('/api/cocoproxy/notifications/test', { method: 'POST', body: {} })
+    await refresh(); return result
   }
   return { status, events, localSubscription, permission, platform, limitation, refresh, enable, disable, save, test }
 }

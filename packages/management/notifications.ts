@@ -187,7 +187,14 @@ export async function createNotifications(options: { stateDirectory: string; ori
         if (!live || live.status === 'expired') fail('NOTIFICATION_SETUP_REQUIRED', 409);
         if (live.testAt && now() - live.testAt < 60_000) fail('NOTIFICATION_RATE_LIMIT', 429);
         live.testAt = now(); add(next, { id: randomUUID(), at: now(), scope: 'test', group: '测试通知', from: '', to: '', reason: 'test' }, deviceId);
-      }); void tick().catch(() => {}); return { queued: true };
+      });
+      // A timer tick may already be synchronizing an older state. Waiting for
+      // it and then ticking once more guarantees this test job receives one
+      // bounded send attempt before the API reports its result.
+      await tick(); await tick();
+      const current = state.subscriptions.find(s => s.deviceId === deviceId);
+      const pending = state.jobs.filter(job => job.deviceId === deviceId).length;
+      return { queued: pending > 0, delivery: current?.status ?? 'expired', pending };
     }
     return fail('NOT_FOUND', 404);
   }

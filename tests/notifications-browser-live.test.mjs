@@ -100,10 +100,14 @@ test('generated notification settings and real Service Worker preserve opt-in, h
     await section.getByRole('button', { name: '保存通知偏好', exact: true }).click();
     await section.getByRole('button', { name: '发送测试通知', exact: true }).click();
     await section.getByRole('status').waitFor();
+    assert.match(await section.getByRole('status').innerText(), /推送服务已接受/);
     assert.deepEqual(await section.getByRole('alert').allTextContents(), []);
     assert.equal(await section.getByLabel('在锁屏通知中显示节点名称', { exact: true }).isChecked(), true);
     for (let attempt = 0; !sent.length; attempt++) { assert.ok(attempt < 50); await new Promise(resolve => setTimeout(resolve, 100)); }
     assert.equal(sent.length, 1);
+    assert.match(await section.getByRole('button', { name: '刷新通知状态', exact: true }).innerText(), /刷新状态/);
+    assert.match(await section.getByRole('button', { name: '关闭此设备通知', exact: true }).innerText(), /关闭通知/);
+    assert.match(await section.getByRole('button', { name: '发送测试通知', exact: true }).innerText(), /发送测试/);
     const worker = context.serviceWorkers().find(worker => worker.url() === origin + '/cocoproxy-sw.js');
     assert.ok(worker);
     const deliver = payload => worker.evaluate(async payload => {
