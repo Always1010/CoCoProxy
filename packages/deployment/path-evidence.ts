@@ -53,6 +53,11 @@ export async function assertServiceAncestors(path: string, host: PathEvidenceHos
     parent = posix.dirname(parent);
   }
 }
+export async function assertPrivatePath(path: string, uid: number, host: PathEvidenceHost) {
+  const stat = await host.info(path);
+  need(stat && stat.file && stat.nlink === 1 && stat.uid === uid && (stat.mode & 0o7777) === 0o600,
+    'INSTALL_PRIVATE_FILE_OWNERSHIP');
+}
 export async function assertPlannedDeploymentDirectory(directory: { path: string; owner: 'root' | number; mode: string },
   directories: readonly { path: string; owner: 'root' | number }[], host: PathEvidenceHost) {
   async function parent(path: string): Promise<void> {

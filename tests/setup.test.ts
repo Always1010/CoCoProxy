@@ -8,6 +8,7 @@ import { ManagedWebError } from '../packages/setup/https.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../packages/gateway/profile.ts';
 import { assertDeploymentAccount } from '../packages/deployment/install.ts';
+import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, NetworkObservationError } from '../packages/deployment/network-evidence.ts';
 
 const sample = JSON.parse(await readFile(new URL('../examples/setup-environment.json', import.meta.url), 'utf8'));
 const release = { manifestSha256: 'b'.repeat(64), binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256, serviceUid: 12345 };
@@ -167,7 +168,7 @@ test('doctor keeps six partial layers and reports independent failures with fixe
       if (path.endsWith('python3')) return 'Python 3.8.20';
       if (path.endsWith('getent')) throw Object.assign(new Error('PRIVATE COMMAND'), { code: 'EIO' });
       if (args.includes('route')) return 'PRIVATE MALFORMED JSON';
-      if (path.endsWith('nft') && args.includes('ruleset')) return '{"unexpected":[]}';
+      if (path.endsWith('nft') && args.includes('tables')) return '{"unexpected":[]}';
       return host.run(path, args);
     },
   });
@@ -222,7 +223,7 @@ function readyDoctorHost(): DoctorHost {
     read: async () => '1', resolve: async path => path,
     stat: async path => {
       if (['/var/lib/cocoproxy', '/var/lib/cocoproxy-gateway-network', '/var/lib/cocoproxy-deployment', '/etc/cocoproxy'].includes(path) ||
-        path.startsWith('/var/lib/cocoproxy-web-') || path.startsWith('/run/cocoproxy-web') ||
+        path.startsWith('/var/lib/cocoproxy-gateway-network/') || path.startsWith('/var/lib/cocoproxy-web-') || path.startsWith('/run/cocoproxy-web') ||
         path.startsWith('/opt/cocoproxy/releases/')) throw Object.assign(new Error('synthetic absent'), { code: 'ENOENT' });
       const file = ['/usr/bin/node', '/usr/bin/systemctl', '/usr/bin/python3', '/usr/bin/getent', '/usr/sbin/ip', '/usr/sbin/nft'].includes(path);
       return { directory: !file && path !== '/dev/net/tun', file,
@@ -294,6 +295,65 @@ test('doctor follows root-owned distro tool links and keeps incomplete path obse
   assert.equal(incomplete.checks.find(check => check.id === 'python')?.status, 'unknown');
   assert.equal(incomplete.checks.find(check => check.id === 'node-path')?.status, 'unknown');
   assert.equal(incomplete.readyForInstallPreflight, false);
+});
+
+test('shared network predicates detect reserved resources and conservative numeric, masked and negated mark overlap', () => {
+  const n = { egressPriority: 8000, egressTable: 2024, egressMark: 65536, clientCIDR: '192.0.2.0/24' };
+  assert.deepEqual(policyRuleConflicts([{ priority: 8001, fwmark: '0x10000' }], n), ['INSTALL_RULE_CONFLICT', 'INSTALL_RULE_MARK_CONFLICT']);
+  for (const rule of [
+    { priority: 100, fwmark: 65536 }, { priority: 100, fwmark: '0x10000/0xff0000' },
+    { priority: 100, fwmark: '0', fwmask: '0x0' }, { priority: 100, src: 'all', fwmark: '0x20000', not: null },
+    { priority: 100, fwmark: '2023' },
+  ]) assert.deepEqual(policyRuleConflicts([rule], n), ['INSTALL_RULE_MARK_CONFLICT']);
+  assert.deepEqual(policyRuleConflicts([{ priority: 100, fwmark: '0x20000', fwmask: '0xffff0000' }], n), []);
+  assert.deepEqual(policyRuleConflicts([{ priority: 100, fwmark: '0', fwmask: '0', not: null }], n), []);
+  assert.deepEqual(policyRuleConflicts([{ priority: 9005 }], n), ['INSTALL_RULE_CONFLICT']);
+  for (const table of [2024, '22024', 2022]) assert.deepEqual(routeConflicts([{ dst: 'default', table }], n), ['INSTALL_ROUTE_CONFLICT']);
+  assert.deepEqual(routeConflicts([{ table: 'main', dst: '198.51.100.0/24' }], n), []);
+  assert.deepEqual(firewallConflicts({ nftables: [{ table: { family: 'inet', name: 'mihomo' } }] }), ['INSTALL_NFT_CONFLICT']);
+  assert.deepEqual(tunConflicts([{ ifname: 'cocoproxy-tun' }]), ['INSTALL_TUN_CONFLICT']);
+  for (const malformed of [[{}], [{ priority: 100, fwmark: 'private malformed value' }], [{ priority: 100, fwmask: 255 }],
+    [{ priority: 100, fwmark: '0', fwmask: '0', not: null, src: '198.51.100.0/24' }]]) {
+    assert.throws(() => policyRuleConflicts(malformed, n), NetworkObservationError);
+  }
+});
+
+test('doctor reports conflicts in valid network JSON and retained network receipts independently without mutation', async () => {
+  const base = readyDoctorHost(), calls: string[] = [];
+  const receipt = '/var/lib/cocoproxy-gateway-network/network-receipt.json';
+  const result = await inspectSetup(sample, { ...base, stat: async path => path === receipt
+    ? { directory: false, file: true, characterDevice: false, link: false, uid: 0, mode: 0o600, nlink: 1 }
+    : path === '/var/lib/cocoproxy-gateway-network' ? { directory: true, file: false, characterDevice: false, link: false, uid: 0, mode: 0o700, nlink: 1 } : base.stat(path),
+    read: async path => path === receipt ? '{"schemaVersion":1,"status":"complete"}' : base.read(path),
+    run: async (path, args) => {
+      calls.push(path + ' ' + args.join(' '));
+      if (args.includes('rule')) return JSON.stringify([{ priority: 8000, fwmark: '0x10000' }]);
+      if (args.includes('route')) return JSON.stringify([{ table: 22024, dst: 'default' }]);
+      if (args.includes('tables')) return JSON.stringify({ nftables: [{ table: { family: 'inet', name: 'cocoproxy_auto_guard' } }] });
+      if (args.includes('link')) return JSON.stringify([{ ifname: 'cocoproxy-tun' }]);
+      return base.run(path, args);
+    },
+  });
+  for (const [id, code] of [['policy-rules', 'INSTALL_RULE_CONFLICT'], ['routes', 'INSTALL_ROUTE_CONFLICT'],
+    ['firewall', 'INSTALL_NFT_CONFLICT'], ['tun-name', 'INSTALL_TUN_CONFLICT'], ['network-receipt', 'INSTALL_NETWORK_REMOVE_REQUIRED']]) {
+    assert.equal(result.checks.find(check => check.id === id)?.code, code, id);
+    assert.equal(result.checks.find(check => check.id === id)?.status, 'fail', id);
+  }
+  assert.deepEqual(result.checks.find(check => check.id === 'policy-rules')?.conflicts, ['INSTALL_RULE_CONFLICT', 'INSTALL_RULE_MARK_CONFLICT']);
+  assert.ok(calls.every(call => !/prepare|remove|delete|flush|replace/.test(call)));
+  assert.doesNotMatch(JSON.stringify(result), /192\.0\.2|0x10000|network-receipt\.json/);
+  const malformed = await inspectSetup(sample, { ...base, run: async (path, args) => args.includes('rule')
+    ? JSON.stringify([{ priority: 100, fwmark: 'private invalid mark' }]) : base.run(path, args) });
+  assert.equal(malformed.checks.find(check => check.id === 'policy-rules')?.status, 'unknown');
+  assert.doesNotMatch(JSON.stringify(malformed), /private invalid mark/);
+  for (const [status, expected] of [['removed', 'pass'], ['incomplete', 'fail'], ['unrecognized', 'unknown']]) {
+    const observed = await inspectSetup(sample, { ...base, stat: async path => path === receipt
+      ? { directory: false, file: true, characterDevice: false, link: false, uid: 0, mode: 0o600, nlink: 1 }
+      : path === '/var/lib/cocoproxy-gateway-network' ? { directory: true, file: false, characterDevice: false, link: false, uid: 0, mode: 0o700, nlink: 1 } : base.stat(path),
+      read: async path => path === receipt ? JSON.stringify({ schemaVersion: 1, status }) : base.read(path),
+    });
+    assert.equal(observed.checks.find(check => check.id === 'network-receipt')?.status, expected);
+  }
 });
 
 test('doctor blocks managed HTTPS on failed or unavailable evidence and keeps private details out of its report', async () => {
