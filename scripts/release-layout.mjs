@@ -3,7 +3,7 @@ import { posix } from 'node:path';
 // Keep additions explicit: documentation links never expand the payload implicitly.
 export const releaseSourceFiles = new Set([
   'AGENTS.md', '.github/workflows/release.yml',
-  'docs/setup.md', 'docs/setup-lifecycle.md', 'docs/maintenance-recovery.md', 'docs/support-matrix.md', 'docs/router-contract.md', 'docs/getting-started.md', 'docs/deployment.md', 'docs/management-https.md', 'docs/release-staging.md',
+  'docs/setup.md', 'docs/setup-lifecycle.md', 'docs/setup-management-evidence.md', 'docs/maintenance-recovery.md', 'docs/support-matrix.md', 'docs/router-contract.md', 'docs/getting-started.md', 'docs/deployment.md', 'docs/management-https.md', 'docs/release-staging.md',
   'docs/usage.md', 'docs/notifications.md', 'docs/architecture.md', 'docs/development.md', 'docs/network-benchmark.md',
   'docs/images/architecture-overview.svg', 'docs/images/runtime-relations.svg', 'docs/images/proxy-traffic-flow.svg',
   'docs/cooperating-router-requirements.md', 'docs/release-notes.md',
