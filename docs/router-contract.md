@@ -1,6 +1,6 @@
 # 协同路由器最小行为契约 v1
 
-契约标识为 `cocoproxy-router-contract/v1`，适用于当前同子网 IPv4 原生自动网关。它定义路由器与 CoCoProxy 协作所需的网络行为、启停语义和验收证据，不是厂商 API 或通用自动配置协议。现有[远程部署入口](remote-deployment.md#后续更新)提供可选的 AlwayRoute SSH 适配器，通过既有 ubus API 显式查询、关闭或启用路由器上已有的配置；升级协调按操作前的开启意图恢复交付。该入口不自动识别或生成任意固件的配置，也不安装、更新路由器组件或升级固件。实现仍可采用满足契约的固件原生能力或经过审阅的组件。支持结论按[支持矩阵](support-matrix.md)分级，详细设备条件及参数映射见[设备与协作要求](cooperating-router-requirements.md)。
+契约标识为 `cocoproxy-router-contract/v1`，适用于当前同子网 IPv4 原生自动网关。它定义路由器与 CoCoProxy 协作所需的网络行为、启停语义和验收证据，不是厂商 API 或通用自动配置协议。现有[远程部署入口](remote-deployment.md#后续更新)提供可选的 AlwayRoute SSH 适配器，通过既有 ubus API 显式查询、关闭或启用路由器上已有的配置；升级协调按操作前的开启意图恢复交付。统一环境生成的参数另可通过下述明确入口预览、比对及保存到已兼容的 AlwayRoute。该入口不自动识别或生成任意固件的配置，也不安装、更新路由器组件或升级固件。实现仍可采用满足契约的固件原生能力或经过审阅的组件。支持结论按[支持矩阵](support-matrix.md)分级，详细设备条件及参数映射见[设备与协作要求](cooperating-router-requirements.md)。
 
 ## 范围与输入
 
@@ -17,6 +17,40 @@ CoCoProxy 原生输入允许同一 /1–/29 子网，不允许与保留 TUN 网�
 该实现的本地域及无点名称固定交给路由器 `127.0.0.1:53`，公网 DNS 转至外设 `ports.dns`；路由器专用监听端口单独填写。外设 bootstrap 只取 `management.bootstrapResolvers`，不会额外写入不存在的路由器 bootstrap 字段。`baseDNSIndependentConfirmed` 只记录操作者对独立解析前提的确认；DNS UDP/TCP、基础解析和实际路径仍需分项验收。
 
 适配声明保存在随包的 [router-adapter.json](../packages/setup/router-adapter.json)，标识 `alwayroute-ubus/v1` / 适配器版本 `1.0.0`。声明列出所审阅 AlwayRoute 源码提交、配置 schema、组件包和能力接口要求；这些属于实现来源和静态兼容条件，不表示指定固件或包已部署，也不增加组合实测结论。现有组合证据仍以[支持矩阵](support-matrix.md)与发行说明为准。
+
+### 读取、审阅与保存
+
+在已获准的 Linux 操作端使用随包 `source/scripts/router-ssh-hook.py`，源码目录对应 `scripts/router-ssh-hook.py`。SSH 配置格式与主机指纹要求见[远程部署说明](remote-deployment.md#后续更新)，沿用已有私有密钥，不在两端参数文件中填写凭据。以下为合成私有路径；参数文件由 `configure --router-output` 生成，SSH 配置及参数文件均要求当前身份所有、0600、单链接普通文件。
+
+```sh
+HOOK=./source/scripts/router-ssh-hook.py
+SSH_CONFIG=/etc/cocoproxy-install/router-ssh.json
+PARAMETERS=/etc/cocoproxy-install/router-parameters.json
+python3 "$HOOK" --config "$SSH_CONFIG" --parameters "$PARAMETERS" preview-config
+python3 "$HOOK" --config "$SSH_CONFIG" --parameters "$PARAMETERS" save-config \
+  --apply --reviewed-plan-sha256 '<刚才预览返回的planSha256>'
+python3 "$HOOK" --config "$SSH_CONFIG" --parameters "$PARAMETERS" check-config
+```
+
+预览与未加 `--apply` 的 `save-config` 只读。保存要求当前 `phase:disabled`、`desiredEnabled:false`、DNS 和转发资源已撤销，并核对 schema 与能力接口；开启或不稳定状态会拒绝，先走独立关闭再重新预览。预览包含目标、当前完整配置、真实 revision、完整候选及逐字段差异，含网络资料，按私有资料处理。摘要绑定这些内容和原参数；目标、revision、现有配置或参数变化后必须重做预览。
+
+保存是完整替换：当前生成器固定 `bypass4:[]`、`clients:[]`，使用全 LAN 模式。已有额外目的绕过、本地域、接口、监听及候选开关的变化会出现在 `changes`，必须审阅；需要保留当前生成器不能表达的绕过时，不执行保存，继续用对应组件原入口明确维护，不能把空数组误认为保留旧值。
+
+`configuration.enabled` / `candidateEnabled` 是下次显式 apply 所用的候选值；`persistentIntentEnabled` 是独立持久 intent 的观察，二者不是同一状态。所审阅实现分别保存 config、intent 和 lastgood：`external_save` 只递增并保存 config，不写 intent/lastgood，不应用网络；关闭 intent 下重启恢复不会以草稿取代它。适配器保存后读回完整配置和新 revision，并再确认仍 disabled、`desiredEnabled:false`，才返回 `saved:true`、`networkApplied:false`。这不证明开启或终端路径通过。
+
+远端保存本身以 expectedRevision/CAS 串行校验配置，适配器在保存前后检查关闭状态。它不能跨多个 RPC 锁住其他管理入口；预览、保存与开启必须由单一操作者串行执行，避免其他入口并发改变 intent。并发修改、保存后读回不符或状态改变均报告失败，不宣称操作已撤销，先检查实际状态再继续。
+
+外设已经完成配置和必要验收，且候选 `enabled:true` 时，可显式开启并比对：
+
+```sh
+python3 "$HOOK" --config "$SSH_CONFIG" --parameters "$PARAMETERS" enable
+python3 "$HOOK" --config "$SSH_CONFIG" --parameters "$PARAMETERS" check-config
+python3 "$HOOK" --config "$SSH_CONFIG" disable
+```
+
+`enable` 检查实际 capabilities/schema，并在提供参数时比较当前保存配置，应用后核对 appliedRevision。`check-config` 比较保存配置，同时分别报告 appliedRevision 与 `appliedConfigurationMatches`；保存草稿相同不等于实际应用相同，active 也不等于端到端通过。既有维护协调的 `status`/`disable`/`enable` 简短 JSON 接口保持兼容；未带参数的 enable 只应用既有已开启候选，不代表完成两端映射校验。关闭优先直接调用 `external_disable`，不先要求 active，不受配置能力或参数文件校验阻断，故障 degraded 时仍可关闭；仍须等待任务并确认最终撤销，失败如实返回。
+
+缺少或不兼容的能力返回 `REMOTE_ROUTER_CAPABILITIES_INCOMPATIBLE`，schema 不兼容返回 `REMOTE_ROUTER_SCHEMA_INCOMPATIBLE`，参数不符返回 `REMOTE_ROUTER_PARAMETERS_INVALID`，保存配置与参数不同返回 `REMOTE_ROUTER_CONFIGURATION_MISMATCH`。`REMOTE_ROUTER_DISABLE_BEFORE_SAVE` 要求先关闭，`REMOTE_ROUTER_PLAN_REVIEW_REQUIRED` 要求重新预览并使用匹配摘要，`REMOTE_ROUTER_SAVE_UNCONFIRMED` 要求检查实际保存内容。通用 RPC/SSH、任务超时或最终状态失败都不表示远端任务已取消；不要反复覆盖配置。
 
 ## 必须满足的行为
 
@@ -48,6 +82,6 @@ CoCoProxy 原生输入允许同一 /1–/29 子网，不允许与保留 TUN 网�
 
 适配结论至少包含契约版本、CoCoProxy 提交/载荷 manifest 摘要、核心平台、路由器固件/组件版本、受管模式、每个 R1–R9 项目的证据等级及未执行场景。路由器配置版本与 CoCoProxy 运行代次是不同标识；状态须带观察时间/有效边界，不能仅凭某次历史 active 放行。
 
-现有 AlwayRoute SSH 适配器的 `status`、`disable`、`enable` 动作及其他适配器的 hook 约定见[远程部署说明](remote-deployment.md#后续更新)。当前没有统一的厂商自动配置实现或认证型号名单；该适配器也没有提供版本化的机器能力声明或能力协商。契约版本说明所需行为，适配器能力声明应说明指定组件版本实现了什么，组合验证记录则说明指定环境实际验到了哪里，三者不能互相替代。现有实机和隔离证据按[发行说明](release-notes.md)限定；物理断电、实体多终端、换口和持续负载缺口继续保留。原始配置、流量、身份、恢复资料放本地；公开结论仅保留必要脱敏事实。
+现有 AlwayRoute SSH 适配器的 `status`、`disable`、`enable` 动作及其他适配器的 hook 约定见[远程部署说明](remote-deployment.md#后续更新)，配置映射与保存使用本文明确入口。当前没有统一的厂商自动配置实现或认证型号名单；该适配器有上述版本化静态声明，并读取真实 capabilities 接口校验最小条件，不协商任意组件版本或自动升级组件。契约版本说明所需行为，适配器能力声明说明指定来源实现的接口，组合验证记录则说明指定环境实际验到了哪里，三者不能互相替代。现有实机和隔离证据按[发行说明](release-notes.md)限定；物理断电、实体多终端、换口和持续负载缺口继续保留。原始配置、流量、身份、恢复资料放本地；公开结论仅保留必要脱敏事实。
 
 在 v1 内补充说明或验收方法不能降低 R1–R9 的要求。改变来源身份、DNS 信任边界、IPv6 行为、关闭语义或拓扑范围时应定义新契约版本，并给出迁移/回退及对应验证；不能借同一版本把不兼容行为静默替换。契约版本本身不会使现有配置文件新增字段，具体配置 schema 仍由各实现负责。
