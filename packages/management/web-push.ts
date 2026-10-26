@@ -2,13 +2,20 @@ import { createECDH, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
+import { isAbsolute } from 'node:path';
 import { addressAllowed } from '../subscriptions/http.ts';
 
 export type PushSubscription = { endpoint: string; keys: { p256dh: string; auth: string } };
 export type PushKeys = { publicKey: string; privateKey: string };
 export type PushReply = { status: number; retryAfterMs?: number; code?: string };
 export type PushSend = (subscription: PushSubscription, payload: string, keys: PushKeys, subject: string, ttl: number, topic: string) => Promise<PushReply>;
-const require = createRequire(import.meta.url);
+// Nitro rewrites import.meta.url through a global placeholder. Dependency
+// chunks run before the entry module initializes that placeholder, so a
+// top-level createRequire(import.meta.url) can become rooted at /_entry.js.
+// The executed Node entry is already absolute and remains stable throughout
+// startup, including while persisted notification jobs are restored.
+const runtimeEntry = process.argv[1];
+const require = createRequire(runtimeEntry && isAbsolute(runtimeEntry) ? runtimeEntry : import.meta.url);
 
 export function pushEndpoint(value: string): URL {
   let url: URL;

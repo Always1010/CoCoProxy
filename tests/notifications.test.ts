@@ -100,6 +100,19 @@ test('confirmed events persist, coalesce, survive restart and expire; accepted d
   assert.equal((await (await f.call('events')).json()).events.length, 3);
 });
 
+test('test notification reports its first bounded send result instead of only acknowledging the queue', async t => {
+  const f = await fixture(t); await f.enable();
+  let response = await f.call('test', 'POST', {});
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { queued: false, delivery: 'accepted', pending: 0 });
+  assert.equal(f.sent.length, 1);
+  assert.equal((await f.call('test', 'POST', {})).status, 429);
+  f.advance(60_000); f.setReply({ status: 0, code: 'PUSH_LIBRARY_UNAVAILABLE' });
+  response = await f.call('test', 'POST', {});
+  assert.deepEqual(await response.json(), { queued: false, delivery: 'PUSH_LIBRARY_UNAVAILABLE', pending: 0 });
+  assert.equal(f.sent.length, 2);
+});
+
 test('retry state is durable, invalid subscriptions stop retrying and device revocation cancels queued messages', async t => {
   const f = await fixture(t); await f.enable(); f.setReply({ status: 429, retryAfterMs: 60_000 });
   f.event(); await f.tick(); f.advance(10_000); await f.tick(); assert.equal(f.sent.length, 1);
