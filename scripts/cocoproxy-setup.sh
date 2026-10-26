@@ -21,4 +21,8 @@ if ! command -v node >/dev/null 2>&1; then
     exit 1
 fi
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ "$command_name" = deploy ]; then
+    shift
+    exec node "$script_directory/deploy-ssh.mjs" "$@"
+fi
 exec node --experimental-strip-types "$script_directory/../apps/setup/main.ts" "$@"
