@@ -9,6 +9,7 @@ interface Props {
   timeout: number | null
   isSelected?: boolean
   providerName?: string
+  groupName?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -127,15 +128,15 @@ onBeforeUnmount(() => {
       @mouseleave="onMouseLeave"
     >
       <div
-        class="flex items-center gap-2 px-3 py-1.5"
+        class="flex items-center gap-1.5 px-2 py-1.5 sm:gap-2 sm:px-3"
         :class="{ 'cursor-pointer hover:opacity-80': !!onClick }"
         role="button"
         tabindex="0"
         :aria-pressed="isSelected"
         :aria-label="proxyName"
         @click="onClick"
-        @keydown.enter.prevent="onClick"
-        @keydown.space.prevent="onClick"
+        @keydown.enter.self.prevent="onClick"
+        @keydown.space.self.prevent="onClick"
       >
         <!-- Selected indicator -->
         <IconCircleCheckFilled
@@ -151,7 +152,7 @@ onBeforeUnmount(() => {
         <!-- UDP indicator -->
         <span
           v-if="isUDP"
-          class="shrink-0 rounded bg-info px-1.5 py-0.5 text-[0.625rem] font-semibold text-info-content"
+          class="hidden shrink-0 rounded bg-info px-1.5 py-0.5 text-[0.625rem] font-semibold text-info-content sm:inline"
           >U</span
         >
 
@@ -179,19 +180,9 @@ onBeforeUnmount(() => {
             interactive
             @click.stop="handleLatencyTest"
           />
-          <!-- Latency stability bar -->
-          <div
-            v-if="stabilityBar.length > 0"
-            class="flex h-[3px] w-full max-w-[44px] gap-px overflow-hidden rounded-full"
-          >
-            <div
-              v-for="(result, index) in stabilityBar"
-              :key="index"
-              class="h-full flex-1 bg-current first:rounded-l-full last:rounded-r-full"
-              :class="result.colorClass"
-            />
-          </div>
+          <div v-if="!groupName && stabilityBar.length" class="flex h-[3px] w-full max-w-[44px] gap-px overflow-hidden rounded-full" aria-hidden="true"><div v-for="(result, index) in stabilityBar" :key="index" class="h-full flex-1 bg-current" :class="result.colorClass" /></div>
         </div>
+        <SiteResultBadge v-if="groupName" :proxy-name="proxyName" :group-name="groupName" />
       </div>
 
       <!-- Tooltip for latency history (mounted lazily while open) -->

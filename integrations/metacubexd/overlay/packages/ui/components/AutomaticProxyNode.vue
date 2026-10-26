@@ -4,6 +4,7 @@ const props = defineProps<{
   testUrl: string | null
   timeout: number | null
   isSelected?: boolean
+  groupName?: string
 }>()
 const { proxyType, runLatencyTest } = useProxyNode(
   () => props.proxyName,
@@ -18,5 +19,6 @@ const { proxyType, runLatencyTest } = useProxyNode(
     <span class="hidden text-xs text-base-content/45 sm:inline">{{ proxyType }}</span>
     <TcpLatency :proxy-name="proxyName" />
     <Latency :proxy-name="proxyName" :test-url="testUrl" interactive @click.stop="runLatencyTest" />
+    <SiteResultBadge v-if="groupName" :proxy-name="proxyName" :group-name="groupName" />
   </div>
 </template>

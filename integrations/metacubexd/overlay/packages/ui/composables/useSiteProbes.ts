@@ -3,7 +3,7 @@ import { useWorkspace } from './useWorkspace'
 import { useRequest, LatencyTestError } from './useApi'
 import { runLatencyBatch } from '../utils/latencyBatch'
 
-export type SiteResult = { status: 'testing' | 'success' | 'failed' | 'timeout' | 'cancelled' | 'denied' | 'busy' | 'unavailable'; delay: number | null }
+export type SiteResult = { status: 'testing' | 'success' | 'failed' | 'timeout' | 'cancelled' | 'denied' | 'busy' | 'unavailable'; delay: number | null; checkedAt?: number }
 export interface SiteRun {
   group: string
   targets: SiteTarget[]
@@ -32,7 +32,8 @@ export function useSiteProbes(owner = false) {
   const sites = useSiteSettings()
   const proxiesStore = useProxiesStore()
   const config = useConfigStore()
-  const runs = useState<Record<string, SiteRun>>('cocoproxy-site-runs', () => ({}))
+  const siteMeasurements = useState<Record<string, string[]>>('cocoproxy-site-measurements', () => Object.create(null))
+  const runs = useState<Record<string, SiteRun>>('cocoproxy-site-runs', () => Object.create(null))
   const running = useState<string | null>('cocoproxy-site-running', () => null)
   const controller = useState<AbortController | null>('cocoproxy-site-controller', () => null)
   const members = (group: string) => siteGroupMembers(group, proxiesStore.proxies)
@@ -41,13 +42,13 @@ export function useSiteProbes(owner = false) {
     controller.value = null
     for (const run of Object.values(runs.value)) {
       for (const results of Object.values(run.results)) for (const result of Object.values(results))
-        if (result.status === 'testing') result.status = 'cancelled'
+        if (result.status === 'testing') { result.status = 'cancelled'; result.checkedAt = Date.now() }
       if (run.checkedAt === null) run.checkedAt = Date.now()
       run.inFlight = {}
     }
     running.value = null
   }
-  const reset = () => { cancel(); runs.value = {} }
+  const reset = () => { cancel(); runs.value = Object.create(null) }
   const signature = computed(() => JSON.stringify([sites.scopeKey.value, api.generation.value, api.session.value,
     view.value?.tcpNodes, proxiesStore.proxies.map(group => [group.name, group.all]), sites.data.value?.targets,
     sites.data.value?.selections, config.latencyTestTimeoutDuration]))
@@ -66,7 +67,7 @@ export function useSiteProbes(owner = false) {
     const previous = runs.value[group]
     const entry: SiteRun = {
       group, targets, nodes: onlyNode && previous ? [...new Set([...previous.nodes, ...nodes])] : nodes,
-      results: onlyNode && previous ? { ...previous.results } : {},
+      results: onlyNode && previous ? Object.assign(Object.create(null), previous.results) : Object.create(null),
       completed: 0, total: nodes.length * targets.length, inFlight: {}, checkedAt: null,
     }
     const jobs = nodes.flatMap(name => {
@@ -86,6 +87,7 @@ export function useSiteProbes(owner = false) {
         let result: SiteResult = { status: 'denied', delay: null }
         try {
           if (job.target.permitted) {
+            siteMeasurements.value[job.name] = [...new Set([...(siteMeasurements.value[job.name] ?? []), job.target.url])]
             const value = await request.get(`proxies/${encodeURIComponent(job.name)}/delay`, {
               searchParams: { url: job.target.url, timeout }, signal: abort.signal, timeout: timeout + 5000,
             }).json<{ delay: number }>()
@@ -101,7 +103,7 @@ export function useSiteProbes(owner = false) {
           result = { status, delay: null }
         } finally { delete active.inFlight[job.key] }
         if (!current()) return
-        active.results[job.name]![job.target.id] = result
+        active.results[job.name]![job.target.id] = { ...result, checkedAt: Date.now() }
         active.completed++
       }, current)
     } finally {

@@ -37,7 +37,7 @@ describe('group site probes', () => {
     const probes = useSiteProbes()
     await probes.run('Group')
     expect(mocks.get).toHaveBeenCalledTimes(2)
-    expect(probes.runs.value.Group?.results['node-a']?.google).toEqual({ status: 'success', delay: 42 })
+    expect(probes.runs.value.Group?.results['node-a']?.google).toMatchObject({ status: 'success', delay: 42, checkedAt: expect.any(Number) })
     expect(probes.runs.value.Group).toMatchObject({ completed: 2, total: 2, checkedAt: expect.any(Number) })
     await probes.run('Group', 'node-a')
     expect(probes.runs.value.Group?.results['node-b']?.google?.delay).toBe(42)
