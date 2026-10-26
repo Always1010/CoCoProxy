@@ -89,7 +89,7 @@ test('real stores project to secret-free preservation capsules and the coordinat
   for (const secret of [f.grant.token, f.grant.device.id, f.subscription.endpoint, f.subscription.keys.auth, credential.hash, 'Example Proxy', 'synthetic-token=private']) assert.equal(serialized.includes(secret), false);
   const changed = structuredClone(after); changed.files.trustedDevices = null;
   assert.equal(find(compare(before, changed, true), 'known-state-files').status, 'fail');
-  const added = structuredClone(after); added.directories.auth = { present: true, entries: 'new' };
+  const added: Snapshot = structuredClone(after); added.directories.auth = { present: true, entries: 'new' };
   assert.equal(find(compare(before, added, true), 'state-directories').status, 'fail');
   assert.equal(compare(before, after).authentication.status, 'not-run');
 });
