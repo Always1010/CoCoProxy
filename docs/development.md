@@ -44,6 +44,7 @@ stage 只保存不可变候选，draft-stage 捕获指定保存版本；均不�
 | 工作区、规则、管理 | `test:workspace`、`test:management`；UI 适配另用 `test:overlay` 和独立 UI 类型检查 |
 | 原生网关与部署 | `test:gateway`、`test:deployment` |
 | 载荷与源码装配 | `test:release-stage`、`test:git-tree` |
+| 通知 | `test:notifications`；`test:notifications-browser` 需显式现成 UI/Playwright/浏览器输入，模拟推送，不证明公网送达或系统显示 |
 | CLI | `test:cli` |
 
 单元层覆盖输入约束、冲突、权限、锁、持久提交和恢复；显式替身不构成真实服务或网络验收。Linux 文件权限、进程与内核行为须在 Linux 验证。
@@ -93,6 +94,6 @@ DNS 是本次系统 `lookup` 的耗时，字面 IP 不产生该阶段；TCP 从 
 
 ## 待完成的验收
 
-当前主要缺口是冷启动／规则清空期间的连续阻断、开机启动与整机重启、持续负载，以及 x86-64 和新路由器组合；具体状态以发行说明为准。扩大到多终端、跨网段或 IPv6 前须先完善两端配置与故障模型。
+当前主要缺口是冷启动／规则清空期间的连续阻断、开机启动与整机重启、持续负载，以及 x86-64 和新路由器组合；具体状态以发行说明为准。实体多终端仍须现场验收；跨网段及 IPv6 扩展前须先完善两端配置与故障模型。
 
 源码同步与打包遵循 [AGENTS.md](../AGENTS.md)，排除本地资料、凭据、依赖和生成物，不跟随共享目录链接。

@@ -15,13 +15,33 @@ CoCoProxy 分别固定 Mihomo 核心、MetaCubeXD 源树与 overlay、离线规�
 
 当前基线为 MetaCubeXD v1.273.1、Mihomo v1.19.33；精确提交和摘要以锁文件为准。MetaCubeXD 源码自带的默认核心 v1.19.27 不决定实际发行核心。
 
-## MetaCubeXD overlay 清单
+## MetaCubeXD overlay 的理由与升级方法
 
-逐文件清单以已提交基线 `ea91f38` 的66条路径为起点，并补充本次站点设置组件及配置回归测试，当前共68个overlay文件，按固定上游树区分30个整文件替换和38个项目新增；新增路径须同步补清单并重新核对。每个路径的覆盖原因、自有能力、上游行为、真实测试或无直接测试、更新关注点，以及完整base blob，统一维护在[逐文件清单与人工三方比较步骤](metacubexd-overlay-maintenance.md)。该说明是源码维护资料，不扩展运行载荷白名单；分组概览不能代替逐文件五项记录。
+完整替换/新增文件由 [overlay](../integrations/metacubexd/overlay) 和固定 [source-tree.json](../integrations/metacubexd/source-tree.json) 表达。新增路径在固定树中无同名项；替换的 base blob/mode 直接从 source-tree 读取，不另抄路径计数和机器清单。覆盖的人工维护重点如下：
 
-上游更新时重点保留这些边界：原 Agent 启动/刷新/直接写活跃配置通道被禁用，配置应用统一进入 CoCoProxy 事务并由 systemd 监管；公共 `config.js` 不注入凭据；浏览器固定同源会话认证的 Controller HTTP/WS，核心 secret 留在服务端；Desktop 同步与上游离线缓存禁用，自有通知 Worker 和安装清单按设备主动启用。不能因新上游增加路由、插件或全局钩子而恢复旁路。
+| 范围与关键文件 | 存在理由及接管行为 | 更新时核对 |
+| --- | --- | --- |
+| Server supervisor、boot-kernel、control 路由和 auth middleware | systemd 和 CoCoProxy 事务持有核心生命周期；旧 Agent/getAgent 及直接写活跃配置通道明确拒绝 | 新上游新增/改名路由、插件或 supervisor 不得恢复旁路；HTTP middleware 不能替代全局 WS upgrade gate |
+| Server cocoproxy 桥接、API catch-all、clash relay、SPA catch-all | 惰性加载管理网关，认证失败/加载失败可解释；Controller HTTP/WS 统一同源会话，secret 仅服务端；SPA 回退不吞 API/资源错误 | Nitro/h3/crossws 接口、路由优先级、异常和连接清理、背压/撤销；新入口须审阅 |
+| Server nitro.config、公共 config.js | Node 单实例、项目源码及完整推送生产依赖；公共脚本不注入凭据 | trace 闭包、public 覆盖顺序、缓存头、静态 config 注入；不能推导多 worker 会话同步 |
+| UI auth.global、login/cocoproxy 页面、同源插件 | 管理员/可信设备会话、退出与撤销、事务恢复和设备通知；旧 profiles/config/control 路径转入自有流程 | 新页面守卫、hash 路由、错误/等待与触屏操作文字，不能恢复任意远程 endpoint 或核心 secret 登录 |
+| UI nuxt.config、Desktop 空插件、Worker/manifest | 独立 CSR/hash 页面，关闭上游 Workbox 离线缓存及 Desktop 同步；自有通知仅设备主动启用 | 新插件/桥接/缓存是否重启旁路，Worker 作用域/头及缓存为空，不能让通知承担页面缓存 |
+| subscriptions、proxies/rules 页面、工作区 store/composable | 来源私密 URL、保存与更新分开、方案隔离；规则/选择自动经事务生效，保留旧草稿兼容 | revision、过时响应和页面切换、当前来源删除限制、保存与生效的反馈，不能直接写活跃配置 |
+| NativeProxies/组节点组件、自动选择、TCP/代理/站点检测 composable | 统一检测范围、进度、取消、站点设置和结果；自动策略/节点元数据由后端约束 | 请求去重、代次/取消、组和方案隔离、真实0值、节点不适用情况；前端显示不能扩张检测结论 |
+| 导航、Modal、toolbar、规则测试等基础组件 | 移动端可见操作文字、更多导航、受控关闭/焦点及规则解释 | 新路由、虚拟列表/滚动、弹层卸载清理、窄屏溢出与焦点；构建不代替实际触屏验证 |
 
-当前 Nitro 全局 WebSocket upgrade gate 处理 crossws 对无处理器路径的升级行为，HTTP middleware 单独不足。全局upgrade gate在 `apps/server/plugins/boot-kernel.ts`，路由局部relay在 `apps/server/routes/api/clash/[...].ts`；升级 Nitro/h3/crossws 时必须复核 HTTP 和 upgrade 两条入口。当前服务为单实例 Node preset，进程内短会话不能推导多 worker 会话共享/同步撤销支持。
+当前全局 upgrade gate 位于 apps/server/plugins/boot-kernel.ts，局部 relay 位于 apps/server/routes/api/clash/[...].ts，HTTP 和 upgrade 两条入口分别复核。文件理由有变化时更新本表对应职责，避免重新维护逐文件实现摘要。
+
+测试按真实范围选用：latency-batch 直接测纯调度；workspace-ui 抽取脚本在 VM/stub 中执行；overlay 内 composable/store spec 需要现成 Vue/Vitest 环境，不能称 DOM 或真实网络验证。management/controller、automatic-selector、tcp-delay、rule-test、site-probes 保护后端契约，不能替代适配文件执行。management-server-live 的 Server/浏览器分支和 notifications-browser-live 分别需要显式构建/浏览器输入；它们不证明 systemd、物理网络或公网推送。metacubexd-overlay 测合成 blob、幂等及漂移/冲突，不证明上游修复已保留；未有直接断言的桥接失败、组件焦点/布局等仍是缺口，不为填表新增镜像测试。
+
+上游更新按以下步骤作人工三方比较：
+
+1. 固定旧/新完整提交及可信来源，核对 catalog、各 manifest.commit 和完整 Git 树的路径/blob/mode；解包目录在安装依赖前用 verify-git-tree.mjs 验证。manifest 自称 commit 不能替代来源身份。
+2. 用 `git diff --find-renames --name-status <old> <new>` 先看全树新增/删除/重命名，再看 Server/UI 内容。不能只看当前 overlay 同名文件，须找新路由、插件、构建 hook 和生命周期/认证旁路。
+3. 对每个受影响覆盖读取旧 base、新上游和当前 overlay 完整内容：旧→新识别修复/API/依赖变化，旧→overlay 确认自有理由，新→overlay 判断保留、手工移植、冲突或撤销。可用 `git show <commit>:<path>` 和私有目录中的 diff --no-index，差异退出1属正常。
+4. 替换文件删除/改名时确认职责迁移，再决定跟随、转新增或撤销；自有新增遇上游同名视为所有权冲突，即使字节相同也记录新归属/base。来源不可读、blob 不符或职责不清时先解决，不空占位、不强制套用。
+5. 在同一目的提交中更新组件/审核锁、source-tree、必要 overlay 和本表理由；记录对应路径、旧新来源、三方结论、采用/拒绝理由、实际检查及未验证项。原始 diff/输出留私有位置，不新增长期审阅模板。
+6. 先验证新原始树，再在已获环境许可且具备现成依赖的目录应用、构建和按影响检查。overlay 应用工具只接受锁对应 base 或相同已应用字节；可应用不表示上游修复已审阅。
 
 ## 分别维护五类上游
 
@@ -55,7 +75,7 @@ CoCoProxy 分别固定 Mihomo 核心、MetaCubeXD 源树与 overlay、离线规�
 
 ### 5. 路由器适配组件
 
-当前提供可选的 [AlwayRoute SSH 适配器](../scripts/router-ssh-hook.py)，由[远程部署入口](remote-deployment.md#后续更新)在升级时调用。动作、参数映射、版本化声明及真实能力检查以[路由器契约中的适配器说明](router-contract.md#alwayroute-参数映射)为准；它不安装或更新组件、升级固件，也不生成通用固件配置。其他路由器可以提供符合该入口约定的 hook；存在 hook 不能证明整个组合已经满足[路由器契约 v1](router-contract.md)。
+当前提供可选的 [AlwayRoute SSH 适配器](../scripts/router-ssh-hook.py)，由[远程部署入口](deployment.md#后续更新)在升级时调用。动作、参数映射、版本化声明及真实能力检查以[路由器契约中的适配器说明](router-contract.md#alwayroute-参数映射)为准；它不安装或更新组件、升级固件，也不生成通用固件配置。其他路由器可以提供符合该入口约定的 hook；存在 hook 不能证明整个组合已经满足[路由器契约 v1](router-contract.md)。
 
 1. 单独审阅路由器固件、协作组件和适配器的变更，核对 `job_status`、`external_status`、`external_get`、`external_apply`、`external_disable` 的实际 API 和结果语义。AlwayRoute 启用动作使用已有配置的 revision；异步任务须等待完成并读回确认，不能只按 SSH 退出码判断已启用或已关闭。
 2. 维护状态映射、任务超时、独立关闭及原开启意图恢复的行为。关闭结果须确认交付、保护残留及专用 DNS 已撤销；故障或不稳定状态应停止协调并要求审阅。真实连接参数与恢复记录保持私有，适配器只引用已有密钥和主机指纹文件，不为维护复制凭据。

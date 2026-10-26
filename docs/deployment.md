@@ -1,202 +1,214 @@
 # 部署与维护
 
-第一次搭建请先阅读[从零部署与使用总指南](getting-started.md)，按接线、参数准备、软件与 HTTPS 安装、后台配置和路由器验收的顺序操作。本文提供安装器及维护步骤的详细约束。
+首次部署按[从零部署指南](getting-started.md)完成系统准备、HTTPS、路由器接入和终端验收；环境字段及逐步命令见[配置参考](setup.md)，证书/nginx 配方见[HTTPS 配置](management-https.md)，设备范围见[支持矩阵](support-matrix.md)。本文集中本机／SSH 部署、已有安装维护和中断处理。
 
-局域网网页的完整 nginx、证书与独立服务配方见[HTTPS 网页部署](management-https.md)。
+## 本机与 SSH 部署
 
-安装器部署独立的 CoCoProxy Linux 服务。透明代理还需协同路由器提供流量交付、DNS 和独立关闭，设备条件及两端参数见[路由器协作](cooperating-router-requirements.md)。
+从可信发行来源核对 SHA256SUMS 和独立 manifest 摘要，解压匹配目标架构的发行包。入口部署当前解压版本，不下载最新版本、不构建源码、不安装依赖或创建账户。目标须已具备指南要求的软件、服务身份、网络及证书；SSH 调用电脑还需 Node.js ≥22.18、OpenSSH 和 tar。
 
-`apps/deployment/main.ts` 是离线、单目标的安装入口。它复用[发行载荷](release-staging.md)及 `renderDeploymentPlan`；自动网关默认安装八个文件及目录，显式代理模式为五个文件，可选受管 HTTPS 为原生网关追加两个文件并引用既有证书。默认只读核验并输出不含文件内容的预览，只有 `--apply` 写入目标。工具不通过 SSH 控制另一台设备，不探测或推断地址，不安装依赖、账户、nginx 软件或证书，不改默认路由、系统 DNS、sysctl，不启动或启用服务。完整部署还包括下面明确列出的准备、配置、启动和终端验收。
-
-## 支持边界与前置审阅
-
-[统一部署入口](setup.md)提供环境汇总检查、配置生成和相同安装器的调用方式，可减少手工搬运核心摘要、release 路径及重复端口。[生命周期入口](setup-lifecycle.md)组织初始化、启动、持久运行和停机退役；运行期间的升级准备与安装中断检查见[维护恢复](maintenance-recovery.md)。底层入口及本页的明确参数方式继续保留。
-
-安装支持 Linux/systemd、固定审核的 ARM64 或 x86-64 ELF64 little-endian 核心，入口核对实际架构；其他系统与架构拒绝。目标须独立验收，当前已验证范围统一见[发行说明](release-notes.md)。
-
-目标主机需预置 Node.js ≥22.18、systemd、支持 JavaScript `.rules` 的 polkit、唯一的非 root 专用服务账号、root 控制的系统可执行文件及安装父目录。专用账号须使用 `nologin` 或 `false` shell；账号名和固定 UID 来自私有输入，不能复用交互登录账号。工具通过现有 `getent` 验证身份，不创建账户或修改组。应另行审阅该账号既有 sudo/polkit 权限和规则顺序，确保没有更早规则授予任意单元、manage-unit-files 或 root shell；安装工具不能证明所有既有授权都安全。
-
-自动网关还要求 Python ≥3.9、`/usr/sbin/ip`、`/usr/sbin/nft`、可用的 `/dev/net/tun`、内核 TUN/nftables/策略路由能力、已显式配置的 `net.ipv4.ip_forward=1`，以及输入指定接口已 UP 且配置了指定 IPv4/前缀。ip/nft 必须支持现有 helper 使用的 JSON 参数与规则。工具只读检查上述条件，不通过创建 TUN、`nft prepare` 或修改 sysctl 来“试验”能力；具体内核能力还需在独立网络启动与验收中证明。发行版对 sandbox、SELinux/AppArmor、挂载和 capability 的限制也须现场审阅。
-
-首次安装、升级和卸载都要求核心、管理、网关网络及早期保护 unit 已停止且未 enable，没有 drop-in、运行时替代 unit 或待 reload 的定义。已启用自动恢复时还必须先持久 pause，等待共同事务锁排空，再停服务；安装器拒绝 `enabled:true, paused:false` 的生命周期标记。已有自有网络资源必须先通过既有 helper 安全退役，工具不会在只读预检中调用 `prepare`。它核对 guard、部署出口表/规则、客户端回程与上游保留资源均无冲突；存在网络回执时只接受 `removed`。因此升级需要一个明确的维护窗口。
-
-涉及本机环境或设备的变更前，按各自管理约定取得相应许可并明确目标和影响。准备账户、软件、内核模块、IPv4 转发、网口地址、HTTPS 反向代理、证书及路由器交付均属于显式的前置运维步骤，不能从一次只读预检推导其变更授权。
-
-## 1. 装配、传送与私有输入
-
-在构建环境按[发行装配说明](release-staging.md)生成干净载荷，保存成功回执给出的 `manifestSha256`。通过操作者选择的传输方式将**该载荷目录**复制到目标 Linux；不要复制整个仓库、载荷父目录、`.local/` 或跟随本地目录链接。安装工具不下载组件，也不执行 npm。目标上的载荷及全部文件、目录和祖先必须由 root 控制且不可由组/其他用户写入，没有符号链接、硬链接或特殊文件。
-
-以下命令均在**已获准的目标 Linux root shell**执行；路径是合成角色示例。`MANIFEST_SHA` 应填入构建端单独记录并核验的 64 位 SHA-256，不能仅对未知来源的 manifest 自算摘要就视为可信。运行载荷里的入口本身已在执行代码，须在执行前核验载荷来源和清单，不把运行入口当成对任意未知代码的安全沙箱。
+在目标 Linux 本地执行：
 
 ```sh
-PAYLOAD=/srv/cocoproxy-staging/release
-MANIFEST_SHA='<构建端记录的64位manifest摘要>'
-INPUT=/etc/cocoproxy-install/deployment.json
-NODE=/usr/bin/node
-RELEASE="/opt/cocoproxy/releases/$MANIFEST_SHA"
-DEPLOY="$PAYLOAD/source/apps/deployment/main.ts"
-sha256sum "$PAYLOAD/manifest.json"
+./cocoproxy deploy --local --check
+sudo ./cocoproxy deploy --local --preview
+sudo ./cocoproxy deploy --local
 ```
 
-操作者先准备 root 控制的载荷目录、输入父目录和 release 父目录，例如 `/srv/cocoproxy-staging`、`/etc/cocoproxy-install`、`/opt/cocoproxy/releases`。入口使用规范绝对路径，不接受空白或 `.local` 路径段；这些位置不能通过链接或服务账号可写目录到达。服务使用的 root 目录还须允许其遍历；入口保守要求相应祖先对其他用户有执行位，不依赖额外组授权。工具不会递归创建或修改未知祖先，不对共享目录递归 chmod/chown。目标 release 目录必须不存在，其最后一级固定为 manifest 全摘要，避免同一源码提交的不同架构或构建载荷混淆；父路径可由输入显式选择，不依赖示例路径。
+`--local` 直接调用本机协调器，不需要 IP 或本机 SSH。`--check` 无需 root，仅盘点基础条件；实际部署及预览需要 root，缺少权限返回 `LOCAL_DEPLOY_ROOT_REQUIRED`。从源码调用须另给已装配的 `--payload /absolute/staging/release --manifest-sha256 <可信摘要>`。无 IP 且未指定 `--local` 时只显示帮助。
 
-将[自动网关合成输入](../examples/automatic-gateway-deployment.json)复制到目标的私有输入，按实地核验结果替换全部角色参数、UID、origin、端口、bootstrap、核心摘要和私有 controller secret。输入必须是 root 所有、0600 的普通单链接文件，输入及生成计划不得放进载荷或提交。release 三个路径必须按同一目标设置：
-
-```text
-runtime.sourceDirectory = RELEASE/source
-runtime.binaryPath = RELEASE/bin/mihomo
-management.serverEntry = RELEASE/server/.output/server/index.mjs
-runtime.binarySha256 = manifest.components.mihomo.binarySha256
-```
-
-这里 `RELEASE` 表示上面的实际变量值，JSON 中写替换后的绝对字符串，不写字面变量。接口、IPv4、前缀、MAC、受管来源、mark、表与优先级必须是操作者显式核验的输入。样本的文档地址、接口和 secret 均不可直接使用。管理后端固定 loopback；远程 origin 必须有按该 origin 配置并校验证书、Host/协议头和 WebSocket 的专用 HTTPS 反向代理。安装入口不配置代理、不开放端口，不能只填一个 HTTPS origin 就宣称远程管理可用。
-
-## 2. 只读预检与计划审阅
+从另一台电脑执行：
 
 ```sh
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT"
-
-"$NODE" --experimental-strip-types "$PAYLOAD/source/apps/cli/main.ts" \
-  deployment-plan --input "$INPUT" --output /etc/cocoproxy-install/plan.json
+./cocoproxy deploy 192.0.2.2 --check
+./cocoproxy deploy 192.0.2.2 --preview
+./cocoproxy deploy 192.0.2.2
+# Windows 可直接使用发行包的 Node 入口：
+node source/scripts/deploy-ssh.mjs 192.0.2.2
 ```
 
-第一条命令没有 `--apply`，不创建目录、锁、临时文件或收据，不执行服务变更或网络 helper。它验证清单摘要、每个文件大小和摘要、完整文件集合、禁止的本地数据和链接、ELF 架构、计划约束、服务身份、root 信任边界、精确归属、停止/禁用条件及网络冲突。预览只列目标、权限、动作和保留路径；不打印 controller secret、订阅或 credential。第二条生成包含秘密的 0600 私有八文件计划，供操作者审阅原始定义；安装入口重新调用同一 renderer，不接受任意待写文件清单。生成计划是明确的私有文件写入，独立于只读预检。
+地址为合成示例。SSH 用户、端口、密钥沿用已有配置，或指定 `--user`、`--port`、`--identity`、`--known-hosts`；同一已核验主机的不同接口可指定 `--host-key-alias`。首次先用原生 SSH 核验身份，工具不修改 SSH 配置、不接受未知指纹或忽略变化。非 root 目标用户须有 sudo 权限；交互终端可提示密码，无终端自动化须已有 `sudo -n` 权限。
 
-典型拒绝原因与后续动作：
+首次安装另给 `--environment /absolute/private/environment.json --admin-input /absolute/private/administrator.json`，本地模式参数相同。环境按[配置参考](setup.md)准备；管理员文件只含 `username`、`password`，真实值不放命令行、仓库或发行包。Unix 输入须为当前身份所有的 0600 普通单链接文件；Windows 放在仅当前用户可读的私有目录。
 
-| 错误码 | 操作者需要处理的条件 |
+入口安装后初始化唯一管理员并启动管理服务，受管 HTTPS 同时启动网页服务；不自动 enable、不导入订阅、不为路由器开启交付。继续按首次部署指南应用配置和验收。
+
+## 后续更新
+
+核验新发行包后，对既有安装运行相同的 `deploy --local` 或 `deploy <IP>`。目标以 root:0600 的 `/etc/cocoproxy-install/deployment.json` 为部署输入主本，父目录 root:0700。正常更新只更换 release、核心摘要和服务入口，保留网络、内部身份、凭据路径及业务状态。
+
+此前通过底层安装器部署时，首次增加 `--input /absolute/private/previous-deployment.json`；输入必须与收据及实际配置相符，不凭 IP 猜测或接管手工安装。外部网页服务需随维护暂停时增加 `--web-unit cocoproxy-web.service`，受管网页自动纳入。
+
+### 路由器适配器
+
+自动网关更新须先关闭路由器交付。首次可传入 `--router-config /absolute/private/router-ssh.json`，以后复用目标上的 root:0600 配置：
+
+```json
+{
+  "host": "192.0.2.1",
+  "user": "root",
+  "port": 22,
+  "identityFile": "/absolute/private/router-key",
+  "knownHostsFile": "/absolute/private/router-known-hosts"
+}
+```
+
+路径引用目标网关上既有密钥和主机指纹，不复制密钥。内置 AlwayRoute 适配器通过公开 ubus 查询、关闭、等待并恢复原开启意图，不安装路由器软件。固件能力、版本及配置审阅见[路由器契约](router-contract.md#alwayroute-参数映射)。任务总时限120秒（含 RPC，每次最多30秒），协调器含前后核验的操作上限300秒，超时失败不表示远端任务已取消。
+
+其他实现可提供 `--router-hook /absolute/root-owned/executable`，程序及全部祖先须 root 控制、不可由其他身份写入：
+
+| 动作 | 结果要求 |
 | --- | --- |
-| `INSTALL_LINUX_ROOT_REQUIRED` / `INSTALL_SYSTEMD_REQUIRED` | 在受支持的目标 Linux root 环境运行；不能在开发机或普通容器假装完成安装 |
-| `INSTALL_REQUIRED_SYSTEM_TOOL_MISSING` / `INSTALL_NODE_22_18_REQUIRED` / `INSTALL_PYTHON_3_9_REQUIRED` | 在另行获准的软件准备步骤中提供所需工具或版本，再重试；入口不安装软件 |
-| `INSTALL_DEDICATED_ACCOUNT_REQUIRED` | 预置输入明确指定的唯一 UID 和非登录专用账号，复核已有授权 |
-| `INSTALL_TUN_REQUIRED` / `INSTALL_IPV4_FORWARDING_REQUIRED` / `INSTALL_INGRESS_ADDRESS_REQUIRED` | 审阅内核设备、转发和输入接口地址；由操作者另行配置，工具不推断替代值 |
-| `INSTALL_CORE_ARCH_UNSUPPORTED` | 使用已审阅且与目标主机相符的核心载荷；不使用任意替代二进制绕过清单 |
-| `INSTALL_SERVICES_MUST_BE_STOPPED` / `INSTALL_UNITS_MUST_BE_DISABLED` | 先按维护流程停止并禁用自有 unit，核对 drop-in 和 daemon-reload 状态 |
-| `INSTALL_LIFECYCLE_MUST_BE_PAUSED` / `INSTALL_LIFECYCLE_INVALID` | 以服务身份成功执行 runtime-pause；损坏标记须核查，不能删文件绕过维护保护 |
-| `INSTALL_*_CONFLICT` / `INSTALL_NETWORK_REMOVE_REQUIRED` | 查明资源归属；先显式安全退役自有网络，不删除未知规则或上游资源 |
-| `INSTALL_ROOT_OWNERSHIP_REQUIRED` / `INSTALL_OWNED_FILE_CHANGED` | 检查指定目录和已安装文件；不通过递归改权限或覆盖他人修改绕过拒绝 |
-| `INSTALL_RECEIPT_MISMATCH_OR_INCOMPLETE` / `INSTALL_PREVIOUS_APPLY_INCOMPLETE` | 停止普通安装流程，检查 root 私有 receipt 与实际文件；不删除收据后假装首次安装 |
+| `check-adapter` | 只读检查查询、独立关闭、恢复接口及兼容配置，至少返回 `{"schemaVersion":1,"compatible":true}`；失败/未知须拒绝，不能固定返回 true |
+| `status` | 只返回 `{"enabled":true}` 或 `{"enabled":false}` |
+| `disable` / `enable` | 等待动作完成并读回确认 |
 
-详细系统查询失败只返回固定错误码，避免把含秘密的输入或子进程输出混入默认日志。应在目标私有运维记录中调查具体系统条件。
+协调器先检查适配器，再独立查询状态。缺动作、不兼容、未知或格式不符，以 `REMOTE_ROUTER_ADAPTER_PREFLIGHT_FAILED` 在暂停/停服前拒绝。内置检查只覆盖能力及可读 schema/revision，`endToEnd:unverified` 不证明配置或转发恢复；enabled:false/degraded 本身也不代替后续维护状态判定。旧 hook 须补齐真实检查后重新预览。
 
-## 3. 显式安装与服务准备
+### 更新顺序与状态保留
+
+协调器先在运行期间 prepare，通过后暂停并排空事务、关闭路由器交付、停服、用旧 helper 退役网络，再调用公开升级。已启用但处于维护暂停的安装拒绝自动更新；停用且核心已停的安装可更新并保持停用。暂停标记与运行核心同时存在时须人工审阅。
+
+prepare 拒绝先输出 `phase:"prepare"` 的脱敏摘要和原因码，再返回 `REMOTE_UPGRADE_NOT_READY_OR_CONFIGURATION_CHANGED`，此时未暂停或停服。网络回执只有完整拥有状态才调用旧 helper；从未启用或已经退役不重复删除，回执不完整或中途变化均停止。
+
+保留核验分三个时点：
+
+1. 暂停、关闭交付及停服后读旧安装基线；合法维护前编辑纳入基线。完整 reader 失败、active/selection 不一致或事务待恢复时先处理原事务；从未应用且均无记录不算故障。
+2. 新文件和收据核验后、尚未恢复服务时，比较凭据、规范状态文件、全部候选存在集合及字节摘要、状态目录及规范子目录的目录项。停服窗口任何新增/缺失/修改都阻止恢复。
+3. 凭本次指纹约束令牌恢复原 runtime 标记及服务 enable/active 意图，核验必要核心就绪后，比较稳定身份、用户偏好及完整可读性，通过后才恢复路由器原意图。原标记缺失或未启用时保持原 flags，不借维护启用恢复。
+
+| `preservation` 范围 | 保留及允许正常推进的内容 |
+| --- | --- |
+| `contentChecks` | 实际 reader 验证完整字段、候选摘要及重编译；可读不单独证明业务可用 |
+| 工作区、站点、草稿、订阅 | 用户策略、手动/自动选择、站点设置、草稿及订阅定义保留；修订/刷新时间、尝试/失败及动态快照可变化 |
+| 可信设备/通知 | 有效设备身份、令牌摘要、信任范围/标签、VAPID 密钥及订阅偏好保留；合法续期、自然过期清理、事件/队列/发送时间可变化 |
+| 运行绑定/选择 | 已提交 active、selection 与重编译候选一致、reader 可读；动态目标、时间、PID 不要求相同 |
+| `authentication` | 默认 `not-run`，实际登录、Cookie、终端通知另验 |
+
+快照仅在协调进程内保留脱敏摘要，不复制凭据、数据库或订阅，不创建备份。读取复核目录项和同代数据；已知原子写入临时文件不按业务解析，仍参与目录项比较；未知文件、损坏/缺失记录拒绝继续。首次安装为 `not-applicable`，同版本未升级为 `not-run`。
+
+`REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED` 保持原意图/服务未恢复及路由器关闭；`REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW` 表示恢复后稳定字段或读回待审阅，不能直接归因安装破坏；`REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED` 要求先恢复原事务。明确变更 origin/管理员会使旧设备及通知绑定合法失效，以 `REMOTE_PRESERVATION_REAUTH_REQUIRED` 提示重新授权，不强保留旧身份或把失效当损坏。远程入口仍只更换发行引用，配置迁移另按下述手工审阅。
+
+## 机器状态与生命周期
+
+在目标 Linux 使用原私有输入：
 
 ```sh
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --apply
+./cocoproxy status --input /absolute/private/deployment.json
+./cocoproxy management-report --input /absolute/private/deployment.json --probe-https
 ```
 
-工具仅创建计划的缺失专用目录、root 控制的完整 release、计划中的八个文件，以及独立的 root:0700 `/var/lib/cocoproxy-deployment` 收据目录；文件按计划的 root/服务 UID 与 0644/0600 安装，release 目录为 root:0755、普通文件 0644、可执行文件 0755。完成后执行 `systemctl daemon-reload`，保持所有服务停止且未 enable，不生成管理员密码或修改任何订阅和状态。
+status 分列安装、管理员、管理服务、配置、核心、持久运行，`currentWait`、`next` 提示后续动作。入口复核完整收据、发布、文件及身份，以服务 UID 调用只读状态；核心仅观察本机回环 Controller 和版本。结束前复核安装/身份/配置，变化项改 unknown。它不写状态、启停服务或探测路由器/管理 origin。
 
-receipt 只记录自有目标、权限和摘要，不保存文件内容或凭据副本。它在写目标前持久记录 `pending`，全部完成后变为 `complete`；进程失败或断电可能留下部分安装及持久锁。工具拒绝自动覆盖或恢复这类状态。操作者须在维护窗口逐项审阅 receipt、目标字节和 systemd 状态后进行精确恢复；没有无条件重试、递归删除或凭据备份。安装期间由单一可信操作者控制输入、载荷与目录，普通文件 API 不能防御并发恶意 root 更换路径。
+可选 HTTPS 探测由调用端 Node 请求固定 `/api/cocoproxy/health`，最多5秒、2 KiB，不跳转、不带认证、不忽略 TLS；可信 TLS、HTTP 200 及预期内容同时满足才通过。省略探测不联网、不创建文件；完整私有输入校验仍适用，无需 root。`scope:"invoking-node"` 不能证明浏览器信任、登录或通知显示，实际验收按[总指南第9节](getting-started.md#9-部署验收与交给使用者)。
 
-初次安装且不存在 credential 时，使用现有 `admin-init`。先在目标的私有 0600 文件中提供 `{"username":"<admin-name>","password":"<private-password>"}`，将占位符替换为选定的 ASCII 用户名及私有强口令；字段约束见[管理模块](../packages/management/README.md)。不要把密码放在命令参数、仓库、载荷或示例文件中。以下命令只创建唯一 credential，已有文件时不得执行覆盖：
+生命周期动作默认预览，须附 `--apply --reviewed-plan-sha256 <本次摘要>` 才执行：
 
 ```sh
-ADMIN_INPUT=/etc/cocoproxy-install/admin-login.json
-"$NODE" --experimental-strip-types "$RELEASE/source/apps/cli/main.ts" \
-  admin-init --input "$ADMIN_INPUT" --output /etc/cocoproxy/admin.json
-chown cocoproxy:root /etc/cocoproxy/admin.json
-chmod 0600 /etc/cocoproxy/admin.json
+./cocoproxy lifecycle --action start-management --input /absolute/private/deployment.json
+./cocoproxy lifecycle --action start-management --input /absolute/private/deployment.json \
+  --apply --reviewed-plan-sha256 <本次预览摘要>
 ```
 
-示例中的 `cocoproxy` 和 credential 路径必须与私有输入相同。已有 credential 直接保留，升级不重新初始化。明文登录输入的后续保留/清理由操作者在原私有位置管理，安装工具不复制或备份。root 可按审阅计划核验 `systemd-analyze verify` 的 unit 定义及 polkit 权限：专用身份只可 start/stop 固定核心，原生网关另可 start/reload 固定网络单元；其他 unit、restart、enable 和通用提权均应拒绝。
+| 动作 | 条件与作用 |
+| --- | --- |
+| `initialize` | 另给私有 `--admin-input`；只独占创建缺失凭据，已有合法凭据保留，损坏/归属错误须修复 |
+| `start-management` | 凭据已初始化，自动生命周期关闭或暂停；启动管理及收据内 HTTPS |
+| `enable-persistence` | `--terminal-path-verified` 确认实际终端验收；启动早期 guard、启用管理/HTTPS 并以服务身份 runtime-enable |
+| `pause-maintenance` | 持久暂停并等待事务排空，不操作路由器，也不代表现有核心已停 |
+| `stop-maintenance` | 自动网关须 `--router-disabled` 确认交付已关；暂停、停用服务、核验 PID/Job，再用旧 helper 退役网络 |
+| `resume-persistence` | 此前已启用，`--terminal-path-verified` 确认路径；恢复持久运行和管理/HTTPS 开机启动 |
 
-确认 HTTPS 代理和 credential 就绪后显式启动管理服务：
+摘要绑定输入、完成收据、动作、人工确认、生命周期、凭据和步骤。执行共用 install.lock，每步先写 root 私有 lifecycle.json 意图再记完成，管理员明文只读取原输入、不复制到记录。原进程已退出且锁/记录证明同一动作、输入及收据时，可重新预览后用新摘要继续；完成标记不代替当前 PID/Job 核验。初始化须现有凭据与记录摘要相符；未完成网络回执不自动再删。未知/旧格式锁、记录不匹配或文件漂移先 inspect，不能清锁重试。
 
-```sh
-systemctl start cocoproxy-management.service
-```
+## 关闭升级与卸载
 
-管理登录后，按[使用说明](usage.md)导入订阅、选择方案并应用；候选捕获和运行 CAS 由工作区流程内部完成，不绕过事务直接裸启动 Mihomo。自动网关核心启动会依赖 root 网络 oneshot，它执行固定 `prepare` 并创建 guard、出口及回程规则，属于已审阅的显式网络激活，不能把这一步称为安装预检。管理健康响应只证明管理服务响应，不能作为网关就绪依据。
+用户恢复普通直连须从路由器撤销交付并恢复 DNS；网页直连模式仍经外设，停核心仍保留 guard。维护先成功 pause，再关闭路由器，最后停服退役，不能与自动恢复竞争。
 
-## 4. 接入与终端验收
-
-通过协同路由器的管理界面或受支持的命令入口填写网关角色参数。**LAN 模式要求双方配置相同的精确接入子网，覆盖其中普通 IPv4 客户端并阻断受管公网 IPv6；兼容单终端模式仍可显式选用。** 至少验证两个客户端和新加入地址，不能从单终端通过推导整个 LAN 已验收。路由器端保持自身管理和独立关闭入口可达，首次接入时核验核心、接管、DNS、来源保留、出口和回程。已验收组合的日常应用可使用有界的新鲜网关 DNS 预检；该检查只证明局部可达，完整路径状态仍须如实标记，见[协作说明](cooperating-router-requirements.md)。CoCoProxy 安装工具不替路由器修改配置。服务开机启用由操作者在验收后另行决定，例如 `systemctl enable cocoproxy-management.service`；后续维护先禁用，不能把 enable 与首次安装合并。
-
-验收至少包含 IPv4 TCP/UDP、路由器转交的 DNS、局域网管理、本机原有出口不被接管、未支持 IPv6 在受管范围阻断、核心停止时受管外网阻断，以及核心仍停止时从路由器独立关闭后终端恢复普通直连。业务站点成功、systemd active、Mihomo `-t` 与 HTTP health 各自只覆盖局部条件。具体测量、真实角色参数和恢复笔记保持私有；正式结论只记录组件版本、双方提交及脱敏范围。
-
-## 关闭、升级与卸载
-
-用户关闭由路由器撤销交付并恢复其 DNS 完成；停止核心保留 guard，不能代替用户关闭。持久运行的启用、sysctl 与地址准备见[总指南第 8 节](getting-started.md#8-启用持久运行与自动恢复)。升级/卸载先以服务身份执行 pause，成功后完成路由器侧关闭，再停服务。变量必须与实际部署一致：
+优先用生命周期入口组织暂停和停止。手工维护使用已安装旧发布及原输入的精确路径，以下角色变量须替换：
 
 ```sh
+NODE=/usr/bin/node
+RELEASE='/opt/cocoproxy/releases/<旧manifest摘要>'
 SERVICE_USER=cocoproxy
 STATE_DIR=/var/lib/cocoproxy
 RUNTIME_SETTINGS=/etc/cocoproxy/runtime.json
 CLI="$RELEASE/source/apps/cli/main.ts"
 runuser -u "$SERVICE_USER" -- "$NODE" --experimental-strip-types "$CLI" \
   runtime-pause --state-dir "$STATE_DIR" --runtime-settings "$RUNTIME_SETTINGS"
-```
-
-pause 成功表示已排空管理协调；仍须停止服务并核验 MainPID/Job 清零。维护标记跨重启保留并阻止核心启动器执行。不要只 pause 就认为现有核心已停止。
-
-```sh
+# 成功后，从路由器关闭交付并确认，再停止服务：
 systemctl disable --now cocoproxy-management.service
 systemctl disable --now cocoproxy-mihomo.service
 systemctl stop cocoproxy-gateway-network.service
 systemctl disable --now cocoproxy-gateway-guard.service
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --operation uninstall
-```
-
-最后一条仍是只读预览，有网络资源时预期拒绝。需先确认核心已停、TUN 和上游资源已消失，且自有网络回执完整、资源与设置全部相符，再执行既有 helper：
-
-```sh
+# 核验核心 PID/Job、TUN 和上游资源；完整拥有回执匹配时退役：
 /usr/bin/python3 -I "$RELEASE/source/apps/gateway/network.py" remove \
   --settings /etc/cocoproxy/gateway-network.json
 ```
 
-网络设置路径应采用当前已安装计划的确切值。helper 对完整回执和资源严格核验，guard 最后移除；它拒绝不完整收据、未知资源和跨 boot 不匹配，不清理上游残留。若网络服务从未 prepare 且不存在网络资源或回执，无须调用 remove。安装入口只读检查“无冲突且回执已 removed/不存在”，不会调用 remove，也不根据停止状态臆测资源已经安全移除。
+受管/独立网页也须停止禁用。helper 严格核对完整回执、设置及实时资源，guard 最后移除；拒绝未知资源、不完整回执或跨 boot 不匹配，不清理上游残留。从未 prepare 且无资源/回执时无需 remove。安装器只核验已清空和回执 removed/不存在，不代为退役。
 
-升级时装配并传送新载荷，保存新 manifest 摘要；准备新私有输入，将 source/binary/server 路径改为新摘要目录，核心摘要改为新载荷摘要，其余管理、secret、网络和身份配置保持一致。将 `PAYLOAD`、`MANIFEST_SHA`、`INPUT`、`DEPLOY` 指向**新**载荷和输入，先预览再应用：
-
-```sh
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --operation upgrade
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --operation upgrade --apply
-```
-
-升级只接受当前 complete receipt、所有旧自有文件字节/权限/身份与旧 release 清单一致的新版本。旧七文件自动网关允许唯一的受控扩展：新增固定 root 所有的 `cocoproxy-gateway-guard.service`，且目标原先必须不存在；不允许借此增删其他文件。默认发现人工修改、secret/网络/管理配置变化或未知安装一律拒绝；配置迁移须单独审阅并使用下述显式摘要入口。它保留管理员 credential、订阅、草稿、事务及生命周期状态，更新新的 runtime release 引用和 unit；旧 release 也保留以便审阅，工具不自动回滚活跃事务或复制秘密。升级后更新 RELEASE/CLI，恢复管理及网页，检查保留配置与当前部署匹配，再以服务身份 runtime-resume、重新启用早期保护/管理/网页，恢复路由器交付并验收。此前从未启用生命周期时使用 runtime-enable。
-
-需要迁移网络范围或管理许可时，先审阅新私有输入及 `renderDeploymentPlan` 输出。显式 `--reviewed-configuration-sha256` 仅对 upgrade 生效；它绑定旧/新 manifest、新输入**原始字节**摘要和全部旧敏感受管文件的路径/摘要。旧收据、文件归属、服务身份、状态/凭据路径、受管文件路径集合、完整 schema 及停止/网络无冲突检查仍必须通过。输入重新排版、旧配置或载荷变化后原审阅摘要失效；不修改 `/etc` 或 receipt 来绕过核验。
-
-经审阅后，可以用以下只读计算取得 `CONFIG_REVIEW_SHA`（仅输出摘要，无设置内容）：
+准备新载荷和私有输入，release 的 source/binary/server 路径及核心摘要采用新 manifest，其余身份、secret、状态和网络保持原值；可用[configure --existing-input](setup.md#5-升级输入与维护)生成。载荷及祖先须 root 控制、不可由其他身份写入、精确文件集/摘要匹配，无链接/特殊文件；release 末级为 manifest 全摘要且尚不存在。只传送载荷，排除 .local，不整体复制工作区。
 
 ```sh
-"$NODE" --experimental-strip-types --input-type=module - \
-  "$PAYLOAD/source/packages/deployment/install.ts" "$INPUT" "$MANIFEST_SHA" <<'JS'
-import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
-const { configurationReviewDigest } = await import(pathToFileURL(process.argv[2]).href);
-const previous = JSON.parse(await readFile('/var/lib/cocoproxy-deployment/receipt.json', 'utf8'));
-console.log(configurationReviewDigest({ previousManifestSha256: previous.manifestSha256,
-  manifestSha256: process.argv[4], inputSha256: createHash('sha256').update(await readFile(process.argv[3])).digest('hex'),
-  previousConfiguration: previous.files.filter(file => file.sensitive).map(({ path, sha256 }) => ({ path, sha256 })) }));
-JS
-
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" \
-  --operation upgrade --reviewed-configuration-sha256 "$CONFIG_REVIEW_SHA"
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" \
-  --operation upgrade --reviewed-configuration-sha256 "$CONFIG_REVIEW_SHA" --apply
+PAYLOAD=/srv/cocoproxy-staging/new-release
+MANIFEST_SHA='<可信的新manifest摘要>'
+INPUT=/etc/cocoproxy-install/deployment-next.json
+"$PAYLOAD/cocoproxy" upgrade --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT"
+"$PAYLOAD/cocoproxy" upgrade --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --apply
+# 卸载同样先预览，确认后另加 --apply：
+"$PAYLOAD/cocoproxy" uninstall --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT"
 ```
 
-该入口只安装新定义，不启动服务或迁移活跃候选。扩大网关范围时须在旧 helper 和旧设置仍有效时先退役旧网络，升级后先启动管理，经工作区重新应用生成与新范围匹配的候选，再开启路由器交付。新候选失败后旧候选可能无法在新范围设置下回滚，应保持路由器关闭并恢复匹配的设置，再显式恢复事务。审阅摘要错误返回 `INSTALL_CONFIGURATION_REVIEW_MISMATCH`；默认缺少明确审阅时返回 `INSTALL_CONFIGURATION_CHANGE_REQUIRES_REVIEW`。
+升级只接受 complete 收据、旧自有文件字节/权限/身份及旧 release 完整匹配。旧七文件网关仅允许受控追加原不存在的固定 guard unit，不能借此改其他文件。配置变化默认拒绝；迁移先 prepare 审阅，实施附 `--reviewed-configuration-sha256 <review.digest>`。摘要绑定新旧 manifest、新输入原字节及旧敏感配置，重新排版或输入/载荷变化须重审；服务身份、状态及凭据路径、文件集合、停服和无冲突约束仍适用。
 
-卸载使用**当前已安装**摘要及原输入，在安全移除网络后运行：
+升级保留管理员、订阅、草稿、事务、生命周期及旧 release，不复制秘密、不自动回滚。完成后更新 RELEASE/CLI，核对保留配置与新部署，恢复原服务意图；已启用时以服务身份 runtime-resume（首次才 runtime-enable），恢复早期 guard、管理及网页，最后恢复路由器交付并验收。卸载只删除仍匹配收据的自有文件，保留私有设置、状态、凭据与 release；独立 HTTPS 和路由器另行处理。
+
+### 安装预检拒绝
+
+首次安装、升级、卸载均要求相关 unit 停止且未 enable，无 drop-in、运行时替代或待 reload；已启用恢复必须先 pause。完整前提见[设备条件](support-matrix.md#外接设备条件)。
+
+| 原因码 | 下一步 |
+| --- | --- |
+| `INSTALL_*_REQUIRED` | 核验对应 Linux/root、软件、唯一非登录服务 UID、可信目录、TUN、转发及接口地址，环境另行准备 |
+| `INSTALL_CORE_ARCH_UNSUPPORTED` | 使用审核且匹配目标架构的载荷 |
+| `INSTALL_SERVICES_MUST_BE_STOPPED` / `INSTALL_UNITS_MUST_BE_DISABLED` | 按顺序停服、禁用并核对覆盖定义 |
+| `INSTALL_LIFECYCLE_MUST_BE_PAUSED` / `INSTALL_LIFECYCLE_INVALID` | 完成持久 pause，损坏标记先调查 |
+| `INSTALL_*_CONFLICT` / `INSTALL_NETWORK_REMOVE_REQUIRED` | 确认归属，显式退役旧自有网络，不删除未知资源 |
+| `INSTALL_OWNED_FILE_CHANGED` / `INSTALL_ROOT_OWNERSHIP_REQUIRED` | 核对文件、路径和权限，不递归改权限或覆盖漂移过检 |
+| `INSTALL_RECEIPT_MISMATCH_OR_INCOMPLETE` / `INSTALL_PREVIOUS_APPLY_INCOMPLETE` | 停止普通部署，按下一节检查 |
+
+## 升级准备与中断恢复
+
+### 运行期间准备
 
 ```sh
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --operation uninstall
-"$NODE" --experimental-strip-types "$DEPLOY" \
-  --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --operation uninstall --apply
+./cocoproxy prepare --payload /absolute/staging/new-release \
+  --manifest-sha256 <可信摘要> --input /absolute/private/deployment-next.json
 ```
 
-卸载只删除收据匹配的 unit 和 polkit 文件并 daemon-reload。默认保留全部私有设置、管理员 credential、业务状态、网络退役收据、安装收据和所有 release，不递归删除目录，不卸载系统软件/账户，不清理 HTTPS 代理、路由器或未知网络资源。收据标记 `uninstalled` 后普通 install/upgrade 拒绝冒认已有私有状态；重新启用或彻底销毁资料属于独立的精确审阅步骤。本入口不提供清空数据选项。
+prepare 只读验证新旧发布、收据、文件、身份、工具和输入，允许服务运行，不停服或删除网络。输出配置变化及 review.digest，不是实施授权；正式升级会在维护窗口重查。
 
-既有手工安装没有本工具的 complete receipt，不能直接升级，也不能补写摘要冒认自有文件。迁移时先按旧部署计划关闭交付、停服务并安全 remove 网络，再逐个审阅旧七文件的内容和归属、撤下确认属于旧安装的文件，保留状态和 credential；之后按首次安装流程进入新 release。原 settings 中的真实 secret 与网络参数从原私有主本核对，不放进发行包或生成多份凭据备份。
+compatibilityAssessment 分列 state、configuration、historyCandidates、network、identity 的状态、原因和条件。状态/候选复用完整 reader，目标 manifest 的 stateSchemas、contentReaders、configurationReader、candidateReader 须与源码契约吻合，不仅凭同版本号推导兼容。坏内容为 unsupported，缺少/未知 reader 或无法可信读取为 unknown；候选核验规范字节、摘要、引用及目标设置重编译，不运行目标核心；网络只比静态绑定与回执状态，不证明实时资源归属；身份变化的合法失效与损坏分开报告。
+
+原 stateCompatibility 和 `readiness:"prepared-not-applied"` 保留兼容语义，只表示必需静态格式可继续准备，仍须看 readinessScope 和完整五维结论，不表示动态网络可用或可立即安装。坏内容、reader 缺少/未知及观察失败分别用 `DEPLOYMENT_STATE_CONTENT_INVALID` / `DEPLOYMENT_STATE_JSON_INVALID`、`DEPLOYMENT_STATE_CONTENT_READER_NOT_DECLARED` / `DEPLOYMENT_STATE_CONTENT_READER_UNKNOWN`、`DEPLOYMENT_STATE_OBSERVATION_UNAVAILABLE` 表达。远程入口只接受原有配置未变化路径。
+
+### 检查与收尾
+
+```sh
+./cocoproxy inspect
+./cocoproxy recover
+# 审阅动作及 reviewedRecoverySha256 后才实施：
+./cocoproxy recover --apply --reviewed-recovery-sha256 <本次摘要>
+```
+
+inspect 列收据、受管文件/权限/摘要、发布完整性、锁进程和临时文件，不删除锁/文件、重装、改收据或启停服务。缺失/损坏收据不能可靠证明归属。
+
+recover 只给同一已写齐安装/升级事务收尾：收据与含事务 ID、启动标识、进程开始时间的锁匹配，原进程已退出，全部预期字节/权限正确，生命周期暂停，服务停止禁用且无覆盖。它仅 daemon-reload、标记收据完成并移除同事务安装锁，不补写文件、恢复历史状态、退役网络或重启服务。摘要绑定凭据存在及内容，取得恢复锁后重查，变化须重预览。
+
+已知首装可尚无管理员，返回 `credential:"initialization-required"`、`administratorInitializationRequired:true`，收尾后再 initialize；缺凭据不表示可登录。升级缺原凭据返回 `INSTALL_RECOVERY_CREDENTIAL_REQUIRED`，不能借恢复重置身份。已有凭据复核可信父路径、服务 UID、0600 及普通单链接条件。
+
+旧 PID 锁、缺事务标识的 pending、部分写入、文件漂移、卸载中断、遗留恢复锁均人工审阅。失败不自动重复变更；协调记录 `/etc/cocoproxy-install/remote-last.json` 保存阶段、摘要、原意图及维护令牌，root:0600。安装收据/锁仍是文件权威证据；令牌只接受未被后续动作改变的暂停标记，不能清锁/删收据或只依 SSH 返回值重试。
+
+`--preview` 会创建私有协调目录/锁、传送暂存载荷、生成临时输入，首次还验证管理员生成，但不停服/安装、不写管理员凭据。缓存发布前和既有缓存执行前均精确核验文件集/字节，不删除未知目录重试；普通复制失败清理本次暂存，中断遗留按归属审阅。两种模式沿用 REMOTE_* 原因码。
+
+默认输出仅固定阶段、提交、摘要和结果，不输出配置、口令、原始系统错误、节点或订阅。仅 manifest 文件传输，拒绝 .local、.git 和目录链接；SSH 临时上传及管理员输入收尾清理。旧 release 不是业务备份，也不证明旧程序能读当前状态，故无通用程序降级/回滚命令。

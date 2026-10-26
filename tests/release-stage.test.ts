@@ -25,9 +25,9 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'packages/runtime/start.ts'), 'export const fixture = true;\n');
   await put(join(sourceDir, 'packages/deployment/state-compatibility.mjs'), await readFile(new URL('../packages/deployment/state-compatibility.mjs', import.meta.url), 'utf8'));
   await put(join(sourceDir, 'docs/deployment.md'), 'Synthetic role deployment instructions\n');
-  await put(join(sourceDir, 'docs/cooperating-router-requirements.md'), 'Synthetic independent product and router capabilities\n');
+  await put(join(sourceDir, 'docs/support-matrix.md'), 'Synthetic independent product and router capabilities\n');
   await put(join(sourceDir, 'docs/release-notes.md'), 'Synthetic fixed-version release scope and known limitations\n');
-  for (const name of ['setup.md', 'getting-started.md', 'usage.md', 'notifications.md', 'architecture.md', 'development.md', 'remote-deployment.md']) {
+  for (const name of ['setup.md', 'getting-started.md', 'usage.md', 'architecture.md', 'development.md']) {
     await put(join(sourceDir, 'docs', name), 'Synthetic documentation\n');
   }
   for (const name of ['architecture-overview.svg', 'runtime-relations.svg', 'proxy-traffic-flow.svg']) {
@@ -99,16 +99,16 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.ok(manifest.files.some(file => file.path === 'server/.output/server/node_modules/web-push/dist/index.js'));
   assert.ok(manifest.files.some(file => file.path === 'source/integrations/mihomo/LICENSE'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/deployment.md'));
-  assert.ok(manifest.files.some(file => file.path === 'source/docs/cooperating-router-requirements.md'));
+  assert.ok(manifest.files.some(file => file.path === 'source/docs/support-matrix.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/release-notes.md'));
-  for (const path of ['getting-started.md', 'usage.md', 'notifications.md', 'architecture.md', 'development.md', 'images/architecture-overview.svg',
+  for (const path of ['getting-started.md', 'usage.md', 'architecture.md', 'development.md', 'images/architecture-overview.svg',
     'images/runtime-relations.svg', 'images/proxy-traffic-flow.svg']) {
     assert.ok(manifest.files.some(file => file.path === `source/docs/${path}`));
   }
   assert.ok(manifest.files.some(file => file.path === 'source/examples/nginx-management.conf'));
   assert.ok(manifest.files.some(file => file.path === 'source/examples/deployment-options.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/scripts/measure-latency.mjs'));
-  for (const path of ['source/docs/remote-deployment.md', 'source/scripts/deploy-ssh.mjs', 'source/scripts/remote-deploy.py', 'source/scripts/router-ssh-hook.py']) {
+  for (const path of ['source/scripts/deploy-ssh.mjs', 'source/scripts/remote-deploy.py', 'source/scripts/router-ssh-hook.py']) {
     assert.ok(manifest.files.some(file => file.path === path));
   }
   assert.ok(manifest.files.some(file => file.path === 'cocoproxy' && file.mode === '0755'));

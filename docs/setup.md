@@ -4,61 +4,42 @@
 
 发行包解压后使用根目录 `cocoproxy`；源码目录使用 `sh scripts/cocoproxy-setup.sh` 或 `npm run setup --`。以下命令在已核验发行包及获准目标 Linux 中执行，路径是合成角色示例，须替换实际值。
 
-需要自动组织安装或更新时，使用 `sudo ./cocoproxy deploy --local` 在本机执行，或 `./cocoproxy deploy <IP>` 从另一台电脑通过 SSH 执行。首次安装还需私有环境与管理员输入，参数、预览及更新状态保留见[本机与远程部署更新](remote-deployment.md)。本地模式无需本机 SSH 服务；下面保留逐步配置、预检和维护入口。
+需要自动组织安装或更新时，使用 `sudo ./cocoproxy deploy --local` 在本机执行，或 `./cocoproxy deploy <IP>` 从另一台电脑通过 SSH 执行。首次安装还需私有环境与管理员输入，参数、预览及更新状态保留见[本机与远程部署更新](deployment.md)。本地模式无需本机 SSH 服务；下面保留逐步配置、预检和维护入口。
 
 ## 1. 盘点环境
 
 ```sh
 sh ./cocoproxy check
 sh ./cocoproxy doctor
+sh ./cocoproxy doctor --environment /absolute/private/environment.json
 ```
 
-`check` 仅检查基础工具是否存在，不依赖 Node。`doctor` 汇总 Linux、架构、Node、systemd、Python、ip/nft、polkit、TUN 和 IPv4 转发结果。失败或未知的必要项使退出码为 1。结果包含固定 id、解释及处理方向，不输出原始系统错误。软件、账户、地址和 IPv4 转发仍按目标系统准备，检查不会安装依赖或改变网络。
+check 只检查基础工具，不依赖 Node。doctor 只读汇总 Linux/架构、Node、systemd、Python、ip/nft、polkit、TUN、转发、身份/路径、网络资源、端口及安装状态；不安装软件、创建账户、运行网络 helper 或修复权限。环境 JSON 格式失败不妨碍独立基础检查，私有文件读取/JSON 解析失败仍走 CLI 原错误出口。
 
-环境输入选择受管 HTTPS 时，`doctor` 同时复用安装器的只读检查，核对 nginx、证书与私钥的路径和权限、证书有效期、SAN 及密钥匹配，并返回固定错误码和处理方向。未取得 root 权限或有效服务 UID 时该项为未知，不能算作通过。此检查不启动 nginx、不复制密钥，也不能证明实际终端信任证书。
-
-报告保留 `schemaVersion: 1`、`checks`、`serviceUid` 和 `readyForInstallPreflight`。每个检查继续提供原有 `id`、`status`、`required`、`message`，并统一提供 `layer`、`code`、`reason`、`action`。`id` 标识检查项，`code` 区分固定原因，中文 `reason` 说明当前结论，`action` 给出下一步。字段不包含原始命令错误、账户快照或私有环境值。新增字段属于兼容扩展；读取报告时应允许未知字段。
-
-`layers` 按以下固定顺序列出六层及其 `checkIds`。`coverage: "partial"` 只表示该层报告了部分检查；`"not-assessed"` 表示该层尚无检查结果。层目录齐全不表示六层能力已经完整实现，也没有“整层通过”的结论。
-
-| layer | 含义与当前边界 |
+| 报告层 | 范围及使用边界 |
 | --- | --- |
-| `foundation` | Linux、架构、运行时、systemd及环境字段格式 |
-| `components` | 已有工具版本、polkit目录及指定Node版本；不证明全部运行能力 |
-| `identity` | 账户、UID、可信工具链接链、普通部署目录归属与祖先遍历；最终安装按实际输入与载荷复核 |
-| `network` | TUN、转发、指定地址，以及策略优先级/mark、路由表、nft表、TUN名称与网络回执；路由器实际行为另验 |
-| `management` | 管理与受管HTTPS端口的当次socket观察、受管HTTPS静态条件及终端信任待验提示；外部反代或实际登录另验 |
-| `installation` | 复用 `inspect` 的收据、文件/发行漂移、锁与journal、维护状态及身份布局；最终安装仍重新核验 |
+| foundation/components | 系统、版本、字段格式和已有组件；名称存在不证明运行能力 |
+| identity | 唯一非登录服务 UID、root 可信工具链接链、目录归属及服务遍历；最终安装重查实际计划 |
+| network | TUN/转发/地址、策略优先级及 mark、路由/nft 表、TUN 名和回执；不求解完整策略路由，未知表达式拒绝推断 |
+| management | 计划地址/协议端口的当次 socket 观察；受管 HTTPS 核对既有 nginx、证书有效期/SAN/密钥及权限，不证明终端信任 |
+| installation | 收据、文件/发布漂移、锁/journal、维护状态和身份布局；未知安装不自动接管 |
 
-检查状态保留 `pass`、`fail`、`unknown`：`pass` 只确认该项观察；明确条件不符或可信观察确认路径/命令不存在为 `fail`；权限不足、超时、命令失败或无法解析观察结果为 `unknown`，不能把失败命令直接解释为依赖缺失。任一必要项 `fail` 或 `unknown` 都不能继续算作预检准备通过。`readyForInstallPreflight: true` 仅表示已报告的必要项通过，可以继续完整安装预检，不证明未覆盖层、实际网络或整套部署已经就绪。
+报告兼容 schemaVersion:1，保留 checks、serviceUid、readyForInstallPreflight，以及每项 id/status/required/message；layer/code/reason/action 提供固定原因及方向，读取者应允许未知字段。layers 的 partial/not-assessed 只是覆盖范围，没有整层通过结论。pass 仅覆盖该项观察，fail 为已知不符，unknown 为权限/超时/失败或不可解析；必要项 fail/unknown 均阻止准备通过。readyForInstallPreflight 只表示可继续完整安装预检。
 
-| 固定原因码 | 解释与处理 |
+| 原因码 | 处理方向 |
 | --- | --- |
-| `SETUP_CHECK_PASSED` | 本项只读观察通过；仍按步骤完成最终安装及独立验收 |
-| `SETUP_REQUIREMENT_NOT_MET` | 已观察到条件不符；结合检查 `id`、`message` 和 `action` 处理 |
-| `SETUP_REQUIRED_COMPONENT_MISSING` | 可信 `ENOENT` 观察确认所需路径或命令不存在；按对应系统准备后重查 |
-| `SETUP_CHECK_UNAVAILABLE` | 查询失败或访问受限；核对权限、工具与执行条件，不据此安装或删除资源 |
-| `SETUP_OBSERVATION_INVALID` | 观察输出格式无法识别；核对工具及查询结果后重查，不计为通过 |
-| `SETUP_ENVIRONMENT_REQUIRED` / `SETUP_ENVIRONMENT_INVALID` | 缺少环境输入或字段不合部署格式；补正私有输入后重查 |
-| `SETUP_EXTERNAL_VERIFICATION_REQUIRED` | 路由器或实际终端证据尚未取得；按对应验收流程处理 |
+| SETUP_REQUIREMENT_NOT_MET / SETUP_REQUIRED_COMPONENT_MISSING | 条件不符或可信 ENOENT 确认缺失，按具体 action 准备后重查 |
+| SETUP_CHECK_UNAVAILABLE / SETUP_OBSERVATION_INVALID | 查询受限/失败或不可解析，先核对权限及工具，不能按空结果或依赖缺失处理 |
+| SETUP_ENVIRONMENT_REQUIRED / SETUP_ENVIRONMENT_INVALID | 补正私有环境输入 |
+| SETUP_EXTERNAL_VERIFICATION_REQUIRED | 路由器、反代或终端实际验收尚未完成 |
+| SETUP_PORT_CONFLICT / SETUP_PORT_OWNED_REQUIRES_STOP | 新占用须查归属；确属本安装仍须按维护流程停服 |
+| SETUP_PORT_OWNERSHIP_UNKNOWN / SETUP_PORT_OBSERVATION_INCOMPLETE | 绑定、归属或查询证据不足，不能终止未知进程 |
+| SETUP_INSTALLATION_INCOMPLETE / BUSY / DRIFT | 分别审阅中断记录、存活操作或文件漂移，不删锁/收据过检 |
+| SETUP_MAINTENANCE_REQUIRED / SETUP_INSTALLATION_IDENTITY_MISMATCH | 先暂停持久运行，或核对已有 UID/布局 |
 
-账户继续保留 `SETUP_SERVICE_ACCOUNT_REQUIRED`、`SETUP_SERVICE_ACCOUNT_INVALID`，受管HTTPS继续保留原 `SETUP_HTTPS_*` 原因码和处理方向。环境对象未通过格式校验时，报告该错误并继续收集不依赖它的基础结果；CLI在调用doctor之前读取私有文件或解析JSON的失败仍走原错误出口，不保证形成分层报告。本报告没有创建账户、准备依赖、修改网络或更改证书信任的执行步骤。
+账户使用原 SETUP_SERVICE_ACCOUNT_*，HTTPS 使用原 SETUP_HTTPS_*；可信路径/资源检查复用安装器 INSTALL_* 原因码，不另维护一份判定。工具链接逐层核对 root 归属、不可写祖先及可执行条件，允许受信发行版链接。网络保留核心优先级/mark/表及 TUN，回执只接受不存在或 removed；已占用资源不因看似自有就视为空闲。
 
-可信路径检查与最终安装器共享同一组只读判定。所有版本、账户和网络查询在执行前先检查工具及链接链：允许 root 所有的发行版工具链接，逐层检查链接目标，拒绝可写祖先、错误归属和非普通可执行文件。`node-path`、`systemctl-path` 还要求服务账户能遍历祖先并读取、执行工具；`release-parent` 要求发行父目录已存在。`deployment-directory-N` 按当前生成计划的目录顺序分别检查 root 或服务 UID 的归属和权限；缺失目录只在安装计划明确允许创建时接受。`receipt-directory` 检查已有收据目录的 root:0700 条件，`service-paths` 检查普通部署路径的服务遍历条件。缺少服务 UID 或文件类型等观察字段时返回 `unknown`。
-
-这些检查保留安装器原因码：`INSTALL_TOOL_UNTRUSTED`、`INSTALL_ROOT_OWNERSHIP_REQUIRED` 表示工具或祖先的链接、归属、可写权限不符；`INSTALL_REQUIRED_SYSTEM_TOOL_MISSING`、`INSTALL_TOOL_NOT_EXECUTABLE`、`INSTALL_TOOL_LINK_LIMIT` 分别表示工具缺失、文件不可执行、链接链超限；`INSTALL_DIRECTORY_REQUIRED`、`INSTALL_DIRECTORY_OWNERSHIP_CONFLICT`、`INSTALL_SERVICE_TRAVERSE_REQUIRED` 分别要求准备对应目录、核对目录归属与权限、核对服务遍历条件。报告不打印实际路径，也不修复权限；最终安装会按实际载荷和输入重新核验全部路径。
-
-网络资源判定也由 doctor 与最终安装器共享。`policy-rules` 拒绝所选三项策略优先级、核心保留的 9000–9010 优先级，以及与出口或核心保留 mark 有重叠的规则；`routes` 检查出口表、对应回程表及核心表；`firewall` 检查项目保护表和核心 nft 表，`tun-name` 检查核心 TUN 名称。`conflicts` 数组保留同项中全部已发现的固定原因码，不含原始规则。`network-receipt` 只接受缺失回执或可信 root:0600 单链接文件明确记录的 `removed` 状态；完整或中断回执需要通过维护流程显式退役。
-
-`INSTALL_RULE_CONFLICT`、`INSTALL_ROUTE_CONFLICT`、`INSTALL_NFT_CONFLICT`、`INSTALL_TUN_CONFLICT` 分别表示上述资源占用；`INSTALL_NETWORK_REMOVE_REQUIRED` 表示回执尚未退役。新增 `INSTALL_RULE_MARK_CONFLICT` 采用保守检查：支持数值/十六进制 mark、独立 mask 或 `mark/mask`，并识别 iproute2 实际输出的 `"not": null`。只有可识别的纯 mark 逆规则才反转匹配；逆规则还含非平凡地址或其他选择器时返回 `unknown`，避免将整条规则的反转误当成只反转 mark。不会求解接口、源地址、goto、suppress 等完整策略路由语义，可能要求操作者审阅更窄的规则。观察形状或 mark 表达式无法可靠解析时 doctor 返回 `SETUP_OBSERVATION_INVALID` / `unknown`，安装器拒绝并保留 `INSTALL_NETWORK_OBSERVATION_INVALID`。存在同名资源时不因它看似属于本项目就当作空闲；doctor 不运行网络 helper、不删除规则，也不自动接管资源。
-
-端口检查读取已有受信 `ss`（固定候选为 `/usr/bin/ss`、`/usr/sbin/ss`）的 IPv4/IPv6 `-a` 数字输出，覆盖工具可见的监听及已连接 TCP/UDP。本次没有发现地址、协议和端口重叠时，才报告该快照范围通过；这不是最终绑定保证，也不能排除查询后的竞争。管理、mixed 和 controller 按计划的 loopback 地址判断，DNS 与受管 HTTPS 按指定外设地址判断；不同地址或协议不一概当成冲突。IPv6 wildcard 的双栈行为、已连接 socket 的端口复用或必要查询证据不足时返回 `unknown`。查询出现错误、警告或无法识别输出时不按空列表处理。
-
-已有监听只有在完整可信收据、对应 unit 文件、无 override 的 unit 主进程、进程 executable 和 cgroup 同时匹配时，才认定为自有占用，并以 `SETUP_PORT_OWNED_REQUIRES_STOP` 阻断，要求先走维护停服。确认的新占用使用 `SETUP_PORT_CONFLICT`；归属或绑定语义不明使用 `SETUP_PORT_OWNERSHIP_UNKNOWN`；必要的监听/已连接查询不完整使用 `SETUP_PORT_OBSERVATION_INCOMPLETE`。报告不打印 PID、进程名、地址或原始输出，也不终止进程。
-
-较新 `ss -B` 可额外观察仅绑定未监听 TCP；该能力不是准备环境的强制依赖，工具不支持或空输出无法证明能力时，单列非必要的 `bound-sockets` / `SETUP_PORT_BOUND_SCOPE_UNAVAILABLE`，明确这个额外范围未覆盖。若该查询实际发现与计划端口重叠，仍合并到对应必要端口项并阻断。外部 HTTPS 模式单列 `external-https` 待验证提示；反代配置、实际转发、登录与终端信任按相应指南独立验收。
-
-已有安装的五项检查为 `installation-receipt`、`installation-files`、`installation-locks`、`installation-maintenance`、`installation-identity`。它们直接消费维护检查的只读证据；没有收据目录与查询失败会得到不同结论。`SETUP_INSTALLATION_INCOMPLETE` 要求审阅 pending、卸载残留、锁、未完成journal或临时写入；`SETUP_INSTALLATION_BUSY` 表示锁主进程仍存活；`SETUP_INSTALLATION_DRIFT` 要求核对受管文件或发行内容的缺失与改动；`SETUP_MAINTENANCE_REQUIRED` 要求先暂停持久运行；`SETUP_INSTALLATION_IDENTITY_MISMATCH` 要求核对已有服务 UID 和布局。权限不足、无法读取或检查器能力不足时相应项为 `unknown`；不通过删除锁、清回执或覆盖文件使检查变绿。
+端口使用已有可信 ss 的 IPv4/IPv6 TCP/UDP 监听及连接观察，按计划地址/协议区分；自有占用须收据、unit、无 override 的主进程、executable 和 cgroup 同时匹配。双栈/复用或查询不完整为 unknown。可选 ss -B 未支持时以非必要 SETUP_PORT_BOUND_SCOPE_UNAVAILABLE 说明缺口，发现冲突仍阻断。报告不打印实际路径、PID、地址或原始系统输出；快照通过不保证稍后绑定。
 
 ## 2. 填写一次环境事实
 
@@ -112,7 +93,7 @@ sh ./cocoproxy install --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --
 sh ./cocoproxy install --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT" --apply
 ```
 
-第一条只读。第二条才安装文件并 daemon-reload，仍不启动服务。随后按[安装与维护](deployment.md)准备管理员和[HTTPS](management-https.md)，完成首次应用、路由器交付、终端验收及[持久运行](getting-started.md#8-启用持久运行与自动恢复)。HTTPS 登录成功不代表终端信任证书或[通知](notifications.md)已可用。
+第一条只读。第二条才安装文件并 daemon-reload，仍不启动服务。随后按[安装与维护](deployment.md)准备管理员和[HTTPS](management-https.md)，完成首次应用、路由器交付、终端验收及[持久运行](getting-started.md#8-启用持久运行与自动恢复)。HTTPS 登录成功不代表终端信任证书或[通知](usage.md#自动选择通知)已可用。
 
 ## 5. 升级输入与维护
 
@@ -135,7 +116,7 @@ sh ./cocoproxy inspect
 sh ./cocoproxy recover
 ```
 
-`prepare` 允许服务仍运行，但不表示已经可以执行升级；应用阶段会重新要求暂停、停用服务和退役网络。`inspect` 读取收据、锁和文件证据。`recover` 默认仅预览：只有新事务已写完全部预期字节、原进程已退出且当前状态满足约束时，才允许用返回的审阅摘要显式收尾。它不重试部分写入，不删除未知锁，不进行程序降级。详细步骤见[安装中断检查与恢复](maintenance-recovery.md)。
+`prepare` 允许服务仍运行，但不表示已经可以执行升级；应用阶段会重新要求暂停、停用服务和退役网络。`inspect` 读取收据、锁和文件证据。`recover` 默认仅预览：只有新事务已写完全部预期字节、原进程已退出且当前状态满足约束时，才允许用返回的审阅摘要显式收尾。它不重试部分写入，不删除未知锁，不进行程序降级。详细步骤见[安装中断检查与恢复](deployment.md#升级准备与中断恢复)。
 
 ## 6. 可选的受管 HTTPS
 
@@ -157,7 +138,7 @@ sh ./cocoproxy recover
 
 ## 7. 初始化、启动与持久运行
 
-[生命周期入口](setup-lifecycle.md)把初始化、管理启动、持久运行启用、暂停及停机退役组织为可预览步骤：
+[生命周期入口](deployment.md#机器状态与生命周期)把初始化、管理启动、持久运行启用、暂停及停机退役组织为可预览步骤：
 
 ```sh
 sh ./cocoproxy lifecycle --action start-management --input "$INPUT"
@@ -167,7 +148,7 @@ sh ./cocoproxy lifecycle --action start-management --input "$INPUT" \
 
 入口核对当前完整安装收据、输入和文件字节，执行时与安装/恢复共用互斥条件。初始化另外指定私有 `--admin-input`；完整步骤及各动作的条件见生命周期说明。`--terminal-path-verified`、`--router-disabled` 记录操作者已完成实际验收或关闭的确认，不是工具自己观测到的网络证据。
 
-从另一台电脑安装或更新时使用[SSH 部署入口](remote-deployment.md)，由该入口协调目标上的安装、服务和已有路由器适配器；它不要求在本机执行 Linux 服务命令。
+从另一台电脑安装或更新时使用[SSH 部署入口](deployment.md)，由该入口协调目标上的安装、服务和已有路由器适配器；它不要求在本机执行 Linux 服务命令。
 
 ## 输出边界
 
