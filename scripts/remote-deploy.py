@@ -57,9 +57,24 @@ def directory(path, mode=0o755):
     if not path.exists():
         directory(path.parent)
         path.mkdir(mode=mode)
+        # Creation modes are filtered by the coordinator's private umask. Only
+        # newly created directories may receive the requested explicit mode.
+        path.chmod(mode)
     trusted(path)
     need(path.is_dir(), 'REMOTE_DIRECTORY_REQUIRED')
     return path
+
+
+def service_traversable_directory(path):
+    path = trusted(path)
+    for item in [*reversed(path.parents), path]:
+        info = item.lstat()
+        need(stat.S_ISDIR(info.st_mode) and info.st_mode & 0o001, 'REMOTE_STAGE_DIRECTORY_NOT_TRAVERSABLE')
+
+
+def staged_mode(path, expected):
+    trusted(path)
+    need(stat.S_IMODE(path.lstat().st_mode) == expected, 'REMOTE_CACHED_PAYLOAD_INVALID')
 
 
 def put(path, data, mode=0o600):
@@ -127,8 +142,10 @@ def payload_manifest(raw, manifest_sha):
 
 
 def verify_staged_payload(stage, raw, manifest):
-    trusted(stage)
+    service_traversable_directory(stage)
+    staged_mode(stage, 0o755)
     need(stage.is_dir() and regular(stage / 'manifest.json', maximum=4 * 1024 * 1024) == raw, 'REMOTE_CACHED_PAYLOAD_INVALID')
+    staged_mode(stage / 'manifest.json', 0o644)
     expected = {entry['path']: entry for entry in manifest['files']}
     parents = {str(parent.as_posix()) for name in expected for parent in Path(name).parents if str(parent) != '.'}
     found = set()
@@ -136,12 +153,12 @@ def verify_staged_payload(stage, raw, manifest):
         for name in directories:
             path = Path(current) / name
             need(not path.is_symlink() and path.relative_to(stage).as_posix() in parents, 'REMOTE_CACHED_PAYLOAD_INVALID')
-            trusted(path)
+            staged_mode(path, 0o755)
         for name in files:
             path = Path(current) / name
             relative = path.relative_to(stage).as_posix()
             need(relative == 'manifest.json' or relative in expected, 'REMOTE_CACHED_PAYLOAD_INVALID')
-            trusted(path)
+            staged_mode(path, 0o644 if relative == 'manifest.json' else int(expected[relative]['mode'], 8))
             if relative != 'manifest.json':
                 data = regular(path)
                 entry = expected[relative]
@@ -156,6 +173,9 @@ def stage_payload(source, manifest_sha):
     raw = regular(source / 'manifest.json', maximum=4 * 1024 * 1024)
     manifest = payload_manifest(raw, manifest_sha)
     parent = directory(INCOMING)
+    # Existing private ancestors must be corrected explicitly by their owner;
+    # never loosen them merely because a new payload needs service access.
+    service_traversable_directory(parent)
     stage = parent / manifest_sha
     if stage.exists() or stage.is_symlink():
         verify_staged_payload(stage, raw, manifest)
