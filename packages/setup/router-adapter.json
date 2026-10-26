@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "alwayroute-ubus/v1",
+  "version": "1.0.0",
+  "contract": "cocoproxy-router-contract/v1",
+  "configurationSchema": 1,
+  "reviewedSource": {
+    "project": "AlwayRoute",
+    "commit": "067085c10349486e8fd0af160d17723068361621",
+    "managerPackage": "alwayroute-external-manager 1.0.0-6",
+    "forwardingPackage": "alwayroute-external-forwarding 1.0.0-4",
+    "contractPath": "contracts/external-v1.md",
+    "implementationPaths": [
+      "firmware/openwrt/alwayroute-manager/files/usr/share/ucode/alwayroute/external-model.uc",
+      "firmware/openwrt/alwayroute-manager/files/usr/share/ucode/alwayroute/external-controller.uc",
+      "firmware/openwrt/alwayroute-external-manager/files/usr/share/ucode/alwayroute/store.uc"
+    ]
+  },
+  "requiredExternalProxy": {
+    "schema": 1,
+    "family": "ipv4",
+    "clientMode": "lan",
+    "faultPolicy": "block",
+    "gatewayObservation": "udp-dns"
+  },
+  "baseDNS": { "address": "127.0.0.1", "port": 53 },
+  "scope": {
+    "configuration": "explicit-lan-ipv4",
+    "endToEnd": "unverified",
+    "firmwareInstallation": false,
+    "componentUpgrade": false
+  }
+}

@@ -7,6 +7,15 @@
     "routerMAC": "02:00:00:00:00:01",
     "clientCIDR": "192.0.2.0/24"
   },
+  "router": {
+    "adapter": "alwayroute-ubus/v1",
+    "lanInterface": "br-lan-test",
+    "gatewayMAC": "02:00:00:00:00:02",
+    "dnsListenPort": 1053,
+    "localDomains": ["lan"],
+    "enabled": false,
+    "baseDNSIndependentConfirmed": true
+  },
   "management": {
     "origin": "https://gateway.example:13443",
     "bootstrapResolvers": ["198.51.100.53"],

@@ -4,6 +4,7 @@ import { cloneConfigJson, type JsonObject } from '../config/index.ts';
 import { renderDeploymentPlan } from '../deployment/plan.ts';
 import { releaseTarget } from '../deployment/install.ts';
 import { AUTOMATIC_GATEWAY_CORE_SHA256, parseAutomaticGatewaySettings } from '../gateway/profile.ts';
+import { createRouterParameters, parseSetupRouter, RouterAdapterError, type SetupRouter } from './router-adapter.ts';
 
 export class SetupError extends Error {
   readonly code: string;
@@ -34,6 +35,7 @@ export interface SetupEnvironment {
   ports: { management: number; mixed: number; controller: number; dns: number };
   resources: { egressMark: number; egressTable: number; egressPriority: number; tunMtu: number };
   https?: { mode: 'external' } | { mode: 'managed'; certificatePath: string; privateKeyPath: string; nginxPath: string };
+  router?: SetupRouter;
 }
 
 /** Environment facts only. Release paths, duplicate ports and secrets are generated. */
@@ -41,7 +43,7 @@ export function parseSetupEnvironment(input: unknown, previous?: unknown): Setup
   try {
     const old = previous === undefined ? undefined : cloneConfigJson(previous) as any;
     if (previous !== undefined) renderDeploymentPlan(old);
-    const value = record(cloneConfigJson(input), ['schemaVersion', 'network', 'management'], ['system', 'ports', 'resources', 'https']);
+    const value = record(cloneConfigJson(input), ['schemaVersion', 'network', 'management'], ['system', 'ports', 'resources', 'https', 'router']);
     if (value.schemaVersion !== 1) fail();
     const network = record(value.network, ['ingressInterface', 'gatewayIPv4', 'routerIPv4', 'routerMAC', 'clientCIDR']);
     const management = record(value.management, ['origin', 'bootstrapResolvers', 'subscriptionOrigins'], ['probeOrigins']);
@@ -81,12 +83,13 @@ export function parseSetupEnvironment(input: unknown, previous?: unknown): Setup
       system: { serviceUser, ...(system.serviceUid === undefined ? {} : { serviceUid: integer(system.serviceUid, 1, 4_294_967_294) }),
         nodePath: installPath(system.nodePath ?? '/usr/bin/node'), systemctlPath: installPath(system.systemctlPath ?? '/usr/bin/systemctl'),
         releaseParent: installPath(system.releaseParent ?? '/opt/cocoproxy/releases') }, ports: resolvedPorts, resources: resolvedResources,
-      ...(https ? { https } : {}) };
+      ...(https ? { https } : {}),
+      ...(value.router === undefined ? {} : { router: parseSetupRouter(value.router, network.routerMAC) }) };
     // Reuse the final deployment compiler for DNS, origin, download policy and port contracts.
     createSetupDeployment(result, { manifestSha256: 'a'.repeat(64), binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256,
       serviceUid: result.system.serviceUid ?? 12345, controllerSecret: 'setup-validation-only' });
     return result;
-  } catch { return fail(); }
+  } catch (error) { if (error instanceof RouterAdapterError) throw error; return fail(); }
 }
 
 export interface SetupRelease {
@@ -140,8 +143,5 @@ export function createSetupDeployment(environment: SetupEnvironment, release: Se
 }
 
 export function routerParameters(environment: SetupEnvironment) {
-  return { schemaVersion: 1, contract: 'cocoproxy-router-contract/v1', managedIPv4: environment.network.clientCIDR,
-    nextHopIPv4: environment.network.gatewayIPv4, routerIPv4: environment.network.routerIPv4,
-    deliveryMAC: environment.network.routerMAC.toLowerCase(), dnsPort: environment.ports.dns,
-    preserveClientSource: true, managedPublicIPv6: 'block', independentDisableRequired: true };
+  return createRouterParameters(environment);
 }

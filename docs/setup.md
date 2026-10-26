@@ -84,7 +84,22 @@ sh ./cocoproxy configure --environment "$ENVIRONMENT" \
 
 输出父目录须已存在、由当前身份所有且权限 0700；输出新建为 0600，拒绝覆盖。完整载荷先经过摘要和文件集核验，再派生 release 目录、核心摘要、source/binary/server 路径、前缀和重复 DNS 端口，首次生成随机内部 controller secret。摘要必须来自可信来源，不能只对未知下载自算摘要建立信任。
 
-路由器参数文件含真实网络信息，仍是私有资料；它不是任意固件的可导入配置，按[协作约定](router-contract.md)映射到已验证适配器。程序不会据此写入另一台设备。
+路由器参数文件含真实网络信息，仍是私有资料。请求 `--router-output` 时，环境还须明确填写示例中的 `router` 对象；缺失或未确认会在创建任何私有输出前拒绝。旧环境不请求此输出时仍可生成外设安装输入。`SETUP_ROUTER_CONFIRMATION_REQUIRED` 表示缺少整组路由器事实，`SETUP_ROUTER_FACTS_INVALID` 表示事实不完整或独立基础 DNS 未确认，`SETUP_ROUTER_ADAPTER_UNSUPPORTED` 表示没有对应适配器。
+
+| 只填写一次的环境字段 | 含义与生成位置 |
+| --- | --- |
+| `network.ingressInterface` | 外设接收交付的接口；不据此猜路由器接口 |
+| `network.routerMAC` | 路由器向外设交付时的来源 MAC，进入外设来源校验及参数 `deliveryMAC` |
+| `router.lanInterface` | 路由器实际 LAN 三层入口，进入 `configTemplate.link.interface` |
+| `router.gatewayMAC` | 外设接口的已核验 MAC，进入路由器 `link.gatewayMac`；不能填路由器 MAC |
+| `ports.dns` | 外设受限 DNS 入口，同时生成外设配置及路由器 `dns.gatewayPort` |
+| `router.dnsListenPort` | 路由器专用解析器监听端口，进入 `dns.listenPort`；不能占用基础 DNS 53，不与外设端口混推 |
+| `router.localDomains` | 本地域后缀，路由器将这些名称及无点名称交给自身基础 DNS |
+| `router.enabled` | 本次候选配置的明确开启意图；生成文件不会启用网络 |
+| `management.bootstrapResolvers` | 外设纯 IP bootstrap；仅从这一处读取，不在路由器输入重复填写 |
+| `router.baseDNSIndependentConfirmed` | 必须明确为 true，确认上述 bootstrap 与路由器基础 DNS 均不回到受管公网 DNS 转发链；这是人工前提确认，仍须实际查询验收 |
+
+参数包含适配器标识、完整 `configTemplate`、字段来源和独立解析前提。模板使用已审阅的 AlwayRoute schema1，远端 `revision` 必须由目标当前配置读取后绑定，不用固定的 0 冒充当前版本。路由器基础 DNS 在该实现中固定为 `127.0.0.1:53`，不接受任意基础解析目标。参数不是任意固件的可导入配置；具体预览、读回和保存边界见[协作约定](router-contract.md)。生成器不会写入另一台设备，也不会把人工前提确认报告为实际路径通过。
 
 ## 4. 安装预检与执行
 

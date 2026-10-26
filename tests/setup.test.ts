@@ -32,6 +32,41 @@ test('setup derives matching release paths, DNS ports and a private random secre
   assert.equal(routerParameters(environment).dnsPort, input.management.deployment.dnsPort);
   assert.equal(routerParameters(environment).contract, 'cocoproxy-router-contract/v1');
 });
+test('router mapping uses one environment and keeps each interface, MAC and DNS port role distinct', () => {
+  const environment = parseSetupEnvironment({ ...sample, ports: { dns: 15354 },
+    router: { ...sample.router, dnsListenPort: 2053, enabled: true } });
+  const input = createSetupDeployment(environment, release) as any;
+  const parameters = routerParameters(environment);
+  assert.equal(parameters.configTemplate.link.interface, sample.router.lanInterface);
+  assert.notEqual(parameters.configTemplate.link.interface, environment.network.ingressInterface);
+  assert.equal(parameters.configTemplate.link.gatewayMac, sample.router.gatewayMAC);
+  assert.equal(parameters.deliveryMAC, sample.network.routerMAC);
+  assert.notEqual(parameters.deliveryMAC, parameters.configTemplate.link.gatewayMac);
+  assert.equal(parameters.configTemplate.dns.gatewayPort, input.management.deployment.dnsPort);
+  assert.equal(parameters.configTemplate.dns.listenPort, 2053);
+  assert.equal(parameters.configTemplate.clientCIDR, input.runtime.automaticGateway.clientCIDR);
+  assert.equal(parameters.configTemplate.link.gatewayAddress, input.runtime.automaticGateway.gatewayIPv4);
+  assert.deepEqual(parameters.prerequisites.bootstrapResolvers, input.management.deployment.bootstrapResolvers);
+  assert.deepEqual(parameters.prerequisites.baseDNS, { address: '127.0.0.1', port: 53, localDomains: ['lan'], unqualifiedNames: true });
+  assert.equal(parameters.prerequisites.endToEnd, 'unverified');
+  assert.equal(parameters.configTemplate.enabled, true);
+  assert.equal(Object.hasOwn(parameters.configTemplate, 'revision'), false);
+  assert.doesNotMatch(JSON.stringify(parameters), /controllerSecret|setup-validation-only/);
+});
+test('legacy environment remains usable but a complete router output needs explicitly confirmed router facts', () => {
+  const { router, ...legacy } = sample;
+  const environment = parseSetupEnvironment(legacy);
+  assert.doesNotThrow(() => createSetupDeployment(environment, release));
+  assert.throws(() => routerParameters(environment), { code: 'SETUP_ROUTER_CONFIRMATION_REQUIRED' });
+  for (const change of [{ lanInterface: undefined }, { gatewayMAC: sample.network.routerMAC },
+    { gatewayMAC: '01:00:00:00:00:02' }, { enabled: undefined }, { baseDNSIndependentConfirmed: false },
+    { dnsListenPort: 53 }, { localDomains: [] }, { localDomains: ['lan', 'lan'] }, { localDomains: ['bad..lan'] }]) {
+    const candidate = JSON.parse(JSON.stringify({ ...legacy, router: { ...router, ...change } }));
+    assert.throws(() => parseSetupEnvironment(candidate), { code: 'SETUP_ROUTER_FACTS_INVALID' });
+  }
+  assert.throws(() => parseSetupEnvironment({ ...sample, router: { ...router, adapter: 'unknown-adapter' } }),
+    { code: 'SETUP_ROUTER_ADAPTER_UNSUPPORTED' });
+});
 test('setup preserves an existing internal identity and refuses silent custom-layout changes', () => {
   const environment = parseSetupEnvironment(sample), previous = createSetupDeployment(environment, release) as any;
   const input = createSetupDeployment(environment, { ...release, manifestSha256: 'c'.repeat(64) }, previous) as any;

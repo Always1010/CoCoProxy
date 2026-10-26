@@ -135,6 +135,8 @@ try {
       const release = await verifyRelease(options['--payload'], options['--manifest-sha256']);
       const previous = options['--existing-input'] ? await jsonInput(options['--existing-input']) : undefined;
       const environment = parseSetupEnvironment(await jsonInput(options['--environment']), previous);
+      // Validate every requested router fact before creating either private output.
+      const router = options['--router-output'] ? routerParameters(environment) : undefined;
       const serviceUid = await resolveServiceUid(environment);
       if (options['--router-output'] === options['--output']) throw new SetupError('SETUP_OUTPUT_CONFLICT');
       // Validate both destinations before writing the secret-bearing deployment input.
@@ -146,7 +148,7 @@ try {
       }
       const deployment = createSetupDeployment(environment, { manifestSha256: options['--manifest-sha256'], binarySha256: release.coreSHA, serviceUid }, previous);
       await writePrivate(options['--output'], deployment);
-      if (options['--router-output']) await writePrivate(options['--router-output'], routerParameters(environment));
+      if (options['--router-output']) await writePrivate(options['--router-output'], router);
       process.stdout.write(JSON.stringify({ schemaVersion: 1, configured: true, routerParametersWritten: Boolean(options['--router-output']),
         existingIdentityPreserved: previous !== undefined, next: 'install-preflight', servicesStarted: false }) + '\n');
     } else {
