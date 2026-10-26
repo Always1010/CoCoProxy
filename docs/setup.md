@@ -15,6 +15,33 @@ sh ./cocoproxy doctor
 
 环境输入选择受管 HTTPS 时，`doctor` 同时复用安装器的只读检查，核对 nginx、证书与私钥的路径和权限、证书有效期、SAN 及密钥匹配，并返回固定错误码和处理方向。未取得 root 权限或有效服务 UID 时该项为未知，不能算作通过。此检查不启动 nginx、不复制密钥，也不能证明实际终端信任证书。
 
+报告保留 `schemaVersion: 1`、`checks`、`serviceUid` 和 `readyForInstallPreflight`。每个检查继续提供原有 `id`、`status`、`required`、`message`，并统一提供 `layer`、`code`、`reason`、`action`。`id` 标识检查项，`code` 区分固定原因，中文 `reason` 说明当前结论，`action` 给出下一步。字段不包含原始命令错误、账户快照或私有环境值。新增字段属于兼容扩展；读取报告时应允许未知字段。
+
+`layers` 按以下固定顺序列出六层及其 `checkIds`。`coverage: "partial"` 只表示该层报告了部分检查；`"not-assessed"` 表示该层尚无检查结果。层目录齐全不表示六层能力已经完整实现，也没有“整层通过”的结论。
+
+| layer | 含义与当前边界 |
+| --- | --- |
+| `foundation` | Linux、架构、运行时、systemd及环境字段格式 |
+| `components` | 已有工具版本、polkit目录及指定Node版本；不证明全部运行能力 |
+| `identity` | 已有账户、UID及运行工具文件；普通路径祖先与完整归属仍由安装预检核验 |
+| `network` | TUN、转发、指定地址及规则JSON可读性；当前报告不判断资源冲突或路由器已验收 |
+| `management` | 受管HTTPS静态条件及终端信任待验提示；不证明监听端口、外部反代或实际登录可用 |
+| `installation` | 当前为未检查；已有安装的收据、文件漂移及维护状态另用 `inspect`，最终安装仍重新核验 |
+
+检查状态保留 `pass`、`fail`、`unknown`：`pass` 只确认该项观察；明确条件不符或可信观察确认路径/命令不存在为 `fail`；权限不足、超时、命令失败或无法解析观察结果为 `unknown`，不能把失败命令直接解释为依赖缺失。任一必要项 `fail` 或 `unknown` 都不能继续算作预检准备通过。`readyForInstallPreflight: true` 仅表示已报告的必要项通过，可以继续完整安装预检，不证明未覆盖层、实际网络或整套部署已经就绪。
+
+| 固定原因码 | 解释与处理 |
+| --- | --- |
+| `SETUP_CHECK_PASSED` | 本项只读观察通过；仍按步骤完成最终安装及独立验收 |
+| `SETUP_REQUIREMENT_NOT_MET` | 已观察到条件不符；结合检查 `id`、`message` 和 `action` 处理 |
+| `SETUP_REQUIRED_COMPONENT_MISSING` | 可信 `ENOENT` 观察确认所需路径或命令不存在；按对应系统准备后重查 |
+| `SETUP_CHECK_UNAVAILABLE` | 查询失败或访问受限；核对权限、工具与执行条件，不据此安装或删除资源 |
+| `SETUP_OBSERVATION_INVALID` | 观察输出格式无法识别；核对工具及查询结果后重查，不计为通过 |
+| `SETUP_ENVIRONMENT_REQUIRED` / `SETUP_ENVIRONMENT_INVALID` | 缺少环境输入或字段不合部署格式；补正私有输入后重查 |
+| `SETUP_EXTERNAL_VERIFICATION_REQUIRED` | 路由器或实际终端证据尚未取得；按对应验收流程处理 |
+
+账户继续保留 `SETUP_SERVICE_ACCOUNT_REQUIRED`、`SETUP_SERVICE_ACCOUNT_INVALID`，受管HTTPS继续保留原 `SETUP_HTTPS_*` 原因码和处理方向。环境对象未通过格式校验时，报告该错误并继续收集不依赖它的基础结果；CLI在调用doctor之前读取私有文件或解析JSON的失败仍走原错误出口，不保证形成分层报告。本报告没有创建账户、准备依赖、修改网络或更改证书信任的执行步骤。
+
 ## 2. 填写一次环境事实
 
 将随包 `source/examples/setup-environment.json` 作为合成参考，在已存在的私有目录创建自己的 0600 文件。不要直接使用文档地址。

@@ -131,6 +131,91 @@ test('doctor aggregates independent failures without invoking mutation commands 
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE RAW ERROR|192\.0\.2|subscription\.example/);
   assert.ok(calls.every(call => !/prepare|remove|restart|enable|sysctl\s+-w/.test(call)));
 });
+test('doctor reports invalid environment input while still collecting independent host observations', async () => {
+  const host = readyDoctorHost();
+  const result = await inspectSetup({ ...sample, privateSecret: 'PRIVATE INPUT VALUE' }, host);
+  assert.equal(result.readyForInstallPreflight, false);
+  assert.equal(result.checks.find(check => check.id === 'environment')?.status, 'fail');
+  assert.equal(result.checks.find(check => check.id === 'environment')?.code, 'SETUP_ENVIRONMENT_INVALID');
+  assert.equal(result.checks.find(check => check.id === 'systemd')?.status, 'pass');
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE INPUT VALUE/);
+});
+test('doctor distinguishes missing accounts from unavailable account observations', async () => {
+  const host = readyDoctorHost();
+  const missing = await inspectSetup(sample, { ...host, run: async (path, args) => path.endsWith('getent') ? '' : host.run(path, args) });
+  assert.equal(missing.checks.find(check => check.id === 'service-account')?.status, 'fail');
+  assert.equal(missing.checks.find(check => check.id === 'service-account')?.code, 'SETUP_SERVICE_ACCOUNT_REQUIRED');
+  const unavailable = await inspectSetup(sample, { ...host, run: async (path, args) => {
+    if (path.endsWith('getent')) throw Object.assign(new Error('PRIVATE OBSERVATION'), { code: 'EACCES' });
+    return host.run(path, args);
+  } });
+  assert.equal(unavailable.checks.find(check => check.id === 'service-account')?.status, 'unknown');
+  assert.equal(unavailable.readyForInstallPreflight, false);
+  assert.doesNotMatch(JSON.stringify(unavailable), /PRIVATE OBSERVATION|EACCES/);
+});
+test('doctor keeps six partial layers and reports independent failures with fixed public reasons', async () => {
+  const host = readyDoctorHost();
+  const result = await inspectSetup(sample, { ...host,
+    stat: async path => {
+      if (path === '/run/systemd/system') throw Object.assign(new Error('PRIVATE PATH'), { code: 'ENOENT' });
+      if (path === '/etc/polkit-1/rules.d') throw Object.assign(new Error('PRIVATE ACCESS'), { code: 'EACCES' });
+      return host.stat(path);
+    },
+    read: async () => '0',
+    run: async (path, args) => {
+      if (path.endsWith('python3')) return 'Python 3.8.20';
+      if (path.endsWith('getent')) throw Object.assign(new Error('PRIVATE COMMAND'), { code: 'EIO' });
+      if (args.includes('route')) return 'PRIVATE MALFORMED JSON';
+      if (path.endsWith('nft') && args.includes('ruleset')) return '{"unexpected":[]}';
+      return host.run(path, args);
+    },
+  });
+  assert.deepEqual(result.layers.map(layer => layer.id), ['foundation', 'components', 'identity', 'network', 'management', 'installation']);
+  assert.deepEqual(result.layers.find(layer => layer.id === 'installation'), {
+    id: 'installation', label: '已有安装', checkIds: [], coverage: 'not-assessed',
+  });
+  assert.ok(result.layers.every(layer => ['partial', 'not-assessed'].includes(layer.coverage)));
+  for (const check of result.checks) {
+    assert.ok(result.layers.some(layer => layer.id === check.layer && layer.checkIds.includes(check.id)));
+    for (const field of ['id', 'code', 'reason', 'action', 'message'] as const) assert.ok(check[field].length > 0);
+    assert.equal(typeof check.required, 'boolean');
+  }
+  for (const [id, status, code] of [
+    ['systemd', 'fail', 'SETUP_REQUIRED_COMPONENT_MISSING'], ['python', 'fail', 'SETUP_REQUIREMENT_NOT_MET'],
+    ['polkit', 'unknown', 'SETUP_CHECK_UNAVAILABLE'], ['service-account', 'unknown', 'SETUP_CHECK_UNAVAILABLE'],
+    ['routes', 'unknown', 'SETUP_OBSERVATION_INVALID'], ['firewall', 'unknown', 'SETUP_OBSERVATION_INVALID'],
+    ['forwarding', 'fail', 'SETUP_REQUIREMENT_NOT_MET'],
+  ]) {
+    const check = result.checks.find(item => item.id === id);
+    assert.equal(check?.status, status, id);
+    assert.equal(check?.code, code, id);
+  }
+  assert.equal(result.readyForInstallPreflight, false);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|EACCES|ENOENT|EIO|192\.0\.2|subscription\.example/);
+});
+test('doctor only treats explicit missing-tool observations as failure and keeps malformed query evidence unknown', async () => {
+  const host = readyDoctorHost();
+  for (const [code, status] of [['ENOENT', 'fail'], ['EACCES', 'unknown'], ['ETIMEDOUT', 'unknown'], ['COMMAND_EXIT_1', 'unknown']]) {
+    const result = await inspectSetup(sample, { ...host, run: async (path, args) => {
+      if (path.endsWith('/ip') && args.includes('-Version')) throw Object.assign(new Error('PRIVATE ERROR'), { code });
+      return host.run(path, args);
+    } });
+    assert.equal(result.checks.find(check => check.id === 'ip')?.status, status, code);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE ERROR/);
+  }
+  const malformed = await inspectSetup(sample, { ...host, run: async (path, args) => path.endsWith('getent')
+    ? 'PRIVATE INVALID PASSWD OUTPUT' : host.run(path, args) });
+  assert.equal(malformed.checks.find(check => check.id === 'service-account')?.status, 'unknown');
+  assert.equal(malformed.checks.find(check => check.id === 'service-account')?.code, 'SETUP_OBSERVATION_INVALID');
+  const unreadableForwarding = await inspectSetup(sample, { ...host, read: async () => 'PRIVATE INVALID SYSCTL' });
+  assert.equal(unreadableForwarding.checks.find(check => check.id === 'forwarding')?.status, 'unknown');
+  assert.equal(unreadableForwarding.checks.find(check => check.id === 'forwarding')?.code, 'SETUP_OBSERVATION_INVALID');
+  assert.doesNotMatch(JSON.stringify(unreadableForwarding), /PRIVATE INVALID SYSCTL/);
+  const complete = await inspectSetup(sample, host);
+  assert.equal(complete.schemaVersion, 1);
+  assert.equal(complete.readyForInstallPreflight, true);
+  assert.equal(complete.layers.find(layer => layer.id === 'installation')?.coverage, 'not-assessed');
+});
 function readyDoctorHost(): DoctorHost {
   return { platform: 'linux', architecture: 'arm64', uid: 0, nodeVersion: '22.18.0',
     read: async () => '1', resolve: async path => path,
