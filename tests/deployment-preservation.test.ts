@@ -15,7 +15,7 @@ import { createNotifications } from '../packages/management/notifications.ts';
 import { generatePushKeys } from '../packages/management/web-push.ts';
 import { WorkspaceStore, initialWorkspace } from '../packages/management/workspace.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
-import { summarizePreservation } from '../packages/deployment/preservation.ts';
+import { capturePreservation, summarizePreservation } from '../packages/deployment/preservation.ts';
 import type { RuntimeSettings } from '../packages/runtime/types.ts';
 
 const origin = 'https://management.example';
@@ -92,6 +92,23 @@ test('real stores project to secret-free preservation capsules and the coordinat
   const added: Snapshot = structuredClone(after); added.directories.auth = { present: true, entries: 'new' };
   assert.equal(find(compare(before, added, true), 'state-directories').status, 'fail');
   assert.equal(compare(before, after).authentication.status, 'not-run');
+});
+
+test('preservation accepts the same abandoned atomic files as the business readers', {
+  skip: process.platform === 'win32' || process.geteuid?.() === 0,
+}, async t => {
+  const f = await fixture(t);
+  const runtimeSettingsPath = join(f.root, 'runtime.json'), managementSettingsPath = join(f.root, 'management.json');
+  const credentialPath = join(f.root, 'administrator.json');
+  await writeFile(credentialPath, JSON.stringify(credential), { mode: 0o600 });
+  await writeFile(runtimeSettingsPath, JSON.stringify({ ...settings, stateDirectory: f.root, serviceUid: process.geteuid!() }), { mode: 0o600 });
+  await writeFile(managementSettingsPath, JSON.stringify({ schemaVersion: 1, origin, credentialPath, runtimeSettingsPath }), { mode: 0o600 });
+  for (const directory of ['subscriptions', 'candidates']) {
+    await writeFile(join(f.root, directory, '.write-12345678-1234-4234-8234-123456789abc'), 'unfinished atomic write', { mode: 0o600 });
+  }
+  assert.equal((await capturePreservation(managementSettingsPath)).ready, true);
+  await writeFile(join(f.root, 'subscriptions', 'unexpected-file'), 'not a known temporary name', { mode: 0o600 });
+  await assert.rejects(capturePreservation(managementSettingsPath), { code: 'REMOTE_PRESERVATION_SNAPSHOT_UNAVAILABLE' });
 });
 
 test('same identity survives renewal and notification processing while dynamic times, jobs, events and hot process evidence may change', async t => {
