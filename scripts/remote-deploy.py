@@ -23,6 +23,19 @@ INCOMING = Path('/opt/cocoproxy/incoming')
 NETWORK_RECEIPT = Path('/var/lib/cocoproxy-gateway-network/network-receipt.json')
 
 
+def preservation_report(upgraded, compared_files=0):
+    """Describe exactly the checks performed, never all private state."""
+    status = 'pass' if upgraded else 'not-applicable'
+    return {'schemaVersion': 1, 'scope': 'stopped-baseline-to-restored-file-comparison',
+        'status': status, 'code': 'REMOTE_CHECKED_FILES_UNCHANGED' if upgraded else 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE',
+        'checks': [
+            {'id': 'administrator', 'status': status, 'evidenceScope': 'credential-file-bytes'},
+            {'id': 'configured-business-files', 'status': status,
+             'evidenceScope': 'workspace-site-probes-draft-subscription-file-set-and-bytes', 'comparedFileCount': compared_files}],
+        'notAssessed': ['trusted-devices', 'notification-identity-preferences-and-outbox', 'automatic-runtime-bindings', 'runtime-selection-and-candidate',
+            'restored-authentication-and-business-availability']}
+
+
 def need(value, code):
     if not value:
         raise RuntimeError(code)
@@ -287,7 +300,8 @@ def main_locked(options):
         # state compatibility and unchanged configuration before maintenance.
         if installed and receipt['manifestSha256'] == options.manifest_sha256:
             inspect_complete(options.manifest_sha256)
-            print(json.dumps({'installed': True, 'unchanged': True, 'commit': manifest['commit']}))
+            print(json.dumps({'installed': True, 'unchanged': True, 'commit': manifest['commit'],
+                'preservation': {'status': 'not-run', 'code': 'REMOTE_UNCHANGED_NO_PRESERVATION_WINDOW'}}))
             return
         preparation = json.loads(run(installer + ['--operation', 'prepare' if installed else 'install', *common]))
         if installed:
@@ -440,9 +454,11 @@ def main_locked(options):
             if router_enabled:
                 run([*router_command, 'enable'], timeout=300)
                 need(json.loads(run([*router_command, 'status']))['enabled'] is True, 'REMOTE_ROUTER_NOT_RESTORED')
-            replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit']})
+            preservation = preservation_report(installed, len(before_business) if before_business is not None else 0)
+            replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit'],
+                'preservation': preservation})
             print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256,
-                'privateStatePreserved': installed, 'routerRestored': bool(router_enabled), 'initialConfigurationRequired': not installed}))
+                'preservation': preservation, 'routerRestored': bool(router_enabled), 'initialConfigurationRequired': not installed}))
         except Exception:
             progress.update(status='failed', lastCompletedPhase=progress['phase'], phase='manual-review-required')
             replace(journal, progress)
