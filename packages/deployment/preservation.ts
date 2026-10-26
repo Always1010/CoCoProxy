@@ -6,6 +6,7 @@ import { privateRead, inspectPrivateDirectory } from '../storage/private-files.t
 import { parseAdminCredential, type AdminCredential } from '../management/auth.ts';
 import { parseTrustedDeviceDocument } from '../management/trusted-devices.ts';
 import { parseAutomaticBindings } from '../management/automatic-bindings.ts';
+import { parseAutomaticHistory, AUTOMATIC_HISTORY_FILE_LIMIT } from '../management/automatic-history.ts';
 import { parseWorkspaceDocument } from '../management/workspace.ts';
 import { parseSiteProbeState } from '../management/site-probes.ts';
 import { parseDraftDocument } from '../drafts/index.ts';
@@ -21,6 +22,7 @@ const stores = {
   transaction: ['state.json', 65536], lifecycle: ['lifecycle.json', 4096], trustedDevices: ['auth/trusted-devices.json', 131072],
   workspace: ['workspace.json', 1048576],
   siteProbes: ['site-probes.json', 1048576], draft: ['draft.json', 4194304], automaticSelections: ['automatic-selections.json', 262144],
+  automaticHistory: ['automatic-history.json', AUTOMATIC_HISTORY_FILE_LIMIT],
   selection: ['selection.json', 4096],
 } as const;
 type Store = keyof typeof stores;
@@ -52,6 +54,7 @@ export function summarizePreservation(documents: Documents, sources: Record<stri
   const siteProbes = validate('siteProbes', documents.siteProbes, parseSiteProbeState);
   const draft = validate('draft', documents.draft, parseDraftDocument);
   validate('automaticSelections', documents.automaticSelections, parseAutomaticBindings);
+  validate('automaticHistory', documents.automaticHistory, parseAutomaticHistory);
   const selection = validate('selection', documents.selection, parseRuntimeSelection);
   const sourceSettings: unknown[] = [];
   for (const [id, bytes] of Object.entries(sources).sort(([a], [b]) => a.localeCompare(b))) {

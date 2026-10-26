@@ -14,6 +14,7 @@ import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
 import { selectionChanges } from '../runtime/selections.ts';
 import { privateRead } from '../storage/private-files.ts';
 import { SiteProbeStore, siteScope } from './site-probes.ts';
+import { AutomaticHistoryStore, retainAutomaticEvents } from './automatic-history.ts';
 
 type Plan = { workspace: Workspace; policy: JsonObject; nodeDnsPolicy?: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string;
   automatic: { scope: string; key: string; signatures: Record<string, string>; policies: Record<string, AutoGroupPolicy>; choices: Record<string, string[]> }; bindingKey: string };
@@ -91,6 +92,7 @@ export function createWorkspaceApplication(options: {
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
   const sites = new SiteProbeStore(options.stateDirectory, options.allowedProbeOrigins?.length !== 0);
+  const history = new AutomaticHistoryStore(options.stateDirectory);
   const { subscriptions, store, manager } = options;
   const cachedCompile = memoizePolicyCompiler(input => options.compile(input.policy as JsonObject, input.nodeDnsPolicy as JsonObject | undefined));
   const compile = (plan: Plan) => cachedCompile({ policy: plan.policy, ...(plan.nodeDnsPolicy ? { nodeDnsPolicy: plan.nodeDnsPolicy } : {}) });
@@ -286,7 +288,10 @@ export function createWorkspaceApplication(options: {
       catalog: serviceCatalog.map(({ id, name, default: enabled }) => ({ id, name, default: enabled })),
       rules: allRules.slice(0, 2000).map((value, index) => ({ value, source: !error && workspace.runMode === 'rule' && index < user.rules.length ? 'user' :
         workspace.mode === 'local' ? 'template' : workspace.mode === 'subscription' ? 'subscription' : 'legacy', editable: !error && index < user.rules.length && workspace.runMode === 'rule' })),
-      ruleCount: allRules.length, invalidSelections, automatic: options.automaticStatus?.() ?? { groups: [], events: [] },
+      ruleCount: allRules.length, invalidSelections, automatic: await automaticStatus(workspace).catch(cause => ({
+        scope: scopeOf(workspace), workspaceRevision: workspace.revision, groups: [], events: [],
+        error: cause instanceof WorkspaceError ? cause.code : 'AUTO_STATE_CORRUPT',
+      })),
       allowedProbeOrigins: [...(options.allowedProbeOrigins ?? ['https://www.gstatic.com'])], ...(error ? { error } : {}) };
   }
 
@@ -319,6 +324,7 @@ export function createWorkspaceApplication(options: {
         const observed = await options.observeSelections!();
         if (observed.generation !== state.active) return;
         const bindings = await readAutomaticBindings(options.stateDirectory);
+        if (bindings && bindings.scope !== currentPlan.automatic.scope) await history.write(await history.read());
         const repaired: AutomaticBindings = bindings?.scope === currentPlan.automatic.scope ? structuredClone(bindings) :
           { version: 1, scope: currentPlan.automatic.scope, targets: {}, events: [] };
         for (const change of differences) {
@@ -344,12 +350,13 @@ export function createWorkspaceApplication(options: {
       if (!current || !e || e.id !== journal.pendingEvent!.id || (await store.status()).active !== state.active || (await load()).revision !== workspace.revision) return;
       if (current.scope === plan.automatic.scope && e.revision === workspace.revision && e.signature === plan.automatic.signatures[e.group] && observed.selections[e.group] === e.to) {
         const { signature: _signature, revision: _revision, ...confirmed } = e;
+        await history.append(current.scope, confirmed);
         current.events = [...current.events.filter(event => event.id !== e.id), confirmed].slice(-50);
       }
       delete current.pendingEvent;
       await writeAutomaticBindings(options.stateDirectory, current);
     });
-    const value = { key: plan.automatic.key, generation: state.active, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES,
+    const value = { key: plan.automatic.key, scope: plan.automatic.scope, generation: state.active, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES,
       groups: Object.entries(plan.automatic.policies).map(([name, policy]) => ({ name, current: observed.selections[name], policy }))
         .filter(group => typeof group.current === 'string' && [...group.policy.preferred, ...group.policy.fallback].includes(group.current)) };
     snapshotCache = { revision: workspace.revision, generation: state.active, expires: Date.now() + 30_000, value };
@@ -373,9 +380,13 @@ export function createWorkspaceApplication(options: {
       if ((await load()).revision !== workspace.revision || (await store.status()).active !== snapshot.generation ||
           hash(await readAutomaticBindings(options.stateDirectory)) !== plan.bindingKey) throw new TransactionError('AUTO_STATE_CONFLICT');
       before = await readAutomaticBindings(options.stateDirectory);
+      // Preserve a legacy scheme's history before its runtime binding is replaced.
+      if (before && before.scope !== plan.automatic.scope) await history.write(await history.read());
       proposed = before?.scope === plan.automatic.scope ? structuredClone(before) : { version: 1, scope: plan.automatic.scope, targets: {}, events: [] };
       proposed.targets[name] = { signature: plan.automatic.signatures[name], target };
       proposed.pendingEvent = { id: randomUUID(), at: Date.now(), group: name, from: source.current, to: target,
+        fromPool: group.policy.preferred.includes(source.current) ? 'preferred' : 'fallback',
+        toPool: group.policy.preferred.includes(target) ? 'preferred' : 'fallback',
         reason: /^[a-z_-]{1,80}$/i.test(reason) ? reason : 'automatic', signature: plan.automatic.signatures[name], revision: workspace.revision };
       await writeAutomaticBindings(options.stateDirectory, proposed);
     });
@@ -394,7 +405,9 @@ export function createWorkspaceApplication(options: {
       const current = await readAutomaticBindings(options.stateDirectory);
       if (current?.scope === plan.automatic.scope && current.pendingEvent?.id === proposed.pendingEvent?.id) {
         const { signature: _signature, revision: _revision, ...confirmed } = current.pendingEvent!;
-        current.events = [...current.events, { ...confirmed, at: Date.now() }].slice(-50);
+        const event = { ...confirmed, at: Date.now() };
+        await history.append(current.scope, event);
+        current.events = [...current.events, event].slice(-50);
         delete current.pendingEvent;
         await writeAutomaticBindings(options.stateDirectory, current);
       }
@@ -403,13 +416,41 @@ export function createWorkspaceApplication(options: {
     } finally { automaticChanging = false; snapshotCache = undefined; }
   }
 
+  async function automaticStatus(current: Workspace, prune = false) {
+    const archive = await history.read();
+    if (prune) await history.write(archive);
+    const events = retainAutomaticEvents(archive.scopes.find(s => s.scope === scopeOf(current))?.events ?? []);
+    const status = options.automaticStatus?.() as { scope?: string; groups: { name: string }[] } | undefined;
+    const state = await store.status();
+    const paused = (await readRuntimeLifecycle(options.stateDirectory)).paused;
+    return { scope: scopeOf(current), workspaceRevision: current.revision, paused,
+      suspended: paused || !state.active || current.runMode === 'direct' || !!state.transaction || !!state.fault,
+      groups: status?.scope === scopeOf(current) ?
+        (status?.groups ?? []).filter(g => !!activePolicies(current)[g.name]) : [], events };
+  }
+
   async function automaticRoute(request: Request): Promise<unknown> {
     const path = new URL(request.url).pathname;
+    const exclusive = <T>(operation: () => Promise<T>) => store.exclusive(async () => {
+      try { return await operation(); }
+      catch (error) { if (error instanceof WorkspaceError) throw new TransactionError(error.code); throw error; }
+    });
     if (path === '/api/cocoproxy/automatic/status' && request.method === 'GET') {
-      const status = options.automaticStatus?.() as { groups: unknown[]; events: unknown[] } | undefined;
-      const bindings = await readAutomaticBindings(options.stateDirectory);
-      const current = await load();
-      return { groups: status?.groups ?? [], events: bindings?.scope === scopeOf(current) ? bindings.events : status?.events ?? [] };
+      return exclusive(async () => automaticStatus(await load(), true));
+    }
+    if (path === '/api/cocoproxy/automatic/history/clear' && request.method === 'POST') {
+      const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'scope', 'group']);
+      return exclusive(async () => {
+        const current = await load();
+        if (current.revision !== body.expectedRevision || scopeOf(current) !== body.scope) invalid('WORKSPACE_CONFLICT');
+        if (typeof body.group !== 'string' || !asGroups((await build(current, true)).policy).some(g => g.name === body.group && g.type === 'select')) invalid('AUTO_GROUP_INVALID');
+        const bindings = await readAutomaticBindings(options.stateDirectory);
+        // A process may have died after commit but before removing pendingEvent.
+        // Suppress that old journal entry, while an in-process switch may still finish after clear.
+        const pendingId = !automaticChanging && bindings?.scope === body.scope && bindings.pendingEvent?.group === body.group ? bindings.pendingEvent.id : undefined;
+        await history.clear(body.scope as string, body.group, pendingId);
+        return automaticStatus(current);
+      });
     }
     if (path === '/api/cocoproxy/automatic/probes' && request.method === 'GET') return { defaults: DEFAULT_AUTO_PROBES,
       allowedOrigins: [...(options.allowedProbeOrigins ?? ['https://www.gstatic.com'])] };

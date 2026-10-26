@@ -55,6 +55,8 @@ def compare_preservation(before, after, frozen=False):
         check('automatic-runtime-bindings', after['runtime']['automaticBindingsReadable'] and not (
             before['files'].get('automaticSelections') is not None and after['files'].get('automaticSelections') is None),
             'runtime-binding-reader-only-dynamic-targets-events-and-times-may-change', absent=before['files'].get('automaticSelections') is None)
+        check('automatic-switch-history', not (before['files'].get('automaticHistory') is not None and after['files'].get('automaticHistory') is None),
+            'private-history-reader-only-records-may-expire-or-grow', absent=before['files'].get('automaticHistory') is None)
         check('runtime-selection', after['runtime']['coherent'] and not (before['runtime']['active'] is not None and after['runtime']['active'] is None),
             'current-committed-active-selection-and-recompiled-candidate-not-process-identity-or-same-dynamic-target', absent=before['runtime']['active'] is None)
     required = [item['status'] for item in checks]

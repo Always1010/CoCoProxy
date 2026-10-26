@@ -35,6 +35,7 @@ test('content assessment reuses complete readers and refuses broken fields even 
     workspace: { version: 1, revision: 1, settings },
     siteProbes: { version: 1, revision: 0, custom: [], groups: {} },
     automaticSelections: { version: 1, scope: 'synthetic', targets: {}, events: [] },
+    automaticHistory: { version: 1, scopes: [] },
     selection: { schemaVersion: 1, generation: candidate.id },
     subscription: { version: 1, id: 'sourceA', url: 'https://subscription.example/config', revision: 1, definitionRevision: 1,
       snapshot: null, etag: null, lastAttempt: null, lastError: null },

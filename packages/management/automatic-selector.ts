@@ -1,7 +1,7 @@
 import type { AutoGroupPolicy, AutoProbeSettings, ProbeTarget } from './automatic-policy.ts';
 
 export type AutoSnapshot = {
-  key: string; generation: string; probes: AutoProbeSettings;
+  key: string; generation: string; probes: AutoProbeSettings; scope?: string;
   groups: { name: string; current: string; policy: AutoGroupPolicy }[];
 };
 export type ProbeResult = { ok: boolean; delay: number | null; retryAfterMs?: number };
@@ -322,6 +322,7 @@ export function createAutomaticSelector(options: Options) {
     async close() { closed = true; if (timer) clearInterval(timer); await running; },
     status() {
       return {
+        scope: snapshot?.scope,
         groups: [...groups.values()].map(g => ({ name: g.name, current: g.current,
           health: g.health, phase: g.search?.kind === 'outage' ? 'outage' : g.search ? g.search.kind === 'slow' ? 'slow-search' : 'failure-search'
             : g.secondaryAt !== null ? 'failure-confirmation' : g.returning ? 'return-confirmation' : isBackup(g) ? 'backup' : 'monitoring',

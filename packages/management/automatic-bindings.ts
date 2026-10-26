@@ -2,7 +2,8 @@ import { join } from 'node:path';
 import { privateRead, atomicWrite } from '../storage/private-files.ts';
 import { WorkspaceError } from './workspace.ts';
 
-export type AutomaticEvent = { id?: string; at: number; group: string; from: string; to: string; reason: string };
+export type AutomaticEvent = { id?: string; at: number; group: string; from: string; to: string; reason: string;
+  fromPool?: 'preferred' | 'fallback'; toPool?: 'preferred' | 'fallback' };
 export type AutomaticBindings = {
   version: 1;
   scope: string;
@@ -24,6 +25,8 @@ export function parseAutomaticBindings(input: unknown): AutomaticBindings {
       throw new Error();
     }
     if (value.events.some((e: AutomaticEvent) => e.id !== undefined && (typeof e.id !== 'string' || !/^[a-f0-9-]{36}$/.test(e.id)))) throw new Error();
+    if ([...value.events, ...(value.pendingEvent ? [value.pendingEvent] : [])].some(e =>
+      [e.fromPool, e.toPool].some(pool => pool !== undefined && pool !== 'preferred' && pool !== 'fallback'))) throw new Error();
     if (value.pendingEvent !== undefined) {
       const e = value.pendingEvent;
       if (!e || !/^[a-f0-9-]{36}$/.test(e.id) || !Number.isSafeInteger(e.at) || e.at < 0 || !name(e.group) || !name(e.from) || !name(e.to) || !name(e.reason) ||
