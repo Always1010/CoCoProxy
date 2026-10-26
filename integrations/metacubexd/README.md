@@ -1,6 +1,6 @@
 # MetaCubeXD 集成与构建
 
-固定上游为 **v1.273.1**，提交 `8bbc8f58fef71148a94fb5c0ff808f79b057337d`，完整476文件 blob 清单见 [source-tree.json](source-tree.json)，组件审核见 [review.json](review.json)。构建核对提交与内容，不只信任 tag。
+固定上游为 **v1.273.1**，提交 `8bbc8f58fef71148a94fb5c0ff808f79b057337d`，完整476文件 blob 清单见 [source-tree.json](source-tree.json)，组件来源锁见 [components.json](components.json)，组件审核见 [review.json](review.json)。构建核对提交与内容，不只信任 tag。版本更新按源码仓库的[上游维护流程](https://github.com/Always1010/CoCoProxy/blob/main/docs/upstream-maintenance.md)分别处理核心、UI/overlay、规则及依赖；完整 overlay 清单与现有例外也在该文档维护。该维护参考属于源码文档，不随运行载荷提供。
 
 当前 UI 提供概览、连接、流量、日志、节点、订阅和规则。日常流程见[使用说明](../../docs/usage.md)，工作区与兼容草稿见[管理模块](../../packages/management/README.md)，支持格式见[订阅模块](../../packages/subscriptions/README.md)。
 

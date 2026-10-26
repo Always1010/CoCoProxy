@@ -13,7 +13,7 @@ CoCoProxy 是部署在 Linux 外接设备上的局域网代理方案，使用 Mi
 | 安装、升级或卸载 | [部署与维护](docs/deployment.md)，[HTTPS 配置](docs/management-https.md)，[可信部署与性能选项](examples/deployment-options.md) |
 | 管理订阅、方案、节点和规则 | [使用说明](docs/usage.md) |
 | 理解组件、流量和配置应用 | [软件架构](docs/architecture.md) |
-| 开发、构建与验证 | [开发说明](docs/development.md)，[管理界面构建](integrations/metacubexd/README.md) |
+| 开发、构建与验证 | [开发说明](docs/development.md)，[管理界面构建](integrations/metacubexd/README.md)，[上游维护](docs/upstream-maintenance.md) |
 | 装配发行载荷 | [发行装配](docs/release-staging.md) |
 
 开发基线为 Node.js ≥22.18，依赖由根目录与 tooling 锁文件固定。CLI 入口为 `npm run cli -- help`，模块参考从架构文档进入。
