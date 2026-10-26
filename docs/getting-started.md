@@ -427,4 +427,4 @@ journalctl -u cocoproxy-management.service -u cocoproxy-mihomo.service \
 
 若需要调整 DNS、TUN 或性能参数，先阅读[可信部署选项](../examples/deployment-options.md)，按维护流程审阅迁移并重新验收。普通订阅和后台规则不能覆盖这些部署边界。
 
-当前源码还有一项可选参数兼容问题：配置层接受的 `automaticGateway.tunStack`、`tunGso` 尚未被 root 网络 helper 的字段校验接受，显式填写会导致网络服务启动失败。本指南沿用部署样本中的默认 TUN 设置，暂不添加这两个字段；已有故障配置应按维护流程审阅迁移，不能直接修改受管文件绕过收据检查。
+可选 `automaticGateway.tunStack`、`tunGso` 在配置层与 root 网络 helper 使用相同字段约束。默认值沿用部署样本；修改这些性能参数仍需按维护流程审阅迁移，并对实际核心与网络重新验收，不能直接修改受管文件绕过收据检查。
