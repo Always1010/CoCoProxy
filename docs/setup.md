@@ -13,6 +13,8 @@ sh ./cocoproxy doctor
 
 `check` 仅检查基础工具是否存在，不依赖 Node。`doctor` 汇总 Linux、架构、Node、systemd、Python、ip/nft、polkit、TUN 和 IPv4 转发结果。失败或未知的必要项使退出码为 1。结果包含固定 id、解释及处理方向，不输出原始系统错误。软件、账户、地址和 IPv4 转发仍按目标系统准备，检查不会安装依赖或改变网络。
 
+环境输入选择受管 HTTPS 时，`doctor` 同时复用安装器的只读检查，核对 nginx、证书与私钥的路径和权限、证书有效期、SAN 及密钥匹配，并返回固定错误码和处理方向。未取得 root 权限或有效服务 UID 时该项为未知，不能算作通过。此检查不启动 nginx、不复制密钥，也不能证明实际终端信任证书。
+
 ## 2. 填写一次环境事实
 
 将随包 `source/examples/setup-environment.json` 作为合成参考，在已存在的私有目录创建自己的 0600 文件。不要直接使用文档地址。
