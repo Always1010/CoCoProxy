@@ -13,6 +13,11 @@ import { verifyRelease } from '../packages/deployment/install.ts';
 
 const execute = promisify(execFile);
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
+const developmentFiles = ['AGENTS.md', '.github/workflows/release.yml', 'docs/development.md', 'docs/network-benchmark.md',
+  'docs/release-staging.md', 'integrations/protocol-fixture/README.md', 'integrations/metacubexd/README.md',
+  'scripts/measure-latency.mjs', 'packages/routing/generate-assets.mjs'];
+const routingFiles = ['index.ts', 'service-catalog.ts', 'domestic-data.ts', 'legacy-domestic-data.ts', 'overseas-data.ts',
+  'sources.lock.json', 'LICENSE.domestic'];
 async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cocoproxy-release-')));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -23,11 +28,13 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'apps/setup/main.ts'), 'console.log("synthetic setup");\n');
   await put(join(sourceDir, 'apps/runtime/launch-core.ts'), 'console.log("synthetic core launcher");\n');
   await put(join(sourceDir, 'packages/runtime/start.ts'), 'export const fixture = true;\n');
+  for (const name of routingFiles) await put(join(sourceDir, 'packages/routing', name), 'synthetic offline rule asset\n');
+  await put(join(sourceDir, 'LICENSE'), 'Synthetic project license\n');
   await put(join(sourceDir, 'packages/deployment/state-compatibility.mjs'), await readFile(new URL('../packages/deployment/state-compatibility.mjs', import.meta.url), 'utf8'));
   await put(join(sourceDir, 'docs/deployment.md'), 'Synthetic role deployment instructions\n');
   await put(join(sourceDir, 'docs/support-matrix.md'), 'Synthetic independent product and router capabilities\n');
   await put(join(sourceDir, 'docs/release-notes.md'), 'Synthetic fixed-version release scope and known limitations\n');
-  for (const name of ['setup.md', 'getting-started.md', 'usage.md', 'architecture.md', 'development.md']) {
+  for (const name of ['setup.md', 'getting-started.md', 'usage.md', 'architecture.md', 'management-https.md', 'router-contract.md']) {
     await put(join(sourceDir, 'docs', name), 'Synthetic documentation\n');
   }
   for (const name of ['architecture-overview.svg', 'runtime-relations.svg', 'proxy-traffic-flow.svg']) {
@@ -35,7 +42,7 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   }
   await put(join(sourceDir, 'examples/nginx-management.conf'), '# Synthetic HTTPS role template\n');
   await put(join(sourceDir, 'examples/deployment-options.md'), 'Synthetic trusted performance options\n');
-  await put(join(sourceDir, 'scripts/measure-latency.mjs'), 'console.log("synthetic latency baseline");\n');
+  for (const path of developmentFiles) await put(join(sourceDir, path), 'synthetic development-only input\n');
   await put(join(sourceDir, 'scripts/cocoproxy-setup.sh'), '#!/bin/sh\nexit 0\n');
   for (const name of ['deploy-ssh.mjs', 'remote-deploy.py', 'router-ssh-hook.py']) {
     await put(join(sourceDir, 'scripts', name), '# synthetic remote deployment entry\n');
@@ -101,19 +108,24 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.ok(manifest.files.some(file => file.path === 'source/docs/deployment.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/support-matrix.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/docs/release-notes.md'));
-  for (const path of ['getting-started.md', 'usage.md', 'architecture.md', 'development.md', 'images/architecture-overview.svg',
+  for (const path of ['setup.md', 'getting-started.md', 'usage.md', 'architecture.md', 'management-https.md', 'router-contract.md', 'images/architecture-overview.svg',
     'images/runtime-relations.svg', 'images/proxy-traffic-flow.svg']) {
     assert.ok(manifest.files.some(file => file.path === `source/docs/${path}`));
   }
   assert.ok(manifest.files.some(file => file.path === 'source/examples/nginx-management.conf'));
   assert.ok(manifest.files.some(file => file.path === 'source/examples/deployment-options.md'));
-  assert.ok(manifest.files.some(file => file.path === 'source/scripts/measure-latency.mjs'));
+  assert.ok(manifest.files.some(file => file.path === 'source/LICENSE'));
+  for (const path of routingFiles) assert.ok(manifest.files.some(file => file.path === `source/packages/routing/${path}`));
+  for (const path of developmentFiles) assert.ok(!manifest.files.some(file => file.path === `source/${path}`), path);
   for (const path of ['source/scripts/deploy-ssh.mjs', 'source/scripts/remote-deploy.py', 'source/scripts/router-ssh-hook.py']) {
     assert.ok(manifest.files.some(file => file.path === path));
   }
   assert.ok(manifest.files.some(file => file.path === 'cocoproxy' && file.mode === '0755'));
   assert.ok(manifest.files.some(file => file.path === 'README.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/integrations/metacubexd/components.json'));
+  for (const path of ['LICENSE', 'review.json', 'source-tree.json']) {
+    assert.ok(manifest.files.some(file => file.path === `source/integrations/metacubexd/${path}`));
+  }
   assert.ok(manifest.files.every(file => !file.path.includes('.local') && !file.path.endsWith('.map') && !file.path.endsWith('nitro.json')));
   assert.ok(!bytes.toString().includes(options.sourceDir) && !bytes.toString().includes('SYNTHETIC_PRIVATE_VALUE'));
   for (const file of manifest.files) {

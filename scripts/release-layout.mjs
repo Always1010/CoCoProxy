@@ -2,22 +2,21 @@ import { posix } from 'node:path';
 
 // Keep additions explicit: documentation links never expand the payload implicitly.
 export const releaseSourceFiles = new Set([
-  'AGENTS.md', '.github/workflows/release.yml',
-  'docs/setup.md', 'docs/support-matrix.md', 'docs/router-contract.md', 'docs/getting-started.md', 'docs/deployment.md', 'docs/management-https.md', 'docs/release-staging.md',
-  'docs/usage.md', 'docs/architecture.md', 'docs/development.md', 'docs/network-benchmark.md',
+  'docs/setup.md', 'docs/support-matrix.md', 'docs/router-contract.md', 'docs/getting-started.md', 'docs/deployment.md', 'docs/management-https.md',
+  'docs/usage.md', 'docs/architecture.md',
   'docs/images/architecture-overview.svg', 'docs/images/runtime-relations.svg', 'docs/images/proxy-traffic-flow.svg',
   'docs/release-notes.md',
   'examples/setup-environment.json', 'examples/deployment-plan.json', 'examples/automatic-gateway-deployment.json',
   'examples/deployment-options.md', 'examples/runtime-deployment.json', 'examples/subscription-source.json',
   'examples/subscription-policy.json', 'examples/nginx-management.conf', 'examples/cocoproxy-web.service',
-  'scripts/measure-latency.mjs', 'scripts/cocoproxy-setup.sh', 'integrations/protocol-fixture/README.md',
+  'scripts/cocoproxy-setup.sh',
   'scripts/deploy-ssh.mjs', 'scripts/remote-deploy.py', 'scripts/router-ssh-hook.py',
 ]);
 export const releaseIntegrationFiles = [
   'integrations/metacubexd/LICENSE', 'integrations/metacubexd/components.json', 'integrations/metacubexd/review.json',
-  'integrations/metacubexd/source-tree.json', 'integrations/metacubexd/README.md', 'integrations/mihomo/LICENSE',
+  'integrations/metacubexd/source-tree.json', 'integrations/mihomo/LICENSE',
 ];
-export const selectedReleaseSource = path => /^(apps|packages)\//u.test(path)
+export const selectedReleaseSource = path => (/^(apps|packages)\//u.test(path) && path !== 'packages/routing/generate-assets.mjs')
   || /^(package(?:-lock)?\.json|LICENSE(?:\.[A-Za-z0-9-]+)?|NOTICE(?:\.[A-Za-z0-9-]+)?)$/u.test(path)
   || releaseSourceFiles.has(path);
 
