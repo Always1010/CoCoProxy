@@ -36,7 +36,7 @@ function color(result?: SiteResult) {
 </script>
 
 <template>
-  <button v-if="context && groupName" type="button" class="flex shrink-0 flex-col items-end gap-1 rounded px-1 py-0.5 text-[11px] tabular-nums hover:bg-base-content/5" :aria-label="`${proxyName} ${label}，查看站点结果`" @click.stop="context.details(groupName, nodeName)" @keydown.stop>
+  <button v-if="context && groupName" type="button" class="flex shrink-0 flex-col items-end gap-1 rounded px-1 py-0.5 text-[10px] tabular-nums hover:bg-base-content/5 sm:text-[11px]" :aria-label="`${proxyName} ${label}，查看站点结果`" @click.stop="context.details(groupName, nodeName)" @keydown.stop>
     <span class="inline-flex items-center gap-0.5 whitespace-nowrap text-base-content/70"><IconChevronDown :size="11" /><span>{{ label }}</span></span>
     <span v-if="targets.length" class="flex h-[3px] w-11 gap-px overflow-hidden rounded-full" aria-hidden="true"><span v-for="(entry, index) in entries" :key="index" class="h-full min-w-0 flex-1" :class="color(entry)" /></span>
   </button>

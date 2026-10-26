@@ -24,6 +24,6 @@ const title = computed(() => {
 
 <template>
   <button type="button" class="flex shrink-0 items-center gap-1 rounded-md bg-base-content/5 px-1.5 py-1 text-[0.65rem] tabular-nums sm:text-xs" :class="result?.status === 'success' ? 'text-success' : result && result.status !== 'testing' ? 'text-warning' : 'text-base-content/60'" :disabled="!applicable || result?.status === 'testing'" :title="title" :aria-label="`${proxyName} TCP 延迟 ${text}`" :aria-busy="result?.status === 'testing'" @click.stop="tcp.testNode(proxyName)" @keydown.enter.stop @keydown.space.stop>
-    <IconBolt :size="14" :class="{ 'animate-pulse': result?.status === 'testing' }" /><span><span class="hidden sm:inline">TCP </span>{{ text }}</span>
+    <IconBolt :size="14" :class="{ 'animate-pulse': result?.status === 'testing' }" /><span>TCP {{ text }}</span>
   </button>
 </template>

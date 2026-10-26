@@ -84,7 +84,7 @@ const ariaLabel = computed(() => {
 
 <template>
   <span
-    class="latency-pill flex min-w-12 cursor-pointer items-center justify-center rounded-md px-1.5 py-1 text-xs font-semibold whitespace-nowrap tabular-nums"
+    class="latency-pill flex min-w-12 cursor-pointer items-center justify-center rounded-md px-1.5 py-1 text-[0.65rem] font-semibold whitespace-nowrap tabular-nums sm:text-xs"
     :class="[latencyClass, extraClass]"
     :role="interactive ? 'button' : undefined"
     :tabindex="interactive ? 0 : undefined"

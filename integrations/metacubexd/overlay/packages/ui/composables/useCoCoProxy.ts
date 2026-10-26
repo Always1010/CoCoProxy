@@ -44,6 +44,12 @@ export interface CoCoProxyStatus {
 }
 
 const messages: Record<string, string> = {
+  SITE_SETTINGS_INVALID: '站点设置无效。请使用公开 HTTPS 网址，不含账号、查询参数、片段或自定义端口；每组最多选择 16 项。',
+  SITE_SETTINGS_CONFLICT: '站点设置或当前方案已变化，请重新读取后保存。',
+  SITE_SETTINGS_CORRUPT: '站点设置无法读取，请检查服务存储。',
+  SITE_TARGET_DENIED: '当前部署限制了此检测来源，尚未保存。请先配置允许的探测来源，或取消受限目标。',
+  SITE_TARGET_DUPLICATE: '此检测网址已在站点目录中，请选择已有站点。',
+  SITE_TARGET_IN_USE: '其他组或方案仍选用了此站点，请先取消对应选择，再删除。',
   AUTO_SETTINGS_INVALID: '自动选择设置无效，请检查候选节点和检测参数。',
   AUTO_GROUP_INVALID: '此策略组不支持自动选择，或候选节点已变化，请刷新后重试。',
   AUTO_STATE_CONFLICT: '自动选择运行状态已变化，请刷新后重试。',

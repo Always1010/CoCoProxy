@@ -4,8 +4,10 @@ import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
 import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
 import AutomaticSelectionSettings from '~/components/AutomaticSelectionSettings.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
+import { siteGroupMembers } from '~/composables/useSiteProbes'
 import {
   IconBolt,
+  IconActivity,
   IconBrandSpeedtest,
   IconChevronRight,
   IconRefresh,
@@ -30,6 +32,8 @@ interface Props {
   scrollContainer?: HTMLElement | null
   batchTesting?: boolean
   tcpTesting?: boolean
+  siteTesting?: boolean
+  siteCounts?: Record<string, number>
 }
 
 const props = defineProps<Props>()
@@ -37,6 +41,7 @@ const emit = defineEmits<{
   scroll: [event: Event]
   'test-group': [name: string]
   'test-tcp': [names: string[], group: string]
+  'test-sites': [group: string]
 }>()
 
 const proxiesStore = useProxiesStore()
@@ -118,7 +123,19 @@ const selectedVisible = computed(
     !!activeGroup.value?.now &&
     displayNodes.value.includes(activeGroup.value.now),
 )
-const hasTcpNodes = computed(() => displayNodes.value.some(name => view.value?.tcpNodes?.some(node => node.name === name && node.applicable)))
+const allMembers = computed(() => activeGroup.value ? siteGroupMembers(activeGroup.value.name, proxiesStore.proxies) : [])
+const hasTcpNodes = computed(() => allMembers.value.some(name => view.value?.tcpNodes?.some(node => node.name === name && node.applicable)))
+const detectionBusy = computed(() => props.batchTesting || props.tcpTesting || props.siteTesting || busy.value)
+const detectionMenu = ref<HTMLDetailsElement>()
+const groupSettings = ref<{ openSites: () => void }>()
+function detect(kind: 'latency' | 'tcp' | 'sites') {
+  if (!activeGroup.value || detectionBusy.value) return
+  if (detectionMenu.value) detectionMenu.value.open = false
+  if (kind === 'latency') emit('test-group', activeGroup.value.name)
+  else if (kind === 'tcp') emit('test-tcp', [...allMembers.value], activeGroup.value.name)
+  else if (!props.siteCounts?.[activeGroup.value.name]) groupSettings.value?.openSites()
+  else emit('test-sites', activeGroup.value.name)
+}
 
 function toggleInSet(set: Ref<Set<string>>, key: string) {
   const next = new Set(set.value)
@@ -263,7 +280,7 @@ function aliveCount(group: ProxyType) {
             >
               <IconRefresh v-if="automaticEnabled" :size="14" class="shrink-0" aria-hidden="true" />
               <span class="shrink-0 font-bold">{{
-                automaticEnabled ? '自动选择' : formatProxyType(activeGroup.type, t)
+                automaticEnabled ? '自动选点' : canSelect ? '手动选择' : formatProxyType(activeGroup.type, t)
               }}</span>
               <template v-if="activeGroup.now?.length">
                 <IconChevronRight :size="16" class="shrink-0" />
@@ -274,9 +291,15 @@ function aliveCount(group: ProxyType) {
           <span class="shrink-0 text-xs text-base-content/45">
             {{ displayNodes.length }}/{{ activeNodes.length }}
           </span>
-          <AutomaticSelectionSettings :group-name="activeGroup.name" :selectable="canSelect" />
-          <button type="button" class="btn btn-ghost btn-sm" :disabled="tcpTesting || busy || !hasTcpNodes" title="测试本组筛选后可见节点的 TCP 延迟（从网关建连）" aria-label="测本组可见 TCP" @click="emit('test-tcp', [...displayNodes], activeGroup.name)"><IconBolt :size="18" /><span>测本组可见 TCP</span></button>
-          <button type="button" class="btn btn-ghost btn-sm" title="测试本组全部成员的代理延迟（访问测试网址，不受筛选影响）" aria-label="测本组代理延迟" :disabled="batchTesting || proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name]" @click="emit('test-group', activeGroup.name)"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-success': batchTesting || proxiesStore.proxyGroupLatencyTestingMap[activeGroup.name] }" /><span>测本组代理延迟</span></button>
+          <details ref="detectionMenu" class="dropdown dropdown-end">
+            <summary class="btn btn-ghost btn-sm" aria-label="选择检测类型"><IconBrandSpeedtest :size="18" /><span>检测</span><span aria-hidden="true">▾</span></summary>
+            <div class="dropdown-content z-40 w-64 rounded-xl border border-base-content/10 bg-base-200 p-2 shadow-xl">
+              <p class="px-2 py-1 text-xs text-base-content/60">当前策略组 · 全部可检测节点<br />不受名称、地区和协议筛选影响</p>
+              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !allMembers.length" @click="detect('latency')"><IconBrandSpeedtest :size="16" /><span>代理延迟</span></button>
+              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !hasTcpNodes" @click="detect('tcp')"><IconBolt :size="16" /><span>TCP 延迟</span></button>
+              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !allMembers.length" @click="detect('sites')"><IconActivity :size="16" /><span>站点连通 · {{ siteCounts?.[activeGroup.name] ? `已选 ${siteCounts[activeGroup.name]} 项` : '选择站点' }}</span></button>
+            </div>
+          </details>
           <button
             type="button"
             class="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-base-content/10 bg-base-100/60 px-2 text-xs text-base-content/70 transition-all duration-200 hover:border-primary/30 hover:bg-primary/15 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
@@ -288,6 +311,7 @@ function aliveCount(group: ProxyType) {
             <IconTarget :size="18" />
             <span>定位</span>
           </button>
+          <AutomaticSelectionSettings ref="groupSettings" :group-name="activeGroup.name" :selectable="canSelect" />
         </div>
 
         <p v-if="automaticEnabled" class="text-xs text-primary" role="status">点击节点可切换为手动选择</p>
@@ -426,6 +450,7 @@ function aliveCount(group: ProxyType) {
           <ProxyNodeListItem
             v-if="canSelect"
             :proxy-name="name"
+            :group-name="activeGroup.name"
             :test-url="activeGroup.testUrl || null"
             :timeout="activeGroup.timeout ?? null"
             :is-selected="activeGroup.now === name"
@@ -435,6 +460,7 @@ function aliveCount(group: ProxyType) {
           <AutomaticProxyNode
             v-else
             :proxy-name="name"
+            :group-name="activeGroup.name"
             :test-url="activeGroup.testUrl || null"
             :timeout="activeGroup.timeout ?? null"
             :is-selected="activeGroup.now === name"

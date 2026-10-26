@@ -102,7 +102,9 @@ POST `/api/cocoproxy/rules/test` 接收 `{target, network?, destinationPort?, so
 
 `/api/clash/*` 与上述接口共用 Cookie。仅允许有限 GET：version/configs/proxies/group/rules/providers/connections；按名称选择节点的 PUT，以及关闭连接／清除选择的 DELETE 要求 `If-Match` 等于已观察 generation，且在配置应用共用锁内重新核验目标。PATCH/PUT configs、重启、更新、provider 下载与脚本入口均拒绝。GET 返回 `X-CoCoProxy-Generation`；候选切换由事务接口完成，不借助热写配置。
 
-目标固定为当前 active、selection 和真实运行证据一致的 loopback controller，密钥仅在服务端 Authorization 头中使用。不接受客户端 Bearer、Cookie 转发、目标地址或 token 查询。延迟探测只能使用 `controllerPolicy.allowedProbeOrigins` 中精确的 HTTPS origin，timeout 不超过 10 秒；省略 `controllerPolicy` 时使用仪表盘默认的 `https://www.gstatic.com`，显式空数组关闭测速。UI 的探测 URL 必须与部署许可一致。
+目标固定为当前 active、selection 和真实运行证据一致的 loopback controller，密钥仅在服务端 Authorization 头中使用。不接受客户端 Bearer、Cookie 转发、目标地址或 token 查询。延迟探测接受 `controllerPolicy.allowedProbeOrigins` 中精确的 HTTPS origin，或服务端站点目录中获准的完整 URL，timeout 不超过 10 秒；目录许可不会开放同一 origin 的其他路径。省略 `controllerPolicy` 时基准仍使用 `https://www.gstatic.com`，站点目录提供内置目标及经管理操作登记的自定义目标；显式列表限制目录目标的来源，空数组关闭全部探测。自动选点仍只使用原 origin 许可，不借站点目录扩大范围。
+
+GET `/api/cocoproxy/workspace/sites` 返回 `{revision, workspaceRevision, scope, targets, selections, groups}`；目标包含稳定 id、名称、URL、分类、内置标记和 `permitted`。PUT 接收 `{expectedRevision, expectedWorkspaceRevision, scope, group?, selected?, add?:{name,url}, remove?}`，共用配置锁校验 revision 和当前方案，原子保存到私有 `site-probes.json`，不应用或重启核心。目录最多 32 个自定义目标，每组最多选 16 项；只接受无凭据、查询、片段和自定义端口的公开 HTTPS 域名目标，重复 URL 拒绝，已引用的自定义目标不能删除。组选择以工作区模式和来源集合／订阅身份隔离；删除或变更方案不会把同名组选择混用。前端结果只在当前会话中保留，并绑定节点内容、目标、方案和运行代次，变化后失效，不写入推荐评分。
 
 HTTP 响应最多 2 MiB、5 秒，拒绝重定向，严格解析 UTF-8 JSON；递归脱敏秘密字段及实际 controller secret，限制深度和数量。WS 只允许 traffic/connections/memory/logs 与有界 interval/level 参数，单帧 1 MiB、队列 32 帧／2 MiB，并复核客户端发送缓存。每秒重查会话／设备授权和代次；注销、设备撤销、认证过期、事务开始或代次改变会关闭连接。受信任设备的有效授权可在短期会话过期后继续认证。Node Server 另限制最多 128 条流、客户端帧 4096 字节且拒绝任何客户端消息；全局 upgrade hook 同时封住没有 WS 路由的匿名升级入口。流状态不代表代理节点或网关健康。
 

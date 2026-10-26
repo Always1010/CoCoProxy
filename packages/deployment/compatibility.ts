@@ -8,6 +8,7 @@ export const DEPLOYMENT_STATE_FILES: readonly { store: StateStore; path: string;
   { store: 'notifications', path: 'notifications/state.json', key: 'version', nested: 'state', limit: 2097152 },
   { store: 'draft', path: 'draft.json', key: 'version', limit: 4194304 },
   { store: 'workspace', path: 'workspace.json', key: 'version', limit: 1048576 },
+  { store: 'siteProbes', path: 'site-probes.json', key: 'version', limit: 1048576 },
   { store: 'automaticSelections', path: 'automatic-selections.json', key: 'version', limit: 262144 },
   { store: 'selection', path: 'selection.json', key: 'schemaVersion', limit: 4096 },
 ];

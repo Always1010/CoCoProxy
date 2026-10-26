@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import { IconCheck } from '@tabler/icons-vue'
 import type { AutoProbeSettings } from '~/composables/useWorkspace'
 import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
 const { api, view, workspace, busy, error, run, save } = useWorkspace()
-const dialog = ref<HTMLDialogElement>()
 const draft = ref<AutoProbeSettings>()
 const allowedOrigins = ref<string[]>([])
 const loading = ref(false)
@@ -29,7 +29,6 @@ async function open() {
   draft.value = undefined
   localError.value = ''
   testResult.value = ''
-  dialog.value?.showModal()
   try {
     const result = await api.request<{ defaults: AutoProbeSettings; allowedOrigins: string[] }>('/api/cocoproxy/automatic/probes')
     if (!disposed) {
@@ -62,14 +61,13 @@ async function validateAndSave() {
   })
 }
 watch(draft, () => { testResult.value = '' }, { deep: true })
+onMounted(open)
 onUnmounted(() => { disposed = true })
 </script>
 
 <template>
-  <button type="button" class="btn btn-outline btn-sm" @click="open">自动选择检测设置</button>
-  <dialog ref="dialog" class="modal">
-    <div class="modal-box">
-      <h2 class="mb-3 text-lg font-semibold">自动选择检测设置</h2>
+    <section class="border-t border-base-content/10 pt-4">
+      <h3 class="mb-2 text-sm font-semibold">自动选点检测 · 所有组共用</h3>
       <p class="mb-3 text-xs leading-relaxed text-base-content/65">所有策略组共用，保存在服务端。验证会通过当前选中的具体节点访问两个网址；二者均通过后才保存。主检测失败或变慢时使用备用检测复核。</p>
       <p v-if="loading" role="status" class="text-sm">正在读取设置…</p>
       <form v-if="draft" class="flex flex-col gap-3" @submit.prevent="validateAndSave">
@@ -83,10 +81,8 @@ onUnmounted(() => { disposed = true })
         <p class="break-all text-xs text-base-content/55">当前许可来源：{{ allowedOrigins.length ? allowedOrigins.join('、') : '无' }}。部署可能只许可 gstatic；其他来源须由管理员显式配置后才能使用。</p>
         <p v-if="validation" role="alert" class="text-sm text-warning">{{ validation }}</p>
         <p v-if="testResult" role="status" class="text-sm text-success">{{ testResult }}</p>
-        <div class="modal-action mt-1"><button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="dialog?.close()">关闭</button><button type="submit" class="btn btn-primary btn-sm" :disabled="busy || !!validation">{{ busy ? '正在验证并保存…' : '验证并保存' }}</button></div>
+        <div class="mt-1 flex justify-end"><button type="submit" class="btn btn-primary btn-sm" :disabled="busy || !!validation"><IconCheck :size="16" /><span>{{ busy ? '正在验证并保存…' : '验证并保存' }}</span></button></div>
       </form>
       <p v-if="localError || error" role="alert" class="mt-3 text-sm text-error">{{ localError || error }}</p>
-    </div>
-    <form method="dialog" class="modal-backdrop"><button aria-label="关闭自动选择检测设置">关闭</button></form>
-  </dialog>
+    </section>
 </template>

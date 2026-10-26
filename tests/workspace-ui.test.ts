@@ -142,7 +142,7 @@ test('automatic settings off/save/reopen/on retains ordered pools and return pre
   const view = { value: { nodes: ['first', 'second', 'backup'], groups: [{ name: 'Stream', options: ['first', 'second', 'backup'], activeSelected: 'backup' }] } };
   const exports: Record<string, any> = {};
   new Script(code, { filename: 'AutomaticSelectionSettings.js' }).runInNewContext({
-    exports, defineProps: () => ({ groupName: 'Stream', selectable: true }),
+    exports, defineProps: () => ({ groupName: 'Stream', selectable: true }), defineExpose: () => {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: () => {}, onUnmounted: () => {}, document: { hidden: true }, setTimeout: () => 0, clearTimeout: () => {},
     useProxyRefresh: () => ({ refresh: async () => {} }),
