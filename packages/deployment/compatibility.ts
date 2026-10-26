@@ -1,4 +1,14 @@
 import { DEPLOYMENT_STATE_COMPATIBILITY } from './state-compatibility.mjs';
+import { parseTransactionState } from '../transaction/index.ts';
+import { parseDraftDocument } from '../drafts/index.ts';
+import { parseRuntimeLifecycle } from '../runtime/lifecycle.ts';
+import { parseRuntimeSelection } from '../runtime/settings.ts';
+import { parseTrustedDeviceDocument } from '../management/trusted-devices.ts';
+import { parseNotificationEnvelope } from '../management/notifications.ts';
+import { parseWorkspaceDocument } from '../management/workspace.ts';
+import { parseSiteProbeState } from '../management/site-probes.ts';
+import { parseAutomaticBindings } from '../management/automatic-bindings.ts';
+import { parseSourceRecord } from '../subscriptions/index.ts';
 export { DEPLOYMENT_STATE_COMPATIBILITY } from './state-compatibility.mjs';
 export type StateStore = keyof typeof DEPLOYMENT_STATE_COMPATIBILITY.stateSchemas;
 export const DEPLOYMENT_STATE_FILES: readonly { store: StateStore; path: string; key: 'version' | 'schemaVersion'; nested?: 'state'; limit: number }[] = [
@@ -17,4 +27,42 @@ export function assessStateSchema(store: StateStore, observedVersion: unknown, d
   if (!Number.isSafeInteger(observedVersion) || (observedVersion as number) < 1) return 'invalid' as const;
   if (!contract || contract.schemaVersion !== 1 || !contract.stateSchemas || !Object.hasOwn(contract.stateSchemas, store)) return 'not-declared' as const;
   return contract.stateSchemas[store] === observedVersion ? 'supported-version' as const : 'unsupported-version' as const;
+}
+export type CompatibilityStatus = 'supported' | 'unsupported' | 'unknown';
+export interface StateContentAssessment {
+  status: CompatibilityStatus; code: string;
+  content: 'valid' | 'invalid' | 'not-assessed';
+  version: ReturnType<typeof assessStateSchema>;
+  scope: 'current-reader-content-and-declared-format';
+}
+/** Validate the same complete representation accepted by runtime readers, without I/O or identity invalidation. */
+export function assessStateContent(store: StateStore, input: unknown, declaration: unknown, sourceId?: string): StateContentAssessment {
+  const file = DEPLOYMENT_STATE_FILES.find(file => file.store === store);
+  const record = input as Record<string, unknown> | null;
+  const envelope = file?.nested ? record?.[file.nested] as Record<string, unknown> | null : record;
+  const version = assessStateSchema(store, envelope?.[file?.key ?? 'version'], declaration);
+  const result = (status: CompatibilityStatus, code: string, content: StateContentAssessment['content']): StateContentAssessment =>
+    ({ status, code, content, version, scope: 'current-reader-content-and-declared-format' });
+  if (version === 'invalid' || version === 'unsupported-version') return result('unsupported', 'DEPLOYMENT_STATE_VERSION_UNSUPPORTED', 'not-assessed');
+  if (store === 'subscription' && !sourceId) return result('unknown', 'DEPLOYMENT_STATE_SOURCE_CONTEXT_REQUIRED', 'not-assessed');
+  try {
+    switch (store) {
+      case 'transaction': parseTransactionState(input); break;
+      case 'lifecycle': parseRuntimeLifecycle(input); break;
+      case 'trustedDevices': parseTrustedDeviceDocument(input); break;
+      case 'notifications': parseNotificationEnvelope(input); break;
+      case 'draft': parseDraftDocument(input); break;
+      case 'workspace': parseWorkspaceDocument(input); break;
+      case 'siteProbes': parseSiteProbeState(input); break;
+      case 'automaticSelections': parseAutomaticBindings(input); break;
+      case 'selection': parseRuntimeSelection(input); break;
+      case 'subscription': parseSourceRecord(input, sourceId!); break;
+    }
+  } catch { return result('unsupported', 'DEPLOYMENT_STATE_CONTENT_INVALID', 'invalid'); }
+  const contract = declaration as { schemaVersion?: unknown; contentReaders?: Record<string, unknown> } | undefined;
+  if (version === 'not-declared' || !contract?.contentReaders || !Object.hasOwn(contract.contentReaders, store)) {
+    return result('unknown', 'DEPLOYMENT_STATE_CONTENT_READER_NOT_DECLARED', 'valid');
+  }
+  return contract.contentReaders[store] === DEPLOYMENT_STATE_COMPATIBILITY.contentReaders[store]
+    ? result('supported', 'DEPLOYMENT_STATE_CONTENT_SUPPORTED', 'valid') : result('unknown', 'DEPLOYMENT_STATE_CONTENT_READER_UNKNOWN', 'valid');
 }

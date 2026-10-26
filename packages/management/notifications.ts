@@ -37,6 +37,11 @@ function parseState(input: unknown): State {
   return s;
 }
 
+export function parseNotificationEnvelope(input: unknown): { epoch: unknown; state: State } {
+  const envelope = exactRecord(input, ['epoch', 'state']);
+  return { epoch: envelope.epoch, state: parseState(envelope.state) };
+}
+
 export function notificationMessage(event: NotificationEvent, showNodes: boolean) {
   const group = event.group.slice(0, 96);
   const words: Record<string, string> = { 'preferred-restored': '首选节点稳定恢复，已自动回切', 'failure-recovery': '原线路不可用，已恢复可用出口', 'faster-candidate': '原线路持续缓慢，已自动切换', 'all-unavailable': '候选节点暂无可用出口，正在等待恢复', 'available-again': '已恢复可用出口', test: '这是一条测试通知，请确认此设备是否显示提醒' };
@@ -56,8 +61,8 @@ export async function createNotifications(options: { stateDirectory: string; ori
   const epoch = options.devices.bindingFingerprint();
   try {
     await inspectPrivateDirectory(options.stateDirectory); await inspectPrivateDirectory(directory);
-    const envelope = exactRecord(JSON.parse(await privateRead(join(directory, 'state.json'), 2 * 1024 * 1024)), ['epoch', 'state']);
-    const loaded = parseState(envelope.state);
+    const envelope = parseNotificationEnvelope(JSON.parse(await privateRead(join(directory, 'state.json'), 2 * 1024 * 1024)));
+    const loaded = envelope.state;
     state = envelope.epoch === epoch ? loaded : empty();
   } catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') broken = true; }
   async function mutate<T>(operation: (next: State) => T): Promise<T> {

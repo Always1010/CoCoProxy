@@ -27,7 +27,7 @@ export const BUILTIN_SITE_TARGETS: readonly SiteTarget[] = [
   ['steam', 'Steam', 'https://store.steampowered.com/', '更多服务'],
 ].map(([id, name, url, category]) => ({ id: id!, name: name!, url: url!, category: category! }));
 
-type SiteSettings = { version: 1; revision: number; custom: SiteTarget[]; groups: Record<string, Record<string, string[]>> };
+export type SiteSettings = { version: 1; revision: number; custom: SiteTarget[]; groups: Record<string, Record<string, string[]>> };
 const fail = (code = 'SITE_SETTINGS_INVALID'): never => { throw new ManagementError(code, /CONFLICT|IN_USE/.test(code) ? 409 : 400); };
 const safeName = (value: unknown, limit = 256): value is string => typeof value === 'string' && value.length > 0 && value.length <= limit &&
   !/[\x00-\x1f\x7f]/.test(value) && !['__proto__', 'constructor', 'prototype'].includes(value);
@@ -119,3 +119,5 @@ export class SiteProbeStore {
     return target;
   }
 }
+
+export { parse as parseSiteProbeState };

@@ -11,10 +11,9 @@ export type AutomaticBindings = {
   pendingEvent?: AutomaticEvent & { id: string; signature: string; revision: number };
 };
 
-/** Runtime choices are private and separate from the user's manual settings. */
-export async function readAutomaticBindings(root: string): Promise<AutomaticBindings | null> {
+export function parseAutomaticBindings(input: unknown): AutomaticBindings {
   try {
-    const value = JSON.parse(await privateRead(join(root, 'automatic-selections.json'), 262144));
+    const value = input as AutomaticBindings;
     const name = (input: unknown) => typeof input === 'string' && input.length > 0 && input.length <= 1024 && !/[\x00-\x1f\x7f]/.test(input);
     if (!value || value.version !== 1 || typeof value.scope !== 'string' || value.scope.length > 16384 ||
         !value.targets || typeof value.targets !== 'object' || Array.isArray(value.targets) || Object.keys(value.targets).length > 100 ||
@@ -31,6 +30,14 @@ export async function readAutomaticBindings(root: string): Promise<AutomaticBind
           !/^[a-f0-9]{64}$/.test(e.signature) || !Number.isSafeInteger(e.revision) || e.revision < 0) throw new Error();
     }
     return value as AutomaticBindings;
+  } catch { throw new WorkspaceError('AUTO_STATE_CORRUPT'); }
+}
+
+/** Runtime choices are private and separate from the user's manual settings. */
+export async function readAutomaticBindings(root: string): Promise<AutomaticBindings | null> {
+  try {
+    const value = JSON.parse(await privateRead(join(root, 'automatic-selections.json'), 262144));
+    return parseAutomaticBindings(value);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw new WorkspaceError('AUTO_STATE_CORRUPT');

@@ -127,6 +127,31 @@ export async function verifyBinary(input: RuntimeSettings): Promise<string> {
   } catch { verifiedBinary = undefined; return fail('BINARY_UNTRUSTED'); }
 }
 
+export function recompileRuntimeCandidate(config: JsonObject, input: RuntimeSettings, generation: string): Candidate {
+  const settings = parseRuntimeSettings(input);
+  try {
+    const controller = config['external-controller'];
+    const dns = config.dns;
+    if (settings.automaticGateway) {
+      const compiled = recompileAutomaticGatewayConfig(config, settings.automaticGateway);
+      if (compiled.id !== generation || typeof controller !== 'string' || typeof config.secret !== 'string') fail('CANDIDATE_UNTRUSTED');
+      return compiled;
+    }
+    if (typeof controller !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(controller) ||
+        !dns || typeof dns !== 'object' || Array.isArray(dns) ||
+        typeof dns.listen !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(dns.listen) ||
+        typeof config.secret !== 'string') fail('CANDIDATE_UNTRUSTED');
+    const policy = expandCompilerRuleSets(config);
+    for (const key of ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer']) delete policy[key];
+    const compiled = compileConfig({ schemaVersion: 1, deployment: {
+      mixedPort: config['mixed-port'], controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,
+      dnsPort: Number(dns.listen.slice(10)), bootstrapResolvers: dns['default-nameserver'], ...deploymentDnsOptions(config),
+    }, policy });
+    if (compiled.id !== generation) fail('CANDIDATE_UNTRUSTED');
+    return compiled;
+  } catch { return fail('CANDIDATE_UNTRUSTED'); }
+}
+
 export async function loadRuntimeCandidate(input: RuntimeSettings, generation: string): Promise<RuntimeCandidate> {
   return structuredClone(await loadRuntimeCandidateReadonly(input, generation));
 }
@@ -148,28 +173,26 @@ export async function loadRuntimeCandidateReadonly(input: RuntimeSettings, gener
     const cached = compiledCandidates.get(key);
     if (cached) return cached;
     const config = JSON.parse(bytes) as JsonObject;
-    const controller = config['external-controller'];
-    const dns = config.dns;
-    if (settings.automaticGateway) {
-      const compiled = recompileAutomaticGatewayConfig(config, settings.automaticGateway);
-      if (compiled.id !== generation || typeof controller !== 'string' || typeof config.secret !== 'string') fail('CANDIDATE_UNTRUSTED');
-      return rememberCandidate(key, { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret },
-        home: posix.join(settings.stateDirectory, 'core-home') });
-    }
-    if (typeof controller !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(controller) ||
-        !dns || typeof dns !== 'object' || Array.isArray(dns) ||
-        typeof dns.listen !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(dns.listen) ||
-        typeof config.secret !== 'string') fail('CANDIDATE_UNTRUSTED');
-    const policy = expandCompilerRuleSets(config);
-    for (const key of ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer']) delete policy[key];
-    const compiled = compileConfig({ schemaVersion: 1, deployment: {
-      mixedPort: config['mixed-port'], controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,
-      dnsPort: Number(dns.listen.slice(10)), bootstrapResolvers: dns['default-nameserver'], ...deploymentDnsOptions(config),
-    }, policy });
-    if (compiled.id !== generation) fail('CANDIDATE_UNTRUSTED');
-    return rememberCandidate(key, { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret },
+    const compiled = recompileRuntimeCandidate(config, settings, generation);
+    const controller = config['external-controller'] as string;
+    return rememberCandidate(key, { candidate: compiled, path, controller: { port: Number(controller.slice(10)), secret: config.secret as string },
       home: posix.join(settings.stateDirectory, 'core-home') });
   } catch { return fail('CANDIDATE_UNTRUSTED'); }
+}
+
+export function parseRuntimeSelection(input: unknown): RuntimeSelection {
+  try {
+    const value = plainRecord(input, ['schemaVersion', 'generation'], ['hot']);
+    if (value.schemaVersion !== 1 || typeof value.generation !== 'string' || !digest.test(value.generation)) fail('SELECTION_UNTRUSTED');
+    if (value.hot !== undefined) {
+      const hot = plainRecord(value.hot, ['pid', 'bootId', 'startTime', 'baseGeneration']);
+      if (typeof hot.pid !== 'number' || !Number.isSafeInteger(hot.pid) || hot.pid <= 1 ||
+          typeof hot.bootId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(hot.bootId) ||
+          typeof hot.startTime !== 'string' || !/^[1-9]\d{0,31}$/.test(hot.startTime) ||
+          typeof hot.baseGeneration !== 'string' || !digest.test(hot.baseGeneration)) fail('SELECTION_UNTRUSTED');
+    }
+    return value as unknown as RuntimeSelection;
+  } catch { return fail('SELECTION_UNTRUSTED'); }
 }
 
 /** Read-only selection lookup; it never creates a missing state directory. */
@@ -184,16 +207,7 @@ export async function readRuntimeSelection(input: RuntimeSettings): Promise<Runt
     return fail('SELECTION_UNTRUSTED');
   }
   try {
-    const value = plainRecord(JSON.parse(bytes), ['schemaVersion', 'generation'], ['hot']);
-    if (value.schemaVersion !== 1 || typeof value.generation !== 'string' || !digest.test(value.generation)) fail('SELECTION_UNTRUSTED');
-    if (value.hot !== undefined) {
-      const hot = plainRecord(value.hot, ['pid', 'bootId', 'startTime', 'baseGeneration']);
-      if (typeof hot.pid !== 'number' || !Number.isSafeInteger(hot.pid) || hot.pid <= 1 ||
-          typeof hot.bootId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(hot.bootId) ||
-          typeof hot.startTime !== 'string' || !/^[1-9]\d{0,31}$/.test(hot.startTime) ||
-          typeof hot.baseGeneration !== 'string' || !digest.test(hot.baseGeneration)) fail('SELECTION_UNTRUSTED');
-    }
-    return value as unknown as RuntimeSelection;
+    return parseRuntimeSelection(JSON.parse(bytes));
   } catch { return fail('SELECTION_UNTRUSTED'); }
 }
 
