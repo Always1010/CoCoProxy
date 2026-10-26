@@ -2,9 +2,10 @@
 import { IconArrowLeft, IconCheck, IconChevronDown, IconChevronUp, IconEdit, IconInfoCircle, IconList, IconSettings, IconWorld, IconX } from '@tabler/icons-vue'
 import type { AutomaticStatus, AutoGroupPolicy } from '~/composables/useWorkspace'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
+import GroupMatchingRules from '~/components/GroupMatchingRules.vue'
 
 const props = defineProps<{ groupName: string; selectable: boolean }>()
-const { api, view, overrides, busy, error, run, save, editOverrides } = useWorkspace()
+const { api, view, workspace, overrides, busy, error, run, save, editOverrides } = useWorkspace()
 const proxyRefresh = useProxyRefresh()
 const dialog = ref<HTMLDialogElement>()
 const enabled = ref(false)
@@ -19,7 +20,7 @@ const editorSelected = ref<string[]>([])
 const expanded = ref({ preferred: false, fallback: false })
 const initialDraft = ref('')
 const visible = ref(false)
-const tab = ref<'selection' | 'sites'>('selection')
+const tab = ref<'selection' | 'rules' | 'sites'>('selection')
 const statusError = ref('')
 const status = ref<AutomaticStatus>()
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -125,7 +126,8 @@ function open() {
   void refreshStatus(++session)
 }
 function openSites() { open(); tab.value = 'sites' }
-defineExpose({ open, openSites })
+function openRules() { open(); tab.value = 'rules' }
+defineExpose({ open, openSites, openRules })
 async function persist() {
   if (editorKind.value || invalid.value || busy.value) return
   await run(async () => {
@@ -141,7 +143,7 @@ async function persist() {
       }
     }, enabled.value ? '自动选择已启用' : '已切换为手动选择')
     await proxyRefresh.refresh()
-    dialog.value?.close()
+    initialDraft.value = draftSignature()
   })
 }
 watch(() => props.groupName, () => { dialog.value?.close(); close() })
@@ -165,10 +167,12 @@ onUnmounted(() => { disposed = true; close() })
           <button type="button" class="btn btn-ghost min-h-11 shrink-0" @click="dialog?.close()"><IconX :size="16" /><span>关闭</span></button>
         </template>
       </div>
-      <div v-if="!editorKind" class="mb-4 flex shrink-0 gap-2" role="tablist" aria-label="组设置类别">
+      <div v-if="!editorKind" class="mb-4 flex shrink-0 flex-wrap gap-2" role="tablist" aria-label="组设置类别">
         <button type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'selection' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'selection'" @click="tab = 'selection'"><IconList :size="16" /><span>节点选择</span></button>
+        <button v-if="workspace?.mode === 'local'" type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'rules' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'rules'" @click="tab = 'rules'"><IconList :size="16" /><span>匹配规则</span></button>
         <button type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'sites' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'sites'" @click="tab = 'sites'"><IconWorld :size="16" /><span>站点连通</span></button>
       </div>
+      <GroupMatchingRules v-if="visible && workspace?.mode === 'local'" v-show="tab === 'rules'" :group-name="groupName" @close="dialog?.close()" />
       <div v-if="visible && tab === 'sites'" class="min-h-0 overflow-y-auto"><SiteTargetSettings :group-name="groupName" /></div>
       <p v-if="tab === 'selection' && !selectable" class="text-sm text-base-content/65">此组保留核心的 {{ view?.groups.find(group => group.name === groupName)?.type }} 自动算法，不能叠加自动选点；仍可配置站点连通检测。</p>
       <form v-if="tab === 'selection' && selectable" class="flex min-h-0 flex-1 flex-col gap-4" @submit.prevent="persist">
@@ -214,7 +218,7 @@ onUnmounted(() => { disposed = true; close() })
               <p class="leading-relaxed">开启后按检测结果自动选择节点；关闭后手动选择。正常时每 30 秒检测当前节点，故障时按需检测候选节点。优选不可用时使用备选；开启回切后按 5、10、15 分钟退避检测优选恢复。停用后保留候选和回切设置。此处的自动选点独立于手动站点连通检测。仅可选择此组内的具体代理节点；优选与备选不重复，合计最多 32 个。</p>
             </details>
           </div>
-          <div class="modal-action mt-0 shrink-0"><button type="button" class="btn btn-ghost min-h-11" :disabled="busy" @click="dialog?.close()"><IconX :size="16" /><span>取消</span></button><button type="submit" class="btn btn-primary min-h-11" :disabled="busy || !!invalid"><IconCheck :size="16" /><span>{{ busy ? '正在保存…' : '保存' }}</span></button></div>
+          <div class="modal-action mt-0 shrink-0"><button type="button" class="btn btn-ghost min-h-11" :disabled="busy" @click="dialog?.close()"><IconX :size="16" /><span>取消</span></button><button type="submit" class="btn btn-primary min-h-11" :disabled="busy || !!invalid"><IconCheck :size="16" /><span>{{ busy ? '正在保存…' : '保存节点设置' }}</span></button></div>
         </template>
         <template v-else>
           <p class="shrink-0 text-xs leading-relaxed text-base-content/65">勾选加入{{ editorLabel }}，取消勾选移出。修改暂存，返回组设置后点击“保存”生效。已在{{ otherLabel }}中的节点置灰并排在末尾，需先从{{ otherLabel }}移除后才能选择。</p>

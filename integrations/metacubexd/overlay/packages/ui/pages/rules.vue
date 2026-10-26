@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { IconChevronDown, IconChevronUp, IconDeviceFloppy, IconPlus, IconTrash } from '@tabler/icons-vue'
+import { ruleTarget } from '~/utils/group-rules'
 useHead({ title: '规则 · CoCoProxy' })
 const { view, workspace, overrides, busy, load, run, save, editOverrides } = useWorkspace()
-const tab = ref<'effective' | 'custom'>('effective')
+const route = useRoute()
+const tab = ref<'effective' | 'custom'>(route.query.tab === 'custom' ? 'custom' : 'effective')
+const groupFilter = ref(typeof route.query.group === 'string' ? route.query.group : '')
 const entries = ref<string[]>([])
+const visibleEntries = computed(() => entries.value.map((value, index) => ({ value, index })).filter(entry => !groupFilter.value || ruleTarget(entry.value) === groupFilter.value))
 const dirty = computed(() => JSON.stringify(entries.value) !== JSON.stringify(overrides.value.rules))
 const targets = computed(() => [...new Set(['DIRECT', 'REJECT', ...(view.value?.groups.map(group => group.name) ?? [])])])
 const targetName = (name: string) => workspace.value?.mode === 'local' ? view.value?.catalog?.find(service => service.id === name)?.name ?? name : name
@@ -45,6 +49,7 @@ onMounted(() => run(load))
     </div>
     <NativeRules v-if="tab === 'effective'" :key="view?.active ?? 'initial'" class="min-h-0 flex-1" />
     <div v-else class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+      <label class="flex flex-wrap items-center gap-2 text-sm">按目标筛选<select v-model="groupFilter" class="select select-sm min-h-11" aria-label="按目标筛选规则"><option value="">全部目标</option><option v-for="value in [...new Set([...targets, groupFilter].filter(Boolean))]" :key="value" :value="value">{{ targetName(value) }}</option></select><span class="text-xs text-base-content/60">列表编号和移动操作沿用全部自定义规则的顺序</span></label>
       <div class="flex items-center justify-between gap-2 px-1"><span class="text-xs text-base-content/50">优先匹配 · {{ workspace?.mode === 'local' ? '本地规则' : '仅覆盖当前配置' }} · 保存即生效</span><button class="btn btn-ghost btn-sm" title="保存规则并立即生效" aria-label="保存规则" :disabled="!dirty || busy" @click="run(saveRules)"><IconDeviceFloppy :size="18" />保存</button></div>
       <template v-if="workspace">
         <form class="flex flex-wrap items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/60 p-3" @submit.prevent="add">
@@ -54,7 +59,8 @@ onMounted(() => run(load))
           <button class="btn btn-primary btn-sm" type="submit" title="添加规则" aria-label="添加规则" :disabled="busy"><IconPlus :size="18" />添加</button>
         </form>
         <div v-if="!entries.length" class="py-16 text-center text-sm text-base-content/45">暂无自定义规则</div>
-        <div v-for="(entry, index) in entries" :key="index" class="flex flex-wrap items-center gap-1 rounded-xl border border-base-content/8 bg-base-200/60 p-2">
+        <div v-if="entries.length && !visibleEntries.length" class="py-8 text-center text-sm text-base-content/45">当前目标暂无自定义规则</div>
+        <div v-for="{ index } in visibleEntries" :key="index" class="flex flex-wrap items-center gap-1 rounded-xl border border-base-content/8 bg-base-200/60 p-2">
           <span class="w-7 shrink-0 text-center text-xs text-base-content/35">{{ index + 1 }}</span>
           <input v-model="entries[index]" class="input input-ghost input-sm min-w-0 flex-1 font-mono text-xs" :aria-label="`规则 ${index + 1}`" :disabled="busy" spellcheck="false" />
           <div class="ml-auto flex items-center gap-1">
