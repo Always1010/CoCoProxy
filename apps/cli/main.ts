@@ -13,7 +13,7 @@ import type { HttpsClientOptions } from '../../packages/subscriptions/http.ts';
 import { renderRuntimePlan } from '../../packages/runtime/plan.ts';
 import { loadRuntimeSettings } from '../../packages/runtime/settings.ts';
 import { SystemdMihomoRuntime } from '../../packages/runtime/systemd.ts';
-import { readRuntimeLifecycle, setRuntimeLifecycle } from '../../packages/runtime/lifecycle.ts';
+import { pauseRuntimeForMaintenance, readRuntimeLifecycle, restoreRuntimeAfterMaintenance, setRuntimeLifecycle } from '../../packages/runtime/lifecycle.ts';
 import { RuntimeError } from '../../packages/runtime/types.ts';
 import { createAdminCredential, AuthError } from '../../packages/management/auth.ts';
 import { privateRead } from '../../packages/storage/private-files.ts';
@@ -42,6 +42,8 @@ const HELP = [
   'runtime-status --state-dir <绝对路径> --runtime-settings <私有JSON>  核验当前核心进程',
   'runtime-enable --state-dir <绝对路径> --runtime-settings <私有JSON>  启用已提交配置的持久自动恢复',
   'runtime-pause --state-dir <绝对路径> --runtime-settings <私有JSON>  暂停自动恢复并等待在途协调结束，供维护使用',
+  'runtime-maintenance-pause --state-dir <绝对路径>  共锁暂停并返回精确恢复凭据，不读取核心版本',
+  'runtime-maintenance-restore --state-dir <绝对路径> --input <私有JSON>  按本次暂停凭据恢复原意图，不启动服务',
   'runtime-resume --state-dir <绝对路径> --runtime-settings <私有JSON>  结束维护，恢复已启用的自动恢复',
   'runtime-disable --state-dir <绝对路径> --runtime-settings <私有JSON>  关闭自动恢复；不代替路由器关闭交付',
   'runtime-lifecycle-status --state-dir <绝对路径> --runtime-settings <私有JSON>  只读查询持久恢复意图',
@@ -83,6 +85,8 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     'runtime-status': ['--state-dir', '--runtime-settings'],
     'runtime-enable': ['--state-dir', '--runtime-settings'],
     'runtime-pause': ['--state-dir', '--runtime-settings'],
+    'runtime-maintenance-pause': ['--state-dir'],
+    'runtime-maintenance-restore': ['--state-dir', '--input'],
     'runtime-resume': ['--state-dir', '--runtime-settings'],
     'runtime-disable': ['--state-dir', '--runtime-settings'],
     'runtime-lifecycle-status': ['--state-dir', '--runtime-settings'],
@@ -192,6 +196,15 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
     const plan = renderRuntimePlan(await readInput(flags.get('--input')!));
     await writePrivateOutput(flags.get('--output')!, JSON.stringify(plan, null, 2) + '\n');
     return { planned: true, unitSha256: plan.settings.unitSha256, runtime: 'not_started' };
+  }
+  if (command === 'runtime-maintenance-pause') {
+    return { ...await pauseRuntimeForMaintenance(flags.get('--state-dir')!), scope: 'runtime_intent', servicesChanged: false, routerChanged: false };
+  }
+  if (command === 'runtime-maintenance-restore') {
+    let input: unknown;
+    try { input = JSON.parse(await privateRead(resolve(flags.get('--input')!), 8192)); }
+    catch { throw new CliError('RUNTIME_MAINTENANCE_RESTORE_INVALID'); }
+    return { lifecycle: await restoreRuntimeAfterMaintenance(flags.get('--state-dir')!, input), scope: 'runtime_intent', servicesChanged: false, routerChanged: false };
   }
   if (command.startsWith('runtime-')) {
     const settings = await loadRuntimeSettings(flags.get('--runtime-settings')!);
