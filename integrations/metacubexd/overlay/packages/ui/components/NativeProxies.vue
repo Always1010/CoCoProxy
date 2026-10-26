@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { ProxyProvider, ProxyNodeWithProvider } from '~/types'
 import type { MobileNavReselectDetail } from '~/constants'
-import { IconActivity, IconArrowUp, IconBrandSpeedtest, IconDots, IconReload, IconSearch, IconSettings, IconX } from '@tabler/icons-vue'
+import { IconActivity, IconArrowUp, IconBolt, IconBrandSpeedtest, IconReload, IconSearch, IconSettings, IconX } from '@tabler/icons-vue'
 import { MOBILE_NAV_RESELECT_EVENT, ROUTES } from '~/constants'
 import { filterProxiesByAvailability, filterProxiesByName, formatTimeFromNow, sortProxiesByOrderingType } from '~/utils'
 import { useProxyRefresh } from '~/composables/useProxyRefresh'
 import { useBatchLatencyTest } from '~/composables/useBatchLatencyTest'
+import { useTcpDelay } from '~/composables/useTcpDelay'
 import NativeProxyMasterDetail from '~/components/NativeProxyMasterDetail.vue'
 import ConnectivityBoard from '~/components/ConnectivityBoard.vue'
 import AutoProbeSettings from '~/components/AutoProbeSettings.vue'
@@ -15,6 +16,15 @@ const proxiesStore = useProxiesStore()
 const configStore = useConfigStore()
 const recommendationStore = useNodeRecommendationStore()
 const workspace = useWorkspace()
+const { isRunning: tcpRunning, completed: tcpCompleted, total: tcpTotal, resultFor: tcpResultFor, run: runTcp, cancel: cancelTcp } = useTcpDelay()
+const tcpScope = ref('')
+const allTcpNames = computed(() => workspace.view.value?.tcpNodes?.filter(node => node.applicable).map(node => node.name) ?? [])
+const testingTcpNames = computed(() => allTcpNames.value.filter(name => tcpResultFor(name)?.status === 'testing'))
+async function testTcp(names: string[], scope: string) {
+  if (tcpRunning.value || workspace.busy.value || initialRead.value) return
+  tcpScope.value = scope
+  await runTcp(names)
+}
 const proxyRefresh = useProxyRefresh()
 const { isRunning: isBatchTesting, activeProbes, groupProgress, testMultipleGroups, healthCheckAllProviders, abortTest } = useBatchLatencyTest()
 const testingNames = computed(() => activeProbes.value.map(probe => probe.name))
@@ -63,8 +73,7 @@ const sortedNamesByGroup = computed(() => Object.fromEntries(renderProxies.value
 function providerNames(provider: ProxyProvider & { proxies: ProxyNodeWithProvider[] }) {
   return sortedNames(provider.proxies.map(node => node.name), provider.testUrl || null)
 }
-function testAllGroups(event: Event) {
-  (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
+function testAllGroups() {
   return testMultipleGroups(renderProxies.value.map(group => group.name))
 }
 function onScroll(event: Event) { showScrollToTop.value = (event.currentTarget as HTMLElement).scrollTop > 300 }
@@ -96,10 +105,10 @@ watch(activeTab, () => { showScrollToTop.value = false })
         </button>
       </div>
       <ProxiesSortSelect />
-      <details v-if="activeTab === 'proxies'" class="dropdown shrink-0">
-        <summary class="btn btn-ghost btn-sm" title="更多代理测速操作" aria-label="更多代理测速操作"><IconDots :size="18" /><span>更多测速</span></summary>
-        <ul class="dropdown-content z-40 menu mt-1 w-56 rounded-box border border-base-content/10 bg-base-200 shadow-lg"><li><button :disabled="isBatchTesting || initialRead || !renderProxies.length" @click="testAllGroups"><IconBrandSpeedtest :size="18" /><span>测全部组代理延迟</span></button></li></ul>
-      </details>
+      <template v-if="activeTab === 'proxies'">
+        <button type="button" class="btn btn-ghost btn-sm" title="测试全部策略组的代理延迟（访问测试网址）" aria-label="测全部组代理延迟" :disabled="isBatchTesting || initialRead || !renderProxies.length" @click="testAllGroups"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-success': isBatchTesting }" /><span>测全部组代理延迟</span></button>
+        <button type="button" class="btn btn-ghost btn-sm" title="测试全部节点 TCP 延迟（从网关建连，不受当前组和筛选影响）" aria-label="测全部节点 TCP" :disabled="tcpRunning || workspace.busy.value || initialRead || !allTcpNames.length" @click="testTcp(allTcpNames, '全部节点')"><IconBolt :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-primary': tcpRunning }" /><span>测全部节点 TCP</span></button>
+      </template>
       <template v-else>
         <button class="btn btn-ghost btn-sm" title="检测全部代理提供者" aria-label="检测全部代理提供者" :disabled="isBatchTesting" @click="healthCheckAllProviders"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-success': isBatchTesting }" /><span>检测提供者</span></button>
         <button class="btn btn-ghost btn-sm" title="更新全部代理提供者" aria-label="更新全部代理提供者" :disabled="proxiesStore.isAllProviderUpdating" @click="proxiesStore.updateAllProvider"><IconReload :size="18" :class="{ 'animate-spin motion-reduce:animate-none': proxiesStore.isAllProviderUpdating }" /><span>更新提供者</span></button>
@@ -111,6 +120,13 @@ watch(activeTab, () => { showScrollToTop.value = false })
       </label>
       <button class="btn btn-ghost btn-sm" title="检测指定节点或策略组访问站点的连通性" aria-label="站点检测" @click="openConnectivity"><IconActivity :size="18" /><span>站点检测</span></button>
       <button class="btn btn-ghost btn-sm" title="显示设置" aria-label="显示设置" @click="settingsModal?.open()"><IconSettings :size="18" /><span>显示设置</span></button>
+    </div>
+
+    <div v-if="tcpRunning" role="status" aria-live="polite" class="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-primary/15 bg-primary/10 px-3 py-2 text-xs text-primary">
+      <span class="loading loading-xs loading-spinner shrink-0 motion-reduce:animate-none" />
+      <span class="shrink-0">TCP 测试 · {{ tcpScope }} · {{ tcpCompleted }}/{{ tcpTotal }}</span>
+      <span v-if="testingTcpNames.length" class="min-w-0 flex-1 basis-40 truncate" :title="testingTcpNames.join('、')">正在建连：{{ testingTcpNames.join('、') }}</span>
+      <button type="button" class="btn btn-ghost btn-sm shrink-0" title="取消本次 TCP 延迟测试" aria-label="取消 TCP 测试" @click="cancelTcp"><IconX :size="16" /><span>取消 TCP 测试</span></button>
     </div>
 
     <div v-if="isBatchTesting" role="status" aria-live="polite" class="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-success/15 bg-success/10 px-3 py-2 text-xs text-success">
@@ -128,7 +144,7 @@ watch(activeTab, () => { showScrollToTop.value = false })
     <div ref="scrollEl" data-testid="proxies-scroll-container" class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto" @scroll.passive="onScroll">
       <template v-if="activeTab === 'proxies'">
         <div v-if="initialRead || (!proxiesStore.proxiesLoaded && !renderProxies.length)" class="flex flex-col gap-3 p-1"><div v-for="i in 4" :key="i" class="h-20 animate-pulse rounded-xl bg-base-content/5" /></div>
-        <NativeProxyMasterDetail v-else-if="renderProxies.length" ref="proxyMasterDetail" :groups="renderProxies" :sorted-names-by-group="sortedNamesByGroup" :scroll-container="scrollEl" :batch-testing="isBatchTesting" @test-group="name => testMultipleGroups([name])" @scroll="onScroll" />
+        <NativeProxyMasterDetail v-else-if="renderProxies.length" ref="proxyMasterDetail" :groups="renderProxies" :sorted-names-by-group="sortedNamesByGroup" :scroll-container="scrollEl" :batch-testing="isBatchTesting" :tcp-testing="tcpRunning" @test-tcp="(names, group) => testTcp(names, `${group} · 可见节点`)" @test-group="name => testMultipleGroups([name])" @scroll="onScroll" />
         <div v-else class="py-12 text-center text-sm text-base-content/50">暂无策略组 <NuxtLink to="/subscriptions" class="link link-primary">选择订阅</NuxtLink></div>
       </template>
       <div v-else class="flex flex-col gap-3">
