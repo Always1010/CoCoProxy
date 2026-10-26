@@ -125,8 +125,9 @@ const nativeHost: FirstDeploymentHost = {
 };
 
 function interrupted(observation: InstallationObservation): boolean {
-  return Boolean(typeof observation.receipt === 'object' && observation.receipt.status !== 'complete' || observation.lock?.present ||
-    observation.recoveryLock?.present || observation.lifecycleClaimPresent || observation.lifecycleJournal && observation.lifecycleJournal.status !== 'complete');
+  return Boolean('receipt' in observation && typeof observation.receipt === 'object' && observation.receipt.status !== 'complete' ||
+    'lock' in observation && observation.lock?.present || 'recoveryLock' in observation && observation.recoveryLock?.present ||
+    observation.lifecycleClaimPresent || 'lifecycleJournal' in observation && observation.lifecycleJournal && observation.lifecycleJournal.status !== 'complete');
 }
 
 /** Cross-step report only: no service starts, router commands, writes, or lifecycle authorization. */
