@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { IconCircleCheckFilled } from '@tabler/icons-vue'
-import dayjs from 'dayjs'
-import { getLatencyClassName } from '~/utils'
 
 interface Props {
   proxyName: string
@@ -21,16 +19,12 @@ const emit = defineEmits<{
   click: []
 }>()
 
-const configStore = useConfigStore()
-const { t } = useI18n()
-
 const {
   proxyType,
   isUDP,
   specialTypes,
   isTesting,
   stabilityBar,
-  historyReversed,
   runLatencyTest,
 } = useProxyNode(
   () => props.proxyName,
@@ -39,93 +33,21 @@ const {
   { providerName: () => props.providerName },
 )
 
-// Anchor element for the lazily-mounted tooltip
-const reference = ref<HTMLElement | null>(null)
-const isTooltipOpen = ref(false)
-
-// Touch-primary devices: the floating popover is `strategy: fixed` and
-// re-anchors on scroll, riding along with the list and covering node rows —
-// no way to tap another node. Skip the popover on mobile; taps select the node.
-const isTouchDevice = useMediaQuery('(pointer: coarse)')
-
-let openTimeout: ReturnType<typeof setTimeout> | null = null
-let closeTimeout: ReturnType<typeof setTimeout> | null = null
-
-function clearTimeouts() {
-  if (openTimeout) {
-    clearTimeout(openTimeout)
-    openTimeout = null
-  }
-  if (closeTimeout) {
-    clearTimeout(closeTimeout)
-    closeTimeout = null
-  }
-}
-
-function openTooltip() {
-  if (isTouchDevice.value) return
-  acquireSingletonPopover(closeTooltip)
-  isTooltipOpen.value = true
-}
-
-function closeTooltip() {
-  isTooltipOpen.value = false
-  releaseSingletonPopover(closeTooltip)
-}
-
-function onMouseEnter() {
-  clearTimeouts()
-  openTimeout = setTimeout(() => {
-    openTooltip()
-  }, 300)
-}
-
-function onMouseLeave() {
-  clearTimeouts()
-  // Delay closing to allow mouse to move to tooltip
-  closeTimeout = setTimeout(() => {
-    closeTooltip()
-  }, 100)
-}
-
-function onTooltipMouseEnter() {
-  clearTimeouts()
-}
-
-function onTooltipMouseLeave() {
-  clearTimeouts()
-  closeTooltip()
-}
-
 function onClick() {
   emit('click')
 }
-
-function handleLatencyTest() {
-  clearTimeouts()
-  openTooltip()
-  runLatencyTest()
-}
-
-onBeforeUnmount(() => {
-  clearTimeouts()
-  releaseSingletonPopover(closeTooltip)
-})
 </script>
 
 <template>
   <!-- Wrapper lifts the selected row above its neighbours -->
   <div class="relative z-0" :class="isSelected ? 'z-10' : ''">
     <div
-      ref="reference"
       class="relative rounded-lg transition-all duration-300"
       :class="
         isSelected
           ? 'bg-primary/15 text-base-content shadow-[inset_2px_0_var(--color-primary)]'
           : 'bg-neutral text-neutral-content hover:shadow-md'
       "
-      @mouseenter="onMouseEnter"
-      @mouseleave="onMouseLeave"
     >
       <div
         class="flex items-center gap-1.5 px-2 py-1.5 sm:gap-2 sm:px-3"
@@ -178,62 +100,12 @@ onBeforeUnmount(() => {
             :provider-name="providerName"
             :class="{ 'animate-pulse': isTesting }"
             interactive
-            @click.stop="handleLatencyTest"
+            @click.stop="runLatencyTest()"
           />
           <div v-if="!groupName && stabilityBar.length" class="flex h-[3px] w-full max-w-[44px] gap-px overflow-hidden rounded-full" aria-hidden="true"><div v-for="(result, index) in stabilityBar" :key="index" class="h-full flex-1 bg-current" :class="result.colorClass" /></div>
         </div>
         <SiteResultBadge v-if="groupName" :proxy-name="proxyName" :group-name="groupName" />
       </div>
-
-      <!-- Tooltip for latency history (mounted lazily while open) -->
-      <ProxyNodeTooltip
-        v-if="isTooltipOpen"
-        :reference="reference"
-        @mouse-enter="onTooltipMouseEnter"
-        @mouse-leave="onTooltipMouseLeave"
-      >
-        <div class="flex flex-col items-center gap-2">
-          <h2 class="w-full text-center text-lg font-bold break-all">
-            <ProxyNodeName :name="proxyName" />
-          </h2>
-
-          <div v-if="specialTypes" class="w-full text-xs uppercase">
-            ({{ specialTypes }})
-          </div>
-
-          <template v-if="historyReversed.length > 0">
-            <div class="flex max-h-60 w-full flex-col gap-2 overflow-y-auto">
-              <div
-                v-for="(result, index) in historyReversed"
-                :key="index"
-                class="flex items-start gap-2"
-              >
-                <div class="mt-1.5 size-2 rounded-full bg-current opacity-50" />
-                <div class="flex flex-col gap-1">
-                  <time class="text-sm italic">
-                    {{ dayjs(result.time).format('YYYY-MM-DD HH:mm:ss') }}
-                  </time>
-                  <div
-                    class="inline-block rounded px-2 py-0.5 text-xs"
-                    :class="
-                      getLatencyClassName(
-                        result.delay,
-                        configStore.latencyQualityMap,
-                      )
-                    "
-                  >
-                    {{ result.delay || '---' }}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-
-          <div v-else class="text-sm opacity-75">
-            {{ t('noLatencyHistory') }}
-          </div>
-        </div>
-      </ProxyNodeTooltip>
     </div>
   </div>
 </template>
