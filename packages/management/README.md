@@ -76,6 +76,7 @@ HTTPS 使用 `__Host-cocoproxy_session` 和受信任设备的 `__Host-cocoproxy_
 | POST `/api/cocoproxy/recover` | 空对象；恢复中断事务 |
 | GET `/api/cocoproxy/sources` | 来源摘要清单，不包含 URL、ETag 或节点凭据 |
 | GET/PUT `/api/cocoproxy/sources/:id` | 读取摘要；PUT `{expectedRevision,name?,url?}` 保存来源 |
+| GET `/api/cocoproxy/sources/:id/edit` | 登录后按需读取编辑信息，包含当前名称、完整 URL 和版本；响应禁止缓存，URL 不进入来源清单或工作区摘要 |
 | POST `/api/cocoproxy/sources/:id/refresh` | `{expectedRevision}`；按部署许可策略刷新，不自动应用 |
 | DELETE `/api/cocoproxy/sources/:id` | `{expectedRevision}`；删除来源，页面先解除工作区引用 |
 

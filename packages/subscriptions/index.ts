@@ -297,6 +297,15 @@ export class SubscriptionStore {
     });
   }
 
+  /** Editor-only detail includes the private URL; keep it out of inventories. */
+  async edit(id: string): Promise<SourceMetadata & { url: string }> {
+    return this.protect(async () => {
+      const record = await this.read(id);
+      if (!record) fail('SOURCE_NOT_FOUND');
+      return { ...metadata(record), url: record.url };
+    });
+  }
+
   /** Read-only inventory; public metadata never includes subscription URLs. */
   async list(): Promise<SourceMetadata[]> {
     return this.protect(async () => {

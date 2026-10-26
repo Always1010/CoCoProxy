@@ -127,8 +127,9 @@ export function createManagementApplication(options: { stateDirectory: string; d
         return { ...await manager.recover() };
       }
       if (path === '/api/cocoproxy/sources' && request.method === 'GET') return { sources: await subscriptions.list() };
-      const source = /^\/api\/cocoproxy\/sources\/([A-Za-z][A-Za-z0-9_-]{0,63})(\/refresh)?$/.exec(path);
+      const source = /^\/api\/cocoproxy\/sources\/([A-Za-z][A-Za-z0-9_-]{0,63})(\/refresh|\/edit)?$/.exec(path);
       if (source !== null) {
+        if (request.method === 'GET' && source[2] === '/edit') return { source: await subscriptions.edit(source[1]) };
         if (request.method === 'GET' && !source[2]) return { source: await subscriptions.status(source[1]) };
         if (request.method === 'PUT' && !source[2]) {
           const body = exactRecord(await readJsonBody(request, 16_384), ['expectedRevision'], ['url', 'name']);
@@ -146,7 +147,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
           });
           return { removed: true };
         }
-        if (request.method === 'POST' && source[2]) {
+        if (request.method === 'POST' && source[2] === '/refresh') {
           const body = exactRecord(await readJsonBody(request, 128), ['expectedRevision']);
           if (!revision(body.expectedRevision)) throw new ManagementError('INVALID_REVISION');
           const current = await new WorkspaceStore(options.stateDirectory).read();

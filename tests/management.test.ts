@@ -318,6 +318,41 @@ test('browser source updates expose metadata and capture exact snapshots without
   await assert.rejects(new SubscriptionStore(f.state).list(), { code: 'SOURCE_CORRUPT' });
 });
 
+test('subscription editor reads current private URL only through an authenticated non-cacheable detail', async t => {
+  const f = await fixture(t);
+  const cookie = await login(f.handler);
+  const path = '/api/cocoproxy/sources/primary';
+  const url = 'https://subscription.example/feed?token=synthetic-editor-token';
+  const call = async (suffix = '', method = 'GET', body?: unknown) => f.handler(request(path + suffix, method, body, cookie));
+  assert.equal((await call('', 'PUT', { expectedRevision: 0, name: '示例订阅', url })).status, 200);
+  assert.equal((await call('/refresh', 'POST', { expectedRevision: 1 })).status, 200);
+  assert.equal((await f.handler(request(path + '/edit'))).status, 401);
+  assert.equal((await f.handler(request(path + '/edit', 'GET', undefined, cookie, { origin: 'https://other.example' }))).status, 403);
+  const detail = await call('/edit');
+  assert.equal(detail.status, 200);
+  assert.equal(detail.headers.get('cache-control'), 'no-store');
+  const { source } = await detail.json();
+  assert.equal(source.name, '示例订阅');
+  assert.equal(source.url, url);
+  assert.equal(source.revision, 2);
+  assert.equal(source.proxies, undefined);
+  assert.equal(source.etag, undefined);
+  const saved = await call('', 'PUT', { expectedRevision: source.revision, name: '已修改名称', url: source.url });
+  assert.equal(saved.status, 200);
+  const renamed = await saved.json();
+  assert.equal(renamed.snapshotCurrent, true);
+  assert.equal(renamed.snapshotDigest, source.snapshotDigest);
+  assert.equal((await (await call('/edit')).json()).source.name, '已修改名称');
+  for (const endpoint of [path, '/api/cocoproxy/sources', '/api/cocoproxy/workspace']) {
+    const response = await f.handler(request(endpoint, 'GET', undefined, cookie));
+    assert.equal(response.status, 200);
+    assert.ok(!(await response.text()).includes('synthetic-editor-token'));
+  }
+  assert.equal((await f.handler(request('/api/cocoproxy/sources/missing/edit', 'GET', undefined, cookie))).status, 404);
+  assert.equal((await call('/edit', 'POST', { expectedRevision: 3 })).status, 404);
+  assert.deepEqual(f.events, []);
+});
+
 test('failed runtime application is restored and never leaks diagnostics or enables legacy upstream operations', async t => {
   const f = await fixture(t);
   const cookie = await login(f.handler);

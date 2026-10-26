@@ -7,6 +7,69 @@ import ts from '../tooling/node_modules/typescript/lib/typescript.js';
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useWorkspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 
+test('subscription editor loads existing fields and current revision, preserves URLs on save and clears on close', async () => {
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/pages/subscriptions.vue', import.meta.url), 'utf8');
+  const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
+    .replace(/^import .*$/gm, '') + '\nexport { openEditor, closeEditor, submit, editorOpen, editing, name, url };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const source = { id: 'sample', name: '原订阅', host: 'subscription.example', revision: 7, url: 'https://subscription.example/feed?token=synthetic-token' };
+  let failRead = false;
+  let onRead: (() => void) | undefined;
+  let onLeave: (() => void) | undefined;
+  let saved: any;
+  const error = { value: '' };
+  const exports: Record<string, any> = {};
+  new Script(code, { filename: 'subscriptions.js' }).runInNewContext({
+    exports, useHead: () => {}, ref: (value: unknown) => ({ value }), onMounted: () => {},
+    onUnmounted: (fn: () => void) => { onLeave = fn; },
+    useWorkspace: () => ({
+      api: { request: async (_path: string, options?: { body?: unknown }) => {
+        if (options) { saved = options.body; return; }
+        if (failRead) throw new Error('读取失败');
+        onRead?.();
+        return { source: { ...source } };
+      } }, view: { value: { sources: [] } }, workspace: { value: { mode: 'local', sourceIds: [] } }, error,
+      run: async (fn: () => Promise<void>) => { error.value = ''; try { await fn(); } catch (cause) { error.value = String(cause); } },
+      load: async () => {},
+    }),
+  });
+  await exports.openEditor({ id: 'sample', revision: 1 });
+  assert.equal(exports.editorOpen.value, true);
+  assert.equal(exports.name.value, source.name);
+  assert.equal(exports.url.value, source.url);
+  assert.equal(exports.editing.value.revision, 7);
+  assert.equal(exports.editing.value.url, undefined);
+  exports.name.value = '重命名';
+  await exports.submit();
+  assert.equal(saved.expectedRevision, 7);
+  assert.equal(saved.name, '重命名');
+  assert.equal(saved.url, source.url);
+  assert.equal(exports.editorOpen.value, false);
+  assert.equal(exports.url.value, '');
+  source.name = '';
+  await exports.openEditor(source);
+  assert.equal(exports.name.value, source.host);
+  exports.url.value = 'https://replacement.example/feed';
+  await exports.submit();
+  assert.equal(saved.url, 'https://replacement.example/feed');
+  await exports.openEditor(source);
+  exports.closeEditor();
+  assert.equal(exports.url.value, '');
+  assert.equal(exports.editing.value, null);
+  await exports.openEditor();
+  assert.equal(exports.name.value, '');
+  assert.equal(exports.url.value, '');
+  failRead = true;
+  await exports.openEditor(source);
+  assert.equal(exports.editorOpen.value, false);
+  assert.match(error.value, /读取失败/);
+  failRead = false;
+  onRead = () => onLeave!();
+  await exports.openEditor(source);
+  assert.equal(exports.editorOpen.value, false);
+  assert.equal(exports.url.value, '');
+});
+
 for (const mode of ['local', 'subscription', 'legacy'] as const) {
   test(`manual takeover of the current node disables only the selected group's automatic policy (${mode})`, async () => {
     const automatic = {

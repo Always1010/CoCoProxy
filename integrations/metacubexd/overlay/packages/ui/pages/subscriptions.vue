@@ -9,6 +9,7 @@ const editorOpen = ref(false)
 const editing = ref<WorkspaceSource | null>(null)
 const name = ref('')
 const url = ref('')
+let editorRequest = 0
 const deleting = ref<WorkspaceSource | null>(null)
 const sourcePath = (id: string) => `/api/cocoproxy/sources/${encodeURIComponent(id)}`
 const selected = (source: WorkspaceSource) => workspace.value?.mode === 'subscription'
@@ -27,11 +28,27 @@ const updated = (value: string | null) => value
   ? new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
   : '尚未更新'
 
-function openEditor(source: WorkspaceSource | null = null) {
-  editing.value = source
-  name.value = source?.name ?? ''
+function closeEditor() {
+  editorRequest++
+  editorOpen.value = false
+  editing.value = null
+  name.value = ''
   url.value = ''
-  editorOpen.value = true
+}
+
+async function openEditor(source: WorkspaceSource | null = null) {
+  closeEditor()
+  const request = editorRequest
+  await run(async () => {
+    if (source) {
+      const { source: { url: currentUrl, ...current } } = await api.request<{ source: WorkspaceSource & { url: string } }>(`${sourcePath(source.id)}/edit`)
+      if (request !== editorRequest) return
+      editing.value = current
+      name.value = current.name || current.host || ''
+      url.value = currentUrl
+    }
+    editorOpen.value = true
+  })
 }
 
 async function submit() {
@@ -42,11 +59,9 @@ async function submit() {
     : !!view.value?.sources.some(source => source.snapshotCurrent && workspace.value?.sourceIds.includes(source.id))
   await run(async () => {
     await api.request(sourcePath(id), {
-      method: 'PUT', body: { expectedRevision: source?.revision ?? 0, name: name.value.trim(), ...(url.value.trim() ? { url: url.value.trim() } : {}) },
+      method: 'PUT', body: { expectedRevision: source?.revision ?? 0, ...(name.value.trim() ? { name: name.value.trim() } : {}), url: url.value.trim() },
     })
-    // Clear the address before the next network request; the service owns it now.
-    url.value = ''
-    editorOpen.value = false
+    closeEditor()
     await load()
     if (!source) {
       const created = view.value?.sources.find(item => item.id === id)
@@ -103,6 +118,7 @@ async function remove() {
 }
 
 onMounted(() => run(load))
+onUnmounted(closeEditor)
 </script>
 
 <template>
@@ -150,15 +166,15 @@ onMounted(() => run(load))
       </article>
     </div>
 
-    <dialog v-if="editorOpen" open class="modal modal-open" aria-labelledby="subscription-editor-title" @keydown.esc="editorOpen = false">
+    <dialog v-if="editorOpen" open class="modal modal-open" aria-labelledby="subscription-editor-title" @keydown.esc="closeEditor">
       <form class="modal-box max-w-md space-y-4" @submit.prevent="submit">
-        <div class="flex items-center justify-between"><h2 id="subscription-editor-title" class="text-lg font-semibold">{{ editing ? '编辑订阅' : '导入订阅' }}</h2><button type="button" class="btn btn-ghost btn-square btn-sm" title="关闭" aria-label="关闭" @click="editorOpen = false"><IconX :size="18" /></button></div>
-        <label class="fieldset"><span class="fieldset-legend">名称</span><input v-model="name" class="input w-full" placeholder="订阅名称" maxlength="80" /></label>
-        <label class="fieldset"><span class="fieldset-legend">{{ editing ? '替换订阅地址' : '订阅地址' }}</span><input v-model="url" class="input w-full" type="url" :required="!editing" :placeholder="editing ? '留空保留原地址' : 'https://…'" autocomplete="off" spellcheck="false" /></label>
+        <div class="flex items-center justify-between"><h2 id="subscription-editor-title" class="text-lg font-semibold">{{ editing ? '编辑订阅' : '导入订阅' }}</h2><button type="button" class="btn btn-ghost btn-sm" title="关闭" aria-label="关闭" @click="closeEditor"><IconX :size="18" />关闭</button></div>
+        <label class="fieldset"><span class="fieldset-legend">名称</span><input v-model="name" class="input w-full" placeholder="订阅名称" maxlength="128" /></label>
+        <label class="fieldset"><span class="fieldset-legend">订阅地址</span><input v-model="url" class="input w-full" type="url" required placeholder="https://…" autocomplete="off" spellcheck="false" /></label>
         <div v-if="error" role="alert" class="text-sm text-error">{{ error }}</div>
-        <div class="modal-action"><button class="btn btn-primary btn-sm" type="submit" :disabled="busy">{{ editing ? '保存' : '导入' }}</button></div>
+        <div class="modal-action"><button class="btn btn-primary btn-sm" type="submit" :disabled="busy"><IconCheck v-if="editing" :size="18" /><IconDownload v-else :size="18" />{{ editing ? '保存' : '导入' }}</button></div>
       </form>
-      <form method="dialog" class="modal-backdrop" @submit.prevent="editorOpen = false"><button>关闭</button></form>
+      <form method="dialog" class="modal-backdrop" @submit.prevent="closeEditor"><button>关闭</button></form>
     </dialog>
     <dialog v-if="deleting" open class="modal modal-open" aria-labelledby="subscription-delete-title" @keydown.esc="deleting = null">
       <div class="modal-box max-w-sm"><h2 id="subscription-delete-title" class="font-semibold">删除 {{ deleting.name || deleting.host }}？</h2><div class="modal-action"><button class="btn btn-ghost btn-sm" :disabled="busy" @click="deleting = null">取消</button><button class="btn btn-error btn-sm" :disabled="busy" @click="remove">删除</button></div></div>

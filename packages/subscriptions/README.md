@@ -68,6 +68,7 @@ DNS 超时后晚到结果不连接，但系统 DNS 查询不能取消。200/304 
 | `remove(id,expectedRevision)` | 锁内校验后删除，不删除已有候选；迟到刷新不能恢复已删来源或覆盖同ID重建记录 |
 | `refresh(id,expectedRevision)` | 读取与提交均核对 revision；成功、304和已提交的下载／解码／校验失败均 revision+1 |
 | `status(id)` | metadata 或 null |
+| `edit(id)` | 编辑专用 metadata 加完整 `url`，不存在时抛出 SOURCE_NOT_FOUND；调用方须保护链接凭据，不进入清单、日志或持久前端状态 |
 | `snapshot(id,expectedRevision?)` | 私有 `{id,proxies,policy?,nodeDnsPolicy?,unsupportedFields?,sha256,sourceRevision}`；可选版本匹配当前来源 revision |
 
 来源ID匹配 `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`，最多100来源；URL≤8192字符。configure 在异步前复制并冻结输入，拒绝访问器与继承属性。来源URL改变清除 ETag/usage，旧快照变为非当前；地址未变的刷新失败仍可使用旧快照。304只接受当前已有快照且发出条件请求的情况，不修改快照 sourceRevision。
