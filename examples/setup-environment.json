@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "network": {
+    "ingressInterface": "lan-test",
+    "gatewayIPv4": "192.0.2.2",
+    "routerIPv4": "192.0.2.1",
+    "routerMAC": "02:00:00:00:00:01",
+    "clientCIDR": "192.0.2.0/24"
+  },
+  "management": {
+    "origin": "https://gateway.example:13443",
+    "bootstrapResolvers": ["198.51.100.53"],
+    "subscriptionOrigins": ["https://subscription.example"],
+    "probeOrigins": ["https://www.gstatic.com", "https://cp.cloudflare.com"]
+  }
+}
