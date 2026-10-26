@@ -340,8 +340,19 @@ def main_locked(options):
             return
         preparation = json.loads(run(installer + ['--operation', 'prepare' if installed else 'install', *common]))
         if installed:
-            need(preparation.get('readiness') == 'prepared-not-applied' and preparation.get('review', {}).get('configurationChanged') is False,
-                 'REMOTE_UPGRADE_NOT_READY_OR_CONFIGURATION_CHANGED')
+            if preparation.get('readiness') != 'prepared-not-applied' or preparation.get('review', {}).get('configurationChanged') is not False:
+                # Keep the existing diagnostics without disclosing private input or file paths.
+                pending = list(preparation.get('compatibilityAssessment', {}).get('assessments', {}).values())
+                codes = set()
+                while pending:
+                    assessment = pending.pop()
+                    code = assessment.get('code', '')
+                    if assessment.get('status') in ['unknown', 'unsupported'] and re.fullmatch('[A-Z][A-Z0-9_]+', code):
+                        codes.add(code)
+                    pending.extend(assessment.get('checks', []))
+                print(json.dumps({'phase': 'prepare', 'readiness': preparation.get('readiness'),
+                    'configurationChanged': preparation.get('review', {}).get('configurationChanged'), 'codes': sorted(codes)}), file=sys.stderr)
+                raise RuntimeError('REMOTE_UPGRADE_NOT_READY_OR_CONFIGURATION_CHANGED')
         else:
             admin = temporary / 'administrator.json'
             initial_credential = temporary / 'credential.json'
