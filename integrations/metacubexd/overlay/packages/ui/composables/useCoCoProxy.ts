@@ -44,6 +44,11 @@ export interface CoCoProxyStatus {
 }
 
 const messages: Record<string, string> = {
+  RULE_TEST_TARGET_INVALID: '请输入有效的域名或 IP，不要包含网址路径或端口。',
+  RULE_TEST_INPUT_INVALID: '请检查协议、IP 和端口；端口范围为 1–65535。',
+  RULE_TEST_UNAVAILABLE: '当前核心或生效规则暂不可用，请稍后重试。',
+  RULE_TEST_DNS_FAILED: '核心 DNS 解析失败，暂无法判断 IP 规则。',
+  RULE_TEST_BUSY: '规则测试任务较多，请稍后重试。',
   INVALID_CREDENTIALS: '用户名或密码不正确。',
   UNAUTHORIZED: '会话已失效，请重新登录。',
   LOGIN_RATE_LIMIT: '登录尝试过于频繁，请稍后重试。',

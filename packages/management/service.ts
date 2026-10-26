@@ -1,4 +1,5 @@
 import { isAbsolute, resolve } from 'node:path';
+import { isIP } from 'node:net';
 import { privateRead } from '../storage/private-files.ts';
 import { loadRuntimeSettings, loadRuntimeCandidate, readSelection } from '../runtime/settings.ts';
 import { SystemdMihomoRuntime } from '../runtime/systemd.ts';
@@ -11,6 +12,7 @@ import { createControllerProxy, DEFAULT_LATENCY_PROBE_ORIGIN } from './controlle
 import { createManagementLifecycle, recoverManagementStartup } from './startup.ts';
 import { createManagementApplication } from './application.ts';
 import { createManagementGateway, exactRecord, managementOrigin, ManagementError } from './http.ts';
+import { createRuleTestHandler, type RoutingSnapshot } from './rule-test.ts';
 
 export function stripControllerMount(request: Request): Request {
   const url = new URL(request.url);
@@ -84,7 +86,30 @@ export async function loadManagementGateway(path: string) {
         return result.value;
       },
     });
-    const action = createManagementApplication({ stateDirectory: runtimeSettings.stateDirectory, deployment: settings.deployment,
+    const ruleTest = createRuleTestHandler({ isCurrent,
+      snapshot: async signal => {
+        const responses = await Promise.all(['rules', 'proxies'].map(path => controller.fetch(new Request(settings.origin + '/' + path, { signal }))));
+        if (responses.some(response => !response.ok)) throw new ManagementError('RULE_TEST_UNAVAILABLE', 503);
+        const generation = responses[0].headers.get('x-cocoproxy-generation');
+        if (!generation || responses[1].headers.get('x-cocoproxy-generation') !== generation) throw new ManagementError('ACTIVE_CONFLICT', 409);
+        const [{ rules }, { proxies }] = await Promise.all(responses.map(response => response.json())) as [
+          { rules: { index: number; extra?: { disabled?: boolean } }[] }, { proxies: RoutingSnapshot['proxies'] }];
+        const { candidate } = await loadRuntimeCandidate(runtimeSettings, generation);
+        if (!Array.isArray(rules) || !Array.isArray(candidate.config.rules) || rules.length !== candidate.config.rules.length ||
+          rules.some((rule, index) => rule.index !== index) || !proxies || typeof proxies !== 'object') throw new ManagementError('RULE_TEST_UNAVAILABLE', 503);
+        return { generation, config: candidate.config, proxies, disabled: rules.filter(rule => rule.extra?.disabled).map(rule => rule.index) };
+      },
+      resolve: async (name, generation, ipv6, signal) => {
+        const responses = await Promise.all((ipv6 ? ['A', 'AAAA'] as const : ['A'] as const).map(type => controller.queryDns(name, type, generation, signal)));
+        const addresses: string[] = [];
+        for (const response of responses) {
+          const data = response as { Status?: number; Answer?: { type: number; data: string }[] };
+          if (data.Status !== 0) throw new ManagementError('RULE_TEST_DNS_FAILED', 502);
+          for (const answer of data.Answer ?? []) if ([1, 28].includes(answer.type) && typeof answer.data === 'string' && isIP(answer.data.trim())) addresses.push(answer.data.trim());
+        }
+        return addresses;
+      } });
+    const action = createManagementApplication({ stateDirectory: runtimeSettings.stateDirectory, deployment: settings.deployment, ruleTest,
       runtime, sourceClient, sourceDecoder: decodeSubscriptionProfile, automaticGateway: runtimeSettings.automaticGateway,
       observeSelections: async () => {
         const response = await controller.fetch(new Request(settings.origin + '/proxies'));

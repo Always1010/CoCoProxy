@@ -47,6 +47,7 @@ async function resetInvalidSelections() {
       <span v-else-if="dirty" class="badge badge-warning badge-sm">规则尚未保存</span>
       <span v-else-if="view?.pending" class="badge badge-warning badge-sm">设置未生效</span>
       <div class="ml-auto flex items-center gap-1">
+        <slot name="actions" />
         <button class="btn btn-ghost btn-sm" title="刷新" aria-label="刷新" :disabled="busy" @click="run(load)"><IconRefresh :size="18" :class="{ 'animate-spin': busy }" />刷新</button>
       </div>
     </div>

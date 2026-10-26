@@ -135,6 +135,7 @@ async function upstream(target: ControllerTarget, path: string, method: string, 
 /** The caller supplies authenticated requests and serializes mutations with config apply. */
 export function createControllerProxy(options: ControllerProxyOptions): {
   fetch: (request: Request) => Promise<Response>;
+  queryDns: (name: string, type: 'A' | 'AAAA', generation: string, signal: AbortSignal) => Promise<unknown>;
   relay: (request: Request, client: ControllerClient, authorized: () => boolean) => Promise<() => void>;
 } {
   const readTarget = singleFlight(options.target);
@@ -155,6 +156,16 @@ export function createControllerProxy(options: ControllerProxyOptions): {
     return url.origin;
   }));
   return {
+    async queryDns(name, type, generation, signal) {
+      // Internal diagnostic only: the browser controller allowlist stays closed.
+      if (name.length > 253 || !/^[a-z0-9_.-]+$/i.test(name) || !['A', 'AAAA'].includes(type)) throw new ManagementError('RULE_TEST_TARGET_INVALID');
+      const current = validateTarget(await waitForReadTarget(signal));
+      if (current.generation !== generation || !await options.isCurrent(generation)) throw new ManagementError('ACTIVE_CONFLICT', 409);
+      const result = await upstream(current, `/dns/query?name=${encodeURIComponent(name)}&type=${type}`, 'GET', 5000, false, undefined, signal);
+      if (!await options.isCurrent(generation)) throw new ManagementError('ACTIVE_CONFLICT', 409);
+      if (!result.ok) throw new ManagementError('RULE_TEST_DNS_FAILED', 502);
+      return result.json();
+    },
     async fetch(request) {
       let generation: string | undefined;
       let probeSlot = false;
