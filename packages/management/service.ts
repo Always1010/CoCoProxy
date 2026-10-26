@@ -6,6 +6,7 @@ import { SystemdMihomoRuntime } from '../runtime/systemd.ts';
 import { HttpsSnapshotClient } from '../subscriptions/http.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
 import { loadAdminCredential } from './auth.ts';
+import { TrustedDeviceStore } from './trusted-devices.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { decodeSubscriptionProfile } from '../subscriptions/yaml.ts';
 import { createControllerProxy, DEFAULT_LATENCY_PROBE_ORIGIN } from './controller.ts';
@@ -120,7 +121,8 @@ export async function loadManagementGateway(path: string) {
         for (const [name, value] of Object.entries(body.proxies)) if (typeof value.now === 'string') selections[name] = value.now;
         return { generation, selections };
       } });
-    const gateway = createManagementGateway({ origin: settings.origin, credential }, (request, principal) =>
+    const trustedDevices = await TrustedDeviceStore.load(runtimeSettings.stateDirectory, credential, settings.origin);
+    const gateway = createManagementGateway({ origin: settings.origin, credential, trustedDevices }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
     const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,
       () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'));
