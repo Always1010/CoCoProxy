@@ -1,0 +1,155 @@
+import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
+import { lstat, open, readdir, unlink } from 'node:fs/promises';
+import { platform } from 'node:os';
+import { posix } from 'node:path';
+import { assertDeploymentExecutable, assertDeploymentStopped, assertDeploymentLifecycle, assertOwnedDeploymentFiles,
+  assertPrivateDeploymentFile, assertRootPath, deploymentPathInfo, deploymentProcessIdentity, InstallError,
+  parseDeploymentLock, readRegularDeploymentFile, runDeploymentTool, validateReceipt, verifyRelease,
+  writeAtomicDeploymentFile, type DeploymentLock, type Receipt } from './install.ts';
+
+const STORE = '/var/lib/cocoproxy-deployment';
+const RECEIPT = STORE + '/receipt.json';
+const LOCK = STORE + '/install.lock';
+const baseUnits = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service'];
+const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
+function require(value: unknown, code: string): asserts value { if (!value) throw new InstallError(code); }
+function rootHost() { require(platform() === 'linux' && process.getuid?.() === 0, 'INSTALL_LINUX_ROOT_REQUIRED'); }
+function errorCode(error: unknown) { return error instanceof InstallError ? error.code : 'INSTALL_INSPECTION_UNAVAILABLE'; }
+
+async function readReceipt() {
+  await assertRootPath(STORE);
+  require((await lstat(STORE)).isDirectory() && ((await lstat(STORE)).mode & 0o7777) === 0o700,
+    'INSTALL_RECEIPT_DIRECTORY_PRIVATE_REQUIRED');
+  await assertPrivateDeploymentFile(RECEIPT, 0);
+  const bytes = await readRegularDeploymentFile(RECEIPT, 128 * 1024);
+  return { bytes, receipt: validateReceipt(JSON.parse(bytes.toString())) };
+}
+async function readLock() {
+  await assertPrivateDeploymentFile(LOCK, 0);
+  const bytes = await readRegularDeploymentFile(LOCK, 4096);
+  return { bytes, lock: parseDeploymentLock(JSON.parse(bytes.toString())) };
+}
+export function deploymentOwnerGone(lock: DeploymentLock, observed: { bootId: string; startTime: string | null }): boolean {
+  return lock.bootId !== observed.bootId || observed.startTime === null || lock.startTime !== observed.startTime;
+}
+async function releaseEvidence(receipt: Receipt) {
+  await assertRootPath(receipt.release);
+  await assertRootPath(receipt.release + '/manifest.json');
+  const release = await verifyRelease(receipt.release, receipt.manifestSha256);
+  for (const entry of release.files) {
+    const path = receipt.release + '/' + entry.path;
+    await assertRootPath(path);
+    require(((await lstat(path)).mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_RELEASE_PERMISSIONS_CHANGED');
+  }
+}
+
+/** No service operation, lock removal, file writes, or credential contents. */
+export async function inspectDeployment() {
+  rootHost();
+  if (!(await deploymentPathInfo(STORE))) return { installed: false, readOnly: true, findings: [] };
+  let receipt: Receipt;
+  try { receipt = (await readReceipt()).receipt; }
+  catch (error) { return { installed: 'unknown', readOnly: true, findings: [errorCode(error)],
+    receipt: 'missing-or-untrusted', recovery: 'manual-review-required', automaticProgramRollback: false }; }
+  const files = [];
+  for (const file of receipt.files) {
+    let status = 'matches-receipt';
+    let checks: { regularFile: boolean; ownerMatches: boolean; modeMatches: boolean; contentMatches: boolean | null } | undefined;
+    try {
+      if (receipt.status === 'uninstalled' && !file.sensitive) {
+        status = await deploymentPathInfo(file.path) ? 'unexpected-after-uninstall' : 'removed-as-recorded';
+      } else {
+        await assertRootPath(posix.dirname(file.path));
+        const stat = await deploymentPathInfo(file.path);
+        if (!stat) status = 'missing';
+        else {
+          const regularFile = stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1;
+          checks = { regularFile, ownerMatches: stat.uid === (file.owner === 'root' ? 0 : file.owner),
+            modeMatches: (stat.mode & 0o7777) === parseInt(file.mode, 8), contentMatches: regularFile ?
+              digest(await readRegularDeploymentFile(file.path)) === file.sha256 : null };
+          if (Object.values(checks).some(check => check !== true)) status = 'changed';
+        }
+      }
+    }
+    catch (error) { status = !(await deploymentPathInfo(file.path)) ? 'missing' : errorCode(error); }
+    files.push({ path: file.path, sensitive: file.sensitive, status, ...(checks ? { checks } : {}),
+      intendedAction: receipt.transaction?.operation === 'uninstall' ? file.sensitive ? 'preserve' : 'remove' : receipt.transaction ? 'write' : 'unknown-legacy' });
+  }
+  let release = 'matches-receipt';
+  try { await releaseEvidence(receipt); } catch (error) { release = errorCode(error); }
+  let lock: { present: boolean; owner?: 'gone' | 'alive'; status?: string } = { present: false };
+  if (await deploymentPathInfo(LOCK)) {
+    lock = { present: true };
+    try {
+      const parsed = await readLock();
+      lock.owner = deploymentOwnerGone(parsed.lock, await deploymentProcessIdentity(parsed.lock.pid)) ? 'gone' : 'alive';
+      lock.status = receipt.transaction?.id === parsed.lock.id ? 'matches-receipt' : 'INSTALL_LOCK_RECEIPT_MISMATCH';
+    } catch (error) { lock.status = errorCode(error); }
+  }
+  const temporaryFiles: string[] = [];
+  for (const directory of new Set([STORE, ...receipt.files.map(file => posix.dirname(file.path))])) {
+    try {
+      await assertRootPath(directory);
+      for (const name of await readdir(directory)) if (/^\.cocoproxy-install-[a-f0-9-]{36}$/.test(name)) temporaryFiles.push(directory + '/' + name);
+    } catch { /* File evidence above carries failures; never follow untrusted directories. */ }
+  }
+  return { installed: true, readOnly: true, receipt: { status: receipt.status, manifestSha256: receipt.manifestSha256,
+    operation: receipt.transaction?.operation ?? 'unknown-legacy' }, files, release, lock,
+    recoveryLock: { present: Boolean(await deploymentPathInfo(STORE + '/recovery.lock')) }, temporaryFiles,
+    recovery: 'Only an abandoned transaction with every intended byte already installed can be finalized; partial writes and legacy locks require manual review.',
+    preservedState: true, automaticProgramRollback: false };
+}
+
+export function assertFinalizableReceipt(receipt: Receipt, lock: DeploymentLock): void {
+  require(receipt.transaction?.id === lock.id && ['install', 'upgrade'].includes(receipt.transaction.operation) &&
+    ['pending', 'complete'].includes(receipt.status), 'INSTALL_RECOVERY_NOT_FINALIZABLE');
+}
+
+/** Finish an already copied deployment. Never retry writes, delete releases, or restore state. */
+export async function recoverDeployment(options: { apply?: boolean; reviewedRecoverySha256?: string } = {}) {
+  rootHost();
+  require(!(await deploymentPathInfo(STORE + '/recovery.lock')), 'INSTALL_RECOVERY_PREVIOUS_ATTEMPT_INCOMPLETE');
+  const previous = await readReceipt(), owner = await readLock();
+  const units = [...baseUnits, ...(previous.receipt.files.some(file => file.path === '/etc/systemd/system/cocoproxy-web.service') ? ['cocoproxy-web.service'] : [])];
+  assertFinalizableReceipt(previous.receipt, owner.lock);
+  require(deploymentOwnerGone(owner.lock, await deploymentProcessIdentity(owner.lock.pid)), 'INSTALL_RECOVERY_OWNER_ALIVE');
+  await assertOwnedDeploymentFiles(previous.receipt.files);
+  await releaseEvidence(previous.receipt);
+  await assertPrivateDeploymentFile(previous.receipt.credentialPath, previous.receipt.serviceUid);
+  await assertRootPath(posix.dirname(previous.receipt.credentialPath));
+  await assertDeploymentLifecycle(previous.receipt.stateDirectory, previous.receipt.serviceUid);
+  const systemctl = '/usr/bin/systemctl';
+  await assertDeploymentExecutable(systemctl);
+  await assertDeploymentStopped(systemctl, units, true);
+  const reviewedRecoverySha256 = digest(Buffer.concat([previous.bytes, Buffer.from('\n'), owner.bytes]));
+  const result = { operation: 'recover', apply: Boolean(options.apply), action: 'finalize-installed-files', reviewedRecoverySha256,
+    receiptStatus: previous.receipt.status, services: 'remain stopped and disabled', state: 'preserved-in-place',
+    automaticProgramRollback: false, actions: ['systemd daemon-reload', 'mark receipt complete', 'remove matching abandoned install lock'] };
+  if (!options.apply) return result;
+  require(options.reviewedRecoverySha256 === reviewedRecoverySha256, 'INSTALL_RECOVERY_REVIEW_REQUIRED');
+  // Separate exclusive recovery lock prevents concurrent finalizers. A crash leaves it for manual review.
+  const recoveryLock = STORE + '/recovery.lock';
+  const handle = await open(recoveryLock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+  try { await handle.writeFile(JSON.stringify({ transaction: owner.lock.id, pid: process.pid }) + '\n'); await handle.sync(); }
+  finally { await handle.close(); }
+  try {
+    const current = await readReceipt(), currentOwner = await readLock();
+    require(current.bytes.equals(previous.bytes) && currentOwner.bytes.equals(owner.bytes), 'INSTALL_RECOVERY_EVIDENCE_CHANGED');
+    require(deploymentOwnerGone(owner.lock, await deploymentProcessIdentity(owner.lock.pid)), 'INSTALL_RECOVERY_OWNER_ALIVE');
+    await assertOwnedDeploymentFiles(previous.receipt.files);
+    await releaseEvidence(previous.receipt);
+    await assertPrivateDeploymentFile(previous.receipt.credentialPath, previous.receipt.serviceUid);
+    await assertDeploymentLifecycle(previous.receipt.stateDirectory, previous.receipt.serviceUid);
+    await assertDeploymentStopped(systemctl, units, true);
+    await runDeploymentTool(systemctl, ['daemon-reload']);
+    await assertDeploymentStopped(systemctl, units);
+    await writeAtomicDeploymentFile(RECEIPT, JSON.stringify({ ...previous.receipt, status: 'complete' }) + '\n', 0o600);
+    await unlink(LOCK);
+    await unlink(recoveryLock);
+  } catch (error) {
+    // Retain both locks as evidence; do not convert a second interruption into an automatic retry.
+    throw error;
+  }
+  return result;
+}

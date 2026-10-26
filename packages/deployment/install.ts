@@ -5,21 +5,66 @@ import { posix, resolve } from 'node:path';
 import { arch, machine, platform } from 'node:os';
 import { execFile } from 'node:child_process';
 import { renderDeploymentPlan, type DeploymentPlan } from './plan.ts';
+import { assessStateSchema, DEPLOYMENT_STATE_FILES, type StateStore } from './compatibility.ts';
+import { verifyManagedWeb } from '../setup/https.ts';
 
 // This is deliberately an offline file installer. Service lifecycle, router
 // activation and the existing root network helper remain separate operations.
 const STORE = '/var/lib/cocoproxy-deployment';
 const RECEIPT = STORE + '/receipt.json';
 const HASH = /^[a-f0-9]{64}$/;
+const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 type Operation = 'install' | 'upgrade' | 'uninstall';
 type Entry = { path: string; sha256: string; size: number; mode: string };
-type Owned = { path: string; sha256: string; mode: string; owner: 'root' | number; sensitive: boolean };
-type Receipt = { schemaVersion: 1; status: 'pending' | 'complete' | 'uninstalled'; release: string;
-  manifestSha256: string; files: Owned[]; serviceUid: number; stateDirectory: string; credentialPath: string };
+export type Owned = { path: string; sha256: string; mode: string; owner: 'root' | number; sensitive: boolean };
+export type Receipt = { schemaVersion: 1; status: 'pending' | 'complete' | 'uninstalled'; release: string;
+  manifestSha256: string; files: Owned[]; serviceUid: number; stateDirectory: string; credentialPath: string;
+  transaction?: { id: string; operation: Operation } };
 export type InstallOptions = { payload: string; input: string; manifestSha256: string; operation: Operation; apply?: boolean; reviewedConfigurationSha256?: string };
+export type DeploymentLock = { schemaVersion: 1; id: string; pid: number; bootId: string; startTime: string };
+export function parseDeploymentLock(value: unknown): DeploymentLock {
+  const lock = value as DeploymentLock;
+  require(lock && typeof lock === 'object' && !Array.isArray(lock) && lock.schemaVersion === 1 &&
+    Object.keys(lock).sort().join(',') === 'bootId,id,pid,schemaVersion,startTime' &&
+    UUID.test(lock.id) && Number.isSafeInteger(lock.pid) && lock.pid > 0 &&
+    UUID.test(lock.bootId) && /^[1-9]\d{0,31}$/.test(lock.startTime), 'INSTALL_LOCK_LEGACY_OR_INVALID');
+  return lock;
+}
+export async function deploymentProcessIdentity(pid: number): Promise<{ bootId: string; startTime: string | null }> {
+  const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+  let stat: string;
+  try { stat = await readFile(`/proc/${pid}/stat`, 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { bootId, startTime: null }; throw error; }
+  const startTime = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+  require(UUID.test(bootId) && /^[1-9]\d{0,31}$/.test(startTime), 'INSTALL_PROCESS_IDENTITY_UNAVAILABLE');
+  return { bootId, startTime };
+}
 export class InstallError extends Error {
   readonly code: string;
   constructor(code: string) { super(code); this.name = 'InstallError'; this.code = code; }
+}
+/** Validate before receipt paths are ever used for reads or recovery. */
+export function validateReceipt(value: unknown): Receipt {
+  const r = value as Receipt;
+  require(r && typeof r === 'object' && !Array.isArray(r) && r.schemaVersion === 1 &&
+    Object.keys(r).every(key => ['schemaVersion', 'status', 'release', 'manifestSha256', 'files', 'serviceUid', 'stateDirectory', 'credentialPath', 'transaction'].includes(key)) &&
+    ['pending', 'complete', 'uninstalled'].includes(r.status) && HASH.test(r.manifestSha256) &&
+    Number.isSafeInteger(r.serviceUid) && r.serviceUid > 0 && Array.isArray(r.files) && r.files.length > 0 && r.files.length <= 16,
+  'INSTALL_RECEIPT_INVALID');
+  absolute(r.release); absolute(r.stateDirectory); absolute(r.credentialPath);
+  require(posix.basename(r.release) === r.manifestSha256 && !['/etc', '/usr', '/var', '/srv', '/opt', '/run', '/'].includes(posix.dirname(r.release)),
+    'INSTALL_RECEIPT_INVALID');
+  require(r.files.every(file => file && typeof file === 'object' && !Array.isArray(file)), 'INSTALL_RECEIPT_INVALID');
+  require(new Set(r.files.map(file => file.path)).size === r.files.length, 'INSTALL_RECEIPT_INVALID');
+  for (const file of r.files) {
+    absolute(file.path);
+    require(HASH.test(file.sha256) && ['0600', '0644'].includes(file.mode) && typeof file.sensitive === 'boolean' &&
+      (file.owner === 'root' || file.owner === r.serviceUid) &&
+      file.path !== RECEIPT && !file.path.startsWith(STORE + '/'), 'INSTALL_RECEIPT_INVALID');
+  }
+  if (r.transaction !== undefined) require(r.transaction && Object.keys(r.transaction).sort().join(',') === 'id,operation' && UUID.test(r.transaction.id) &&
+    ['install', 'upgrade', 'uninstall'].includes(r.transaction.operation), 'INSTALL_RECEIPT_INVALID');
+  return r;
 }
 /** Installation must not race the opt-in background runtime reconciler. */
 export function assertMaintenanceLifecycle(value: unknown): void {
@@ -29,8 +74,26 @@ export function assertMaintenanceLifecycle(value: unknown): void {
     typeof (value as any).paused === 'boolean', 'INSTALL_LIFECYCLE_INVALID');
   require(!(value as any).enabled || (value as any).paused, 'INSTALL_LIFECYCLE_MUST_BE_PAUSED');
 }
+export async function assertDeploymentLifecycle(stateDirectory: string, serviceUid: number, allowRunning = false) {
+  if (!(await info(stateDirectory))) return;
+  await trusted(posix.dirname(stateDirectory));
+  const state = await lstat(stateDirectory);
+  require(state.isDirectory() && !state.isSymbolicLink() && state.uid === serviceUid && (state.mode & 0o7777) === 0o700,
+    'INSTALL_DIRECTORY_OWNERSHIP_CONFLICT');
+  const path = posix.join(stateDirectory, 'lifecycle.json');
+  if (!(await info(path))) return;
+  await privateFile(path, serviceUid);
+  let lifecycle: unknown;
+  try { lifecycle = JSON.parse((await regular(path, 4096)).toString('utf8')); }
+  catch { throw new InstallError('INSTALL_LIFECYCLE_INVALID'); }
+  if (allowRunning) {
+    require(lifecycle && typeof lifecycle === 'object' && !Array.isArray(lifecycle), 'INSTALL_LIFECYCLE_INVALID');
+    assertMaintenanceLifecycle({ ...(lifecycle as Record<string, unknown>), paused: true });
+    require(typeof (lifecycle as any).paused === 'boolean', 'INSTALL_LIFECYCLE_INVALID');
+  } else assertMaintenanceLifecycle(lifecycle);
+}
 
-/** The only additive upgrade is the fixed root-owned early gateway guard. */
+/** Add only known managed units; never adopt an arbitrary pre-existing file. */
 export function compatibleOwnedFiles(previous: readonly Owned[], current: readonly Owned[], upgrade: boolean): boolean {
   if (previous.some(old => !current.some(file => file.path === old.path && file.mode === old.mode &&
       file.owner === old.owner && file.sensitive === old.sensitive))) return false;
@@ -38,7 +101,11 @@ export function compatibleOwnedFiles(previous: readonly Owned[], current: readon
   return added.length === 0 && previous.length === current.length || upgrade && previous.length === 7 && current.length === 8 &&
     added.length === 1 && added[0].path === '/etc/systemd/system/cocoproxy-gateway-guard.service' &&
     added[0].owner === 'root' && added[0].mode === '0644' && added[0].sensitive === false &&
-    previous.some(file => file.path === '/etc/systemd/system/cocoproxy-gateway-network.service');
+    previous.some(file => file.path === '/etc/systemd/system/cocoproxy-gateway-network.service') ||
+    upgrade && previous.length === 8 && current.length === 10 && added.length === 2 &&
+    added.every(file => file.owner === 'root' && file.mode === '0644' && !file.sensitive) &&
+    ['/etc/cocoproxy/web/nginx.conf', '/etc/systemd/system/cocoproxy-web.service'].every(path => added.some(file => file.path === path)) &&
+    previous.some(file => file.path === '/etc/systemd/system/cocoproxy-gateway-guard.service');
 }
 function require(value: unknown, code: string): asserts value { if (!value) throw new InstallError(code); }
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
@@ -81,13 +148,56 @@ function relative(path: string) {
   require(typeof path === 'string' && path.length <= 1024 && path.split('/').length <= 32 &&
     !path.startsWith('/') && posix.normalize(path) === path && !/[\\\x00-\x20\x7f]/.test(path) &&
     !path.split('/').some(part => ['..', '.', '.local', '.git'].includes(part)) &&
-    /^(source|server|bin)\//.test(path), 'INSTALL_MANIFEST_PATH_INVALID');
+    (/^(source|server|bin)\//.test(path) || ['README.md', 'cocoproxy'].includes(path)), 'INSTALL_MANIFEST_PATH_INVALID');
   return path;
 }
 async function regular(path: string, limit = 8 * 1024 * 1024) {
-  const stat = await lstat(path);
-  require(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size <= limit, 'INSTALL_REGULAR_FILE_REQUIRED');
-  return readFile(path);
+  const before = await lstat(path);
+  require(before.isFile() && !before.isSymbolicLink() && before.nlink === 1 && before.size <= limit, 'INSTALL_REGULAR_FILE_REQUIRED');
+  const handle = await open(path, constants.O_RDONLY | (platform() === 'win32' ? 0 : constants.O_NOFOLLOW));
+  try {
+    const stat = await handle.stat();
+    require(stat.isFile() && stat.nlink === 1 && stat.dev === before.dev && stat.ino === before.ino && stat.size <= limit,
+      'INSTALL_REGULAR_FILE_REQUIRED');
+    const bytes = await handle.readFile();
+    require(bytes.length <= limit, 'INSTALL_REGULAR_FILE_REQUIRED');
+    return bytes;
+  } finally { await handle.close(); }
+}
+export async function assessDeploymentState(stateDirectory: string, serviceUid: number, declaration: unknown) {
+  const findings: { store: StateStore; status: string }[] = [];
+  if (!(await info(stateDirectory))) return findings;
+  await trusted(posix.dirname(stateDirectory));
+  async function statePath(path: string) {
+    let current = stateDirectory;
+    for (const part of ['', ...posix.relative(stateDirectory, posix.dirname(path)).split('/').filter(Boolean)]) {
+      if (part) current += '/' + part;
+      const stat = await info(current);
+      require(stat && stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === serviceUid &&
+        (stat.mode & 0o7777) === 0o700, 'INSTALL_STATE_OWNERSHIP_REQUIRED');
+    }
+  }
+  const files = [...DEPLOYMENT_STATE_FILES];
+  const subscriptions = stateDirectory + '/subscriptions';
+  if (await info(subscriptions)) {
+    await statePath(subscriptions + '/placeholder');
+    const names = await readdir(subscriptions);
+    require(names.length <= 128, 'INSTALL_STATE_LIMIT');
+    for (const name of names) {
+      if (/^\.write-[a-f0-9-]{36}$/.test(name)) { await privateFile(subscriptions + '/' + name, serviceUid); continue; }
+      require(/^[A-Za-z0-9_-]{1,64}\.json$/.test(name), 'INSTALL_STATE_UNRECOGNIZED');
+      files.push({ store: 'subscription', path: 'subscriptions/' + name, key: 'version', limit: 4 * 1024 * 1024 });
+    }
+  }
+  for (const file of files) {
+    const path = stateDirectory + '/' + file.path;
+    if (!(await info(path))) { findings.push({ store: file.store, status: 'absent' }); continue; }
+    await statePath(path); await privateFile(path, serviceUid);
+    const value = JSON.parse((await regular(path, file.limit)).toString());
+    const envelope = file.nested ? value?.[file.nested] : value;
+    findings.push({ store: file.store, status: assessStateSchema(file.store, envelope?.[file.key], declaration) });
+  }
+  return findings;
 }
 /** No links, sockets, devices, private areas or unlisted files enter a release. */
 export async function verifyRelease(payload: string, expected: string): Promise<{ files: Entry[]; coreSHA: string }> {
@@ -105,6 +215,7 @@ export async function verifyRelease(payload: string, expected: string): Promise<
     require(!paths.has(entry.path.toLowerCase()) && HASH.test(entry.sha256) &&
       Number.isSafeInteger(entry.size) && entry.size >= 0 && entry.size <= 256 * 1024 * 1024 &&
       ['0644', '0755'].includes(entry.mode), 'INSTALL_MANIFEST_INVALID');
+    if (['README.md', 'cocoproxy'].includes(entry.path)) require(entry.mode === (entry.path === 'cocoproxy' ? '0755' : '0644'), 'INSTALL_MANIFEST_INVALID');
     paths.add(entry.path.toLowerCase()); total += entry.size;
     require(total <= 512 * 1024 * 1024, 'INSTALL_PAYLOAD_LIMIT');
   }
@@ -188,12 +299,12 @@ async function serviceAncestors(path: string) {
     parent = posix.dirname(parent);
   }
 }
-async function stopped(systemctl: string, units: string[]) {
+async function stopped(systemctl: string, units: string[], allowReload = false) {
   for (const unit of units) {
     const value = await run(systemctl, ['show', unit, '--property=ActiveState,MainPID,ControlPID,DropInPaths,NeedDaemonReload,FragmentPath']);
     const properties = Object.fromEntries(value.trim().split('\n').map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)]; }));
     require(['inactive', 'failed'].includes(properties.ActiveState) && properties.MainPID === '0' &&
-      properties.ControlPID === '0' && !properties.DropInPaths && properties.NeedDaemonReload === 'no' &&
+      properties.ControlPID === '0' && !properties.DropInPaths && (allowReload || properties.NeedDaemonReload === 'no') &&
       (!properties.FragmentPath || properties.FragmentPath === '/etc/systemd/system/' + unit), 'INSTALL_SERVICES_MUST_BE_STOPPED');
     require(!(await info('/etc/systemd/system/' + unit + '.d')) && !(await info('/run/systemd/system/' + unit)) &&
       !(await info('/run/systemd/system/' + unit + '.d')), 'INSTALL_UNIT_OVERRIDE_CONFLICT');
@@ -263,7 +374,12 @@ async function atomic(path: string, bytes: string, mode: number, uid = 0) {
   try { await directory.sync(); } finally { await directory.close(); }
 }
 
-export async function deployRelease(options: InstallOptions) {
+export async function prepareUpgrade(options: Omit<InstallOptions, 'operation' | 'apply' | 'reviewedConfigurationSha256'>) {
+  return deployment({ ...options, operation: 'upgrade', apply: false }, true);
+}
+export async function deployRelease(options: InstallOptions) { return deployment(options, false); }
+
+async function deployment(options: InstallOptions, preparing: boolean) {
   require(platform() === 'linux' && process.getuid?.() === 0, 'INSTALL_LINUX_ROOT_REQUIRED');
   require(['install', 'upgrade', 'uninstall'].includes(options.operation), 'INSTALL_OPERATION_INVALID');
   require(options.reviewedConfigurationSha256 === undefined || options.operation === 'upgrade', 'INSTALL_CONFIGURATION_REVIEW_UPGRADE_ONLY');
@@ -276,6 +392,8 @@ export async function deployRelease(options: InstallOptions) {
   const inputBytes = await regular(inputPath, 128 * 1024);
   const input = JSON.parse(inputBytes.toString());
   const plan = renderDeploymentPlan(input), target = releaseTarget(input, options.manifestSha256);
+  if (input.web) await verifyManagedWeb({ web: input.web, gatewayIPv4: input.runtime.automaticGateway.gatewayIPv4,
+    origin: input.management.origin, listenPort: input.management.listenPort, serviceUid: input.runtime.serviceUid });
   if (input.runtime.automaticGateway) require(release.files.some(file => file.path === 'source/apps/gateway/network.py'),
     'INSTALL_PAYLOAD_NETWORK_HELPER_MISSING');
   const reserved = (path: string) => path === STORE || path.startsWith(STORE + '/') || STORE.startsWith(path + '/');
@@ -308,23 +426,17 @@ export async function deployRelease(options: InstallOptions) {
     accounts.filter(a => Number(a[2]) === input.runtime.serviceUid).length === 1 &&
     accounts.some(a => a[0] === input.management.serviceUser && Number(a[2]) === input.runtime.serviceUid &&
       ['/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false'].includes(a[6])), 'INSTALL_DEDICATED_ACCOUNT_REQUIRED');
-  const units = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service'];
-  const lifecyclePath = posix.join(input.runtime.stateDirectory, 'lifecycle.json');
-  if (await info(lifecyclePath)) {
-    await privateFile(lifecyclePath, input.runtime.serviceUid);
-    let lifecycle: unknown;
-    try { lifecycle = JSON.parse((await regular(lifecyclePath, 4096)).toString('utf8')); }
-    catch { throw new InstallError('INSTALL_LIFECYCLE_INVALID'); }
-    assertMaintenanceLifecycle(lifecycle);
-  }
-  await stopped(input.runtime.systemctlPath, units);
+  const units = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service',
+    ...(input.web ? ['cocoproxy-web.service'] : [])];
+  await assertDeploymentLifecycle(input.runtime.stateDirectory, input.runtime.serviceUid, preparing);
+  if (!preparing) await stopped(input.runtime.systemctlPath, units);
   await trusted(posix.dirname(target)); await trusted(STORE, true);
   if (await info(STORE)) require(((await lstat(STORE)).mode & 0o7777) === 0o700, 'INSTALL_RECEIPT_DIRECTORY_PRIVATE_REQUIRED');
   require(!(await info(STORE + '/install.lock')), 'INSTALL_PREVIOUS_APPLY_INCOMPLETE');
   const currentFiles = owned(plan); let previous: Receipt | null = null;
   if (await info(RECEIPT)) {
     await trusted(RECEIPT); await privateFile(RECEIPT, 0);
-    previous = JSON.parse((await regular(RECEIPT)).toString());
+    previous = validateReceipt(JSON.parse((await regular(RECEIPT)).toString()));
     require(previous?.schemaVersion === 1 && previous.status === 'complete' && HASH.test(previous.manifestSha256) &&
       posix.basename(previous.release) === previous.manifestSha256 && previous.serviceUid === input.runtime.serviceUid &&
       previous.stateDirectory === input.runtime.stateDirectory && previous.credentialPath === input.management.credentialPath &&
@@ -343,8 +455,13 @@ export async function deployRelease(options: InstallOptions) {
     }
   }
   require(options.operation === 'install' ? !previous : previous, 'INSTALL_OPERATION_RECEIPT_REQUIRED');
+  async function plannedRootParent(path: string): Promise<void> {
+    if (await info(path)) { await trusted(path); return; }
+    require(plan.directories.some(directory => directory.path === path && directory.owner === 'root'), 'INSTALL_DIRECTORY_REQUIRED');
+    await plannedRootParent(posix.dirname(path));
+  }
   for (const directory of plan.directories) {
-    await trusted(posix.dirname(directory.path));
+    await plannedRootParent(posix.dirname(directory.path));
     const stat = await info(directory.path);
     if (stat) require(stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === (directory.owner === 'root' ? 0 : directory.owner) &&
       (directory.mode === '0700' ? (stat.mode & 0o7777) === 0o700 : !(stat.mode & 0o022)), 'INSTALL_DIRECTORY_OWNERSHIP_CONFLICT');
@@ -356,11 +473,12 @@ export async function deployRelease(options: InstallOptions) {
     for (const file of plan.files) require(!(await info(file.path)), 'INSTALL_EXISTING_FILE_CONFLICT');
   }
   let configurationReviewed = false;
+  let review: { digest: string; configurationChanged: boolean; changedFiles: string[]; authorization: 'required-on-apply' } | undefined;
   if (options.operation === 'upgrade') {
     require(previous!.release !== target && !(await info(target)), 'INSTALL_UPGRADE_NEW_RELEASE_REQUIRED');
     // A separate explicit review permits schema-validated configuration migration;
     // receipt identity, owners, paths and lifecycle checks above remain mandatory.
-    let unchanged = true;
+    let unchanged = !(input.web && !previous!.files.some(file => file.path === '/etc/systemd/system/cocoproxy-web.service'));
     for (const file of plan.files.filter(file => file.sensitive)) {
       if (file.path !== input.runtime.settingsPath) {
         unchanged &&= digest(file.content) === previous!.files.find(old => old.path === file.path)?.sha256;
@@ -370,28 +488,48 @@ export async function deployRelease(options: InstallOptions) {
         unchanged &&= JSON.stringify(old) === JSON.stringify(next);
       }
     }
-    configurationReviewed = assertReviewedUpgradeConfiguration({ previousManifestSha256: previous!.manifestSha256,
+    const configuration = { previousManifestSha256: previous!.manifestSha256,
       manifestSha256: options.manifestSha256, inputSha256: digest(inputBytes),
-      previousConfiguration: previous!.files.filter(file => file.sensitive).map(file => ({ path: file.path, sha256: file.sha256 })) },
-    options.reviewedConfigurationSha256, unchanged);
+      previousConfiguration: previous!.files.filter(file => file.sensitive).map(file => ({ path: file.path, sha256: file.sha256 })) };
+    if (preparing) review = { digest: configurationReviewDigest(configuration), configurationChanged: !unchanged,
+      changedFiles: currentFiles.filter(file => file.sensitive && file.sha256 !== previous!.files.find(old => old.path === file.path)?.sha256).map(file => file.path),
+      authorization: 'required-on-apply' };
+    else configurationReviewed = assertReviewedUpgradeConfiguration(configuration, options.reviewedConfigurationSha256, unchanged);
   }
+  const declaration = JSON.parse((await regular(payload + '/manifest.json')).toString()).compatibility;
+  const stateCompatibility = options.operation === 'upgrade' ?
+    await assessDeploymentState(input.runtime.stateDirectory, input.runtime.serviceUid, declaration) : [];
+  require(!stateCompatibility.some(file => ['invalid', 'unsupported-version'].includes(file.status)), 'INSTALL_STATE_SCHEMA_UNSUPPORTED');
+  if (!preparing && options.operation === 'upgrade') require(!stateCompatibility.some(file => file.status === 'not-declared'),
+    'INSTALL_STATE_COMPATIBILITY_NOT_DECLARED');
   if (options.operation === 'uninstall') {
     require(previous!.release === target && previous!.manifestSha256 === options.manifestSha256 &&
       currentFiles.every(file => previous!.files.some(old => old.path === file.path && old.sha256 === file.sha256)), 'INSTALL_UNINSTALL_INPUT_MISMATCH');
   }
-  await networkClear(input);
+  if (!preparing) await networkClear(input);
   // No mkdir, receipt, locks, temp files or helper execution before --apply.
-  const preview = { operation: options.operation, apply: Boolean(options.apply), release: target,
+  const preview = { operation: preparing ? 'prepare' : options.operation, apply: Boolean(options.apply), release: target,
     files: plan.files.map(file => ({ path: file.path, mode: file.mode, owner: file.owner,
       action: options.operation === 'uninstall' ? file.sensitive ? 'preserve' : 'remove' : 'write' })),
     preserved: [input.runtime.stateDirectory, input.management.credentialPath, '/var/lib/cocoproxy-gateway-network'],
-    services: 'remain stopped and disabled', network: 'unchanged', configurationReviewed };
+    services: preparing ? 'running services allowed; apply still requires stopped and disabled units' : 'remain stopped and disabled',
+    network: 'unchanged', configurationReviewed, ...(review ? { review } : {}),
+    ...(preparing ? { readiness: stateCompatibility.some(file => file.status === 'not-declared') ? 'compatibility-not-declared' : 'prepared-not-applied',
+    stateCompatibility, compatibilityLimitations: ['schema versions only; full store content validation remains with runtime readers',
+      'candidate configuration must pass candidate core validation', 'additional network resource journals are not assessed', 'no downgrade or automatic program rollback guarantee'],
+    applyPrerequisites: ['explicit operator authorization',
+      'pause automatic lifecycle', 'stop and disable deployment units', 'remove owned gateway network resources', 'repeat complete apply preflight'],
+    state: { action: 'preserve-in-place', rollback: 'not-assessed', automaticProgramRollback: false } } : {}) };
   if (!options.apply) return preview;
   if (!(await info(STORE))) { await mkdir(STORE, { mode: 0o700 }); await chown(STORE, 0, 0); await chmod(STORE, 0o700); }
   // Exclusive intent lock survives errors/crashes. An operator must inspect the
   // pending receipt before recovery; never guess/overwrite an incomplete install.
   const lock = STORE + '/install.lock';
-  await writeExclusive(lock, `${process.pid}\n`, 0o600);
+  const identity = await deploymentProcessIdentity(process.pid);
+  require(identity.startTime !== null, 'INSTALL_PROCESS_IDENTITY_UNAVAILABLE');
+  const lockOwner: DeploymentLock = { schemaVersion: 1, id: randomUUID(), pid: process.pid,
+    bootId: identity.bootId, startTime: identity.startTime };
+  await writeExclusive(lock, JSON.stringify(lockOwner) + '\n', 0o600);
   // Catch a concurrent completed installer between read-only preflight and lock.
   // No target changes have occurred yet, so these checks can release our lock.
   try {
@@ -400,17 +538,18 @@ export async function deployRelease(options: InstallOptions) {
     if (options.operation !== 'uninstall') require(!(await info(target)), 'INSTALL_TARGET_EXISTS');
     if (previous) await checkOwned(previous.files);
     require(digest(await regular(inputPath, 128 * 1024)) === digest(inputBytes), 'INSTALL_INPUT_CHANGED');
+    await assertDeploymentLifecycle(input.runtime.stateDirectory, input.runtime.serviceUid);
     await stopped(input.runtime.systemctlPath, units);
     await networkClear(input);
   } catch (error) { await unlink(lock); throw error; }
   const next: Receipt = { schemaVersion: 1, status: 'pending', release: target, manifestSha256: options.manifestSha256,
     files: currentFiles, serviceUid: input.runtime.serviceUid, stateDirectory: input.runtime.stateDirectory,
-    credentialPath: input.management.credentialPath };
+    credentialPath: input.management.credentialPath, transaction: { id: lockOwner.id, operation: options.operation } };
   await atomic(RECEIPT, JSON.stringify(next) + '\n', 0o600);
   if (options.operation === 'uninstall') {
     for (const file of plan.files.filter(file => !file.sensitive)) await unlink(file.path);
   } else {
-    for (const directory of plan.directories) if (!(await info(directory.path))) {
+    for (const directory of [...plan.directories].sort((a, b) => a.path.split('/').length - b.path.split('/').length)) if (!(await info(directory.path))) {
       await mkdir(directory.path, { mode: parseInt(directory.mode, 8) });
       await chown(directory.path, directory.owner === 'root' ? 0 : directory.owner, 0);
       await chmod(directory.path, parseInt(directory.mode, 8));
@@ -437,3 +576,9 @@ export async function deployRelease(options: InstallOptions) {
   await unlink(lock);
   return preview;
 }
+
+// Shared host checks keep inspection and finalization at the installer's trust boundary.
+export { info as deploymentPathInfo, trusted as assertRootPath, regular as readRegularDeploymentFile,
+  privateFile as assertPrivateDeploymentFile, checkOwned as assertOwnedDeploymentFiles,
+  executable as assertDeploymentExecutable, stopped as assertDeploymentStopped,
+  run as runDeploymentTool, atomic as writeAtomicDeploymentFile };
