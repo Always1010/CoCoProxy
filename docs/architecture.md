@@ -112,6 +112,5 @@ sequenceDiagram
 | [routing](../packages/routing/README.md) | 本地分流模板与固定资源生成 |
 | [deployment](../packages/deployment/README.md) | 服务、权限与文件计划；安装器位于 `apps/deployment/` |
 | [MetaCubeXD overlay](../integrations/metacubexd/README.md) | UI、Nitro 路由和构建 |
-| [旧 network 框架](../packages/network/README.md) | 保留的自有网络执行与强证据方案，暂停扩建，不进入当前启动链路 |
 
-`packages/storage/private-files.ts` 提供私有原子文件，`packages/mihomo/validator.ts` 包装核心语法校验，`apps/cli/` 复用模块提供命令。当前原生方案不承诺旧 network 框架完整的逐进程 fence、cgroup/socket 和强证据契约。
+`packages/storage/private-files.ts` 提供私有原子文件，`packages/mihomo/validator.ts` 包装核心语法校验，`apps/cli/` 复用模块提供命令。当前原生方案的运行与网络证据边界见 [gateway](../packages/gateway/README.md)。

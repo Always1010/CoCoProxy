@@ -51,7 +51,7 @@ if sys.argv[1] == '--launch':
     _, status = os.waitpid(child, 0)
     sys.exit(os.waitstatus_to_exitcode(status))
 
-fixture = module('kernel_fixture', Path(__file__).with_name('network-kernel.py'))
+fixture = module('kernel_fixture', Path(__file__).with_name('gateway-kernel.py'))
 network = module('gateway_network', Path(__file__).resolve().parents[2] / 'apps/gateway/network.py')
 f = fixture
 
