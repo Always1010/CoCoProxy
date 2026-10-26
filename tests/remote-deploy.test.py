@@ -1,6 +1,7 @@
 """Synthetic lifecycle orchestration checks. Never calls SSH, systemd or installer."""
 import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -119,7 +120,16 @@ class RemoteDeploymentTests(unittest.TestCase):
     def test_update_preserves_identity_and_restores_only_after_core_ready(self):
         temporary, stack, private, before, events, router, args = self.scenario()
         with temporary, stack:
-            deploy.main_locked(args)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                deploy.main_locked(args)
+            report = json.loads(output.getvalue())
+            self.assertNotIn('privateStatePreserved', report)
+            self.assertEqual(report['preservation']['status'], 'pass')
+            self.assertEqual(report['preservation']['checks'][1]['comparedFileCount'], 1)
+            self.assertIn('trusted-devices', report['preservation']['notAssessed'])
+            self.assertIn('notification-identity-preferences-and-outbox', report['preservation']['notAssessed'])
+            self.assertNotIn('synthetic secret', output.getvalue())
             after = json.loads((private / 'deployment.json').read_text())
             self.assertEqual(after['management']['deployment'], before['management']['deployment'])
             self.assertEqual(after['runtime']['automaticGateway'], before['runtime']['automaticGateway'])
@@ -137,6 +147,13 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertIn('payload', pause_command[6])
             self.assertTrue(router['enabled'])
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
+            self.assertEqual(json.loads((private / 'remote-last.json').read_text())['preservation'], report['preservation'])
+
+    def test_first_install_does_not_claim_existing_private_state_was_preserved(self):
+        report = deploy.preservation_report(False)
+        self.assertEqual(report['status'], 'not-applicable')
+        self.assertEqual(report['code'], 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE')
+        self.assertTrue(all(item['status'] == 'not-applicable' for item in report['checks']))
 
     def test_failed_install_keeps_router_disabled_and_blocks_blind_retry(self):
         temporary, stack, private, before, events, router, args = self.scenario(True)
