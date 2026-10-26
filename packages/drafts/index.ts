@@ -6,7 +6,7 @@ import { FileTransactionStore, TransactionError } from '../transaction/index.ts'
 
 export type DraftMetadata = { revision: number; generation: string; updatedAt: string };
 export type LoadedDraft = { revision: number; input: JsonObject; generation: string };
-type DraftDocument = DraftMetadata & { version: 1; input: JsonObject };
+export type DraftDocument = DraftMetadata & { version: 1; input: JsonObject };
 
 /** Public errors deliberately contain neither configuration values nor OS paths. */
 export class DraftError extends Error {
@@ -36,6 +36,19 @@ function metadata(document: DraftDocument): DraftMetadata {
   return { revision: document.revision, generation: document.generation, updatedAt: document.updatedAt };
 }
 
+export function parseDraftDocument(value: unknown): DraftDocument {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('DRAFT_CORRUPT');
+  const document = value as DraftDocument;
+  if (Object.keys(document).length !== DOCUMENT_KEYS.size || Object.keys(document).some(key => !DOCUMENT_KEYS.has(key)) ||
+      document.version !== 1 || !Number.isSafeInteger(document.revision) || document.revision < 1 ||
+      typeof document.generation !== 'string' || !DIGEST.test(document.generation) ||
+      typeof document.updatedAt !== 'string' || !Number.isFinite(Date.parse(document.updatedAt)) ||
+      new Date(document.updatedAt).toISOString() !== document.updatedAt) fail('DRAFT_CORRUPT');
+  try { if (compileConfig(document.input).sha256 !== document.generation) fail('DRAFT_CORRUPT'); }
+  catch { fail('DRAFT_CORRUPT'); }
+  return document;
+}
+
 /**
  * A mutable private draft, independent of immutable candidates and runtime state.
  * Uses the transaction store's process lock without nesting exclusive operations.
@@ -57,16 +70,7 @@ export class DraftStore {
     catch (error) { if (errno(error) === 'ENOENT') return null; throw error; }
     let value: unknown;
     try { value = JSON.parse(contents); } catch { fail('DRAFT_CORRUPT'); }
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('DRAFT_CORRUPT');
-    const document = value as DraftDocument;
-    if (Object.keys(document).length !== DOCUMENT_KEYS.size || Object.keys(document).some(key => !DOCUMENT_KEYS.has(key)) ||
-        document.version !== 1 || !Number.isSafeInteger(document.revision) || document.revision < 1 ||
-        typeof document.generation !== 'string' || !DIGEST.test(document.generation) ||
-        typeof document.updatedAt !== 'string' || !Number.isFinite(Date.parse(document.updatedAt)) ||
-        new Date(document.updatedAt).toISOString() !== document.updatedAt) fail('DRAFT_CORRUPT');
-    try { if (compileConfig(document.input).sha256 !== document.generation) fail('DRAFT_CORRUPT'); }
-    catch { fail('DRAFT_CORRUPT'); }
-    return document;
+    return parseDraftDocument(value);
   }
 
   async metadata(): Promise<DraftMetadata | null> {

@@ -94,6 +94,12 @@ export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {
     ...(autoProbes ? { autoProbes } : {}) };
 }
 
+export function parseWorkspaceDocument(input: unknown): Workspace {
+  const value = exact(input, ['version', 'revision', 'settings']);
+  if (value.version !== 1 || !Number.isSafeInteger(value.revision) || (value.revision as number) < 1) fail('WORKSPACE_CORRUPT');
+  return { ...parseWorkspaceSettings(value.settings), revision: value.revision as number };
+}
+
 /** Private plan preferences use the same lock and durability boundary as config writes. */
 export class WorkspaceStore {
   readonly files: FileTransactionStore;
@@ -103,9 +109,7 @@ export class WorkspaceStore {
   async read(): Promise<Workspace | null> {
     try {
       await inspectPrivateDirectory(this.root);
-      const value = exact(JSON.parse(await privateRead(join(this.root, 'workspace.json'), 1_048_576)), ['version', 'revision', 'settings']);
-      if (value.version !== 1 || !Number.isSafeInteger(value.revision) || (value.revision as number) < 1) fail('WORKSPACE_CORRUPT');
-      return { ...parseWorkspaceSettings(value.settings), revision: value.revision as number };
+      return parseWorkspaceDocument(JSON.parse(await privateRead(join(this.root, 'workspace.json'), 1_048_576)));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       if (error instanceof WorkspaceError || error instanceof PrivateFileError) throw new WorkspaceError('WORKSPACE_CORRUPT');

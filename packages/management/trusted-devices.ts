@@ -20,6 +20,25 @@ const digest = (token: unknown): string | null => {
 };
 const publicDevice = ({ tokenDigest: _tokenDigest, ...device }: DeviceRecord): TrustedDevice => ({ ...device });
 
+export type TrustedDeviceDocument = { schemaVersion: 1; credentialFingerprint: string; devices: DeviceRecord[] };
+export function parseTrustedDeviceDocument(value: unknown): TrustedDeviceDocument {
+  if (!record(value) || Object.keys(value).sort().join(',') !== 'credentialFingerprint,devices,schemaVersion' ||
+      value.schemaVersion !== 1 || typeof value.credentialFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(value.credentialFingerprint) ||
+      !Array.isArray(value.devices) || value.devices.length > LIMIT) failure();
+  const ids = new Set<string>(), tokens = new Set<string>();
+  for (const item of value.devices) {
+    if (!record(item) || Object.keys(item).sort().join(',') !== 'createdAt,expiresAt,id,label,renewedAt,tokenDigest,trust' ||
+        typeof item.id !== 'string' || !/^[a-f0-9]{32}$/.test(item.id) || ids.has(item.id) ||
+        typeof item.tokenDigest !== 'string' || !/^[a-f0-9]{64}$/.test(item.tokenDigest) || tokens.has(item.tokenDigest) ||
+        typeof item.label !== 'string' || !item.label.trim() || item.label.length > 160 || /[\u0000-\u001f\u007f]/.test(item.label) ||
+        !timestamp(item.createdAt) || !timestamp(item.renewedAt) || item.renewedAt < item.createdAt ||
+        typeof item.trust !== 'string' || !['90days', 'until-revoked'].includes(item.trust) ||
+        (item.trust === 'until-revoked' ? item.expiresAt !== null : !timestamp(item.expiresAt) || item.expiresAt !== item.renewedAt + 90 * DAY)) failure();
+    ids.add(item.id); tokens.add(item.tokenDigest);
+  }
+  return value as unknown as TrustedDeviceDocument;
+}
+
 /** Single management process, serialized durable mutations; never stores bearer tokens. */
 export class TrustedDeviceStore {
   private readonly stateDirectory: string;
@@ -43,21 +62,7 @@ export class TrustedDeviceStore {
     try {
       await inspectPrivateDirectory(stateDirectory);
       await inspectPrivateDirectory(store.directory);
-      const value: unknown = JSON.parse(await privateRead(join(store.directory, 'trusted-devices.json'), 128 * 1024));
-      if (!record(value) || Object.keys(value).sort().join(',') !== 'credentialFingerprint,devices,schemaVersion' ||
-          value.schemaVersion !== 1 || typeof value.credentialFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(value.credentialFingerprint) ||
-          !Array.isArray(value.devices) || value.devices.length > LIMIT) failure();
-      const ids = new Set<string>(), tokens = new Set<string>();
-      for (const item of value.devices) {
-        if (!record(item) || Object.keys(item).sort().join(',') !== 'createdAt,expiresAt,id,label,renewedAt,tokenDigest,trust' ||
-            typeof item.id !== 'string' || !/^[a-f0-9]{32}$/.test(item.id) || ids.has(item.id) ||
-            typeof item.tokenDigest !== 'string' || !/^[a-f0-9]{64}$/.test(item.tokenDigest) || tokens.has(item.tokenDigest) ||
-            typeof item.label !== 'string' || !item.label.trim() || item.label.length > 160 || /[\u0000-\u001f\u007f]/.test(item.label) ||
-            !timestamp(item.createdAt) || !timestamp(item.renewedAt) || item.renewedAt < item.createdAt ||
-            typeof item.trust !== 'string' || !['90days', 'until-revoked'].includes(item.trust) ||
-            (item.trust === 'until-revoked' ? item.expiresAt !== null : !timestamp(item.expiresAt) || item.expiresAt !== item.renewedAt + 90 * DAY)) failure();
-        ids.add(item.id); tokens.add(item.tokenDigest);
-      }
+      const value = parseTrustedDeviceDocument(JSON.parse(await privateRead(join(store.directory, 'trusted-devices.json'), 128 * 1024)));
       // Changing credentials or the public origin invalidates every previous device.
       if (value.credentialFingerprint === store.fingerprint) store.devices = value.devices as DeviceRecord[];
       return store;

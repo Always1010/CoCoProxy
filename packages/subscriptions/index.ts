@@ -43,7 +43,7 @@ export class SubscriptionError extends Error {
 }
 
 type StoredSnapshot = { proxies: JsonObject[]; policy?: JsonObject; nodeDnsPolicy?: JsonObject; unsupportedFields?: string[]; materializedProviders?: true; sha256: string; sourceRevision: number; definitionRevision: number };
-type SourceRecord = {
+export type SourceRecord = {
   version: 1;
   id: string;
   url: string;
@@ -172,6 +172,36 @@ function exactKeys(value: object, keys: string[], optional: string[] = []): bool
   return keys.every(key => actual.includes(key)) && actual.every(key => keys.includes(key) || optional.includes(key));
 }
 
+export function parseSourceRecord(input: unknown, id: string): SourceRecord {
+  checkId(id);
+  const record = input as SourceRecord;
+  try {
+    if (!record || !exactKeys(record, ['version', 'id', 'url', 'revision', 'definitionRevision', 'snapshot', 'etag', 'lastAttempt', 'lastError'], ['name', 'generation', 'usage']) ||
+        record.version !== 1 || record.id !== id || !revision(record.revision) || !revision(record.definitionRevision) ||
+        record.definitionRevision > record.revision || !timestamp(record.lastAttempt) ||
+        !(record.lastError === null || failureCodes.has(record.lastError)) ||
+        !(record.etag === null || validEtag(record.etag))) fail('SOURCE_CORRUPT');
+    checkUrl(record.url);
+    if (record.name !== undefined) checkName(record.name);
+    if (record.generation !== undefined && (typeof record.generation !== 'string' || !/^[a-f0-9-]{36}$/.test(record.generation))) fail('SOURCE_CORRUPT');
+    if (record.usage !== undefined && !validUsage(record.usage)) fail('SOURCE_CORRUPT');
+    if (record.snapshot !== null) {
+      const snapshot = record.snapshot;
+      if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision'], ['policy', 'nodeDnsPolicy', 'unsupportedFields', 'materializedProviders']) ||
+          !Array.isArray(snapshot.proxies) || !digestPattern.test(snapshot.sha256) ||
+          !revision(snapshot.sourceRevision) || snapshot.sourceRevision > record.revision ||
+          !revision(snapshot.definitionRevision) || snapshot.definitionRevision > snapshot.sourceRevision ||
+          snapshot.definitionRevision > record.definitionRevision || hash(snapshot) !== snapshot.sha256) fail('SOURCE_CORRUPT');
+      if (snapshot.materializedProviders !== undefined && snapshot.materializedProviders !== true) fail('SOURCE_CORRUPT');
+      validateSnapshot({ proxies: snapshot.proxies, ...(snapshot.policy ? { policy: snapshot.policy } : {}),
+        ...(Object.hasOwn(snapshot, 'nodeDnsPolicy') ? { nodeDnsPolicy: snapshot.nodeDnsPolicy } : {}),
+        ...(snapshot.unsupportedFields ? { unsupportedFields: snapshot.unsupportedFields } : {}) }, true);
+    }
+    if (record.etag !== null && !metadata(record).snapshotCurrent) fail('SOURCE_CORRUPT');
+    return record;
+  } catch { fail('SOURCE_CORRUPT'); }
+}
+
 /** One private atomic record per source; mutations share the runtime store lock. */
 export class SubscriptionStore {
   readonly root: string;
@@ -208,31 +238,7 @@ export class SubscriptionStore {
       if (error instanceof PrivateFileError) throw error;
       fail('SOURCE_CORRUPT');
     }
-    try {
-      if (!record || !exactKeys(record, ['version', 'id', 'url', 'revision', 'definitionRevision', 'snapshot', 'etag', 'lastAttempt', 'lastError'], ['name', 'generation', 'usage']) ||
-          record.version !== 1 || record.id !== id || !revision(record.revision) || !revision(record.definitionRevision) ||
-          record.definitionRevision > record.revision || !timestamp(record.lastAttempt) ||
-          !(record.lastError === null || failureCodes.has(record.lastError)) ||
-          !(record.etag === null || validEtag(record.etag))) fail('SOURCE_CORRUPT');
-      checkUrl(record.url);
-      if (record.name !== undefined) checkName(record.name);
-      if (record.generation !== undefined && (typeof record.generation !== 'string' || !/^[a-f0-9-]{36}$/.test(record.generation))) fail('SOURCE_CORRUPT');
-      if (record.usage !== undefined && !validUsage(record.usage)) fail('SOURCE_CORRUPT');
-      if (record.snapshot !== null) {
-        const snapshot = record.snapshot;
-        if (!snapshot || !exactKeys(snapshot, ['proxies', 'sha256', 'sourceRevision', 'definitionRevision'], ['policy', 'nodeDnsPolicy', 'unsupportedFields', 'materializedProviders']) ||
-            !Array.isArray(snapshot.proxies) || !digestPattern.test(snapshot.sha256) ||
-            !revision(snapshot.sourceRevision) || snapshot.sourceRevision > record.revision ||
-            !revision(snapshot.definitionRevision) || snapshot.definitionRevision > snapshot.sourceRevision ||
-            snapshot.definitionRevision > record.definitionRevision || hash(snapshot) !== snapshot.sha256) fail('SOURCE_CORRUPT');
-        if (snapshot.materializedProviders !== undefined && snapshot.materializedProviders !== true) fail('SOURCE_CORRUPT');
-        validateSnapshot({ proxies: snapshot.proxies, ...(snapshot.policy ? { policy: snapshot.policy } : {}),
-          ...(Object.hasOwn(snapshot, 'nodeDnsPolicy') ? { nodeDnsPolicy: snapshot.nodeDnsPolicy } : {}),
-          ...(snapshot.unsupportedFields ? { unsupportedFields: snapshot.unsupportedFields } : {}) }, true);
-      }
-      if (record.etag !== null && !metadata(record).snapshotCurrent) fail('SOURCE_CORRUPT');
-      return record;
-    } catch { fail('SOURCE_CORRUPT'); }
+    return parseSourceRecord(record, id);
   }
 
   private async write(record: SourceRecord): Promise<void> {

@@ -72,6 +72,35 @@ async function linuxIdentity(pid: number): Promise<{ bootId: string; startTime: 
   return { bootId, startTime, alive: !['Z', 'X', 'x'].includes(fields[0]) };
 }
 
+export type TransactionState = State;
+export function parseTransactionState(input: unknown): TransactionState {
+  const value = input as State;
+  if (!value || value.version !== 1 || !optionalId(value.desired) || !optionalId(value.active) ||
+      !(value.fault === null || value.fault === 'RESTORE_FAILED') ||
+      !(value.checkedAt === null || (typeof value.checkedAt === 'string' && Number.isFinite(Date.parse(value.checkedAt))))) fail('STATE_CORRUPT');
+  if (value.pending !== null) {
+    const pending = value.pending;
+    if (!pending || typeof pending.id !== 'string' || !/^[a-f0-9-]{36}$/.test(pending.id) ||
+        (pending.ownerToken !== undefined && (typeof pending.ownerToken !== 'string' ||
+          !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(pending.ownerToken))) ||
+        !optionalId(pending.previous) || !validId(pending.target) || !phases.has(pending.phase) ||
+        value.desired !== pending.target ||
+        (pending.phase === 'committed' ? value.active !== pending.target : value.active !== pending.previous &&
+          !((pending.phase === 'fault' || pending.phase === 'restoring' || pending.phase === 'recovering-target') && value.active === null && value.fault === 'RESTORE_FAILED'))) fail('STATE_CORRUPT');
+  }
+  if (value.fault !== null && value.pending?.phase !== 'fault' && value.pending?.phase !== 'restoring' && value.pending?.phase !== 'recovering-target') fail('STATE_CORRUPT');
+  if (value.pending?.phase === 'recovering-target' && (value.active !== null || value.fault !== 'RESTORE_FAILED')) fail('STATE_CORRUPT');
+  return value;
+}
+
+export function parseStoredCandidate(bytes: string, generation: string): Candidate['config'] {
+  if (!validId(generation) || createHash('sha256').update(bytes).digest('hex') !== generation) fail('CANDIDATE_TAMPERED');
+  let value: unknown;
+  try { value = JSON.parse(bytes); } catch { fail('CANDIDATE_TAMPERED'); }
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || canonicalJson(value as Candidate['config']) !== bytes) fail('CANDIDATE_TAMPERED');
+  return value as Candidate['config'];
+}
+
 /** Private file store. POSIX permissions are enforced; Windows requires a private parent ACL. */
 export class FileTransactionStore {
   readonly root: string;
@@ -180,9 +209,7 @@ export class FileTransactionStore {
     catch (error) { if (errno(error) === 'ENOENT') fail('CANDIDATE_NOT_FOUND'); throw error; }
     if (createHash('sha256').update(bytes).digest('hex') !== id) fail('CANDIDATE_TAMPERED');
     if (canonicalCandidates.has(id)) return path;
-    let value: unknown;
-    try { value = JSON.parse(bytes); } catch { fail('CANDIDATE_TAMPERED'); }
-    if (value === null || typeof value !== 'object' || Array.isArray(value) || canonicalJson(value as Candidate['config']) !== bytes) fail('CANDIDATE_TAMPERED');
+    parseStoredCandidate(bytes, id);
     if (canonicalCandidates.size >= 4) canonicalCandidates.delete(canonicalCandidates.values().next().value!);
     canonicalCandidates.add(id);
     return path;
@@ -192,22 +219,7 @@ export class FileTransactionStore {
     let value: State;
     try { value = JSON.parse(await privateRead(join(this.root, 'state.json'), 64 * 1024)); }
     catch (error) { if (errno(error) === 'ENOENT') return emptyState(); if (error instanceof PrivateFileError) throw new TransactionError(error.code); if (error instanceof TransactionError) throw error; fail('STATE_CORRUPT'); }
-    if (!value || value.version !== 1 || !optionalId(value.desired) || !optionalId(value.active) ||
-        !(value.fault === null || value.fault === 'RESTORE_FAILED') ||
-        !(value.checkedAt === null || (typeof value.checkedAt === 'string' && Number.isFinite(Date.parse(value.checkedAt))))) fail('STATE_CORRUPT');
-    if (value.pending !== null) {
-      const pending = value.pending;
-      if (!pending || typeof pending.id !== 'string' || !/^[a-f0-9-]{36}$/.test(pending.id) ||
-          (pending.ownerToken !== undefined && (typeof pending.ownerToken !== 'string' ||
-            !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(pending.ownerToken))) ||
-          !optionalId(pending.previous) || !validId(pending.target) || !phases.has(pending.phase) ||
-          value.desired !== pending.target ||
-          (pending.phase === 'committed' ? value.active !== pending.target : value.active !== pending.previous &&
-            !((pending.phase === 'fault' || pending.phase === 'restoring' || pending.phase === 'recovering-target') && value.active === null && value.fault === 'RESTORE_FAILED'))) fail('STATE_CORRUPT');
-    }
-    if (value.fault !== null && value.pending?.phase !== 'fault' && value.pending?.phase !== 'restoring' && value.pending?.phase !== 'recovering-target') fail('STATE_CORRUPT');
-    if (value.pending?.phase === 'recovering-target' && (value.active !== null || value.fault !== 'RESTORE_FAILED')) fail('STATE_CORRUPT');
-    return value;
+    return parseTransactionState(value);
   }
 
   async writeState(state: State): Promise<void> {

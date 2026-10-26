@@ -9,14 +9,21 @@ import { RuntimeError } from './types.ts';
 
 export type RuntimeLifecycle = { schemaVersion: 1; enabled: boolean; paused: boolean };
 
+export function parseRuntimeLifecycle(input: unknown): RuntimeLifecycle {
+  try {
+    const value = input as RuntimeLifecycle;
+    if (!value || Object.keys(value).sort().join(',') !== 'enabled,paused,schemaVersion' ||
+        value.schemaVersion !== 1 || typeof value.enabled !== 'boolean' || typeof value.paused !== 'boolean') throw new Error();
+    return value;
+  } catch { throw new RuntimeError('RUNTIME_LIFECYCLE_INVALID'); }
+}
+
 /** Missing means the operator has never enabled persistent reconciliation. */
 export async function readRuntimeLifecycle(stateDirectory: string): Promise<RuntimeLifecycle> {
   try {
     await inspectPrivateDirectory(stateDirectory);
     const value = JSON.parse(await privateRead(join(stateDirectory, 'lifecycle.json'), 4096));
-    if (!value || Object.keys(value).sort().join(',') !== 'enabled,paused,schemaVersion' ||
-        value.schemaVersion !== 1 || typeof value.enabled !== 'boolean' || typeof value.paused !== 'boolean') throw new Error();
-    return value;
+    return parseRuntimeLifecycle(value);
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { schemaVersion: 1, enabled: false, paused: false };
     throw new RuntimeError('RUNTIME_LIFECYCLE_INVALID');
