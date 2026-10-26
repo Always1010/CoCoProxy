@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "management": {
+    "repository": "https://github.com/MetaCubeX/metacubexd",
+    "tag": "v1.273.1",
+    "commit": "8bbc8f58fef71148a94fb5c0ff808f79b057337d",
+    "packageManager": "pnpm@10.34.1",
+    "sourceArchiveSha256": "d4d0d5b98a1b152c319777c196da8d9e11338ce6a729fd8c32a25f7b1eae94e5",
+    "lockfileSha256": "1282dba8b03fa39b1532be5ba03ce306ca29049c5e89e4135b48a58d3e7a46f2"
+  },
+  "mihomo": {
+    "repository": "https://github.com/MetaCubeX/mihomo",
+    "tag": "v1.19.33",
+    "commit": "3f27ef39f8c96bbfbc8b0b9bb10f5c9ef60149d8",
+    "platforms": {
+      "linux-arm64": {
+        "architecture": "arm64",
+        "elfMachine": 183,
+        "asset": "mihomo-linux-arm64-v1.19.33.gz",
+        "downloadUrl": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-arm64-v1.19.33.gz",
+        "releaseReportedSha256": "ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187",
+        "binarySha256": "8c73570d9a5f388bc2f58eee0b347ccfab84fb3cf1a0f8f2cf5eac7005fbcdc0"
+      },
+      "linux-amd64-v1": {
+        "architecture": "x64",
+        "elfMachine": 62,
+        "asset": "mihomo-linux-amd64-v1-v1.19.33.gz",
+        "downloadUrl": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-v1-v1.19.33.gz",
+        "releaseReportedSha256": "8ec92e7b2fdc6b853ba00156bab7e4e965c8b0d843b8c4ac8ab98795f02ad524",
+        "binarySha256": "19cbe7ba1523a92ed2d0a30716ea093de57db05b7844db23de2b9c21fd7a1afa"
+      }
+    }
+  }
+}

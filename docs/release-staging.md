@@ -6,7 +6,9 @@
 
 [Release 工作流](../.github/workflows/release.yml) 在推送 `v<package.json 版本>` 的 Tag 时运行，例如首版 `v0.1.0-preview.1`。Tag 必须符合 SemVer，且与根 package.json、package-lock.json 版本一致；带预发布后缀的版本自动标记为 GitHub Pre-release。
 
-GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游源码校验、overlay、发行装配及部署测试；随后核验固定上游源码与锁文件、构建 UI/Server，并复用现有装配器生成 ARM64 和 x86-64 载荷。构建入口为 `scripts/build-github-release.mjs`，完整构建只允许在 Actions Linux 环境执行。两个平台均不在构建中执行外来 Mihomo；构建成功不替代目标设备验收。
+GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游源码校验、overlay、发行元数据、离线文档、安装配置、发行装配及部署测试；随后核验固定上游源码与锁文件、构建 UI/Server，并复用现有装配器生成 ARM64 和 x86-64 载荷。构建入口为 `scripts/build-github-release.mjs`，完整构建只允许在 Actions Linux 环境执行。两个平台均不在构建中执行外来 Mihomo；构建成功不替代目标设备验收。
+
+固定输入以[组件清单](../integrations/metacubexd/components.json)为准，包括上游 tag、commit、源码及锁摘要、包管理器、两种平台的资产名、下载地址、压缩包摘要与核心摘要；[审核记录](../integrations/metacubexd/review.json)另存实际验证范围。构建和装配拒绝清单与审核、完整源码树之间的身份或摘要分歧，构建还要求 tooling 的包管理器版本与其锁一致。更新验证结论不会自动更改组件版本，下载入口也不查询 latest。
 
 全部检查成功后，独立发布任务用内置 `GITHUB_TOKEN` 的 `contents: write` 权限创建 Release，无须额外 PAT 或 SSH 密钥。构建任务只有仓库读取权限。发布附件包括两种架构的 `.tar.gz` 安装包、各自的 `.manifest.json`、CoCoProxy/MetaCubeXD/Mihomo 对应源码压缩包、`SOURCES.txt`、`RELEASE-NOTES.md` 和 `SHA256SUMS`。安装包由装配白名单生成，源码包使用 `git archive HEAD`，均不纳入 `.local/` 或跟随本地共享链接。
 
@@ -40,19 +42,24 @@ source/
   docs/、examples/              # 白名单中的部署、使用及来源说明
   package.json、package-lock.json
   scripts/measure-latency.mjs   # 无第三方依赖的请求时延基线工具
+  scripts/cocoproxy-setup.sh    # 安装配置与诊断入口
   node_modules/                # 完整生产依赖
   integrations/metacubexd/      # 来源、review、LICENSE
   integrations/mihomo/LICENSE
 server/.output/{server,public}/
 bin/mihomo
+README.md                     # 解压后的离线导航
+cocoproxy                     # 相对自身目录定位的命令入口
 manifest.json
 ```
 
-载荷的 `source/docs/getting-started.md` 提供[从零部署与使用总指南](getting-started.md)，下载解压后可离线阅读，包含接线、参数准备、安装、路由器协作和后台使用路线。
+解压后从根 `README.md` 或 `./cocoproxy help` 开始，入口按自身位置查找源码，不要求当前目录等于载荷目录。[安装配置与诊断](setup.md)说明 doctor、configure 和后续安装入口；`source/docs/getting-started.md` 提供[从零部署与使用总指南](getting-started.md)。相对链接引用的使用说明、模块说明、图像和合成样本均随载荷保留，可离线阅读。指向上游及源码专用维护说明的 HTTPS 链接仍需联网。
 
 源码必须是干净 Git 工作树根，拒绝受跟踪修改和未忽略的新文件；固定启动HEAD，以 Git blob 读取并在完成前复核。symlink/gitlink 拒绝，不执行 Git hooks 或构建代码。
 
-选择 apps/packages、根包元数据及存在的 LICENSE/NOTICE、明确的文档／样本与来源记录，以及独立的请求时延基线工具。可信部署选项说明 `examples/deployment-options.md` 随载荷提供。排除 .local、.git、缓存、其他开发工具、测试、协议对端及上游完整源树；不遍历本地共享链接。文档白名单变更时须同步维护导航依赖。
+选择 apps/packages、根包元数据及存在的 LICENSE/NOTICE、明确的文档／样本与来源记录，以及安装配置入口和独立的请求时延基线工具。可信部署选项说明 `examples/deployment-options.md` 随载荷提供。离线导航需要的通用协作说明、发布 workflow 和协议夹具说明仅按固定文件名纳入，不带入夹具代码、其他开发工具或上游完整源树。排除 .local、.git、缓存、测试与协议对端；不遍历本地共享链接。受跟踪源码含任意 `.local` 路径时，源码归档和装配都拒绝。
+
+装配在固定白名单内验证所有 Markdown 的本地链接、图片、引用式链接和 HTML src/href 目标；缺失、越界或不安全目标均拒绝并清理本次暂存。检查不按文档链接自动扩大白名单，也不验证远程地址或 Markdown 页内锚点。CI 的 `node --test tests/release-metadata.test.mjs` 使用同一检查提前验证仓库导航闭包。
 
 ## 依赖与构建产物
 
@@ -68,7 +75,7 @@ Nitro输入仅选 server/public，入口为 server/index.mjs。依赖trace允许
 
 ## 核心与许可
 
-Mihomo二进制必须匹配HEAD中[审核数据](../integrations/metacubexd/review.json)的唯一平台摘要，并核验ELF64 little-endian及机器类型，复制为bin/mihomo、0755。CLI不接受任意替换摘要；库函数测试注入不属于部署接口。
+Mihomo二进制必须匹配HEAD中[组件清单](../integrations/metacubexd/components.json)的唯一平台摘要，并核验ELF64 little-endian及机器类型，复制为bin/mihomo、0755。CLI不接受任意替换摘要；库函数测试注入不属于部署接口。
 
 | 平台 | 固定资产 |
 | --- | --- |
@@ -89,6 +96,6 @@ Mihomo二进制必须匹配HEAD中[审核数据](../integrations/metacubexd/revi
 | 文件数／路径 | 12,000；深度32、长度1,024字符 |
 | manifest／Git输出 | 8 MiB／32 MiB |
 
-manifest记录schema、源提交、组件版本、锁摘要、每文件路径／SHA-256／大小／模式。自身不递归列入清单，成功回执另给manifestSha256；回执与固定错误码不泄露输入路径或凭据。
+manifest记录schema、源提交、组件版本、锁及组件清单摘要、状态读取兼容声明、每文件路径／SHA-256／大小／模式。兼容声明复用随源码分发的 `packages/deployment/state-compatibility.mjs`；装配核验该文件与当前装配器的声明来源一致，拒绝对不同契约源码套用当前声明。声明仅覆盖列出的持久状态 schema，不承诺配置迁移、任意旧版升级、降级或网络资源兼容；升级仍须核对实际状态、核心配置和验收条件。manifest 自身不递归列入清单，成功回执另给manifestSha256；回执与固定错误码不泄露输入路径或凭据。
 
 安装前独立核验该摘要、文件集和字节。传送时只选择输出目录，不复制父目录或整个工作区。验证命令为 `npm run test:release-stage`，使用合成仓库、普通依赖和假核心，检查白名单、完整性、路径、失败清理及不覆盖，不构成服务或终端验收。

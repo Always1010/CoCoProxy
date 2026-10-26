@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import { ReleaseStageError, stageExplicitRelease, type StageExplicitReleaseOptions } from '../scripts/stage-explicit-release.mjs';
+import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/state-compatibility.mjs';
 
 const execute = promisify(execFile);
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
@@ -18,11 +19,13 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   const runtimeDependencies = join(root, 'dependencies'); const core = join(root, 'approved-core');
   const put = async (path: string, text: string) => { await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, text); };
   await put(join(sourceDir, 'apps/cli/main.ts'), 'console.log("synthetic");\n');
+  await put(join(sourceDir, 'apps/setup/main.ts'), 'console.log("synthetic setup");\n');
   await put(join(sourceDir, 'packages/runtime/start.ts'), 'export const fixture = true;\n');
+  await put(join(sourceDir, 'packages/deployment/state-compatibility.mjs'), await readFile(new URL('../packages/deployment/state-compatibility.mjs', import.meta.url), 'utf8'));
   await put(join(sourceDir, 'docs/deployment.md'), 'Synthetic role deployment instructions\n');
   await put(join(sourceDir, 'docs/cooperating-router-requirements.md'), 'Synthetic independent product and router capabilities\n');
   await put(join(sourceDir, 'docs/release-notes.md'), 'Synthetic fixed-version release scope and known limitations\n');
-  for (const name of ['getting-started.md', 'usage.md', 'notifications.md', 'architecture.md', 'development.md']) {
+  for (const name of ['setup.md', 'getting-started.md', 'usage.md', 'notifications.md', 'architecture.md', 'development.md']) {
     await put(join(sourceDir, 'docs', name), 'Synthetic documentation\n');
   }
   for (const name of ['architecture-overview.svg', 'runtime-relations.svg', 'proxy-traffic-flow.svg']) {
@@ -31,6 +34,7 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'examples/nginx-management.conf'), '# Synthetic HTTPS role template\n');
   await put(join(sourceDir, 'examples/deployment-options.md'), 'Synthetic trusted performance options\n');
   await put(join(sourceDir, 'scripts/measure-latency.mjs'), 'console.log("synthetic latency baseline");\n');
+  await put(join(sourceDir, 'scripts/cocoproxy-setup.sh'), '#!/bin/sh\nexit 0\n');
   await put(join(sourceDir, '.gitignore'), '.local/\n');
   const dependencies = { 'web-push': '1.0.0', ws: '1.0.0', yaml: '1.0.0' };
   const pkg = { name: 'synthetic-cocoproxy', version: '0.0.0', dependencies };
@@ -50,10 +54,21 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(serverDir, 'server/index.mjs.map'), '{"sources":["/synthetic/private/build"]}');
   await put(join(serverDir, 'public/index.html'), '<h1>Synthetic</h1>');
   await put(join(serverDir, 'nitro.json'), '{"ignored":"/synthetic/build"}');
+  const catalog = JSON.parse(await readFile(new URL('../integrations/metacubexd/components.json', import.meta.url), 'utf8'));
+  Object.assign(catalog.management, { tag: 'v1.2.3', commit: '1'.repeat(40) });
+  Object.assign(catalog.mihomo, { tag: 'v4.5.6', commit: '2'.repeat(40) });
+  for (const [platform, value] of Object.entries(catalog.mihomo.platforms) as Array<[string, any]>) {
+    value.asset = `mihomo-${platform}-v4.5.6.gz`;
+    value.downloadUrl = `${catalog.mihomo.repository}/releases/download/v4.5.6/${value.asset}`;
+  }
+  await put(join(sourceDir, 'integrations/metacubexd/components.json'), JSON.stringify(catalog));
   await put(join(sourceDir, 'integrations/metacubexd/review.json'), JSON.stringify({ schemaVersion: 1,
-    management: { tag: 'v1.2.3', commit: '1'.repeat(40) },
-    coreCandidate: { tag: 'v4.5.6', commit: '2'.repeat(40), binarySha256: '0'.repeat(64) } }));
-  for (const name of ['LICENSE', 'README.md', 'source-tree.json']) await put(join(sourceDir, 'integrations/metacubexd', name), `synthetic ${name}`);
+    management: { ...catalog.management, sourceTreeVerified: true, sourceFileCount: 1 },
+    coreCandidate: { ...catalog.mihomo, ...catalog.mihomo.platforms['linux-arm64'],
+      platforms: Object.fromEntries(Object.entries(catalog.mihomo.platforms).map(([name, entry]) => [name, { ...(entry as any), downloadedAssetVerified: true }])) } }));
+  await put(join(sourceDir, 'integrations/metacubexd/source-tree.json'), JSON.stringify({commit: catalog.management.commit,
+    truncated: false, files: [{path: 'synthetic.ts', sha: '3'.repeat(40), mode: '100644'}] }));
+  for (const name of ['LICENSE', 'README.md']) await put(join(sourceDir, 'integrations/metacubexd', name), `synthetic ${name}`);
   await put(join(sourceDir, 'integrations/mihomo/LICENSE'), 'synthetic GPL license');
   await put(join(sourceDir, '.local/private.json'), 'SYNTHETIC_PRIVATE_VALUE');
   await writeFile(core, 'synthetic reviewed core');
@@ -70,7 +85,8 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   const options = await fixture(t);
   const receipt = await stageExplicitRelease(options);
   const bytes = await readFile(join(options.output, 'manifest.json'));
-  const manifest = JSON.parse(bytes.toString()) as { commit: string; files: Array<{path: string; sha256: string; size: number; mode: string}> };
+  const manifest = JSON.parse(bytes.toString()) as { commit: string; compatibility: unknown; files: Array<{path: string; sha256: string; size: number; mode: string}> };
+  assert.deepEqual(manifest.compatibility, DEPLOYMENT_STATE_COMPATIBILITY);
   assert.equal(receipt.manifestSha256, digest(bytes));
   assert.equal(manifest.commit, receipt.commit);
   assert.equal(receipt.fileCount, manifest.files.length);
@@ -87,6 +103,9 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.ok(manifest.files.some(file => file.path === 'source/examples/nginx-management.conf'));
   assert.ok(manifest.files.some(file => file.path === 'source/examples/deployment-options.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/scripts/measure-latency.mjs'));
+  assert.ok(manifest.files.some(file => file.path === 'cocoproxy' && file.mode === '0755'));
+  assert.ok(manifest.files.some(file => file.path === 'README.md'));
+  assert.ok(manifest.files.some(file => file.path === 'source/integrations/metacubexd/components.json'));
   assert.ok(manifest.files.every(file => !file.path.includes('.local') && !file.path.endsWith('.map') && !file.path.endsWith('nitro.json')));
   assert.ok(!bytes.toString().includes(options.sourceDir) && !bytes.toString().includes('SYNTHETIC_PRIVATE_VALUE'));
   for (const file of manifest.files) {
@@ -139,6 +158,31 @@ test('rejects source drift and nonignored untracked input while leaving ignored 
   await rejects(stageExplicitRelease(options), 'SOURCE_DIRTY');
 });
 
+test('rejects mismatched release metadata, missing bootstrap and broken offline navigation before publishing output', async t => {
+  for (const [variant, expected] of [
+    ['metadata', 'COMPONENT_REVIEW_MISMATCH'], ['compatibility', 'COMPATIBILITY_SOURCE_MISMATCH'],
+    ['bootstrap', 'SOURCE_REQUIRED_FILE_MISSING'], ['documentation', 'DOCUMENT_LINK_MISSING'],
+  ] as const) {
+    await t.test(variant, async t => {
+      const options = await fixture(t);
+      if (variant === 'metadata') {
+        const path = join(options.sourceDir, 'integrations/metacubexd/review.json');
+        const review = JSON.parse(await readFile(path, 'utf8'));
+        review.management.lockfileSha256 = 'f'.repeat(64);
+        await writeFile(path, JSON.stringify(review));
+      }
+      if (variant === 'compatibility') await writeFile(join(options.sourceDir, 'packages/deployment/state-compatibility.mjs'), 'export const unsupported = true;\n');
+      if (variant === 'bootstrap') await rm(join(options.sourceDir, 'scripts/cocoproxy-setup.sh'));
+      if (variant === 'documentation') await writeFile(join(options.sourceDir, 'docs/deployment.md'), '[missing](private-not-shipped.md)\n');
+      await execute('git', ['-C', options.sourceDir, 'add', '-u']);
+      await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'invalid release fixture']);
+      await rejects(stageExplicitRelease(options), expected);
+      await assert.rejects(lstat(options.output), { code: 'ENOENT' });
+      assert.ok((await readdir(join(options.output, '..'))).every(name => !name.startsWith('.cocoproxy-stage-')));
+    });
+  }
+});
+
 test('accepts pruned Nitro traces with semantically unchanged package metadata and restores full locked packages', async t => {
   const options = await fixture(t);
   for (const name of ['web-push', 'ws', 'yaml']) {
@@ -179,10 +223,14 @@ test('fixed platform catalog selects both reviewed ELF architectures and refuses
       await writeFile(options.core, core);
       const path = join(options.sourceDir, 'integrations/metacubexd/review.json');
       const review = JSON.parse(await readFile(path, 'utf8'));
-      review.coreCandidate.platforms = { [platform]: { architecture, elfMachine: machine,
-        binarySha256: digest(core), downloadedAssetVerified: true, runtimeVerified: false } };
+      review.coreCandidate.platforms[platform].binarySha256 = digest(core);
+      if (platform === 'linux-arm64') review.coreCandidate.binarySha256 = digest(core);
       await writeFile(path, JSON.stringify(review));
-      await execute('git', ['-C', options.sourceDir, 'add', 'integrations/metacubexd/review.json']);
+      const catalogPath = join(options.sourceDir, 'integrations/metacubexd/components.json');
+      const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+      catalog.mihomo.platforms[platform].binarySha256 = digest(core);
+      await writeFile(catalogPath, JSON.stringify(catalog));
+      await execute('git', ['-C', options.sourceDir, 'add', 'integrations/metacubexd/review.json', 'integrations/metacubexd/components.json']);
       await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'platform fixture']);
       await stageExplicitRelease(options);
       const manifest = JSON.parse(await readFile(join(options.output, 'manifest.json'), 'utf8'));
@@ -197,10 +245,14 @@ test('fixed platform catalog selects both reviewed ELF architectures and refuses
     await writeFile(options.core, core);
     const path = join(options.sourceDir, 'integrations/metacubexd/review.json');
     const review = JSON.parse(await readFile(path, 'utf8'));
-    review.coreCandidate.platforms = { 'linux-arm64': { architecture: 'arm64', elfMachine: 183,
-      binarySha256: digest(core), downloadedAssetVerified: true } };
+    review.coreCandidate.platforms['linux-arm64'].binarySha256 = digest(core);
+    review.coreCandidate.binarySha256 = digest(core);
     await writeFile(path, JSON.stringify(review));
-    await execute('git', ['-C', options.sourceDir, 'add', 'integrations/metacubexd/review.json']);
+    const catalogPath = join(options.sourceDir, 'integrations/metacubexd/components.json');
+    const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+    catalog.mihomo.platforms['linux-arm64'].binarySha256 = digest(core);
+    await writeFile(catalogPath, JSON.stringify(catalog));
+    await execute('git', ['-C', options.sourceDir, 'add', 'integrations/metacubexd/review.json', 'integrations/metacubexd/components.json']);
     await execute('git', ['-C', options.sourceDir, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'mislabeled platform fixture']);
     await rejects(stageExplicitRelease(options), 'CORE_ARCH_MISMATCH');
     await assert.rejects(lstat(options.output), { code: 'ENOENT' });

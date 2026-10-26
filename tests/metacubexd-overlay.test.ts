@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { applyMetacubexdOverlay, OverlayError } from '../scripts/apply-metacubexd-overlay.mjs';
 
-const commit = '8bbc8f58fef71148a94fb5c0ff808f79b057337d';
+const commit = JSON.parse(await readFile(new URL('../integrations/metacubexd/components.json', import.meta.url), 'utf8')).management.commit;
 const gitBlob = (text: string) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest('hex');
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-overlay-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cocoproxy-overlay-')));
   const directory = join(root, 'upstream');
   const overlayDirectory = join(root, 'overlay');
   const manifestPath = join(root, 'source-tree.json');

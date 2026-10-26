@@ -5,11 +5,12 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep, parse } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const defaultOverlay = join(project, 'integrations', 'metacubexd', 'overlay');
 const defaultManifest = join(project, 'integrations', 'metacubexd', 'source-tree.json');
-const commit = '8bbc8f58fef71148a94fb5c0ff808f79b057337d';
+const commit = JSON.parse(await readFile(new URL('../integrations/metacubexd/components.json', import.meta.url), 'utf8')).management.commit;
 const MAX_FILE_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 const forbidden = new Set(['.git', '.local', 'node_modules', '.nuxt', '.output']);
