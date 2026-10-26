@@ -1,9 +1,13 @@
 import { execFile } from 'node:child_process';
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
-import { parseSetupEnvironment, SetupError, type SetupEnvironment } from './input.ts';
+import { createSetupDeployment, parseSetupEnvironment, SetupError, type SetupEnvironment } from './input.ts';
 import { ManagedWebError, verifyManagedWeb, type ManagedWebInput } from './https.ts';
 import { inspectServiceAccount } from '../deployment/service-account.ts';
+import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory,
+  PathEvidenceError, type PathEvidenceHost } from '../deployment/path-evidence.ts';
+import { renderDeploymentPlan } from '../deployment/plan.ts';
+import { AUTOMATIC_GATEWAY_CORE_SHA256 } from '../gateway/profile.ts';
 import type { EvidenceResult, EvidenceStatus } from './check-result.ts';
 
 export const DOCTOR_LAYERS = [
@@ -20,15 +24,16 @@ const checkLayers = {
   linux: 'foundation', architecture: 'foundation', node: 'foundation', systemd: 'foundation', environment: 'foundation',
   python: 'components', ip: 'components', nft: 'components', systemctl: 'components', polkit: 'components',
   privileges: 'identity', 'service-account': 'identity', 'node-path': 'identity', 'systemctl-path': 'identity',
+  'release-parent': 'identity', 'receipt-directory': 'identity', 'service-paths': 'identity',
   'configured-node-version': 'components', tun: 'network', forwarding: 'network', 'interface-address': 'network',
   'policy-rules': 'network', routes: 'network', firewall: 'network', 'router-contract': 'network',
   'managed-https': 'management', 'https-client-trust': 'management',
 } as const satisfies Record<string, DoctorLayer>;
-type CheckId = keyof typeof checkLayers;
+type CheckId = keyof typeof checkLayers | `deployment-directory-${number}`;
 export interface DoctorHost {
   platform: string; architecture: string; nodeVersion: string; uid: number;
   read(path: string): Promise<string>;
-  stat(path: string): Promise<{ directory: boolean; characterDevice: boolean; uid: number; mode: number; link: boolean }>;
+  stat(path: string): Promise<{ directory: boolean; characterDevice: boolean; uid: number; mode: number; link: boolean; file?: boolean; nlink?: number }>;
   resolve(path: string): Promise<string>;
   run(path: string, args: string[]): Promise<string>;
   managedWeb?(input: ManagedWebInput): Promise<void>;
@@ -37,7 +42,7 @@ const nativeHost = (): DoctorHost => ({
   platform: platform(), architecture: arch(), nodeVersion: process.versions.node, uid: process.getuid?.() ?? -1,
   read: path => readFile(path, 'utf8'), resolve: realpath, managedWeb: verifyManagedWeb,
   stat: async path => { const s = await lstat(path); return { directory: s.isDirectory(), characterDevice: s.isCharacterDevice(),
-    uid: s.uid, mode: s.mode, link: s.isSymbolicLink() }; },
+    uid: s.uid, mode: s.mode, link: s.isSymbolicLink(), file: s.isFile(), nlink: s.nlink }; },
   run: (path, args) => new Promise((resolve, reject) => execFile(path, args, {
     timeout: 5000, maxBuffer: 2 * 1024 * 1024, windowsHide: true, env: { PATH: '/usr/sbin:/usr/bin', LC_ALL: 'C' },
   }, (error, stdout) => error ? reject(new SetupError((error as NodeJS.ErrnoException).code === 'ENOENT'
@@ -51,6 +56,7 @@ function supportedNode(version: string): boolean {
 
 function observationFailure(error: unknown): { code: string; status: DoctorStatus; reason: string } {
   const code = (error as { code?: unknown } | null)?.code;
+  if (error instanceof PathEvidenceError) return { code: error.code, status: 'fail', reason: '可信路径、归属或服务访问条件不满足安装器的共享规则。' };
   if (code === 'ENOENT' || error instanceof SetupError && code === 'SETUP_REQUIRED_COMPONENT_MISSING') {
     return { code: 'SETUP_REQUIRED_COMPONENT_MISSING', status: 'fail', reason: '只读观察确认所需路径或命令不存在。' };
   }
@@ -75,7 +81,7 @@ export function parseServiceIdentity(accounts: string, name: string, expectedUid
 export async function inspectSetup(environmentInput?: unknown, host: DoctorHost = nativeHost()) {
   const checks: Check[] = [];
   const add = (id: CheckId, status: DoctorStatus, message: string, action?: string, required = true,
-    detail?: { code: string; reason: string }) => checks.push({ id, layer: checkLayers[id], status, required, message,
+    detail?: { code: string; reason: string }) => checks.push({ id, layer: id.startsWith('deployment-directory-') ? 'identity' : checkLayers[id as keyof typeof checkLayers], status, required, message,
       code: detail?.code ?? (status === 'pass' ? 'SETUP_CHECK_PASSED' : status === 'fail' ? 'SETUP_REQUIREMENT_NOT_MET' : 'SETUP_CHECK_UNAVAILABLE'),
       reason: detail?.reason ?? (status === 'pass' ? '本次只读观察满足本项条件。' : status === 'fail'
         ? '已取得观察结果，但条件不满足要求。' : '未取得完整观察证据，不能判断本项通过。') + ' ' + message,
@@ -111,10 +117,24 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
     try { add(id, await action() ? 'pass' : 'fail', message, remedy, required); }
     catch (error) { const failure = observationFailure(error); add(id, failure.status, message, remedy, required, failure); }
   }
+  const pathHost: PathEvidenceHost = { resolve: path => host.resolve(path), info: async path => {
+    try {
+      const stat = await host.stat(path);
+      if (typeof stat.file !== 'boolean' || typeof stat.directory !== 'boolean' || typeof stat.link !== 'boolean' ||
+        !Number.isSafeInteger(stat.nlink) || !Number.isInteger(stat.uid) || !Number.isInteger(stat.mode)) {
+        throw new SetupError('SETUP_OBSERVATION_INVALID');
+      }
+      return { ...stat, file: stat.file, nlink: stat.nlink! };
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+  } };
+  async function trustedRun(path: string, args: string[]) {
+    await assertTrustedExecutable(path, pathHost);
+    return host.run(path, args);
+  }
   await probe('systemd', async () => (await host.stat('/run/systemd/system')).directory,
     '安装目标须由 systemd 管理。', '核对目标的 init 系统，普通端口映射容器不满足当前部署要求。');
   await probe('python', async () => {
-    const match = /^Python (\d+)\.(\d+)\.\d+/.exec(await host.run('/usr/bin/python3', ['--version']));
+    const match = /^Python (\d+)\.(\d+)\.\d+/.exec(await trustedRun('/usr/bin/python3', ['--version']));
     if (!match) throw new SetupError('SETUP_OBSERVATION_INVALID');
     return Number(match[1]) > 3 || Number(match[1]) === 3 && Number(match[2]) >= 9;
   }, 'Python 需要 3.9 或以上，路径为 /usr/bin/python3。', '按支持组合的系统准备步骤安装或修正工具。');
@@ -122,7 +142,7 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
     ['ip', '/usr/sbin/ip', ['-Version'], /ip utility|iproute2/, '需要可用的 iproute2。'],
     ['nft', '/usr/sbin/nft', ['--version'], /nftables/, '需要可用的 nftables。'],
     ['systemctl', environment?.system.systemctlPath ?? '/usr/bin/systemctl', ['--version'], /^systemd /, '需要可用的 systemctl。'],
-  ] as const) await probe(id, async () => recognized(await host.run(path, [...args]), match), message, '按支持组合的系统准备步骤安装或修正工具。');
+  ] as const) await probe(id, async () => recognized(await trustedRun(path, [...args]), match), message, '按支持组合的系统准备步骤安装或修正工具。');
   await probe('polkit', async () => (await host.stat('/etc/polkit-1/rules.d')).directory,
     '需要 polkit JavaScript rules 目录；存在目录不证明既有授权规则安全。', '安装支持 JavaScript rules 的 polkit 并审阅既有授权。');
   await probe('tun', async () => (await host.stat('/dev/net/tun')).characterDevice,
@@ -136,7 +156,7 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
   let serviceUid: number | null = null;
   if (environment) {
     try {
-      const accounts = await host.run('/usr/bin/getent', ['passwd']);
+      const accounts = await trustedRun('/usr/bin/getent', ['passwd']);
       if (accounts.trim() && accounts.trim().split('\n').some(line => line.split(':').length !== 7)) {
         throw new SetupError('SETUP_OBSERVATION_INVALID');
       }
@@ -151,7 +171,7 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
         '核对账户或查询权限后重跑；工具不会创建账户。', true, failure);
     }
     await probe('interface-address', async () => {
-      const result = JSON.parse(await host.run('/usr/sbin/ip', ['-j', 'address', 'show', 'dev', environment.network.ingressInterface]));
+      const result = JSON.parse(await trustedRun('/usr/sbin/ip', ['-j', 'address', 'show', 'dev', environment.network.ingressInterface]));
       if (!Array.isArray(result)) throw new SetupError('SETUP_OBSERVATION_INVALID');
       if (result.length !== 1) return false;
       if (!Array.isArray(result[0]?.flags) || !Array.isArray(result[0]?.addr_info)) throw new SetupError('SETUP_OBSERVATION_INVALID');
@@ -160,12 +180,35 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
     }, '指定接口应为 UP，且已配置所选 IPv4 与前缀。', '核对网口与地址；不要将 TUN 或其他网络误选为交付接口。');
     for (const [id, path] of [['node-path', environment.system.nodePath], ['systemctl-path', environment.system.systemctlPath]] as const) {
       await probe(id, async () => {
-        const resolved = await host.resolve(path), s = await host.stat(resolved);
-        return !s.directory && !s.link && s.uid === 0 && (s.mode & 0o022) === 0 && (s.mode & 0o005) === 0o005;
-      }, '运行工具应为 root 控制且服务账户可读取和执行。', '使用系统安装的工具，最终安装预检仍会核对全部祖先。');
+        const resolved = await assertTrustedExecutable(path, pathHost);
+        await assertServiceAncestors(path, pathHost); await assertServiceAncestors(resolved, pathHost);
+        return ((await pathHost.info(resolved))!.mode & 0o005) === 0o005;
+      }, '运行工具及链接链必须由 root 控制，服务账户可遍历、读取和执行。', '核对工具及全部祖先的归属与权限，再执行最终安装预检。');
+    }
+    await probe('release-parent', async () => {
+      await assertRootControlledPath(environment.system.releaseParent, pathHost);
+      return Boolean((await pathHost.info(environment.system.releaseParent))?.directory);
+    }, '发行安装父目录必须已存在且全部祖先由 root 控制。', '按安装准备步骤核对发行父目录，不使用链接或可写祖先。');
+    await probe('receipt-directory', async () => {
+      await assertPlannedDeploymentDirectory({ path: '/var/lib/cocoproxy-deployment', mode: '0700', owner: 'root' }, [], pathHost);
+      return true;
+    }, '已有部署收据目录必须为 root 私有目录，缺失时只检查其可信父目录。', '审阅收据目录归属及权限；不要移动或删除未知收据。');
+    if (serviceUid === null) add('service-paths', 'unknown', '缺少可信服务 UID，未核对部署目录归属和服务遍历。');
+    else {
+      const input = createSetupDeployment(environment, { manifestSha256: 'a'.repeat(64), binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256,
+        serviceUid, controllerSecret: 'doctor-path-inspection-only' }) as any;
+      const plan = renderDeploymentPlan(input);
+      for (const [index, directory] of plan.directories.entries()) await probe(`deployment-directory-${index + 1}`, async () => {
+        await assertPlannedDeploymentDirectory(directory, plan.directories, pathHost); return true;
+      }, '部署计划中的目录及其祖先必须满足对应 root 或服务 UID 的归属和权限。', '按计划顺序审阅对应目录，不由 doctor 创建目录或修改权限。');
+      await probe('service-paths', async () => {
+        for (const path of [input.runtime.sourceDirectory, input.runtime.stateDirectory, input.management.credentialPath,
+          ...plan.files.filter(file => file.owner !== 'root').map(file => file.path)]) await assertServiceAncestors(path, pathHost);
+        return true;
+      }, '服务账户必须可遍历发行、状态、凭据和服务文件的已存在祖先。', '核对祖先的服务遍历条件；缺失的计划目录由最终安装复核。');
     }
     await probe('configured-node-version', async () => {
-      const version = (await host.run(environment.system.nodePath, ['--version'])).trim();
+      const version = (await trustedRun(environment.system.nodePath, ['--version'])).trim();
       recognized(version, /^v\d+\.\d+\.\d+$/);
       return supportedNode(version.slice(1));
     }, '安装设置指定的 Node 路径必须同样满足版本要求。', '不能用当前入口运行时的版本替代目标 nodePath 的版本。');
@@ -174,7 +217,7 @@ export async function inspectSetup(environmentInput?: unknown, host: DoctorHost 
       ['routes', '/usr/sbin/ip', ['-j', 'route', 'show', 'table', 'all'], null],
       ['firewall', '/usr/sbin/nft', ['-j', 'list', 'ruleset'], 'nftables'],
     ] as const) await probe(id, async () => {
-      const value = JSON.parse(await host.run(path, [...args]));
+      const value = JSON.parse(await trustedRun(path, [...args]));
       if (!Array.isArray(field === null ? value : value?.[field])) throw new SetupError('SETUP_OBSERVATION_INVALID');
       return true;
     }, '可读取策略路由或防火墙 JSON；资源归属与冲突由安装预检进一步核验。', '核对权限与工具 JSON 能力，不能清空现有规则。');
