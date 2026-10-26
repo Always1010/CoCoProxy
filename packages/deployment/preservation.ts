@@ -10,7 +10,7 @@ import { parseAutomaticBindings } from '../management/automatic-bindings.ts';
 import { parseWorkspaceDocument } from '../management/workspace.ts';
 import { parseSiteProbeState } from '../management/site-probes.ts';
 import { parseDraftDocument } from '../drafts/index.ts';
-import { parseSourceRecord } from '../subscriptions/index.ts';
+import { isSubscriptionTemporaryName, parseSourceRecord } from '../subscriptions/index.ts';
 import { parseStoredCandidate, parseTransactionState } from '../transaction/index.ts';
 import { parseRuntimeLifecycle } from '../runtime/lifecycle.ts';
 import { loadRuntimeSettings, parseRuntimeSelection, recompileRuntimeCandidate } from '../runtime/settings.ts';
@@ -128,6 +128,7 @@ export async function capturePreservation(managementSettingsPath: string) {
   for (const [role, [path, maximum]] of Object.entries(stores)) documents[role as Store] = await optional(join(settings.stateDirectory, path), maximum);
   const sources: Record<string, string> = {};
   for (const name of names.subscriptions) {
+    if (isSubscriptionTemporaryName(name)) continue;
     need(/^[A-Za-z][A-Za-z0-9_-]{0,63}\.json$/.test(name));
     sources[name.slice(0, -5)] = await privateRead(join(settings.stateDirectory, 'subscriptions', name), 4194304);
   }
@@ -137,6 +138,7 @@ export async function capturePreservation(managementSettingsPath: string) {
   let candidate: string | null = null;
   const candidates: [string, string][] = [];
   for (const name of names.candidates) {
+    if (isSubscriptionTemporaryName(name)) continue;
     need(/^[a-f0-9]{64}\.json$/.test(name));
     const bytes = await privateRead(join(settings.stateDirectory, 'candidates', name));
     need(digest(bytes) === name.slice(0, -5)); candidates.push([name, digest(bytes)]);
