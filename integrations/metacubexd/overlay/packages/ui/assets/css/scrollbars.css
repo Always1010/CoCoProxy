@@ -1,0 +1,40 @@
+/* Keep scrollbars quiet across themes instead of using the accent color. */
+:root {
+  --scrollbar-thumb: color-mix(in oklab, var(--color-base-content) 28%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* Firefox uses the native thin width; utility classes can still hide a bar. */
+@supports not selector(::-webkit-scrollbar) {
+  @layer base {
+    * {
+      scrollbar-width: thin;
+    }
+  }
+}
+
+@supports selector(::-webkit-scrollbar) {
+  /* Native non-auto values override WebKit pseudo-element dimensions. */
+  :root {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  ::-webkit-scrollbar:vertical {
+    width: 4px;
+  }
+
+  ::-webkit-scrollbar:horizontal {
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background-color: var(--scrollbar-thumb);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+}
