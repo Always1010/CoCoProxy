@@ -41,7 +41,6 @@ source/
   apps/、packages/              # HEAD运行源码与模块参考
   docs/、examples/              # 白名单中的部署、使用及来源说明
   package.json、package-lock.json
-  scripts/measure-latency.mjs   # 无第三方依赖的请求时延基线工具
   scripts/cocoproxy-setup.sh    # 安装配置与诊断入口
   node_modules/                # 完整生产依赖
   integrations/metacubexd/      # 来源、review、LICENSE
@@ -59,7 +58,7 @@ manifest.json
 
 源码必须是干净 Git 工作树根，拒绝受跟踪修改和未忽略的新文件；固定启动HEAD，以 Git blob 读取并在完成前复核。symlink/gitlink 拒绝，不执行 Git hooks 或构建代码。
 
-选择 apps/packages、根包元数据及存在的 LICENSE/NOTICE、明确的文档／样本与来源记录，以及安装配置入口和独立的请求时延基线工具。可信部署选项说明 `examples/deployment-options.md` 随载荷提供。离线导航需要的通用协作说明、发布 workflow 和协议夹具说明仅按固定文件名纳入，不带入夹具代码、其他开发工具或上游完整源树。排除 .local、.git、缓存、测试与协议对端；不遍历本地共享链接。受跟踪源码含任意 `.local` 路径时，源码归档和装配都拒绝。
+选择 apps/packages 运行源码、根包元数据及存在的 LICENSE/NOTICE、明确的运维文档／样本与来源记录，以及安装配置和部署维护入口。可信部署选项说明 `examples/deployment-options.md` 随载荷提供。规则数据、旧候选兼容数据及许可随运行源码保留，规则生成器留在源码仓库。开发约定、发布 workflow、开发／构建／压测说明、协议夹具与构建 README、时延测量工具不进入运行包；运维文档需要的开发参考链接到官方源码仓库。排除 .local、.git、缓存、测试与协议对端；不遍历本地共享链接。受跟踪源码含任意 `.local` 路径时，源码归档和装配都拒绝。
 
 装配在固定白名单内验证所有 Markdown 的本地链接、图片、引用式链接和 HTML src/href 目标；缺失、越界或不安全目标均拒绝并清理本次暂存。检查不按文档链接自动扩大白名单，也不验证远程地址或 Markdown 页内锚点。CI 的 `node --test tests/release-metadata.test.mjs` 使用同一检查提前验证仓库导航闭包。
 

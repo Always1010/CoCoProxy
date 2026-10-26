@@ -36,9 +36,7 @@ function safePath(value) {
 }
 function allowed(path) {
   const parts = safePath(path);
-  // Ship the explicitly selected integration guide, while excluding fixtures.
-  return path === 'integrations/protocol-fixture/README.md'
-    || !parts.some(part => forbidden.has(part.toLowerCase()) || part.toLowerCase() === 'node_modules');
+  return !parts.some(part => forbidden.has(part.toLowerCase()) || part.toLowerCase() === 'node_modules');
 }
 function sensitive(path) {
   return safePath(path).some(part => /^\.env(?:\.|$)|^\.(?:npmrc|netrc|pypirc)$|\.(?:pem|key|p12|pfx|ya?ml)$/iu.test(part)
@@ -232,7 +230,7 @@ export async function stageExplicitRelease(options) {
     for (const entry of tree) {
       if (!allowed(entry.path)) continue;
       if (selectedReleaseSource(entry.path)) {
-        if (sensitive(entry.path) && entry.path !== '.github/workflows/release.yml') fail('SOURCE_FILE_FORBIDDEN');
+        if (sensitive(entry.path)) fail('SOURCE_FILE_FORBIDDEN');
         await write(`source/${entry.path}`, await blob(entry.path), entry.mode);
       }
     }
