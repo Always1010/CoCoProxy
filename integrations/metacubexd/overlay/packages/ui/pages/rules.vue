@@ -38,7 +38,7 @@ onMounted(() => run(load))
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-3">
-    <WorkspaceToolbar :dirty="dirty" />
+    <WorkspaceToolbar :dirty="dirty"><template #actions><RuleTestPopover /></template></WorkspaceToolbar>
     <div role="tablist" class="tabs tabs-box w-fit shrink-0">
       <button role="tab" class="tab" :class="{ 'tab-active': tab === 'effective' }" :aria-selected="tab === 'effective'" @click="tab = 'effective'">生效规则</button>
       <button role="tab" class="tab" :class="{ 'tab-active': tab === 'custom' }" :aria-selected="tab === 'custom'" @click="tab = 'custom'">自定义规则<span v-if="entries.length" class="badge badge-sm ml-2">{{ entries.length }}</span></button>

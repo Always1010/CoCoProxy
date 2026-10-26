@@ -67,6 +67,8 @@ Server overlay 替换了上游原控制 router、自动启动、刷新调度和 
 
 ## 核心代理
 
+POST `/api/cocoproxy/rules/test` 接收 `{target, network?, destinationPort?, sourceIP?, sourcePort?}`，在管理会话与 Origin 校验后分析当前生效规则。读取经运行核验的不可变候选、核心规则禁用状态及当前组选择；按原始顺序执行域名、CIDR、端口、协议及内置 inline 集合匹配，遇到条件不足或不支持的复杂表达式时停止并报告，不能跳过后宣称兜底命中。需要地址匹配时通过内部 controller DNS 查询，不开放浏览器任意 controller 路由。最多并行 4 次，DNS 查询有 5 秒时限；前后核验 active 代次，冲突返回 409。不写工作区或核心配置，不访问目标网站，结果是所给条件下的规则分析，不是完整连接实测。正则只执行有界兼容子集及内置表达式，其他 regexp2 表达式明确报告无法分析。
+
 `/api/clash/*` 与上述接口共用 Cookie。仅允许有限 GET：version/configs/proxies/group/rules/providers/connections；按名称选择节点的 PUT，以及关闭连接／清除选择的 DELETE 要求 `If-Match` 等于已观察 generation，且在配置应用共用锁内重新核验目标。PATCH/PUT configs、重启、更新、provider 下载与脚本入口均拒绝。GET 返回 `X-CoCoProxy-Generation`；候选切换由事务接口完成，不借助热写配置。
 
 目标固定为当前 active、selection 和真实运行证据一致的 loopback controller，密钥仅在服务端 Authorization 头中使用。不接受客户端 Bearer、Cookie 转发、目标地址或 token 查询。延迟探测只能使用 `controllerPolicy.allowedProbeOrigins` 中精确的 HTTPS origin，timeout 不超过 10 秒；省略 `controllerPolicy` 时使用仪表盘默认的 `https://www.gstatic.com`，显式空数组关闭测速。UI 的探测 URL 必须与部署许可一致。

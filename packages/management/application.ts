@@ -22,6 +22,7 @@ const revision = (value: unknown): value is number => Number.isSafeInteger(value
 
 /** Routes only CoCoProxy operations; the stock upstream write router is not used. */
 export function createManagementApplication(options: { stateDirectory: string; deployment: unknown; runtime: ManagementRuntime; sourceClient?: SnapshotClient; sourceDecoder?: SnapshotDecoder; automaticGateway?: AutomaticGatewaySettings;
+  ruleTest?: (request: Request) => Promise<unknown>;
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }> }): ManagementAction {
   // Compile before cloning so getters and non-JSON values cannot run here.
   compileConfig({ schemaVersion: 1, deployment: options.deployment, policy: { rules: ['MATCH,REJECT'] } });
@@ -57,6 +58,10 @@ export function createManagementApplication(options: { stateDirectory: string; d
   return async request => {
     try {
       const path = new URL(request.url).pathname;
+      if (path === '/api/cocoproxy/rules/test' && request.method === 'POST') {
+        if (!options.ruleTest) throw new ManagementError('RULE_TEST_UNAVAILABLE', 503);
+        return await options.ruleTest(request);
+      }
       if (path === '/api/cocoproxy/workspace' || path.startsWith('/api/cocoproxy/workspace/')) return await workspace(request);
       if (path === '/api/cocoproxy/status' && request.method === 'GET') {
         const status = await store.status();
