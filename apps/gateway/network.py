@@ -122,9 +122,15 @@ def load_settings(path):
     n = value['network']
     require(isinstance(n, dict))
     source_key = 'clientCIDR' if 'clientCIDR' in n else 'clientIPv4'
-    require(set(n) == {'schemaVersion', 'ingressInterface', 'gatewayIPv4',
+    required = {'schemaVersion', 'ingressInterface', 'gatewayIPv4',
             'routerIPv4', 'routerMAC', source_key, 'prefixLength', 'dnsPort', 'egressMark',
-            'egressTable', 'egressPriority', 'tunMtu'} and type(n['schemaVersion']) is int and n['schemaVersion'] == 1)
+            'egressTable', 'egressPriority', 'tunMtu'}
+    require(required <= set(n) <= required | {'tunStack', 'tunGso'} and
+            type(n['schemaVersion']) is int and n['schemaVersion'] == 1)
+    if 'tunStack' in n:
+        require(type(n['tunStack']) is str and n['tunStack'] in ('mips', 'system', 'mixed', 'gvisor'))
+    if 'tunGso' in n:
+        require(type(n['tunGso']) is bool)
     for key, low, high in [('prefixLength', 1, 29), ('dnsPort', 1024, 65535),
                            ('egressMark', 1, 0xffffffff), ('egressTable', 2000, 19999),
                            ('egressPriority', 1000, 8997), ('tunMtu', 1280, 9000)]:

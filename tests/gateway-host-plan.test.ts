@@ -16,6 +16,31 @@ const network = { schemaVersion: 1, ingressInterface: 'lan0', gatewayIPv4: '192.
 const input = { network, sourceDirectory: '/opt/cocoproxy', pythonPath: '/usr/bin/python3',
   settingsPath: '/etc/cocoproxy/gateway-network.json', stateDirectory: '/var/lib/cocoproxy-gateway-network' };
 
+test('generated optional TUN fields pass the actual Python helper schema without widening accepted keys', {
+  skip: !process.env.COCOPROXY_TEST_PYTHON,
+}, async () => {
+  const cases: { settings: unknown; accepted: boolean }[] = [];
+  for (const tunStack of ['mips', 'system', 'mixed', 'gvisor'] as const) for (const tunGso of [false, true]) {
+    cases.push({ settings: renderAutomaticGatewayHostPlan({ ...input, network: { ...network, tunStack, tunGso } }).settings, accepted: true });
+  }
+  const settings = renderAutomaticGatewayHostPlan(input).settings;
+  cases.push({ settings, accepted: true });
+  for (const extra of [{ tunGso: 1 }, { tunGso: null }, { tunStack: 'auto' }, { tunStack: null }, { unexpected: true }])
+    cases.push({ settings: { ...settings, network: { ...settings.network, ...extra } }, accepted: false });
+  const child = spawn(process.env.COCOPROXY_TEST_PYTHON!, ['-I',
+    fileURLToPath(new URL('./fixtures/gateway-settings-contract.py', import.meta.url)),
+    fileURLToPath(new URL('../apps/gateway/network.py', import.meta.url))], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  let output = ''; child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.resume();
+  child.stdin.end(JSON.stringify(cases));
+  const timer = setTimeout(() => child.kill(), 10_000);
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+    assert.equal(code, 0, 'Python helper schema must accept only the same optional fields as TypeScript');
+    assert.equal(JSON.parse(output).checked, cases.length);
+  } finally { clearTimeout(timer); }
+});
+
 test('native root oneshot retains an independent guard when the core or service stops', () => {
   const plan = renderAutomaticGatewayHostPlan(input);
   assert.match(plan.unit, /Type=oneshot\nRemainAfterExit=true\nUser=root/);
