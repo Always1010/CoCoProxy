@@ -154,6 +154,29 @@ test('selection eligibility refuses every change outside identical select member
   ]) assert.equal(selectionChanges(first, modified), null);
 });
 
+test('selection comparison only reuses deeply frozen policy and returns independent choices', () => {
+  for (const shallowFreeze of [false, true]) {
+    const previous = candidate().config, target = candidate(true).config;
+    if (shallowFreeze) Object.freeze(target);
+    assert.equal(selectionChanges(previous, target)?.length, 2);
+    (target.rules as string[]).push('MATCH,REJECT');
+    assert.equal(selectionChanges(previous, target), null);
+  }
+  const freeze = (value: unknown): void => {
+    if (value === null || typeof value !== 'object') return;
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  };
+  const previous = candidate().config, target = candidate(true).config;
+  freeze(previous); freeze(target);
+  const expected = [{ group: 'Manual', name: 'REJECT' }, { group: 'Secondary', name: 'REJECT' }];
+  const choices = selectionChanges(previous, target)!;
+  assert.deepEqual(choices, expected);
+  choices[0].name = 'DIRECT'; choices.pop();
+  assert.deepEqual(selectionChanges(previous, target), expected);
+  assert.equal(selectionChanges(previous, candidate(true, 'error').config), null);
+});
+
 function observerFixture() {
   const first = candidate(), second = candidate(true), pid = 22001, unit = { ...unitState(), activeState: 'active', subState: 'running', mainPid: pid };
   const path = (id: string) => `/synthetic/state/candidates/${id}.json`, home = '/synthetic/state/core-home';

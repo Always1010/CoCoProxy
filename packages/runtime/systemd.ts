@@ -6,7 +6,7 @@ import { atomicWrite, inspectPrivateDirectory, syncDirectory } from '../storage/
 import type { RuntimeAdapter } from '../transaction/index.ts';
 import { runRuntimeCommand } from './command.ts';
 import { assertManagedUnit, inspectCore, observeCore } from './observer.ts';
-import { loadRuntimeCandidate, parseRuntimeSettings, readRuntimeSelection, verifyBinary } from './settings.ts';
+import { loadRuntimeCandidate, loadRuntimeCandidateReadonly, parseRuntimeSettings, readRuntimeSelection, verifyBinary } from './settings.ts';
 import { selectionChanges, setControllerSelection } from './selections.ts';
 import { RuntimeError } from './types.ts';
 import type { CoreObservation, RuntimeSettings, RuntimeSelection, RuntimeUnitState } from './types.ts';
@@ -70,7 +70,7 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
     this.settings = Object.freeze(parseRuntimeSettings(settings));
     this.deps = { command: runRuntimeCommand, assertUnit: assertManagedUnit, binary: verifyBinary,
       validate: validateWithMihomo, observe: observeCore, verifySystemctl, inspect: inspectCore,
-      load: loadRuntimeCandidate, readSelection: readRuntimeSelection, writeSelection,
+      load: loadRuntimeCandidateReadonly, readSelection: readRuntimeSelection, writeSelection,
       setSelection: setControllerSelection, platform: process.platform, ...dependencies };
   }
 

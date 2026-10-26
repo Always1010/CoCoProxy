@@ -1,10 +1,39 @@
 import { request } from 'node:http';
+import { types } from 'node:util';
 import { canonicalJson } from '../config/index.ts';
 import type { JsonObject, JsonValue } from '../config/index.ts';
 import { RuntimeError } from './types.ts';
 
 type Selection = { group: string; name: string };
 const record = (value: JsonValue | undefined): value is JsonObject => value !== null && typeof value === 'object' && !Array.isArray(value);
+// Weak keys do not keep retired candidate snapshots or their signatures alive.
+const normalizedConfigurations = new WeakMap<JsonObject, string>();
+
+function deeplyFrozen(value: JsonValue): boolean {
+  if (value === null) return true;
+  if (typeof value !== 'object') return ['string', 'boolean', 'number'].includes(typeof value);
+  if (types.isProxy(value) || !Object.isFrozen(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== (Array.isArray(value) ? Array.prototype : Object.prototype) && prototype !== null) return false;
+  return Reflect.ownKeys(value).every(key => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    return 'value' in descriptor && deeplyFrozen(descriptor.value);
+  });
+}
+
+function normalizedConfiguration(config: JsonObject): string {
+  const cached = normalizedConfigurations.get(config);
+  if (cached !== undefined) return cached;
+  const normalized = { ...config, 'proxy-groups': (config['proxy-groups'] as JsonValue[]).map(value => {
+    if (!record(value) || value.type !== 'select') return value;
+    return { ...value, proxies: [...value.proxies as string[]].sort() };
+  }) };
+  const signature = canonicalJson(normalized);
+  // A frozen shell is insufficient: nested policy edits must invalidate the
+  // comparison. Once proved immutable, future hits need no recursive walk.
+  if (deeplyFrozen(config)) normalizedConfigurations.set(config, signature);
+  return signature;
+}
 
 /** Every manual selection is deterministic on restart; cached choices are forbidden. */
 export function manualSelections(config: JsonObject): Selection[] | null {
@@ -25,11 +54,7 @@ export function manualSelections(config: JsonObject): Selection[] | null {
 export function selectionChanges(previous: JsonObject, target: JsonObject): Selection[] | null {
   const oldChoices = manualSelections(previous), choices = manualSelections(target);
   if (!oldChoices || !choices) return null;
-  const normalize = (config: JsonObject): JsonObject => ({ ...config, 'proxy-groups': (config['proxy-groups'] as JsonValue[]).map(value => {
-    if (!record(value) || value.type !== 'select') return value;
-    return { ...value, proxies: [...value.proxies as string[]].sort() };
-  }) });
-  if (canonicalJson(normalize(previous)) !== canonicalJson(normalize(target))) return null;
+  if (normalizedConfiguration(previous) !== normalizedConfiguration(target)) return null;
   return choices.filter((choice, index) => choice.name !== oldChoices[index]?.name);
 }
 
