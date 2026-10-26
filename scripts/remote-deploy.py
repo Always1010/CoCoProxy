@@ -303,22 +303,49 @@ def main_locked(options):
         def lifecycle(command, release, settings):
             return json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types', Path(release) / 'source/apps/cli/main.ts',
                 command, '--state-dir', settings['stateDirectory'], '--runtime-settings', settings['settingsPath']]))
+        def maintenance(command, token_path=None):
+            args = ['runuser', '-u', service, '--', node, '--experimental-strip-types', payload / 'source/apps/cli/main.ts',
+                    command, '--state-dir', runtime['stateDirectory']]
+            return json.loads(run(args + (['--input', token_path] if token_path else [])))
         before_lifecycle = json.loads(regular(Path(runtime['stateDirectory']) / 'lifecycle.json')) if installed and (Path(runtime['stateDirectory']) / 'lifecycle.json').exists() else None
         if before_lifecycle:
-            need(not before_lifecycle['paused'], 'REMOTE_RUNTIME_ALREADY_PAUSED')
-        credential_sha = hashlib.sha256(regular(management['credentialPath'])).hexdigest() if installed else None
+            need(not (before_lifecycle['enabled'] and before_lifecycle['paused']), 'REMOTE_RUNTIME_ALREADY_PAUSED')
+            need(not before_lifecycle['paused'] or not before_units['cocoproxy-mihomo.service']['active'], 'REMOTE_PAUSED_ACTIVE_CORE_REQUIRES_REVIEW')
+        credential_sha = None
         def business():
             state = Path(runtime['stateDirectory'])
             files = [state / 'workspace.json', state / 'draft.json', *sorted((state / 'subscriptions').glob('*.json'))]
             return {str(file.relative_to(state)): hashlib.sha256(regular(file)).hexdigest() for file in files if file.exists()}
-        before_business = business() if installed else None
-        replace(journal, {'status': 'running', 'phase': 'maintenance', 'manifestSha256': options.manifest_sha256})
+        before_business = None
+        progress = {'status': 'running', 'phase': 'maintenance', 'manifestSha256': options.manifest_sha256,
+                    'previousServices': before_units, 'routerPreviouslyEnabled': router_enabled,
+                    'previousLifecycle': {'present': before_lifecycle is not None,
+                        'enabled': before_lifecycle['enabled'] if before_lifecycle else False,
+                        'paused': before_lifecycle['paused'] if before_lifecycle else False}}
+        def record_phase(phase, **facts):
+            progress.update(phase=phase, **facts)
+            replace(journal, progress)
+        record_phase('maintenance')
         try:
             if installed:
-                lifecycle('runtime-pause', receipt['release'], old['runtime'])
+                # The new public CLI can drain the shared transaction without parsing
+                # old core settings, and returns an exact, fingerprint-bound intent token.
+                paused = maintenance('runtime-maintenance-pause')
+                restore_token = paused['maintenanceRestore']
+                previous_intent = restore_token['previous']
+                record_phase('runtime-paused', maintenanceRestore=restore_token)
+                need(previous_intent == {'present': before_lifecycle is not None,
+                     'enabled': before_lifecycle['enabled'] if before_lifecycle else False,
+                     'paused': before_lifecycle['paused'] if before_lifecycle else False}, 'REMOTE_RUNTIME_INTENT_CHANGED')
+                temporary.chmod(0o711)
+                token_path = temporary / 'maintenance-restore.json'
+                put(token_path, (json.dumps(restore_token) + '\n').encode())
+                os.chown(token_path, runtime['serviceUid'], 0)
+                os.chmod(token_path, 0o600)
                 if gateway:
                     run([*router_command, 'disable'])
                     need(json.loads(run([*router_command, 'status']))['enabled'] is False, 'REMOTE_ROUTER_NOT_DISABLED')
+                    record_phase('router-disabled')
                 for unit in ['cocoproxy-web.service', 'cocoproxy-management.service', 'cocoproxy-mihomo.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']:
                     if unit in units:
                         run([systemctl, 'stop', unit])
@@ -328,9 +355,16 @@ def main_locked(options):
                 if gateway:
                     run(['python3', '-I', Path(receipt['release']) / 'source/apps/gateway/network.py', 'remove',
                         '--settings', Path(old['runtime']['settingsPath']).parent / 'gateway-network.json'])
+                # Snapshot after the manager has stopped: edits completed while
+                # entering maintenance must remain valid, rather than look like
+                # changes caused by the subsequent file installation.
+                credential_sha = hashlib.sha256(regular(management['credentialPath'])).hexdigest()
+                before_business = business()
+                record_phase('services-stopped-network-retired')
             operation = 'upgrade' if installed else 'install'
             run(installer + ['--operation', operation, *common])
             run(installer + ['--operation', operation, *common, '--apply'])
+            record_phase('files-installed')
             replace(input_path, candidate)
             replace(PRIVATE / 'remote.json', {**profile, **({'routerHook': hook} if hook else {}), **({'webUnit': web_unit} if web_unit else {})})
             if router_bytes:
@@ -340,6 +374,11 @@ def main_locked(options):
                 os.chown(management['credentialPath'], runtime['serviceUid'], 0)
                 os.chmod(management['credentialPath'], 0o600)
             inspect_complete(options.manifest_sha256)
+            if installed:
+                restored = maintenance('runtime-maintenance-restore', token_path)
+                need(restored.get('lifecycle') == {'schemaVersion': 1, 'enabled': previous_intent['enabled'], 'paused': previous_intent['paused']} and
+                     (Path(runtime['stateDirectory']) / 'lifecycle.json').exists() == previous_intent['present'], 'REMOTE_RUNTIME_INTENT_NOT_RESTORED')
+                record_phase('runtime-intent-restored')
             enabled = [unit for unit, value in before_units.items() if value['enabled']]
             if enabled:
                 run([systemctl, 'enable', *enabled])
@@ -347,11 +386,9 @@ def main_locked(options):
                 for unit in ['cocoproxy-gateway-guard.service', 'cocoproxy-management.service', 'cocoproxy-web.service']:
                     if before_units.get(unit, {}).get('active'):
                         run([systemctl, 'start', unit])
-                if before_lifecycle and before_lifecycle['enabled']:
-                    lifecycle('runtime-resume', Path(runtime['sourceDirectory']).parent, runtime)
-                elif before_units['cocoproxy-mihomo.service']['active']:
-                    run([systemctl, 'start', 'cocoproxy-mihomo.service'])
                 if before_units['cocoproxy-mihomo.service']['active']:
+                    run([systemctl, 'start', 'cocoproxy-mihomo.service'])
+                if before_units['cocoproxy-mihomo.service']['active'] or router_enabled:
                     for _ in range(30):
                         if (lifecycle('runtime-status', Path(runtime['sourceDirectory']).parent, runtime).get('core') or {}).get('ready'):
                             break
@@ -371,9 +408,10 @@ def main_locked(options):
                 need(json.loads(run([*router_command, 'status']))['enabled'] is True, 'REMOTE_ROUTER_NOT_RESTORED')
             replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit']})
             print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256,
-                'privateStatePreserved': installed, 'routerRestored': bool(installed and gateway), 'initialConfigurationRequired': not installed}))
+                'privateStatePreserved': installed, 'routerRestored': bool(router_enabled), 'initialConfigurationRequired': not installed}))
         except Exception:
-            replace(journal, {'status': 'failed', 'phase': 'manual-review-required', 'manifestSha256': options.manifest_sha256})
+            progress.update(status='failed', lastCompletedPhase=progress['phase'], phase='manual-review-required')
+            replace(journal, progress)
             raise
 
 
