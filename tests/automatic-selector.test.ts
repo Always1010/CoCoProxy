@@ -34,6 +34,9 @@ test('automatic policy validates bounded disjoint nodes and safe HTTPS probe set
   assert.deepEqual(parseAutoProbeSettings(DEFAULT_AUTO_PROBES), DEFAULT_AUTO_PROBES);
   assert.deepEqual(parseAutoGroupPolicy({ preferred: ['a'], fallback: ['b'], returnToPreferred: false }),
     { preferred: ['a'], fallback: ['b'], returnToPreferred: false });
+  assert.deepEqual(parseAutoGroupPolicy({ enabled: false, preferred: ['a'], fallback: ['b'], returnToPreferred: false }),
+    { enabled: false, preferred: ['a'], fallback: ['b'], returnToPreferred: false });
+  assert.equal(parseAutoGroupPolicy({ enabled: false, preferred: [], fallback: [], returnToPreferred: true }).enabled, false);
   const invalid = (fn: () => unknown) => assert.throws(fn, error => (error as { code: string }).code === 'AUTO_SETTINGS_INVALID'
     && !(error as Error).message.includes('SECRET'));
   for (const preferred of [['DIRECT'], ['REJECT'], ['a', 'a'], Array.from({ length: 33 }, (_, i) => String(i))]) {
@@ -41,6 +44,8 @@ test('automatic policy validates bounded disjoint nodes and safe HTTPS probe set
   }
   invalid(() => parseAutoGroupPolicy({ preferred: ['a'], fallback: ['a'], returnToPreferred: true }));
   invalid(() => parseAutoGroupPolicy({ preferred: [], fallback: ['a'], returnToPreferred: true }));
+  invalid(() => parseAutoGroupPolicy({ enabled: true, preferred: [], fallback: ['a'], returnToPreferred: true }));
+  invalid(() => parseAutoGroupPolicy({ enabled: 'false', preferred: ['a'], fallback: [], returnToPreferred: true }));
   invalid(() => parseAutoGroupPolicy({ preferred: ['a'], fallback: [], returnToPreferred: true, extra: true }));
   for (const url of ['http://example.test/', 'https://user:SECRET@example.test/', 'https://example.test/?token=SECRET', 'https://example.test/#SECRET']) {
     invalid(() => parseAutoProbeSettings({ ...DEFAULT_AUTO_PROBES, primary: { url, expectedStatus: 204 } }));

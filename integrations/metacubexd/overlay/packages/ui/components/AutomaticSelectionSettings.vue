@@ -72,7 +72,7 @@ function close() {
 function open() {
   if (!props.selectable) return
   const policy = overrides.value.automatic?.[props.groupName]
-  enabled.value = !!policy
+  enabled.value = !!policy && policy.enabled !== false
   preferred.value = [...(policy?.preferred ?? [])]
   fallback.value = [...(policy?.fallback ?? [])]
   returnToPreferred.value = policy?.returnToPreferred ?? true
@@ -86,12 +86,13 @@ function open() {
 async function persist() {
   if (invalid.value || busy.value) return
   await run(async () => {
-    const policy: AutoGroupPolicy = { preferred: [...preferred.value], fallback: [...fallback.value], returnToPreferred: returnToPreferred.value }
+    const policy: AutoGroupPolicy = { enabled: enabled.value, preferred: [...preferred.value], fallback: [...fallback.value], returnToPreferred: returnToPreferred.value }
     await save(settings => {
       const target = editOverrides(settings)
-      if (enabled.value) (target.automatic ??= {})[props.groupName] = policy
-      else {
-        if (target.automatic) delete target.automatic[props.groupName]
+      if (enabled.value || target.automatic?.[props.groupName] || preferred.value.length || fallback.value.length) {
+        (target.automatic ??= {})[props.groupName] = policy
+      }
+      if (!enabled.value) {
         const current = view.value?.groups.find(group => group.name === props.groupName)?.activeSelected
         if (current && nodes.value.includes(current)) target.selections[props.groupName] = current
       }
@@ -107,14 +108,14 @@ onUnmounted(() => { disposed = true; close() })
 
 <template>
   <span class="shrink-0" :title="selectable ? '自动选择设置' : '此订阅策略组保留核心自动算法，无法叠加自动选择'">
-    <button type="button" class="btn btn-ghost btn-sm" :class="overrides.automatic?.[groupName] ? 'text-primary' : ''" :disabled="!selectable" :title="selectable ? '自动选择设置' : '此订阅策略组保留核心自动算法'" :aria-label="`${groupName} 自动选择设置`" @click="open"><IconSettings :size="18" /><span>自动选择</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" :class="overrides.automatic?.[groupName] && overrides.automatic[groupName].enabled !== false ? 'text-primary' : ''" :disabled="!selectable" :title="selectable ? '自动选择设置' : '此订阅策略组保留核心自动算法'" :aria-label="`${groupName} 自动选择设置`" @click="open"><IconSettings :size="18" /><span>自动选择</span></button>
   </span>
   <dialog ref="dialog" class="modal" @close="close">
     <div class="modal-box max-w-2xl">
       <h2 class="mb-4 text-lg font-semibold">{{ groupName }} · 自动选择</h2>
       <form class="flex flex-col gap-4" @submit.prevent="persist">
         <label class="flex items-center justify-between gap-3">启用自动选择<input v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="busy" /></label>
-        <p class="text-xs leading-relaxed text-base-content/65">正常时每 30 秒检测当前节点；故障时按需检测候选节点并切换。优选不可用时使用备选；开启回切后按 5、10、15 分钟退避检测优选恢复。点击组内节点可随时接管为手动。</p>
+        <p class="text-xs leading-relaxed text-base-content/65">正常时每 30 秒检测当前节点；故障时按需检测候选节点并切换。优选不可用时使用备选；开启回切后按 5、10、15 分钟退避检测优选恢复。点击组内节点可随时接管为手动；停用后保留优选、备选和回切设置，再次开启可继续使用。</p>
         <template v-if="enabled">
           <input v-model="search" type="search" class="input input-sm w-full" placeholder="筛选候选节点" aria-label="筛选自动选择候选节点" />
           <div class="grid grid-cols-2 gap-3">

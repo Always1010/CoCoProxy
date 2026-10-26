@@ -46,7 +46,10 @@ const groupNames = computed(() => props.groups.map((g) => g.name))
 // browsing state under the scheme identity instead, including across navigation.
 const { workspace } = useWorkspace()
 const { view, busy, overrides } = useWorkspace()
-const automaticEnabled = computed(() => !!activeName.value && !!overrides.value.automatic?.[activeName.value])
+const automaticEnabled = computed(() => {
+  const policy = overrides.value.automatic?.[activeName.value]
+  return !!policy && policy.enabled !== false
+})
 const { metadata: tcpMetadata, run: runTcp, cancel: cancelTcp, isRunning: tcpRunning, completed: tcpCompleted, total: tcpTotal } = useTcpDelay()
 const scope = `${workspace.value?.mode ?? 'initial'}:${workspace.value?.mode === 'subscription' ? workspace.value.subscriptionId ?? '' : ''}`
 const { activeName, scrollTop } = useProxyWorkbench(scope, groupNames)

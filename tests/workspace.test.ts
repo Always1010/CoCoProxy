@@ -121,6 +121,46 @@ test('automatic activation failure rolls back only its private binding and manua
   assert.equal(await f.action.automaticSnapshot(), null);
 });
 
+test('manual takeover and toggling automatic selection retain candidate pools and resume only when enabled', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }] });
+  const policy = { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: false };
+  const saved = await f.save(settings({ sourceIds: ['pool'], local: {
+    selections: { Proxy: 'synthetic-node' }, rules: [], automatic: { Proxy: policy },
+  } }), 0);
+  const active = await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node' });
+  const before = await f.action.automaticSnapshot(); assert.ok(before);
+  await f.call('/workspace/select', 'POST', { expectedRevision: saved.revision, expectedActive: active.active, group: 'Proxy', name: 'outside' });
+  f.observe({ Proxy: 'outside' });
+  const manual = await f.view();
+  assert.equal(manual.pending, false);
+  assert.equal(manual.workspace.local.selections.Proxy, 'outside');
+  assert.deepEqual({ ...manual.workspace.local.automatic!.Proxy }, { ...policy, enabled: false });
+  assert.equal(await f.action.automaticSnapshot(true), null);
+  assert.equal(await f.action.automaticSwitch(before, 'Proxy', 'spare', 'failure-recovery'), false);
+  const resumedSettings = withoutRevision(structuredClone(manual.workspace));
+  resumedSettings.local.automatic!.Proxy.enabled = true;
+  const resumed = await f.save(resumedSettings, manual.workspace.revision);
+  const running = await f.apply(resumed, manual.active);
+  f.observe({ Proxy: 'synthetic-node' });
+  assert.deepEqual((await f.action.automaticSnapshot(true))?.groups[0].policy, { ...policy, enabled: true });
+  const disabledSettings = withoutRevision(structuredClone(resumed));
+  disabledSettings.local.automatic!.Proxy.enabled = false;
+  disabledSettings.local.selections.Proxy = 'synthetic-node';
+  const disabled = await f.save(disabledSettings, resumed.revision);
+  await f.apply(disabled, running.active);
+  assert.equal(await f.action.automaticSnapshot(true), null);
+  assert.deepEqual({ ...(await f.view()).workspace.local.automatic!.Proxy }, { ...policy, enabled: false });
+  // A removed candidate in a dormant pool must not block manual operation;
+  // enabling that same pool still requires current group membership.
+  const stale = withoutRevision(structuredClone(disabled));
+  stale.local.automatic!.Proxy.preferred = ['removed-node'];
+  const dormant = await f.save(stale, disabled.revision);
+  stale.local.automatic!.Proxy.enabled = true;
+  await assert.rejects(f.save(stale, dormant.revision), { code: 'AUTO_GROUP_INVALID' });
+});
+
 test('automatic configuration rejects group aliases, foreign candidates, native algorithms and unpermitted probes before saving', async t => {
   const f = await fixture(t);
   await f.source('pool', profile);
