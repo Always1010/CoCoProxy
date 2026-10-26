@@ -17,7 +17,7 @@ CoCoProxy 分别固定 Mihomo 核心、MetaCubeXD 源树与 overlay、离线规�
 
 ## MetaCubeXD overlay 清单
 
-下表从当前 `integrations/metacubexd/overlay/` 的 58 个文件归类。表内路径相对该目录；分组表示应共同审阅的边界，不表示文件只影响一种行为。新增、删除或上游移动文件时同步此清单及 overlay 检查。
+下表从当前 `integrations/metacubexd/overlay/` 的 60 个文件归类。表内路径相对该目录；分组表示应共同审阅的边界，不表示文件只影响一种行为。新增、删除或上游移动文件时同步此清单及 overlay 检查。
 
 | 边界 | 文件 |
 | --- | --- |
@@ -26,10 +26,10 @@ CoCoProxy 分别固定 Mihomo 核心、MetaCubeXD 源树与 overlay、离线规�
 | Server 认证与路由（6） | `apps/server/middleware/auth.ts`、`apps/server/routes/[...].ts`、`apps/server/routes/config.js.ts`、`apps/server/routes/api/[...].ts`、`apps/server/routes/api/clash/[...].ts`、`apps/server/routes/api/control/[...].ts` |
 | UI 启动与认证（5） | `packages/ui/nuxt.config.ts`、`packages/ui/middleware/auth.global.ts`、`packages/ui/plugins/cocoproxy.client.ts`、`packages/ui/plugins/desktop-endpoint.client.ts`、`packages/ui/plugins/desktop-sync.client.ts` |
 | UI 页面（6） | `packages/ui/pages/cocoproxy.vue`、`packages/ui/pages/login.vue`、`packages/ui/pages/overview.vue`、`packages/ui/pages/proxies.vue`、`packages/ui/pages/rules.vue`、`packages/ui/pages/subscriptions.vue` |
-| 工作区与导航（9） | `packages/ui/components/MobileBottomNav.vue`、`packages/ui/components/NativeProxies.vue`、`packages/ui/components/NativeProxyMasterDetail.vue`、`packages/ui/components/NativeRules.vue`、`packages/ui/components/ProtectedResources.vue`、`packages/ui/components/RuleTestPopover.vue`、`packages/ui/components/Sidebar.vue`、`packages/ui/components/WorkspaceGroupsMenu.vue`、`packages/ui/components/WorkspaceToolbar.vue` |
+| 工作区与导航（10） | `packages/ui/components/MobileBottomNav.vue`、`packages/ui/components/Modal.vue`、`packages/ui/components/NativeProxies.vue`、`packages/ui/components/NativeProxyMasterDetail.vue`、`packages/ui/components/NativeRules.vue`、`packages/ui/components/ProtectedResources.vue`、`packages/ui/components/RuleTestPopover.vue`、`packages/ui/components/Sidebar.vue`、`packages/ui/components/WorkspaceGroupsMenu.vue`、`packages/ui/components/WorkspaceToolbar.vue` |
 | 自动选择与时延显示（7） | `packages/ui/components/AutomaticProxyNode.vue`、`packages/ui/components/AutomaticSelectionSettings.vue`、`packages/ui/components/AutoProbeSettings.vue`、`packages/ui/components/ConnectionErrorBanner.vue`、`packages/ui/components/Latency.vue`、`packages/ui/components/ProxyNodeListItem.vue`、`packages/ui/components/TcpLatency.vue` |
 | UI 会话/工作区 composables（5） | `packages/ui/composables/useApi.ts`、`packages/ui/composables/useCoCoProxy.ts`、`packages/ui/composables/useProxyWorkbench.ts`、`packages/ui/composables/useWebSocket.ts`、`packages/ui/composables/useWorkspace.ts` |
-| UI 时延/刷新 composables 与状态（7） | `packages/ui/composables/useBatchLatencyTest.ts`、`packages/ui/composables/useLatencyFeedback.ts`、`packages/ui/composables/useProxyRefresh.ts`、`packages/ui/composables/useTcpDelay.ts`、`packages/ui/stores/proxies.ts`、`packages/ui/utils/latencyBatch.ts`、`packages/ui/composables/__tests__/useTcpDelay.spec.ts` |
+| UI 时延/刷新 composables 与状态（8） | `packages/ui/composables/useBatchLatencyTest.ts`、`packages/ui/composables/useLatencyFeedback.ts`、`packages/ui/composables/useProxyRefresh.ts`、`packages/ui/composables/useTcpDelay.ts`、`packages/ui/stores/proxies.ts`、`packages/ui/utils/latencyBatch.ts`、`packages/ui/composables/__tests__/useTcpDelay.spec.ts`、`packages/ui/composables/__tests__/useBatchLatencyTest.spec.ts` |
 | 工作区测试（1） | `packages/ui/composables/__tests__/useProxyWorkbench.spec.ts` |
 | 站点检测与浏览器耗时（4） | `packages/ui/components/ConnectivityBoard.vue`、`packages/ui/components/LatencyCard.vue`、`packages/ui/composables/useReachabilityBoard.ts`、`packages/ui/composables/__tests__/useReachabilityBoard.spec.ts` |
 | 通知与安装清单（4） | `packages/ui/components/NotificationSettings.vue`、`packages/ui/composables/useNotifications.ts`、`packages/ui/public/cocoproxy-sw.js`、`packages/ui/public/manifest.webmanifest` |

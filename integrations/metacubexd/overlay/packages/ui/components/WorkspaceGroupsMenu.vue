@@ -37,13 +37,13 @@ async function remove() {
 
 <template>
   <div v-if="workspace?.mode === 'local'" class="shrink-0 sm:w-full">
-    <button class="btn btn-ghost btn-sm" title="管理策略组" aria-label="管理策略组" @click="menu?.open()"><IconAdjustments :size="18" /></button>
+    <button class="btn btn-ghost btn-sm" title="管理策略组" aria-label="管理策略组" @click="menu?.open()"><IconAdjustments :size="18" /><span>管理策略组</span></button>
     <Modal ref="menu" title="管理策略组">
       <div class="px-2 py-1 text-xs text-base-content/60">添加策略组</div>
       <ul v-if="available.length" class="menu w-full p-0"><li v-for="service in available" :key="service.id"><button :disabled="busy" @click="add(service.id)"><IconPlus :size="16" />{{ service.name }}</button></li></ul>
       <form class="mt-2 flex gap-1 border-t border-base-content/10 pt-2" @submit.prevent="add(customName)">
         <input v-model="customName" class="input input-sm min-w-0 flex-1" aria-label="自定义策略组名称" placeholder="自定义组名" maxlength="80" required />
-        <button class="btn btn-primary btn-sm" type="submit" title="添加自定义策略组" aria-label="添加自定义策略组" :disabled="busy || !customName.trim() || duplicate"><IconPlus :size="16" /></button>
+        <button class="btn btn-primary btn-sm" type="submit" title="添加自定义策略组" aria-label="添加自定义策略组" :disabled="busy || !customName.trim() || duplicate"><IconPlus :size="16" /><span>添加</span></button>
       </form>
       <button v-if="removable" class="btn btn-ghost btn-sm mt-2 w-full text-error" :disabled="busy || referenced" :title="referenced ? '请先移除引用此组的规则' : '移除当前策略组'" @click="remove"><IconTrash :size="16" />移除 {{ activeGroup }}</button>
     </Modal>

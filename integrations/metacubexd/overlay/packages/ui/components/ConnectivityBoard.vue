@@ -54,6 +54,7 @@ defineExpose({ cancel })
       </label>
       <button class="btn btn-primary btn-sm" :disabled="!isRunning && !canRun" :title="isRunning ? '取消站点检测' : '检测所选节点的站点连通性'" :aria-label="isRunning ? '取消站点检测' : '开始站点检测'" @click="isRunning ? cancel() : runBoard()">
         <IconX v-if="isRunning" :size="18" /><IconBrandSpeedtest v-else :size="18" />
+        <span>{{ isRunning ? '取消检测' : '开始检测' }}</span>
       </button>
     </div>
     <div class="flex w-fit max-w-full flex-wrap gap-1 rounded-xl bg-base-200/60 p-1" role="tablist" aria-label="检测站点类别">
@@ -63,7 +64,7 @@ defineExpose({ cancel })
     <div v-if="isRunning" role="status" aria-live="polite" class="flex min-w-0 items-center gap-2 rounded-lg bg-success/10 px-3 py-2 text-xs text-success">
       <span class="loading loading-spinner loading-xs shrink-0 motion-reduce:animate-none" />
       <span class="shrink-0">已处理 {{ progress.completed }}/{{ progress.total }}</span>
-      <span class="min-w-0 break-all">正在检测：{{ currentTargets.map(target => domain(target.url)).join('、') }}</span>
+      <span class="min-w-0 break-all">正在检测：{{ currentTargets.map(target => `${target.name} · ${domain(target.url)}`).join('、') }}</span>
     </div>
     <div class="grid grid-cols-1 gap-2 sm:grid-cols-2" role="list" aria-label="站点检测结果">
       <div v-for="target in activeTargets" :key="target.url" role="listitem" class="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-base-content/10 bg-base-200/40 px-3 py-2">
@@ -77,6 +78,6 @@ defineExpose({ cancel })
       </div>
     </div>
     <p v-if="context && !isRunning" class="break-all text-xs text-base-content/65">本次检测：{{ context.nodeName }} · {{ testedAt }}</p>
-    <p v-else-if="!isRunning" class="text-xs text-base-content/65">{{ !allowedOrigins ? '正在读取检测许可；若长时间未完成，请刷新代理页。' : !activeTargets.some(permitted) ? '当前部署未许可这些站点的检测，请联系管理员配置。' : '站点已列出，点击测速图标开始检测；未获许可的站点会跳过。' }}</p>
+    <p v-else-if="!isRunning" class="text-xs text-base-content/65">{{ !allowedOrigins ? '正在读取检测许可；若长时间未完成，请刷新代理页。' : !activeTargets.some(permitted) ? '当前部署未许可这些站点的检测，请联系管理员配置。' : '站点已列出，点击“开始检测”；未获许可的站点会跳过。' }}</p>
   </div>
 </template>

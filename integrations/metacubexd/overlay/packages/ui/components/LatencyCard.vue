@@ -58,7 +58,7 @@ function getLatencyBarClass(latency: number | null | undefined) {
         <button
           title="重新检测浏览器访问耗时"
           aria-label="重新检测浏览器访问耗时"
-          class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border border-base-content/10 bg-transparent text-base-content/60 transition-all duration-200 hover:bg-base-300 hover:text-base-content disabled:cursor-not-allowed disabled:opacity-50"
+          class="flex min-h-8 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md border border-base-content/10 bg-transparent px-2 text-xs text-base-content/60 transition-all duration-200 hover:bg-base-300 hover:text-base-content disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="isTestingAll"
           @click="testAllLatencies"
         >
@@ -68,6 +68,7 @@ function getLatencyBarClass(latency: number | null | undefined) {
               'animate-spin [animation-direction:reverse]': isTestingAll,
             }"
           />
+          <span>{{ isTestingAll ? '检测中' : '重新检测' }}</span>
         </button>
       </div>
     </div>
