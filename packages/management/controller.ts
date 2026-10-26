@@ -9,6 +9,7 @@ export type ControllerProxyOptions = {
   isCurrent: (generation: string) => Promise<boolean>;
   mutate: <T>(action: () => Promise<T>) => Promise<T>;
   allowedProbeOrigins?: readonly string[];
+  allowedProbeUrls?: () => Promise<readonly string[]>;
 };
 
 export const DEFAULT_LATENCY_PROBE_ORIGIN = 'https://www.gstatic.com';
@@ -67,7 +68,7 @@ function query(url: URL, allowed: readonly string[]): void {
   }
 }
 
-function httpRoute(request: Request, origins: ReadonlySet<string>): { path: string; mutation: boolean; deadlineMs: number; probe: boolean } {
+function httpRoute(request: Request, origins: ReadonlySet<string>, urls: readonly string[] = []): { path: string; mutation: boolean; deadlineMs: number; probe: boolean } {
   const { parts: p, url } = pathParts(request);
   const proxy = p[0] === 'proxies' && p.length === 2;
   const connection = p[0] === 'connections' && p.length <= 2;
@@ -84,7 +85,7 @@ function httpRoute(request: Request, origins: ReadonlySet<string>): { path: stri
     let probe: URL;
     try { probe = new URL(url.searchParams.get('url') ?? ''); } catch { throw new ManagementError('CONTROLLER_PROBE_DENIED'); }
     const timeout = url.searchParams.get('timeout') ?? '';
-    if (probe.protocol !== 'https:' || probe.username || probe.password || probe.hash || !origins.has(probe.origin) ||
+    if (probe.protocol !== 'https:' || probe.username || probe.password || probe.hash || (!origins.has(probe.origin) && !urls.includes(probe.href)) ||
         !/^[1-9]\d{0,4}$/.test(timeout) || Number(timeout) > 10000) throw new ManagementError('CONTROLLER_PROBE_DENIED');
     // The controller deadline must outlive the core's requested probe budget.
     // A fixed 5s deadline raced the UI's 5s default and converted valid slow
@@ -217,7 +218,8 @@ export function createControllerProxy(options: ControllerProxyOptions): {
       let generation: string | undefined;
       let probeSlot = false;
       try {
-        const route = httpRoute(request, origins);
+        const urls = new URL(request.url).searchParams.has('url') ? await options.allowedProbeUrls?.() ?? [] : [];
+        const route = httpRoute(request, origins, urls);
         if (route.probe) {
           if (automaticProbing > 0 || probing >= 16) throw new ManagementError('CONTROLLER_PROBE_BUSY', 429);
           probing++; probeSlot = true;

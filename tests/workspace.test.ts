@@ -24,6 +24,27 @@ const profile: JsonObject = { proxies: [node],
     { name: 'Auto', type: 'url-test', proxies: ['synthetic-node'], url: 'https://probe.example/generate_204', interval: 300, tolerance: 50 },
   ], rules: ['DOMAIN-SUFFIX,provider.example,Provider', 'MATCH,Provider'], 'tcp-concurrent': true };
 
+test('site choices save without applying routing and reject stale scope and referenced deletion', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node] });
+  await f.save(settings({ sourceIds: ['pool'] }), 0);
+  type Sites = { revision: number; workspaceRevision: number; scope: string; selections: Record<string, string[]>; targets: { id: string }[] };
+  const initial = await f.call<Sites>('/workspace/sites');
+  const body = { expectedRevision: initial.revision, expectedWorkspaceRevision: initial.workspaceRevision, scope: initial.scope,
+    group: 'Proxy', selected: ['google'], add: { name: 'Example', url: 'https://probe.example/check' } };
+  const saved = await f.call<Sites>('/workspace/sites', 'PUT', body);
+  assert.equal(saved.selections.Proxy!.length, 2);
+  assert.deepEqual(f.events, []);
+  assert.equal((await f.view()).workspace.revision, initial.workspaceRevision);
+  await assert.rejects(f.call('/workspace/sites', 'PUT', body), { code: 'SITE_SETTINGS_CONFLICT' });
+  await assert.rejects(f.call('/workspace/sites', 'PUT', { expectedRevision: saved.revision,
+    expectedWorkspaceRevision: saved.workspaceRevision, scope: saved.scope, remove: saved.selections.Proxy![1] }), { code: 'SITE_TARGET_IN_USE' });
+  await f.source('other', { proxies: [node] });
+  await f.save(settings({ sourceIds: ['other'] }), initial.workspaceRevision);
+  assert.deepEqual((await f.call<Sites>('/workspace/sites')).selections, {});
+  await assert.rejects(f.call('/workspace/sites', 'PUT', { ...body, expectedRevision: saved.revision }), { code: 'SITE_SETTINGS_CONFLICT' });
+});
+
 test('automatic selections preserve manual intent, use confirmed transactions, persist across reads and reject stale decisions', async t => {
   const f = await fixture(t);
   await f.source('pool', { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }] });

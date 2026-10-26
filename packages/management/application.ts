@@ -27,6 +27,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
   ruleTest?: (request: Request) => Promise<unknown>;
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
   allowedProbeOrigins?: readonly string[];
+  siteProbeOrigins?: readonly string[];
   automaticStatus?: () => unknown;
   automaticProbe?: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult> }) {
   // Compile before cloning so getters and non-JSON values cannot run here.
@@ -47,7 +48,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
   }
   const workspace = createWorkspaceApplication({ stateDirectory: options.stateDirectory, subscriptions, store, manager,
     observeSelections: options.observeSelections,
-    allowedProbeOrigins: options.allowedProbeOrigins, automaticStatus: options.automaticStatus, automaticProbe: options.automaticProbe,
+    allowedProbeOrigins: options.allowedProbeOrigins, siteProbeOrigins: options.siteProbeOrigins, automaticStatus: options.automaticStatus, automaticProbe: options.automaticProbe,
     compile: (policy, nodeDnsPolicy) => compile({ schemaVersion: 1, deployment: nodeDnsPolicy ? {
       ...deployment, nodeNameserverPolicy: { ...nodeDnsPolicy, ...(deployment.nodeNameserverPolicy as JsonObject | undefined) },
     } : deployment, policy }),
