@@ -61,6 +61,7 @@ export const useProxiesStore = defineStore('proxies', () => {
     (ProxyProvider & { proxies: ProxyNodeWithProvider[] })[]
   >([])
   const latencyMap = ref<Record<string, Record<string, number> | undefined>>({})
+  const siteMeasurements = useState<Record<string, string[]>>('cocoproxy-site-measurements', () => Object.create(null))
   const proxyNodeMap = ref<Record<string, ProxyInfo>>({})
 
   // Loading states
@@ -82,7 +83,7 @@ export const useProxiesStore = defineStore('proxies', () => {
 
   // Helper: Get latency from proxy
   const getLatencyFromProxy = (
-    proxy: Pick<Proxy, 'extra' | 'history' | 'testUrl'>,
+    proxy: Pick<Proxy, 'name' | 'extra' | 'history' | 'testUrl'>,
     fallbackDefault = true,
   ) => {
     const extra = (proxy.extra || {}) as Record<
@@ -117,11 +118,14 @@ export const useProxiesStore = defineStore('proxies', () => {
         defaultTestUrl in result.allTestUrlLatency
 
       if (!isDefaultTestUrlLatencyExists) {
-        const delay =
-          proxy.history?.at(-1)?.delay ??
-          configStore.latencyQualityMap.NOT_CONNECTED
+        // A core's generic history may now end in a site probe. It must not be
+        // relabelled as a baseline just because per-URL history is absent.
+        const siteOnly = !!siteMeasurements.value[proxy.name]?.length
+        const history = siteOnly ? proxyNodeMap.value[proxy.name]?.latencyTestHistory[defaultTestUrl] : proxy.history
+        const delay = siteOnly ? latencyMap.value[proxy.name]?.[defaultTestUrl] ?? configStore.latencyQualityMap.NOT_CONNECTED
+          : history?.at(-1)?.delay ?? configStore.latencyQualityMap.NOT_CONNECTED
         result.allTestUrlLatency[defaultTestUrl] = delay
-        result.allTestUrlLatencyHistory[defaultTestUrl] = proxy.history
+        result.allTestUrlLatencyHistory[defaultTestUrl] = history
       }
     }
 
@@ -137,9 +141,11 @@ export const useProxiesStore = defineStore('proxies', () => {
   // health-check url) still surfaces a value instead of "---".
   const findPositiveLatency = (
     latencies: Record<string, number> | undefined,
+    name: string,
   ) => {
     if (!latencies) return undefined
-    for (const value of Object.values(latencies)) {
+    for (const [url, value] of Object.entries(latencies)) {
+      if (siteMeasurements.value[name]?.includes(url)) continue
       if (value > 0) return value
     }
     return undefined
@@ -157,10 +163,12 @@ export const useProxiesStore = defineStore('proxies', () => {
   const pickLatencyHistory = (
     histories: Record<string, Proxy['history'] | undefined>,
     finalTestUrl: string,
+    name: string,
   ) => {
     const exact = histories[finalTestUrl]
     if (hasSuccessfulLatency(exact)) return exact
-    for (const series of Object.values(histories)) {
+    for (const [url, series] of Object.entries(histories)) {
+      if (siteMeasurements.value[name]?.includes(url)) continue
       if (hasSuccessfulLatency(series)) return series
     }
     return exact?.length ? exact : undefined
@@ -458,7 +466,7 @@ export const useProxiesStore = defineStore('proxies', () => {
     // view queries the global url and would otherwise show "---" forever even
     // though a real measurement exists. Reuse any successful reading instead.
     const reused =
-      findPositiveLatency(nodeLatencies) ?? findPositiveLatency(groupLatencies)
+      findPositiveLatency(nodeLatencies, nowName) ?? findPositiveLatency(groupLatencies, name)
     if (reused != null) return reused
 
     // Nothing succeeded anywhere — surface NOT_CONNECTED so the pill shows "---".
@@ -476,8 +484,8 @@ export const useProxiesStore = defineStore('proxies', () => {
     // Prefer the requested url's series; otherwise reuse any non-empty series
     // the node recorded under another url so the bar mirrors getLatencyByName.
     return (
-      pickLatencyHistory(nowHistories, finalTestUrl) ??
-      pickLatencyHistory(proxyHistories, finalTestUrl) ??
+      pickLatencyHistory(nowHistories, finalTestUrl, nowProxyNodeName) ??
+      pickLatencyHistory(proxyHistories, finalTestUrl, name) ??
       []
     )
   }
