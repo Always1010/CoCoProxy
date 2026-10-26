@@ -86,7 +86,7 @@ function stateFindings(observations: StateObservation[]) {
 }
 
 export interface UpgradeAssessmentContext {
-  previousDeclaration: unknown; targetDeclaration: unknown;
+  targetDeclaration: unknown;
   currentRuntime: RuntimeSettings; targetRuntime: RuntimeSettings;
   currentManagement: { origin: string; credentialPath: string; deployment: JsonObject };
   targetManagement: { origin: string; credentialPath: string; deployment: JsonObject };
@@ -97,9 +97,9 @@ function declared(declaration: unknown, key: 'configurationReader' | 'candidateR
   const value = declaration as Record<string, unknown> | null;
   return value?.schemaVersion === 1 && value[key] === DEPLOYMENT_STATE_COMPATIBILITY[key];
 }
-function stateCheck(observations: StateObservation[], reader?: { declaration: unknown }): CompatibilityCheck {
+function stateCheck(observations: StateObservation[]): CompatibilityCheck {
   const checks = observations.map(item => {
-    const result = !reader || item.presence !== 'present' ? item.assessment : assessStateContent(item.store, item.value, reader.declaration, item.sourceId);
+    const result = item.assessment;
     return check(result.status, result.code, item.store, item.presence === 'absent' ? '没有需要读取的既存记录。'
       : '按共享完整 reader 验证当前内容，并单独核对目标声明；不评估未来写入。');
   });
@@ -107,28 +107,28 @@ function stateCheck(observations: StateObservation[], reader?: { declaration: un
     '已逐类检查当前持久状态的完整内容及明确声明。', ['实施时暂停写入并重新读取相同状态；不支持自动迁移。'], checks);
 }
 
-function referencedCandidates(observations: StateObservation[]): { references: Set<string>; active: string | null; uncertain: boolean } {
-  const references = new Set<string>(); let active: string | null = null, uncertain = false;
+function referencedCandidates(observations: StateObservation[]): { references: Set<string>; uncertain: boolean } {
+  const references = new Set<string>(); let uncertain = false;
   for (const item of observations.filter(item => ['transaction', 'selection'].includes(item.store))) {
     if (item.presence === 'absent') continue;
     if (item.presence !== 'present' || item.assessment.content !== 'valid') { uncertain = true; continue; }
     if (item.store === 'transaction') {
-      const value = parseTransactionState(item.value); active = value.active;
+      const value = parseTransactionState(item.value);
       for (const id of [value.active, value.desired, value.pending?.previous, value.pending?.target]) if (id) references.add(id);
     } else {
       const value = parseRuntimeSelection(item.value); references.add(value.generation);
       if (value.hot) references.add(value.hot.baseGeneration);
     }
   }
-  return { references, active, uncertain };
+  return { references, uncertain };
 }
 
 export async function createUpgradeAssessment(context: UpgradeAssessmentContext, host: UpgradeStateHost,
   inspectedState?: Awaited<ReturnType<typeof inspectStateCompatibility>>) {
   const state = inspectedState ?? await inspectStateCompatibility(host, context.targetDeclaration);
   const { observations } = state, references = referencedCandidates(observations);
-  const historyChecks: CompatibilityCheck[] = [], oldHistoryChecks: CompatibilityCheck[] = [];
-  const found = new Set<string>(); let alternatives = 0, enumerationComplete = true;
+  const historyChecks: CompatibilityCheck[] = [];
+  const found = new Set<string>(); let enumerationComplete = true;
   try {
     const names = await host.list('candidates') ?? [];
     if (names.length > 4096) throw new Error();
@@ -136,40 +136,36 @@ export async function createUpgradeAssessment(context: UpgradeAssessmentContext,
       if (/^\.write-[a-f0-9-]{36}$/.test(name)) continue;
       if (!/^[a-f0-9]{64}\.json$/.test(name)) { enumerationComplete = false; continue; }
       const generation = name.slice(0, -5); found.add(generation);
-      if (generation !== references.active) alternatives++;
       let bytes: string | null;
       try { bytes = await host.read('candidates/' + name, 4 * 1024 * 1024); }
       catch { bytes = null; }
       if (bytes === null) {
         const unavailable = check('unknown', 'UPGRADE_CANDIDATE_OBSERVATION_UNAVAILABLE', 'historical-candidate-format', '没有取得候选文件的完整可信读取证据。');
-        historyChecks.push(unavailable); oldHistoryChecks.push(unavailable); continue;
+        historyChecks.push(unavailable); continue;
       }
       try {
         const config = parseStoredCandidate(bytes, generation);
-        for (const [settings, declaration, checks] of [[context.targetRuntime, context.targetDeclaration, historyChecks],
-          [context.currentRuntime, context.previousDeclaration, oldHistoryChecks]] as const) {
-          try {
-            recompileRuntimeCandidate(config, settings, generation);
-            checks.push(check(declared(declaration, 'candidateReader') ? 'supported' : 'unknown',
-              declared(declaration, 'candidateReader') ? 'UPGRADE_CANDIDATE_FORMAT_SUPPORTED' : 'UPGRADE_CANDIDATE_READER_NOT_DECLARED',
-              'historical-candidate-format', '候选摘要、规范字节和运行重编译一致；核心语法尚未执行。'));
-          } catch { checks.push(check('unsupported', 'UPGRADE_CANDIDATE_SETTINGS_INCOMPATIBLE', 'historical-candidate-format', '候选不能在所评估设置下按现有运行 reader 重编译。')); }
-        }
+        try {
+          recompileRuntimeCandidate(config, context.targetRuntime, generation);
+          historyChecks.push(check(declared(context.targetDeclaration, 'candidateReader') ? 'supported' : 'unknown',
+            declared(context.targetDeclaration, 'candidateReader') ? 'UPGRADE_CANDIDATE_FORMAT_SUPPORTED' : 'UPGRADE_CANDIDATE_READER_NOT_DECLARED',
+            'historical-candidate-format', '候选摘要、规范字节和运行重编译一致；核心语法尚未执行。'));
+        } catch { historyChecks.push(check('unsupported', 'UPGRADE_CANDIDATE_SETTINGS_INCOMPATIBLE', 'historical-candidate-format', '候选不能在所评估设置下按现有运行 reader 重编译。')); }
       } catch {
         const invalid = check('unsupported', 'UPGRADE_CANDIDATE_CONTENT_INVALID', 'historical-candidate-format', '历史候选缺失、不可信或不符合规范摘要内容。');
-        historyChecks.push(invalid); oldHistoryChecks.push(invalid);
+        historyChecks.push(invalid);
       }
     }
   } catch { enumerationComplete = false; }
   if (!enumerationComplete || references.uncertain) {
     const unknown = check('unknown', 'UPGRADE_HISTORY_OBSERVATION_UNAVAILABLE', 'historical-candidate-inventory', '历史候选或运行引用未取得完整观察证据。');
-    historyChecks.push(unknown); oldHistoryChecks.push(unknown);
+    historyChecks.push(unknown);
   } else if ([...references.references].some(id => !found.has(id))) {
     const missing = check('unsupported', 'UPGRADE_REFERENCED_CANDIDATE_MISSING', 'historical-candidate-references', '活动、目标或运行选择引用的候选不存在。');
-    historyChecks.push(missing); oldHistoryChecks.push(missing);
+    historyChecks.push(missing);
   }
   const history = check(aggregate(historyChecks), 'UPGRADE_HISTORY_FORMAT_ASSESSED', 'historical-candidate-format-only',
-    '已检查保留候选的规范表示、摘要、引用与设置重编译；不代表新旧核心接受语法。',
+    '已检查保留候选的规范表示、摘要、引用与目标设置重编译；不代表目标核心接受语法。',
     ['任何再次应用的候选须通过所选核心的只读语法验证，再完成运行验收。'], historyChecks);
   let configuration: CompatibilityCheck;
   try {
@@ -224,29 +220,8 @@ export async function createUpgradeAssessment(context: UpgradeAssessmentContext,
   const network = check(aggregate(networkChecks), 'UPGRADE_NETWORK_PRECONDITIONS_ASSESSED', 'static-binding-and-header-with-live-boundary',
     '静态配置、回执头和未执行的动态归属验证单独列出。', [], networkChecks);
   const stateFormats = stateCheck(observations);
-  const oldStateFormats = stateCheck(observations, { declaration: context.previousDeclaration });
-  const coreSyntax = check('unknown', 'UPGRADE_CORE_SYNTAX_NOT_RUN', 'core-syntax-and-runtime', '未运行新旧核心的候选语法或实际启动验收。');
-  const rollbackConfiguration = alternatives === 0 && enumerationComplete
-    ? check('unsupported', 'ROLLBACK_ALTERNATIVE_CONFIGURATION_ABSENT', 'retained-configuration-rollback', '没有观察到不同于当前活动候选的保留候选。')
-    : check(aggregate([history, coreSyntax]), history.status === 'unsupported' ? 'ROLLBACK_CONFIGURATION_FORMAT_UNSUPPORTED' : 'ROLLBACK_CONFIGURATION_CORE_VALIDATION_REQUIRED',
-      'retained-configuration-rollback', '保留候选可读性与实际核心语法分别核验；不存在通用自动配置回退。',
-      ['选定具体候选并执行核心语法验证，再通过正常运行事务应用；不要改写活动指针。'], [history, coreSyntax]);
-  const oldReader = check(declared(context.previousDeclaration, 'configurationReader') ? 'supported' : 'unknown',
-    declared(context.previousDeclaration, 'configurationReader') ? 'ROLLBACK_OLD_CONFIGURATION_READER_DECLARED' : 'ROLLBACK_OLD_CONFIGURATION_READER_UNKNOWN',
-    'retained-program-reader-declaration', '旧程序必须明确声明其配置 reader；保留旧 release 不能替代这一证据。');
-  const oldHistory = check(aggregate(oldHistoryChecks), 'ROLLBACK_OLD_CANDIDATE_FORMAT_ASSESSED', 'retained-program-candidate-format-only',
-    '使用旧声明核对保留候选的格式与当前设置重编译，不推断旧核心语法。', [], oldHistoryChecks);
-  const rollbackProgram = check(aggregate([oldStateFormats, oldReader, oldHistory, coreSyntax]),
-    oldStateFormats.status === 'unsupported' || oldHistoryChecks.some(item => item.status === 'unsupported') ? 'ROLLBACK_PROGRAM_FORMAT_UNSUPPORTED' : 'ROLLBACK_PROGRAM_REVALIDATION_REQUIRED',
-    'retained-program-rollback', '按旧声明评估当前状态和候选，不推断旧核心可运行，也不保证新版本未来写入的数据可降级。',
-    ['回退前重新读取当前状态、配置、身份绑定和网络归属；验证旧核心语法；显式维护安装。'], [oldStateFormats, oldReader, oldHistory, coreSyntax]);
-  const directConnectivity = check('unknown', 'ROLLBACK_DIRECT_CONNECTIVITY_EXTERNAL_EVIDENCE_REQUIRED', 'two-end-ordinary-connectivity',
-    '关闭项目服务不证明路由器撤销交付，也不证明终端普通直连可用。',
-    ['确认接入端独立关闭交付和 DNS 接管。', '暂停协调、停止服务并用旧 helper 退役自有网络。', '从实际终端验证普通 DNS、直连和本地访问。'],
-    [check('supported', 'ROLLBACK_HOST_SHUTDOWN_SEQUENCE_AVAILABLE', 'existing-maintenance-plan', '现有维护流程提供暂停、停服和旧 helper 退役步骤；本次未执行。')]);
   return { schemaVersion: 1, readOnly: true, scope: 'observed-upgrade-compatibility-no-automatic-migration',
     assessments: { state: stateFormats, configuration, historyCandidates: history, network, identity },
-    rollback: { configuration: rollbackConfiguration, program: rollbackProgram, directConnectivity },
     stateCompatibility: state.findings, automaticProgramRollback: false,
     readiness: aggregate([stateFormats, configuration, history, network, identity]) };
 }

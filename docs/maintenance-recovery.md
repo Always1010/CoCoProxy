@@ -14,7 +14,7 @@ node --experimental-strip-types source/apps/deployment/main.ts \
 
 `prepare` 只读验证新旧发布、现有安装收据、受管文件、账号、工具、输入及目录。它允许现有服务和自动生命周期保持运行，不执行停止服务或网络资源移除。输出给出待写文件、配置变化路径、配置审阅摘要及正式实施的前置条件。`review.digest` 绑定新旧清单、当前受管私有配置哈希和新输入的完整字节；运维人员确认变更后，可将其交给 `upgrade --reviewed-configuration-sha256`。生成摘要本身不表示授权实施。
 
-候选发布清单的 `compatibility.stateSchemas` 保留各类状态版本，并用 `contentReaders` 声明对应的完整内容 reader。当前明确的 reader ID 为 `cocoproxy.<store>.v1`，store 为 `transaction`、`lifecycle`、`trustedDevices`、`notifications`、`draft`、`workspace`、`siteProbes`、`automaticSelections`、`selection`、`subscription`；另有 `configurationReader: "deployment-v1"`、`candidateReader: "canonical-compiled-v1"`。这些字段由发行装配器从同一个源码契约写入清单，不另维护版本推断表。只有版本及完整 reader 声明吻合，并且当前数据通过同一运行 reader 的内容校验，才将该格式范围判为 `supported`。同版本但字段损坏为 `unsupported`；旧清单缺少或声明未知 reader 为 `unknown`，不能仅凭版本号相同推断兼容。
+候选发布清单的 `compatibility.stateSchemas` 保留各类状态版本，并用 `contentReaders` 声明对应的完整内容 reader。当前明确的 reader ID 为 `cocoproxy.<store>.v1`，store 为 `transaction`、`lifecycle`、`trustedDevices`、`notifications`、`draft`、`workspace`、`siteProbes`、`automaticSelections`、`selection`、`subscription`；另有 `configurationReader: "deployment-v1"`、`candidateReader: "canonical-compiled-v1"`。这些字段由发行装配器从同一个源码契约写入清单，不另维护版本推断表。只有版本及完整 reader 声明吻合，并且当前数据通过同一运行 reader 的内容校验，才将该格式范围判为 `supported`。同版本但字段损坏为 `unsupported`；目标清单缺少或声明未知 reader 为 `unknown`，不能仅凭版本号相同推断兼容。
 
 `prepare` 返回 `compatibilityAssessment.assessments`，逐项包含 `status`、固定 `code`、实际 `scope`、中文 `reason`、后续 `conditions`，以及独立的子项证据。`supported` 只覆盖写明的当次格式与声明，不代表服务加载、过期处理、真实网络、核心语法或未来写入已经通过。
 
@@ -22,7 +22,7 @@ node --experimental-strip-types source/apps/deployment/main.ts \
 | --- | --- | --- |
 | `state` | 事务、生命周期、可信设备、通知、草稿、工作区、站点设置、自动选择、运行选择、订阅的完整记录；草稿及订阅摘要也复用原校验；订阅数量遵守原 Store 的 100 条及盘点余量限制 | 数据原地读取，不初始化 Store、不执行通知或过期清理；运行中快照仍须在实施前重读 |
 | `configuration` | 目标部署计划、新旧运行设置、管理 origin 和核心部署选项复用原解析与编译；核对目标配置 reader 声明 | 保留配置变化审阅；不替代实际核心和反代运行验证 |
-| `historyCandidates` | 枚举保留候选，校验规范字节、内容摘要、活动/目标/选择引用及相应设置下的运行重编译；核对候选 reader 声明 | 结果限定为候选格式；未运行新旧核心的语法验证，不据此宣称核心可读 |
+| `historyCandidates` | 枚举保留候选，校验规范字节、内容摘要、活动/目标/选择引用及目标设置下的运行重编译；核对目标候选 reader 声明 | 结果限定为候选格式；未运行目标核心的语法验证，不据此宣称核心可读 |
 | `network` | 新旧静态网关绑定分别比较，可信回执的版本和 `complete` / `removed` / `incomplete` 状态单列 | 不验证回执完整 `resources`，不执行旧 helper，不证明实时内核归属或资源已清空；自动网关通常仍有 `unknown` 子项与停机核验条件 |
 | `identity` | 已有管理员凭据内容、origin、服务 UID、凭据路径，以及可信设备与通知保存的身份指纹 | origin 或身份绑定变化导致的合法失效与内容损坏分开；需要重新登录和重新授权时明确提示 |
 
@@ -32,17 +32,9 @@ node --experimental-strip-types source/apps/deployment/main.ts \
 
 状态目录和管理员凭据原地保留；设备令牌摘要、通知密钥、订阅、草稿及历史候选不会复制到准备输出或额外目录。管理 origin 或管理员凭据改变会按应用既有规则使设备信任和通知绑定失效，因此应单独审阅这类配置变化。合法绑定失效不标成状态损坏，旧设备和通知不能靠还原文件自动重新获得授权。
 
-`compatibilityAssessment.rollback` 与 `state.rollback` 给出以下三种独立评估，每种都有自己的原因、已查前提和后续条件，不再用一个 `not-assessed` 代替：
+准备报告只评估升级到目标版本，不提供回退评估或自动回退；`automaticProgramRollback` 固定为 `false`。保留旧 release 不证明旧程序能读取升级后状态。实际回退前须重新核验当时的状态、配置、身份绑定、网络归属及所选核心语法，并显式执行维护流程；恢复普通直连还需从实际终端验证 DNS、直连和本地访问。
 
-| 回退类型 | 已查前提与下一步 |
-| --- | --- |
-| `configuration` | 检查是否有不同于当前活动候选的保留配置，以及其摘要、引用和设置重编译。没有候选或格式不兼容时明确不支持；尚缺选定核心语法验证时为未知。选定具体候选后走正常运行事务，不改写活动指针。 |
-| `program` | 读取已核验旧 release 的 reader 声明，按旧声明重新评估当前状态、配置和历史候选格式。缺少旧声明、旧核心语法或实际启动证据时为未知；已知旧格式不支持时明确不支持。回退前还须按当时状态重做评估，不能把升级前快照用于保证新版本未来写入的数据可降级。 |
-| `directConnectivity` | 分别列出接入端关闭交付/DNS接管、暂停协调并停止服务、旧 helper 退役自有资源，以及实际终端普通 DNS、直连和本地访问。准备检查只说明现有维护步骤可用，不执行这些动作；缺少两端真实证据时保持未知。 |
-
-这里没有自动迁移、自动程序降级、自动三方恢复或重新生成凭据的执行步骤。保留旧 release 是证据之一，不能单独证明任意一种回退可执行。
-
-当前软件回归使用合成状态、合成旧/缺失 reader 声明和由当前编译器生成的保留候选，验证上述判定管线及拒绝边界；它们不是某个旧发行版本升级、旧核心读取或实际程序回退的验收证据。具体历史发行来源、reader 组合和核心语法仍须按目标版本另行核验。
+当前软件回归使用合成状态、缺失或未知的目标 reader 声明和由当前编译器生成的保留候选，验证上述升级判定及拒绝边界；它们不是某个旧发行版本升级、旧核心读取或实际程序回退的验收证据。
 
 正式实施仍需明确授权，暂停自动生命周期，停止并禁用部署服务，清除既有网关网络资源，然后重新执行完整升级预检。安装器对已知坏完整内容返回 `INSTALL_STATE_CONTENT_UNSUPPORTED`，对不支持的版本返回 `INSTALL_STATE_SCHEMA_UNSUPPORTED`，对读取不足返回 `INSTALL_STATE_INSPECTION_UNAVAILABLE`，对缺少完整 reader 声明返回 `INSTALL_STATE_COMPATIBILITY_NOT_DECLARED`。历史候选格式不支持或未知分别使用 `INSTALL_HISTORY_CANDIDATE_UNSUPPORTED`、`INSTALL_HISTORY_COMPATIBILITY_NOT_DECLARED`；目标配置对应 `INSTALL_CONFIGURATION_FORMAT_UNSUPPORTED`、`INSTALL_CONFIGURATION_COMPATIBILITY_NOT_DECLARED`。取得安装锁后会重新检查状态内容；停服、归属及实时资源冲突的原严格检查继续保留。准备结果不能替代实施时的检查。
 
