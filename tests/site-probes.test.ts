@@ -22,10 +22,11 @@ test('site settings persist isolated scheme choices, reject stale writes and enf
   await assert.rejects(store.update(0, () => {}), { code: 'SITE_SETTINGS_CONFLICT' });
   await assert.rejects(store.update(1, settings => { settings.groups[scope]!.Proxy = ['unknown']; }), { code: 'SITE_SETTINGS_INVALID' });
   assert.equal((await store.read()).revision, 1);
-  const restricted = new SiteProbeStore(root, ['https://www.gstatic.com']);
-  assert.deepEqual(await restricted.allowedUrls(), ['https://www.gstatic.com/generate_204']);
-  await assert.rejects(restricted.update(1, settings => { restricted.add(settings, 'Denied', 'https://denied.example/'); }), { code: 'SITE_TARGET_DENIED' });
-  assert.deepEqual(await new SiteProbeStore(root, []).allowedUrls(), []);
+  const urls = await store.allowedUrls();
+  assert.ok(urls.includes('https://github.com/') && urls.includes('https://chatgpt.com/'));
+  const disabled = new SiteProbeStore(root, false);
+  await assert.rejects(disabled.update(1, settings => { disabled.add(settings, 'Disabled', 'https://disabled.example/'); }), { code: 'SITE_TARGET_DENIED' });
+  assert.deepEqual(await disabled.allowedUrls(), []);
   for (const value of ['http://probe.example/', 'https://127.0.0.1/', 'https://localhost/', 'https://router.local/',
     'https://user:secret@probe.example/', 'https://probe.example/?token=secret', 'https://probe.example/#secret']) {
     assert.throws(() => siteUrl(value), { code: 'SITE_SETTINGS_INVALID' });

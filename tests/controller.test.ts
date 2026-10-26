@@ -53,7 +53,7 @@ function client() {
 test('registered site targets permit only exact saved URLs and revoke without opening their entire origin', async t => {
   const f = await fixture(t);
   let urls = ['https://registered.example/check'];
-  const proxy = createControllerProxy({ ...f.options, allowedProbeUrls: async () => urls });
+  const proxy = createControllerProxy({ ...f.options, allowedProbeOrigins: ['https://www.gstatic.com'], allowedProbeUrls: async () => urls });
   const path = (url: string) => '/proxies/node/delay?' + new URLSearchParams({ url, timeout: '1000' });
   assert.equal((await proxy.fetch(request(path(urls[0]!)))).status, 200);
   assert.equal((await proxy.fetch(request(path('https://registered.example/other')))).status, 400);
