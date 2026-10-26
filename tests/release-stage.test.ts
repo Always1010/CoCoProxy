@@ -9,6 +9,7 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 import { ReleaseStageError, stageExplicitRelease, type StageExplicitReleaseOptions } from '../scripts/stage-explicit-release.mjs';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/state-compatibility.mjs';
+import { verifyRelease } from '../packages/deployment/install.ts';
 
 const execute = promisify(execFile);
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
@@ -20,6 +21,7 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   const put = async (path: string, text: string) => { await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, text); };
   await put(join(sourceDir, 'apps/cli/main.ts'), 'console.log("synthetic");\n');
   await put(join(sourceDir, 'apps/setup/main.ts'), 'console.log("synthetic setup");\n');
+  await put(join(sourceDir, 'apps/runtime/launch-core.ts'), 'console.log("synthetic core launcher");\n');
   await put(join(sourceDir, 'packages/runtime/start.ts'), 'export const fixture = true;\n');
   await put(join(sourceDir, 'packages/deployment/state-compatibility.mjs'), await readFile(new URL('../packages/deployment/state-compatibility.mjs', import.meta.url), 'utf8'));
   await put(join(sourceDir, 'docs/deployment.md'), 'Synthetic role deployment instructions\n');
@@ -122,6 +124,23 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   if (process.platform !== 'win32') assert.equal((await lstat(options.output)).mode & 0o777, 0o700);
   await rejects(stageExplicitRelease(options), 'OUTPUT_EXISTS');
   assert.equal(digest(await readFile(join(options.output, 'manifest.json'))), receipt.manifestSha256);
+  // Exercise the consumer on the actual staged layout, including both root files.
+  const verified = await verifyRelease(options.output, receipt.manifestSha256);
+  assert.equal(verified.files.length, manifest.files.length);
+  assert.equal(verified.coreSHA, digest('synthetic reviewed core'));
+  for (const [path, changedPath, mode, code] of [
+    ['README.md', 'README.md', '0755', 'INSTALL_MANIFEST_INVALID'],
+    ['cocoproxy', 'cocoproxy', '0644', 'INSTALL_MANIFEST_INVALID'],
+    ['cocoproxy', 'arbitrary-root', '0755', 'INSTALL_MANIFEST_PATH_INVALID'],
+    ['README.md', '.local/private.md', '0644', 'INSTALL_MANIFEST_PATH_INVALID'],
+  ]) {
+    const changed = JSON.parse(bytes.toString());
+    Object.assign(changed.files.find((file: { path: string }) => file.path === path), { path: changedPath, mode });
+    const rejected = Buffer.from(JSON.stringify(changed));
+    await writeFile(join(options.output, 'manifest.json'), rejected);
+    await assert.rejects(verifyRelease(options.output, digest(rejected)), (error: unknown) => (error as { code: string }).code === code);
+  }
+  await writeFile(join(options.output, 'manifest.json'), bytes);
 });
 
 test('real built server traces the complete locked push dependency closure for release assembly', {
