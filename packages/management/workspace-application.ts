@@ -188,9 +188,10 @@ export function createWorkspaceApplication(options: {
       if (workspace.mode === 'local') {
         const selections = { ...workspace.local.selections };
         if (repair) for (const [id, selected] of Object.entries(selections)) {
-          if (!localGroupChoices(proxies, id).includes(selected)) selections[id] = id === 'Proxy' ? String(proxies[0]?.name ?? 'REJECT') : id === 'Domestic' ? 'DIRECT' : 'Proxy';
+          if (!localGroupChoices(proxies, id, workspace.local.sharedGroups).includes(selected)) selections[id] =
+            id === 'Proxy' || workspace.local.sharedGroups?.includes(id) ? String(proxies[0]?.name ?? 'REJECT') : id === 'Domestic' ? 'DIRECT' : 'Proxy';
         }
-        policy = { ...buildLocalPolicy({ proxies, selections, rules: repair ? [] : workspace.local.rules, mode: workspace.runMode }),
+        policy = { ...buildLocalPolicy({ proxies, selections, sharedGroups: workspace.local.sharedGroups, rules: repair ? [] : workspace.local.rules, mode: workspace.runMode }),
           profile: { 'store-selected': false } };
       } else {
         if (!base) invalid('PROFILE_REQUIRED');
@@ -261,6 +262,7 @@ export function createWorkspaceApplication(options: {
     const policy = plan?.policy;
     const user = workspace.mode === 'local' ? workspace.local : workspace.subscriptionOverrides[workspace.mode === 'legacy' ? 'legacy' : workspace.subscriptionId ?? ''] ?? emptyOverrides();
     const groups = policy ? asGroups(policy).map(group => ({ name: String(group.name), type: String(group.type),
+      role: workspace.mode === 'local' && (group.name === 'Proxy' || workspace.local.sharedGroups?.includes(String(group.name))) ? 'shared' as const : 'service' as const,
       selected: String(Array.isArray(group.proxies) ? group.proxies[0] ?? '' : ''), activeSelected: null as string | null,
       options: plan!.automatic.choices[String(group.name)] ?? [] })) : [];
     if (status.active && options.observeSelections) {

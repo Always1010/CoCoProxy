@@ -140,6 +140,21 @@ test('custom local groups route manual rules and reject node-name collisions or 
   assert.throws(() => policy({ selections: { First: 'Second', Second: 'First' } }), ConfigError);
 });
 
+test('shared exit groups are reusable one-level selectors with concrete-only members', () => {
+  const value = policy({ sharedGroups: ['AI Exit'], selections: {
+    'AI Exit': 'example-node', OpenAI: 'AI Exit', TikTok: 'AI Exit',
+  } });
+  const byName = (name: string) => groups(value).find(group => group.name === name)!;
+  assert.deepEqual(groups(value).slice(0, 3).map(group => group.name), ['Proxy', 'AI Exit', 'Overseas']);
+  assert.deepEqual(byName('AI Exit').proxies, ['example-node', 'DIRECT', 'REJECT']);
+  assert.deepEqual((byName('OpenAI').proxies as string[]).slice(0, 3), ['AI Exit', 'Proxy', 'example-node']);
+  assert.equal(selected(value, 'TikTok'), 'AI Exit');
+  assert.throws(() => policy({ sharedGroups: ['AI Exit'], selections: { 'AI Exit': 'Proxy' } }), ConfigError);
+  assert.throws(() => policy({ sharedGroups: ['AI Exit'], rules: ['DOMAIN,example.org,AI Exit'] }), ConfigError);
+  assert.throws(() => policy({ sharedGroups: ['OpenAI'] }), ConfigError);
+  assert.throws(() => policy({ sharedGroups: ['example-node'] }), ConfigError);
+});
+
 test('logical global/direct modes exclude service, domestic and overseas matching', () => {
   assert.deepEqual(rules(policy({ mode: 'global' })), ['MATCH,Proxy']);
   assert.deepEqual(rules(policy({ mode: 'direct' })), ['MATCH,DIRECT']);

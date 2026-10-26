@@ -6,12 +6,13 @@ import { atomicWrite, inspectPrivateDirectory, privateRead, PrivateFileError } f
 import { parseAutoGroupPolicy, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings } from './automatic-policy.ts';
 
 export type RoutingOverrides = { selections: Record<string, string>; rules: string[]; automatic?: Record<string, AutoGroupPolicy> };
+export type LocalRoutingOverrides = RoutingOverrides & { sharedGroups?: string[] };
 export type WorkspaceSettings = {
   mode: 'legacy' | 'local' | 'subscription';
   subscriptionId: string | null;
   sourceIds: string[];
   runMode: 'rule' | 'global' | 'direct';
-  local: RoutingOverrides;
+  local: LocalRoutingOverrides;
   subscriptionOverrides: Record<string, RoutingOverrides>;
   autoProbes?: AutoProbeSettings;
 };
@@ -34,9 +35,10 @@ function exact(value: unknown, keys: string[]): Record<string, unknown> {
 function string(value: unknown, max = 1024): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 }
-function overrides(value: unknown): RoutingOverrides {
+function overrides(value: unknown, allowSharedGroups = false): LocalRoutingOverrides {
   const record = object(value);
-  if (!Object.hasOwn(record, 'selections') || !Object.hasOwn(record, 'rules') || Object.keys(record).some(key => !['selections', 'rules', 'automatic'].includes(key))) fail();
+  const allowed = ['selections', 'rules', 'automatic', ...(allowSharedGroups ? ['sharedGroups'] : [])];
+  if (!Object.hasOwn(record, 'selections') || !Object.hasOwn(record, 'rules') || Object.keys(record).some(key => !allowed.includes(key))) fail();
   const selections = object(record.selections);
   if (Object.keys(selections).length > 100 || Object.entries(selections).some(([key, target]) =>
     !string(key) || ['__proto__', 'prototype', 'constructor'].includes(key) || !string(target))) fail();
@@ -51,7 +53,15 @@ function overrides(value: unknown): RoutingOverrides {
       try { automatic[key] = parseAutoGroupPolicy(policy); } catch { fail('AUTO_SETTINGS_INVALID'); }
     }
   }
-  return { selections: { ...selections } as Record<string, string>, rules: [...record.rules] as string[], ...(automatic ? { automatic } : {}) };
+  let sharedGroups: string[] | undefined;
+  if (record.sharedGroups !== undefined) {
+    if (!Array.isArray(record.sharedGroups) || record.sharedGroups.length > 100 ||
+        record.sharedGroups.some(name => !string(name, 256) || name.includes(',')) ||
+        new Set(record.sharedGroups).size !== record.sharedGroups.length) fail();
+    sharedGroups = [...record.sharedGroups];
+  }
+  return { selections: { ...selections } as Record<string, string>, rules: [...record.rules] as string[],
+    ...(automatic ? { automatic } : {}), ...(sharedGroups ? { sharedGroups } : {}) };
 }
 export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {
   let budget = 100_000;
@@ -90,7 +100,7 @@ export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {
     try { autoProbes = parseAutoProbeSettings(record.autoProbes); } catch { fail('AUTO_SETTINGS_INVALID'); }
   }
   return { mode: record.mode as WorkspaceSettings['mode'], runMode: record.runMode as WorkspaceSettings['runMode'],
-    subscriptionId: record.subscriptionId as string | null, sourceIds: [...record.sourceIds] as string[], local: overrides(record.local), subscriptionOverrides,
+    subscriptionId: record.subscriptionId as string | null, sourceIds: [...record.sourceIds] as string[], local: overrides(record.local, true), subscriptionOverrides,
     ...(autoProbes ? { autoProbes } : {}) };
 }
 
