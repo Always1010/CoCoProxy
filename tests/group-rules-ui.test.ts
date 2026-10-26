@@ -27,7 +27,7 @@ async function editor(initial: string[]) {
         settings.local = draft.local;
       } }),
   });
-  return { ...exports, settings, workspace, saves: () => saves, fail: () => { failApply = true; } };
+  return Object.assign(exports, { settings, workspace, saves: () => saves, fail: () => { failApply = true; } });
 }
 
 test('group rule edits preserve global positions and unrelated groups, then append new rules', async () => {
@@ -135,4 +135,11 @@ test('group creation opens rule settings only after successful creation and pres
   assert.match(rules.localGroupNameError('DIRECT', view.value), /保留/);
   assert.match(rules.localGroupNameError('Steam', view.value), /预置服务/);
   assert.match(rules.localGroupNameError('AI,Exit', view.value), /逗号/);
+});
+
+test('local rule targets exclude user-shared exits while retaining Proxy and subscription targets', () => {
+  const groups = [{ name: 'Proxy', role: 'shared' as const }, { name: 'AI Exit', role: 'shared' as const }, { name: 'Work', role: 'service' as const }];
+  assert.deepEqual(rules.customRuleTargets('local', groups), ['DIRECT', 'REJECT', 'Proxy', 'Work']);
+  assert.deepEqual(rules.customRuleTargets('subscription', groups), ['DIRECT', 'REJECT', 'Proxy', 'AI Exit', 'Work']);
+  assert.deepEqual(rules.customRuleTargets('legacy', groups), ['DIRECT', 'REJECT', 'Proxy', 'AI Exit', 'Work']);
 });
