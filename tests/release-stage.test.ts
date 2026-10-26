@@ -25,7 +25,7 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'docs/deployment.md'), 'Synthetic role deployment instructions\n');
   await put(join(sourceDir, 'docs/cooperating-router-requirements.md'), 'Synthetic independent product and router capabilities\n');
   await put(join(sourceDir, 'docs/release-notes.md'), 'Synthetic fixed-version release scope and known limitations\n');
-  for (const name of ['setup.md', 'getting-started.md', 'usage.md', 'notifications.md', 'architecture.md', 'development.md']) {
+  for (const name of ['setup.md', 'getting-started.md', 'usage.md', 'notifications.md', 'architecture.md', 'development.md', 'remote-deployment.md']) {
     await put(join(sourceDir, 'docs', name), 'Synthetic documentation\n');
   }
   for (const name of ['architecture-overview.svg', 'runtime-relations.svg', 'proxy-traffic-flow.svg']) {
@@ -35,6 +35,9 @@ async function fixture(t: test.TestContext): Promise<StageExplicitReleaseOptions
   await put(join(sourceDir, 'examples/deployment-options.md'), 'Synthetic trusted performance options\n');
   await put(join(sourceDir, 'scripts/measure-latency.mjs'), 'console.log("synthetic latency baseline");\n');
   await put(join(sourceDir, 'scripts/cocoproxy-setup.sh'), '#!/bin/sh\nexit 0\n');
+  for (const name of ['deploy-ssh.mjs', 'remote-deploy.py', 'router-ssh-hook.py']) {
+    await put(join(sourceDir, 'scripts', name), '# synthetic remote deployment entry\n');
+  }
   await put(join(sourceDir, '.gitignore'), '.local/\n');
   const dependencies = { 'web-push': '1.0.0', ws: '1.0.0', yaml: '1.0.0' };
   const pkg = { name: 'synthetic-cocoproxy', version: '0.0.0', dependencies };
@@ -103,6 +106,9 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   assert.ok(manifest.files.some(file => file.path === 'source/examples/nginx-management.conf'));
   assert.ok(manifest.files.some(file => file.path === 'source/examples/deployment-options.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/scripts/measure-latency.mjs'));
+  for (const path of ['source/docs/remote-deployment.md', 'source/scripts/deploy-ssh.mjs', 'source/scripts/remote-deploy.py', 'source/scripts/router-ssh-hook.py']) {
+    assert.ok(manifest.files.some(file => file.path === path));
+  }
   assert.ok(manifest.files.some(file => file.path === 'cocoproxy' && file.mode === '0755'));
   assert.ok(manifest.files.some(file => file.path === 'README.md'));
   assert.ok(manifest.files.some(file => file.path === 'source/integrations/metacubexd/components.json'));
