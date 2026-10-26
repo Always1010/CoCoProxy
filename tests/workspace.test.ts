@@ -28,17 +28,19 @@ test('site choices save without applying routing and reject stale scope and refe
   const f = await fixture(t);
   await f.source('pool', { proxies: [node] });
   await f.save(settings({ sourceIds: ['pool'] }), 0);
-  type Sites = { revision: number; workspaceRevision: number; scope: string; selections: Record<string, string[]>; targets: { id: string }[] };
+  type Sites = { revision: number; workspaceRevision: number; scope: string; selections: Record<string, string[]>; targets: { id: string; permitted: boolean }[] };
   const initial = await f.call<Sites>('/workspace/sites');
+  assert.ok(initial.targets.length > 2 && initial.targets.every(target => target.permitted));
   const body = { expectedRevision: initial.revision, expectedWorkspaceRevision: initial.workspaceRevision, scope: initial.scope,
-    group: 'Proxy', selected: ['google'], add: { name: 'Example', url: 'https://probe.example/check' } };
+    group: 'Proxy', selected: ['github', 'openai'], add: { name: 'Example', url: 'https://probe.example/check' } };
   const saved = await f.call<Sites>('/workspace/sites', 'PUT', body);
-  assert.equal(saved.selections.Proxy!.length, 2);
+  assert.deepEqual(saved.selections.Proxy!.slice(0, 2), ['github', 'openai']);
+  assert.equal(saved.selections.Proxy!.length, 3);
   assert.deepEqual(f.events, []);
   assert.equal((await f.view()).workspace.revision, initial.workspaceRevision);
   await assert.rejects(f.call('/workspace/sites', 'PUT', body), { code: 'SITE_SETTINGS_CONFLICT' });
   await assert.rejects(f.call('/workspace/sites', 'PUT', { expectedRevision: saved.revision,
-    expectedWorkspaceRevision: saved.workspaceRevision, scope: saved.scope, remove: saved.selections.Proxy![1] }), { code: 'SITE_TARGET_IN_USE' });
+    expectedWorkspaceRevision: saved.workspaceRevision, scope: saved.scope, remove: saved.selections.Proxy![2] }), { code: 'SITE_TARGET_IN_USE' });
   await f.source('other', { proxies: [node] });
   await f.save(settings({ sourceIds: ['other'] }), initial.workspaceRevision);
   assert.deepEqual((await f.call<Sites>('/workspace/sites')).selections, {});

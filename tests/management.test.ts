@@ -384,7 +384,8 @@ test('production factory reads private deployment settings and never creates sta
   await writeFile(runtimeSettingsPath, JSON.stringify({ schemaVersion: 1, stateDirectory: state,
     binaryPath: '/synthetic/not-installed', binarySha256: 'a'.repeat(64), systemctlPath: '/synthetic/not-systemctl',
     unitPath: '/synthetic/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 }), { mode: 0o600 });
-  const settings = { schemaVersion: 1, origin, credentialPath, runtimeSettingsPath, deployment };
+  const settings = { schemaVersion: 1, origin, credentialPath, runtimeSettingsPath, deployment,
+    controllerPolicy: { allowedProbeOrigins: ['https://www.gstatic.com'] } };
   await writeFile(configPath, JSON.stringify(settings), { mode: 0o600 });
   const handler = await loadManagementService(configPath);
   const cookie = await login(handler);
@@ -392,12 +393,22 @@ test('production factory reads private deployment settings and never creates sta
   assert.equal(response.status, 200);
   assert.equal((await response.json()).core, null);
   await assert.rejects(stat(state), { code: 'ENOENT' });
+  const catalog = await handler(request('/api/cocoproxy/workspace/sites', 'GET', undefined, cookie));
+  assert.equal(catalog.status, 200);
+  const sites = await catalog.json();
+  assert.ok(sites.targets.length > 2 && sites.targets.every((target: { permitted: boolean }) => target.permitted));
   const rememberedLogin = await handler(request('/api/session/login', 'POST', { username, password, trust: 'until-revoked', deviceLabel: '合成浏览器' }));
   assert.equal(rememberedLogin.status, 200);
   const rememberedCookie = rememberedLogin.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
   const restarted = await loadManagementService(configPath);
   assert.equal((await restarted(request('/api/session', 'GET', undefined, rememberedCookie))).status, 200);
   assert.equal((await restarted(request('/api/cocoproxy/status', 'GET', undefined, rememberedCookie))).status, 200);
+  await writeFile(configPath, JSON.stringify({ ...settings, controllerPolicy: { allowedProbeOrigins: [] } }), { mode: 0o600 });
+  const disabled = await loadManagementService(configPath);
+  const disabledCookie = await login(disabled);
+  const disabledCatalog = await disabled(request('/api/cocoproxy/workspace/sites', 'GET', undefined, disabledCookie));
+  assert.equal(disabledCatalog.status, 200);
+  assert.ok((await disabledCatalog.json()).targets.every((target: { permitted: boolean }) => !target.permitted));
   await writeFile(configPath, JSON.stringify({ ...settings, subscriptionPolicy: { allowedOrigins: [], resolve: 'not-code' } }));
   await assert.rejects(loadManagementService(configPath), { code: 'MANAGEMENT_SETTINGS_INVALID' });
 });

@@ -78,9 +78,8 @@ function parse(input: unknown): SiteSettings {
 /** Separate from routing preferences: saving detection choices never applies/restarts a core. */
 export class SiteProbeStore {
   readonly files: FileTransactionStore;
-  readonly allowedOrigins?: readonly string[];
-  constructor(root: string, allowedOrigins?: readonly string[]) { this.files = new FileTransactionStore(root); this.allowedOrigins = allowedOrigins; }
-  permitted(target: SiteTarget): boolean { return this.allowedOrigins === undefined || this.allowedOrigins.includes(new URL(target.url).origin); }
+  readonly enabled: boolean;
+  constructor(root: string, enabled = true) { this.files = new FileTransactionStore(root); this.enabled = enabled; }
   targets(settings: SiteSettings): SiteTarget[] { return [...BUILTIN_SITE_TARGETS, ...settings.custom]; }
   async read(): Promise<SiteSettings> {
     try {
@@ -91,7 +90,7 @@ export class SiteProbeStore {
       throw new ManagementError('SITE_SETTINGS_CORRUPT', 503);
     }
   }
-  async allowedUrls(): Promise<string[]> { return this.targets(await this.read()).filter(target => this.permitted(target)).map(target => target.url); }
+  async allowedUrls(): Promise<string[]> { return this.enabled ? this.targets(await this.read()).map(target => target.url) : []; }
   async update(expectedRevision: unknown, change: (settings: SiteSettings) => void | Promise<void>): Promise<SiteSettings> {
     if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0 || (expectedRevision as number) >= Number.MAX_SAFE_INTEGER) return fail();
     const result = await this.files.exclusive(async (): Promise<{ value: SiteSettings } | { error: unknown }> => {
@@ -113,7 +112,7 @@ export class SiteProbeStore {
   add(settings: SiteSettings, name: unknown, input: unknown): SiteTarget {
     if (!safeName(name, 80) || name.trim() !== name || settings.custom.length >= 32) return fail();
     const target = { id: `custom-${randomUUID()}`, name, url: siteUrl(input), category: '自定义' };
-    if (!this.permitted(target)) return fail('SITE_TARGET_DENIED');
+    if (!this.enabled) return fail('SITE_TARGET_DENIED');
     if (this.targets(settings).some(item => item.url === target.url)) return fail('SITE_TARGET_DUPLICATE');
     settings.custom.push(target);
     return target;

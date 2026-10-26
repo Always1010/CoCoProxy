@@ -66,8 +66,9 @@ export async function loadManagementGateway(path: string) {
         return status.active === generation && status.transaction === null && status.fault === null && await readSelection(runtimeSettings) === generation;
       } catch { return false; }
     }
-    const siteProbeOrigins = settings.controllerPolicy === undefined ? undefined : controllerPolicy.allowedProbeOrigins as string[];
-    const sites = new SiteProbeStore(runtimeSettings.stateDirectory, siteProbeOrigins);
+    // The catalog grants exact URLs independently of the raw probe origin policy.
+    // Preserve the explicit empty-list opt-out for all probing.
+    const sites = new SiteProbeStore(runtimeSettings.stateDirectory, (controllerPolicy.allowedProbeOrigins as string[] | undefined)?.length !== 0);
     const controller = createControllerProxy({
       allowedProbeUrls: () => sites.allowedUrls(),
       allowedProbeOrigins: controllerPolicy.allowedProbeOrigins as string[] | undefined,
@@ -118,7 +119,6 @@ export async function loadManagementGateway(path: string) {
       } });
     let automatic: ReturnType<typeof createAutomaticSelector> | undefined;
     const action = createManagementApplication({ stateDirectory: runtimeSettings.stateDirectory, deployment: settings.deployment, ruleTest,
-      siteProbeOrigins,
       allowedProbeOrigins: controllerPolicy.allowedProbeOrigins as string[] | undefined,
       automaticStatus: () => automatic?.status() ?? { groups: [], events: [] },
       automaticProbe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
