@@ -53,6 +53,8 @@ const messages: Record<string, string> = {
   UNAUTHORIZED: '会话已失效，请重新登录。',
   LOGIN_RATE_LIMIT: '登录尝试过于频繁，请稍后重试。',
   SESSION_LIMIT: '会话数量已达上限，请稍后重试。',
+  DEVICE_LIMIT: '已信任设备数量已达上限，请先撤销不再使用的设备。',
+  DEVICE_TRUST_UNAVAILABLE: '此管理入口暂不支持信任设备，请使用临时登录。',
   ORIGIN_DENIED: '当前访问地址未获允许。',
   DRAFT_CONFLICT: '配置已被其他操作修改，请刷新后重试。',
   SOURCE_CONFLICT: '来源版本已变化，请重新读取来源后再操作。',
@@ -183,9 +185,9 @@ export function useCoCoProxy() {
     }
   }
 
-  async function login(username: string, password: string) {
+  async function login(username: string, password: string, trust: 'none' | '90days' | 'until-revoked' = 'none', deviceLabel?: string) {
     session.value = await request<CoCoProxySession>('/api/session/login', {
-      method: 'POST', body: { username, password }, redirectUnauthorized: false,
+      method: 'POST', body: { username, password, trust, ...(deviceLabel?.trim() ? { deviceLabel: deviceLabel.trim() } : {}) }, redirectUnauthorized: false,
     })
   }
 

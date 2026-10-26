@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createAdminCredential, SessionStore } from '../packages/management/auth.ts';
+import { TrustedDeviceStore } from '../packages/management/trusted-devices.ts';
 import { createManagementHandler, createManagementGateway, managementOrigin, readJsonBody } from '../packages/management/http.ts';
 import { createManagementApplication } from '../packages/management/application.ts';
 import { loadManagementService, stripControllerMount } from '../packages/management/service.ts';
@@ -58,6 +59,68 @@ async function login(handler: (r: Request) => Promise<Response>) {
   assert.equal(response.headers.get('cache-control'), 'no-store');
   return cookie.split(';')[0];
 }
+
+test('remembered browsers reauthenticate after expiry and restart; logout and device revocation invalidate HTTP and WS', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-remember-http-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let clock = 1_000_000;
+  const makeGateway = async () => createManagementGateway({ origin, credential, now: () => clock,
+    sessions: new SessionStore({ now: () => clock, ttlMs: 2000 }),
+    trustedDevices: await TrustedDeviceStore.load(root, credential, origin, () => clock),
+  }, async () => ({ ok: true }));
+  let gateway = await makeGateway();
+  const signIn = async (trust: string, label: string, cookie?: string) => {
+    const response = await gateway.fetch(request('/api/session/login', 'POST', { username, password, trust, deviceLabel: label }, cookie));
+    assert.equal(response.status, 200, await response.clone().text());
+    const cookies = response.headers.getSetCookie();
+    assert.equal(cookies.length, 2);
+    for (const value of cookies) assert.match(value, /HttpOnly; SameSite=Strict; Secure; Max-Age=/);
+    return cookies.map(value => value.split(';')[0]).join('; ');
+  };
+  const first = await signIn('until-revoked', '合成手机');
+  const second = await signIn('90days', '合成电脑');
+  const firstToken = first.split('; ')[1];
+  const responseText = await (await gateway.fetch(request('/api/session/devices', 'GET', undefined, first))).text();
+  assert.ok(!responseText.includes('tokenDigest') && !responseText.includes(firstToken.split('=')[1]));
+  const listed = JSON.parse(responseText).devices;
+  const phone = listed.find((item: { label: string }) => item.label === '合成手机');
+  assert.equal(phone.current, true);
+  assert.equal(phone.expiresAt, null);
+  clock += 2000;
+  const renewed = await gateway.fetch(request('/api/session', 'GET', undefined, first));
+  assert.equal(renewed.status, 200);
+  assert.match(renewed.headers.getSetCookie()[0], /^__Host-cocoproxy_session=/);
+  gateway = await makeGateway();
+  const restored = await gateway.fetch(request('/api/session', 'GET', undefined, firstToken));
+  assert.equal(restored.status, 200);
+  const restoredSession = restored.headers.getSetCookie()[0].split(';')[0];
+  const ws = request('/api/clash/traffic', 'GET', undefined, restoredSession, { origin });
+  assert.equal(gateway.authorize(ws, true).username, username);
+  assert.equal((await gateway.fetch(request('/api/session/devices/revoke', 'POST', { id: phone.id }, second, { origin: 'https://other.example' }))).status, 403);
+  assert.equal((await gateway.fetch(request('/api/session/devices/revoke', 'POST', { id: phone.id }, second))).status, 200);
+  assert.throws(() => gateway.authorize(ws, true), { code: 'UNAUTHORIZED' });
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, restoredSession))).status, 401);
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, first))).status, 401);
+  const logout = await gateway.fetch(request('/api/session/logout', 'POST', {}, second));
+  assert.equal(logout.status, 200);
+  assert.equal(logout.headers.getSetCookie().length, 2);
+  for (const value of logout.headers.getSetCookie()) assert.match(value, /Max-Age=0$/);
+  gateway = await makeGateway();
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, second))).status, 401);
+  const third = await signIn('until-revoked', '合成设备丙');
+  const duplicateDevice = third + '; ' + third.split('; ')[1];
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, duplicateDevice))).status, 401);
+  const current = (await (await gateway.fetch(request('/api/session/devices', 'GET', undefined, third))).json()).devices[0];
+  const revokeCurrent = await gateway.fetch(request('/api/session/devices/revoke', 'POST', { id: current.id }, third));
+  assert.deepEqual(await revokeCurrent.json(), { revoked: true, current: true });
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, third))).status, 401);
+  const fourth = await signIn('until-revoked', '合成设备丁');
+  const temporary = await gateway.fetch(request('/api/session/login', 'POST', { username, password, trust: 'none' }, fourth));
+  assert.equal(temporary.status, 200);
+  assert.match(temporary.headers.getSetCookie()[1], /^__Host-cocoproxy_device=;.*Max-Age=0$/);
+  gateway = await makeGateway();
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, fourth))).status, 401);
+});
 async function fixture(t: test.TestContext, automaticGateway?: AutomaticGatewaySettings) {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-management-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -294,6 +357,12 @@ test('production factory reads private deployment settings and never creates sta
   assert.equal(response.status, 200);
   assert.equal((await response.json()).core, null);
   await assert.rejects(stat(state), { code: 'ENOENT' });
+  const rememberedLogin = await handler(request('/api/session/login', 'POST', { username, password, trust: 'until-revoked', deviceLabel: '合成浏览器' }));
+  assert.equal(rememberedLogin.status, 200);
+  const rememberedCookie = rememberedLogin.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
+  const restarted = await loadManagementService(configPath);
+  assert.equal((await restarted(request('/api/session', 'GET', undefined, rememberedCookie))).status, 200);
+  assert.equal((await restarted(request('/api/cocoproxy/status', 'GET', undefined, rememberedCookie))).status, 200);
   await writeFile(configPath, JSON.stringify({ ...settings, subscriptionPolicy: { allowedOrigins: [], resolve: 'not-code' } }));
   await assert.rejects(loadManagementService(configPath), { code: 'MANAGEMENT_SETTINGS_INVALID' });
 });

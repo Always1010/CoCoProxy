@@ -120,7 +120,7 @@ export async function verifyAdminCredential(credential: unknown, input: unknown)
   } finally { actual.fill(0); expected.fill(0); }
 }
 
-export type Session = { username: string; expiresAt: number };
+export type Session = { username: string; expiresAt: number; deviceId?: string };
 export type IssuedSession = Session & { token: string };
 export type SessionStoreOptions = { ttlMs?: number; maxSessions?: number; now?: () => number };
 
@@ -150,8 +150,8 @@ export class SessionStore {
     return createHash('sha256').update(token, 'ascii').digest('hex');
   }
 
-  issue(username: string): IssuedSession {
-    if (!validUsername(username)) fail('AUTH_INPUT_INVALID');
+  issue(username: string, deviceId?: string): IssuedSession {
+    if (!validUsername(username) || (deviceId !== undefined && !/^[a-f0-9]{32}$/.test(deviceId))) fail('AUTH_INPUT_INVALID');
     const time = this.time();
     for (const [digest, session] of this.sessions) if (session.expiresAt <= time) this.sessions.delete(digest);
     if (this.sessions.size >= this.maxSessions) fail('AUTH_SESSION_LIMIT');
@@ -162,8 +162,9 @@ export class SessionStore {
       do { token = randomBytes(32).toString('base64url'); digest = this.digest(token)!; }
       while (this.sessions.has(digest));
     } catch { fail('AUTH_CREDENTIAL_INVALID'); }
-    this.sessions.set(digest, { username, expiresAt });
-    return { token, username, expiresAt };
+    const session = { username, expiresAt, ...(deviceId === undefined ? {} : { deviceId }) };
+    this.sessions.set(digest, session);
+    return { token, ...session };
   }
 
   check(token: unknown): Session | null {
@@ -178,5 +179,9 @@ export class SessionStore {
   revoke(token: unknown): void {
     const digest = this.digest(token);
     if (digest !== null) this.sessions.delete(digest);
+  }
+
+  revokeDevice(id: string): void {
+    for (const [digest, session] of this.sessions) if (session.deviceId === id) this.sessions.delete(digest);
   }
 }

@@ -15,7 +15,7 @@
 | 页面 | 适配本地／订阅工作区、策略和规则；自动组保留算法 |
 | PWA、mock、远程字体 | 禁用，使用系统字体 |
 
-Nitro 全局 WS upgrade gate 补足 crossws 0.3.5 对无处理器路径的默认升级行为，不能只靠 HTTP middleware。当前只支持单实例 Node preset；会话在进程内，不支持多 worker 共享。
+Nitro 全局 WS upgrade gate 补足 crossws 0.3.5 对无处理器路径的默认升级行为，不能只靠 HTTP middleware。当前只支持单实例 Node preset；短期会话在进程内，受信任设备授权在私有状态目录持久保存，不支持多 worker 共享或同步撤销。
 
 上游默认核心 v1.19.27 不进入本项目运行锁；实际使用审核后的 Mihomo v1.19.33。来源与许可见本目录 MIT [LICENSE](LICENSE)及 Mihomo [GPLv3](../mihomo/LICENSE)。
 

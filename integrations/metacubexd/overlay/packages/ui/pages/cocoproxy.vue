@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconCheck, IconLogout, IconRefresh, IconRestore, IconX } from '@tabler/icons-vue'
+import { IconCheck, IconLogout, IconRefresh, IconRestore, IconShieldX, IconX } from '@tabler/icons-vue'
 import type { CoCoProxyStatus } from '~/composables/useCoCoProxy'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
@@ -8,6 +8,8 @@ const api = useCoCoProxy()
 const status = ref<CoCoProxyStatus | null>(null)
 const busy = ref(false)
 const error = ref('')
+type TrustedDevice = { id: string; label: string; trust: '90days' | 'until-revoked'; createdAt: number; renewedAt: number; expiresAt: number | null; current: boolean }
+const devices = ref<TrustedDevice[]>([])
 
 async function run(action: () => Promise<void>) {
   if (busy.value) return
@@ -17,7 +19,19 @@ async function run(action: () => Promise<void>) {
   catch (cause) { error.value = cocoproxyErrorMessage(cause) }
   finally { busy.value = false }
 }
-async function refresh() { status.value = await api.readStatus() }
+async function refresh() {
+  await Promise.all([
+    api.readStatus().then(value => { status.value = value }),
+    api.request<{ devices: TrustedDevice[] }>('/api/session/devices').then(value => { devices.value = value.devices }),
+  ])
+}
+async function revoke(device: TrustedDevice) {
+  const result = await api.request<{ current: boolean }>('/api/session/devices/revoke', { method: 'POST', body: { id: device.id } })
+  if (result.current) {
+    api.clearSession()
+    await navigateTo('/login', { replace: true })
+  } else await refresh()
+}
 async function recover() {
   await api.request('/api/cocoproxy/recover', { method: 'POST', body: {} })
   await refresh()
@@ -34,6 +48,20 @@ onMounted(() => run(refresh))
       <div class="flex items-center justify-between border-b border-base-content/8 p-4"><span class="text-sm">核心状态</span><span v-if="status" class="flex items-center gap-2 text-sm" :class="status.core?.ready ? 'text-success' : 'text-warning'"><IconCheck v-if="status.core?.ready" :size="16" /><IconX v-else :size="16" />{{ status.core?.ready ? '运行中' : '未就绪' }}</span><span v-else class="loading loading-spinner loading-xs" /></div>
       <div class="flex items-center justify-between p-4"><span class="text-sm">管理会话</span><button class="btn btn-outline btn-sm" :disabled="busy" @click="run(api.logout)"><IconLogout :size="16" />退出登录</button></div>
     </div>
+    <section class="max-w-2xl rounded-xl border border-base-content/10 bg-base-200/60 p-4" aria-labelledby="trusted-devices-title">
+      <h2 id="trusted-devices-title" class="text-base font-semibold">已信任设备</h2>
+      <p class="mt-1 text-xs leading-relaxed text-base-content/60">这些设备可自动登录。撤销后，该设备的现有管理会话和自动登录授权一并失效。</p>
+      <p v-if="!devices.length" class="mt-4 text-sm text-base-content/60">暂无已信任设备。可在下次登录时选择信任此设备。</p>
+      <ul v-else class="mt-3 divide-y divide-base-content/10">
+        <li v-for="device in devices" :key="device.id" class="flex items-center justify-between gap-3 py-3">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2"><span class="truncate text-sm">{{ device.label }}</span><span v-if="device.current" class="badge badge-sm shrink-0">当前设备</span></div>
+            <p class="mt-1 text-xs text-base-content/55">{{ device.expiresAt === null ? '长期信任' : `有效至 ${new Date(device.expiresAt).toLocaleDateString()}` }} · 授权于 {{ new Date(device.createdAt).toLocaleDateString() }}</p>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm shrink-0 text-error" :disabled="busy" :title="device.current ? '撤销当前设备并退出登录' : `撤销设备：${device.label}`" :aria-label="device.current ? '撤销当前设备并退出登录' : `撤销设备：${device.label}`" @click="run(() => revoke(device))"><IconShieldX :size="18" /></button>
+        </li>
+      </ul>
+    </section>
     <div v-if="status?.transaction || status?.fault" class="flex max-w-2xl items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning/10 p-4"><span class="text-sm text-warning">配置切换需要恢复</span><button class="btn btn-warning btn-sm" :disabled="busy" @click="run(recover)"><IconRestore :size="16" />恢复</button></div>
   </div>
 </template>

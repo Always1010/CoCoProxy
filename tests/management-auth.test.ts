@@ -7,6 +7,7 @@ import {
   AuthError, createAdminCredential, loadAdminCredential, parseAdminCredential,
   SessionStore, verifyAdminCredential,
 } from '../packages/management/auth.ts';
+import { TrustedDeviceStore } from '../packages/management/trusted-devices.ts';
 
 const password = 'synthetic-password-for-tests';
 const login = { username: 'example-admin', password };
@@ -158,4 +159,66 @@ test('session capacity rejects excess issuance, reclaims expiry and enforces bou
     { maxSessions: 0 }, { maxSessions: 257 }, { maxSessions: 1.5 },
   ]) assert.throws(() => new SessionStore(options), code('AUTH_INPUT_INVALID'));
   assert.throws(() => store.issue('admin\n'), code('AUTH_INPUT_INVALID'));
+});
+
+test('trusted device grants survive restart, renew after use and revoke durably without storing tokens', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-device-auth-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const state = join(root, 'state');
+  const credential = await createAdminCredential(login);
+  const origin = 'https://management.example';
+  const day = 24 * 60 * 60 * 1000;
+  let clock = day;
+  let devices = await TrustedDeviceStore.load(state, credential, origin, () => clock);
+  await assert.rejects(readFile(join(state, 'auth', 'trusted-devices.json')), { code: 'ENOENT' });
+  const limited = await devices.issue('90days', '合成设备甲');
+  const permanent = await devices.issue('until-revoked', '合成设备乙');
+  const saved = await readFile(join(state, 'auth', 'trusted-devices.json'), 'utf8');
+  assert.ok(!saved.includes(limited.token) && !saved.includes(permanent.token) && !saved.includes(password));
+  assert.ok(!JSON.stringify(devices.list()).includes('tokenDigest'));
+  devices = await TrustedDeviceStore.load(state, credential, origin, () => clock);
+  assert.equal(devices.check(permanent.token)?.expiresAt, null);
+  assert.equal(devices.check(limited.token)?.expiresAt, 91 * day);
+  assert.equal((await devices.renew(limited.token))?.renewed, false);
+  clock += 89 * day;
+  assert.equal((await devices.renew(limited.token))?.device.expiresAt, 180 * day);
+  // A queued renewal can never put a revoked grant back in the file.
+  await Promise.all([devices.renew(permanent.token), devices.revoke(permanent.device.id)]);
+  devices = await TrustedDeviceStore.load(state, credential, origin, () => clock);
+  assert.equal(devices.check(permanent.token), null);
+  assert.ok(devices.check(limited.token));
+  clock = 180 * day;
+  assert.equal(devices.check(limited.token), null);
+  assert.equal(await devices.renew(limited.token), null);
+  assert.equal(devices.check('x'.repeat(43)), null);
+});
+
+test('credential/origin changes invalidate remembered devices and corrupt or linked files fail closed', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-device-binding-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const credential = await createAdminCredential(login);
+  const origin = 'https://management.example';
+  const devices = await TrustedDeviceStore.load(root, credential, origin);
+  const issued = await devices.issue('until-revoked', '合成浏览器');
+  const replacement = await createAdminCredential({ ...login, password: 'replacement-synthetic-password' });
+  assert.equal((await TrustedDeviceStore.load(root, replacement, origin)).check(issued.token), null);
+  assert.equal((await TrustedDeviceStore.load(root, credential, 'https://other.example')).check(issued.token), null);
+  assert.ok((await TrustedDeviceStore.load(root, credential, origin)).check(issued.token));
+  const path = join(root, 'auth', 'trusted-devices.json');
+  const saved = await readFile(path, 'utf8');
+  const malformed = JSON.parse(saved);
+  malformed.devices.push(malformed.devices[0]);
+  await writeFile(path, JSON.stringify(malformed));
+  await assert.rejects(TrustedDeviceStore.load(root, credential, origin), code('AUTH_TRUST_UNAVAILABLE'));
+  await writeFile(path, saved);
+  if (process.platform !== 'win32') {
+    await chmod(path, 0o644);
+    await assert.rejects(TrustedDeviceStore.load(root, credential, origin), code('AUTH_TRUST_UNAVAILABLE'));
+    await chmod(path, 0o600);
+    const target = join(root, 'synthetic-target.json');
+    await writeFile(target, saved, { mode: 0o600 });
+    await rm(path);
+    await symlink(target, path);
+    await assert.rejects(TrustedDeviceStore.load(root, credential, origin), code('AUTH_TRUST_UNAVAILABLE'));
+  }
 });

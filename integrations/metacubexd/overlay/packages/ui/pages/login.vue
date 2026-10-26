@@ -7,6 +7,8 @@ useHead({ title: '登录 · CoCoProxy' })
 const { login } = useCoCoProxy()
 const username = ref('')
 const password = ref('')
+const trust = ref<'none' | '90days' | 'until-revoked'>('until-revoked')
+const deviceLabel = ref('')
 const busy = ref(false)
 const error = ref('')
 
@@ -15,7 +17,7 @@ async function submit() {
   busy.value = true
   error.value = ''
   try {
-    await login(username.value, password.value)
+    await login(username.value, password.value, trust.value, deviceLabel.value)
     await navigateTo('/overview', { replace: true })
   } catch (cause) {
     error.value = cocoproxyErrorMessage(cause)
@@ -42,13 +44,26 @@ async function submit() {
           密码
           <input id="cocoproxy-password" v-model="password" class="input input-bordered w-full" type="password" autocomplete="current-password" required :disabled="busy" />
         </label>
+        <label class="flex flex-col gap-2 text-sm" for="cocoproxy-trust">
+          登录保持方式
+          <select id="cocoproxy-trust" v-model="trust" class="select select-bordered w-full" :disabled="busy">
+            <option value="until-revoked">长期信任此设备</option>
+            <option value="90days">信任 90 天（使用时续期）</option>
+            <option value="none">临时登录（8 小时）</option>
+          </select>
+        </label>
+        <label v-if="trust !== 'none'" class="flex flex-col gap-2 text-sm" for="cocoproxy-device-label">
+          设备备注（可选）
+          <input id="cocoproxy-device-label" v-model="deviceLabel" class="input input-bordered w-full" placeholder="例如：我的手机" maxlength="80" :disabled="busy" />
+        </label>
+        <p class="text-xs leading-relaxed text-base-content/55">{{ trust === 'none' ? '临时会话在 8 小时后或管理服务重启后失效。' : '此设备下次自动登录，管理服务重启后仍有效。主动退出或在设置中撤销设备后，需要重新登录。' }}</p>
         <p v-if="error" class="text-sm text-error" role="alert">{{ error }}</p>
         <button class="btn btn-primary w-full" type="submit" :disabled="busy">
           <span v-if="busy" class="loading loading-spinner loading-sm" aria-hidden="true" />
           <IconLogin v-else :size="20" aria-hidden="true" />
           {{ busy ? '登录中…' : '登录' }}
         </button>
-        <p class="text-xs leading-relaxed text-base-content/55">使用部署时设置的管理员账户。会话通过同源 Cookie 验证。</p>
+        <p class="text-xs leading-relaxed text-base-content/55">使用部署时设置的管理员账户。共用设备请选择临时登录。</p>
       </div>
     </form>
   </main>
