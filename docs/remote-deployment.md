@@ -1,6 +1,40 @@
-# 从另一台电脑部署与更新
+# 本机与远程部署更新
 
-这个入口随 Linux 发行包提供，部署时不需要开发仓库、构建工具链或特定设备。先从可信发行来源核对 SHA256SUMS，解压匹配目标架构的发行包，再在解压目录运行。它部署当前解压的版本，不自动下载“最新版本”。
+这个入口随 Linux 发行包提供，支持在目标机直接安装／更新，也支持从另一台电脑通过 SSH 部署。部署时不需要开发仓库、构建工具链或特定设备。先从可信发行来源核对 SHA256SUMS，解压匹配目标架构的发行包，再在解压目录运行。它部署当前解压的版本，不自动下载“最新版本”。
+
+## 在目标机本地部署与更新
+
+在目标 Linux 上使用 `--local`，直接调用本机安装协调器，无需 IP、本机 SSH 服务或 SSH 回环连接。后续更新复用已保存的部署输入：
+
+```sh
+./cocoproxy deploy --local --check
+sudo ./cocoproxy deploy --local --preview
+sudo ./cocoproxy deploy --local
+```
+
+`--check` 无需 root，只读盘点 Linux、架构、Node、Python 和 systemd 基本条件，不核验完整安装前提。实际部署及 `--preview` 需要 root；缺少权限时返回 `LOCAL_DEPLOY_ROOT_REQUIRED`，由操作者显式使用 sudo 或 root 身份执行。预览仍会暂存载荷并生成临时私有输入，但不进入停服或安装阶段。
+
+首次本地安装提供与远程入口相同的私有输入，文件使用绝对路径、仅当前用户可读的 0600 普通单链接文件：
+
+```sh
+sudo ./cocoproxy deploy --local \
+  --environment /absolute/private/environment.json \
+  --admin-input /absolute/private/administrator.json
+```
+
+首次接入既有安装可增加 `--input /absolute/private/previous-deployment.json`；自动网关首次更新提供 `--router-config` 或 `--router-hook`，之后复用保存配置。路由器适配器仍按其协议访问协同路由器，`--local` 只取消对本机的 SSH 传输。
+
+从源码目录调用时，显式指定已经装配好的发行目录及可信摘要：
+
+```sh
+sudo sh scripts/cocoproxy-setup.sh deploy --local \
+  --payload /absolute/staging/release \
+  --manifest-sha256 <可信的manifest摘要>
+```
+
+两种模式共用载荷校验、部署锁、配置主本和中断记录，以及下述维护、服务恢复与状态保留流程；沿用协调器的 `REMOTE_*` 原因码。无 IP 且未指定 `--local` 时只显示部署帮助，不隐式更新当前主机。命令不会构建源码或安装系统依赖。
+
+## 从另一台电脑通过 SSH 部署
 
 ```sh
 ./cocoproxy deploy 192.0.2.2 --check

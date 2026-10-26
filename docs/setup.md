@@ -4,6 +4,8 @@
 
 发行包解压后使用根目录 `cocoproxy`；源码目录使用 `sh scripts/cocoproxy-setup.sh` 或 `npm run setup --`。以下命令在已核验发行包及获准目标 Linux 中执行，路径是合成角色示例，须替换实际值。
 
+需要自动组织安装或更新时，使用 `sudo ./cocoproxy deploy --local` 在本机执行，或 `./cocoproxy deploy <IP>` 从另一台电脑通过 SSH 执行。首次安装还需私有环境与管理员输入，参数、预览及更新状态保留见[本机与远程部署更新](remote-deployment.md)。本地模式无需本机 SSH 服务；下面保留逐步配置、预检和维护入口。
+
 ## 1. 盘点环境
 
 ```sh
