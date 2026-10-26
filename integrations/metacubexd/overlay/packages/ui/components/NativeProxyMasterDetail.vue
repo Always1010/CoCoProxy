@@ -49,6 +49,9 @@ const emit = defineEmits<{
 
 const proxiesStore = useProxiesStore()
 const { t } = useI18n()
+const masterDetailEl = ref<HTMLElement | null>(null)
+const groupRailEl = ref<HTMLElement | null>(null)
+const railResize = useGroupRailResize(masterDetailEl, groupRailEl)
 
 const groupNames = computed(() => props.groups.map((g) => g.name))
 
@@ -231,10 +234,11 @@ function aliveCount(group: ProxyType) {
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-col gap-3 sm:h-full sm:flex-row" :data-active-group="activeName">
+  <div ref="masterDetailEl" class="relative flex min-h-0 flex-col gap-3 sm:h-full sm:flex-row" :class="{ 'select-none': railResize.dragging.value }" :style="railResize.railStyle.value" :data-active-group="activeName">
     <!-- Group navigation: horizontal strip on mobile, left rail on >=sm -->
     <div
-      class="flex shrink-0 gap-1 overflow-x-auto pb-1 sm:w-48 sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0"
+      ref="groupRailEl"
+      class="group-rail flex shrink-0 gap-1 overflow-x-auto pb-1 sm:w-48 sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0"
     >
       <WorkspaceGroupsMenu :active-group="activeName" :configure="configureGroupRules" />
       <button
@@ -279,7 +283,32 @@ function aliveCount(group: ProxyType) {
           </span>
         </span>
       </button>
+      <button v-if="railResize.canResize.value && railResize.hasPreference.value" type="button" class="btn btn-ghost btn-sm shrink-0 gap-1" @click="railResize.resetWidth">
+        <IconRefresh :size="14" aria-hidden="true" /><span>重置宽度</span>
+      </button>
     </div>
+
+    <div
+      v-if="activeGroup && railResize.canResize.value"
+      role="separator"
+      tabindex="0"
+      aria-label="调整策略组列表宽度"
+      aria-orientation="vertical"
+      :aria-valuemin="railResize.minWidth"
+      :aria-valuemax="railResize.maxWidth.value"
+      :aria-valuenow="railResize.currentWidth.value"
+      aria-valuetext="左右方向键调宽，Home 恢复默认"
+      title="拖动调宽，双击恢复默认宽度"
+      class="group-rail-separator absolute inset-y-0 z-10 w-3 -translate-x-1/2 cursor-col-resize rounded focus-visible:outline-2 focus-visible:outline-primary"
+      :class="{ 'is-dragging': railResize.dragging.value }"
+      @pointerdown="railResize.startResize"
+      @pointermove="railResize.moveResize"
+      @pointerup="railResize.endResize"
+      @pointercancel="railResize.endResize"
+      @lostpointercapture="railResize.endResize"
+      @dblclick="railResize.resetWidth"
+      @keydown="railResize.resizeWithKeyboard"
+    />
 
     <!-- Right detail: active group's nodes + workbench bar -->
     <div
@@ -505,3 +534,36 @@ function aliveCount(group: ProxyType) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.group-rail-separator {
+  display: none;
+}
+
+@media (min-width: 640px) and (hover: hover) and (pointer: fine) {
+  .group-rail {
+    width: var(--group-rail-width, 12rem);
+  }
+
+  .group-rail-separator {
+    display: block;
+    left: calc(var(--group-rail-width, 12rem) + 0.375rem);
+  }
+
+  .group-rail-separator::before {
+    content: '';
+    position: absolute;
+    inset: 0 5px;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: 0.12;
+    transition: opacity 150ms;
+  }
+
+  .group-rail-separator:hover::before,
+  .group-rail-separator:focus-visible::before,
+  .group-rail-separator.is-dragging::before {
+    opacity: 0.45;
+  }
+}
+</style>
