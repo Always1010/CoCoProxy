@@ -101,6 +101,8 @@ sh ./cocoproxy configure --environment "$ENVIRONMENT" \
 
 参数包含适配器标识、完整 `configTemplate`、字段来源和独立解析前提。模板使用已审阅的 AlwayRoute schema1，远端 `revision` 必须由目标当前配置读取后绑定，不用固定的 0 冒充当前版本。路由器基础 DNS 在该实现中固定为 `127.0.0.1:53`，不接受任意基础解析目标。参数不是任意固件的可导入配置；具体预览、读回和保存边界见[协作约定](router-contract.md)。生成器不会写入另一台设备，也不会把人工前提确认报告为实际路径通过。
 
+已有兼容 AlwayRoute 时，接着按[读取、审阅与保存](router-contract.md#读取审阅与保存)使用同一参数文件运行 `preview-config`，审阅目标与完整替换差异，再显式 `save-config --apply --reviewed-plan-sha256` 并 `check-config`。保存仅允许关闭状态；候选 `enabled:true` 不会自行改写持久开启 intent，仍需在就绪后单独 enable。示例的 `enabled:false` 表示候选关闭，准备开启时在原环境明确改为 true 并重新生成到新的私有输出，避免手工修改或重复填写两端网络字段。
+
 ## 4. 安装预检与执行
 
 ```sh

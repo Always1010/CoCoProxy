@@ -4,6 +4,20 @@
   "version": "1.0.0",
   "contract": "cocoproxy-router-contract/v1",
   "configurationSchema": 1,
+  "actions": {
+    "status": "observe-stable-intent",
+    "disable": "independent-disable-and-confirm",
+    "enable": "apply-saved-enabled-candidate-and-confirm",
+    "preview-config": "read-target-revision-and-complete-replacement-diff",
+    "check-config": "compare-saved-configuration-and-report-applied-revision",
+    "save-config": "disabled-only-reviewed-cas-save-and-readback"
+  },
+  "saveSemantics": {
+    "configurationIsCandidate": true,
+    "writesPersistentIntent": false,
+    "appliesNetwork": false,
+    "requiresSingleOperator": true
+  },
   "reviewedSource": {
     "project": "AlwayRoute",
     "commit": "067085c10349486e8fd0af160d17723068361621",
