@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('remote_deploy', Path(__file__).parents[1] / 'scripts/remote-deploy.py')
@@ -13,7 +14,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -22,7 +23,10 @@ class RemoteDeploymentTests(unittest.TestCase):
         state = root / 'state'
         state.mkdir()
         (state / 'workspace.json').write_text('{"revision":7}')
-        (state / 'lifecycle.json').write_text('{"schemaVersion":1,"enabled":true,"paused":false}')
+        if lifecycle is ...:
+            lifecycle = {'schemaVersion': 1, 'enabled': True, 'paused': False}
+        if lifecycle is not None:
+            (state / 'lifecycle.json').write_text(json.dumps(lifecycle))
         credential = root / 'credential'
         credential.write_text('synthetic unchanged credential')
         hook = root / 'router-hook'
@@ -37,10 +41,10 @@ class RemoteDeploymentTests(unittest.TestCase):
         receipt.write_text(json.dumps({'status': 'complete', 'release': '/old/release', 'manifestSha256': 'a' * 64}))
         manifest = {'commit': 'e' * 40, 'files': [{'path': 'bin/mihomo', 'sha256': 'c' * 64}]}
         events = []
-        active = {'cocoproxy-management.service': True, 'cocoproxy-mihomo.service': True,
-            'cocoproxy-gateway-network.service': True, 'cocoproxy-gateway-guard.service': True}
+        active = {'cocoproxy-management.service': True, 'cocoproxy-mihomo.service': core_active,
+            'cocoproxy-gateway-network.service': core_active, 'cocoproxy-gateway-guard.service': True}
         enabled = {key: 'enabled' if 'management' in key or 'guard' in key else 'static' for key in active}
-        router = {'enabled': True}
+        router = {'enabled': router_enabled}
 
         def run(args, timeout=120):
             args = [str(item) for item in args]
@@ -49,6 +53,23 @@ class RemoteDeploymentTests(unittest.TestCase):
                 if args[1] != 'status':
                     router['enabled'] = args[1] == 'enable'
                 return json.dumps(router).encode()
+            if 'runtime-maintenance-pause' in args:
+                marker = state / 'lifecycle.json'
+                present = marker.exists()
+                previous = json.loads(marker.read_text()) if present else {'schemaVersion': 1, 'enabled': False, 'paused': False}
+                paused = {**previous, 'paused': True}
+                marker.write_text(json.dumps(paused))
+                return json.dumps({'lifecycle': paused, 'maintenanceRestore': {'schemaVersion': 1,
+                    'previous': {'present': present, 'enabled': previous['enabled'], 'paused': previous['paused']},
+                    'pausedSha256': 'd' * 64}}).encode()
+            if 'runtime-maintenance-restore' in args:
+                previous = json.loads(Path(args[args.index('--input') + 1]).read_text())['previous']
+                restored = {'schemaVersion': 1, 'enabled': previous['enabled'], 'paused': previous['paused']}
+                if previous['present']:
+                    (state / 'lifecycle.json').write_text(json.dumps(restored))
+                else:
+                    (state / 'lifecycle.json').unlink()
+                return json.dumps({'lifecycle': restored}).encode()
             if '--operation' in args:
                 operation = args[args.index('--operation') + 1]
                 if operation == 'prepare':
@@ -64,11 +85,16 @@ class RemoteDeploymentTests(unittest.TestCase):
                     return (('active' if active[args[2]] else 'inactive') if args[4] == 'ActiveState' else enabled[args[2]]).encode()
                 for unit in args[2:]:
                     if action in ['start', 'stop']:
+                        if edit_during_stop and action == 'stop' and unit == 'cocoproxy-management.service':
+                            (state / 'workspace.json').write_text('{"revision":8}')
+                        if action == 'start' and unit == 'cocoproxy-mihomo.service':
+                            marker = state / 'lifecycle.json'
+                            if marker.exists() and json.loads(marker.read_text())['paused']:
+                                raise RuntimeError('RUNTIME_LIFECYCLE_PAUSED')
+                            active['cocoproxy-gateway-network.service'] = True
                         active[unit] = action == 'start'
                     elif action in ['enable', 'disable']:
                         enabled[unit] = 'enabled' if action == 'enable' else 'disabled'
-            if 'runtime-resume' in args:
-                active['cocoproxy-mihomo.service'] = active['cocoproxy-gateway-network.service'] = True
             return b'{"core":{"ready":true}}'
 
         stack = contextlib.ExitStack()
@@ -77,28 +103,34 @@ class RemoteDeploymentTests(unittest.TestCase):
         stack.enter_context(patch.object(deploy, 'trusted', lambda path: Path(path)))
         stack.enter_context(patch.object(deploy, 'directory', lambda path, mode=0o755: Path(path)))
         stack.enter_context(patch.object(deploy, 'regular', lambda path, private=False: Path(path).read_bytes()))
+        stack.enter_context(patch.object(deploy, 'put', lambda path, data, mode=0o600: Path(path).write_bytes(data)))
         stack.enter_context(patch.object(deploy, 'stage_payload', lambda *_: (root / 'payload', manifest)))
         stack.enter_context(patch.object(deploy, 'run', run))
-        stack.enter_context(patch.object(deploy.os, 'geteuid', lambda: 0))
+        stack.enter_context(patch.object(deploy.os, 'chown', lambda *_: None, create=True))
         stack.enter_context(patch.object(deploy.tempfile, 'TemporaryDirectory', lambda **kwargs: factory(prefix='scratch-', dir=root)))
-        args = ['--payload', str(root), '--manifest-sha256', 'b' * 64, '--router-hook', str(hook)]
+        args = SimpleNamespace(payload=str(root), manifest_sha256='b' * 64, router_hook=str(hook), router_config=None,
+            input=None, environment=None, admin_input=None, web_unit=None, preview=False)
         return temporary, stack, private, before, events, router, args
 
     def test_update_preserves_identity_and_restores_only_after_core_ready(self):
         temporary, stack, private, before, events, router, args = self.scenario()
         with temporary, stack:
-            deploy.main(args)
+            deploy.main_locked(args)
             after = json.loads((private / 'deployment.json').read_text())
             self.assertEqual(after['management']['deployment'], before['management']['deployment'])
             self.assertEqual(after['runtime']['automaticGateway'], before['runtime']['automaticGateway'])
             self.assertEqual(after['runtime']['stateDirectory'], before['runtime']['stateDirectory'])
             self.assertIn('b' * 64, after['runtime']['sourceDirectory'])
             find = lambda word: next(index for index, command in enumerate(events) if word in command)
-            self.assertLess(find('prepare'), find('runtime-pause'))
+            self.assertLess(find('prepare'), find('runtime-maintenance-pause'))
             self.assertLess(find('disable'), find('remove'))
             self.assertLess(find('remove'), find('--apply'))
             enable_router = next(index for index, command in enumerate(events) if command[0].endswith('router-hook') and command[1] == 'enable')
             self.assertLess(find('runtime-status'), enable_router)
+            self.assertLess(find('runtime-maintenance-restore'), next(index for index, command in enumerate(events)
+                if command[:2] == ['/usr/bin/systemctl', 'start']))
+            pause_command = next(command for command in events if 'runtime-maintenance-pause' in command)
+            self.assertIn('payload', pause_command[6])
             self.assertTrue(router['enabled'])
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
 
@@ -106,12 +138,35 @@ class RemoteDeploymentTests(unittest.TestCase):
         temporary, stack, private, before, events, router, args = self.scenario(True)
         with temporary, stack:
             with self.assertRaisesRegex(RuntimeError, 'INSTALL_SYNTHETIC_FAILURE'):
-                deploy.main(args)
+                deploy.main_locked(args)
             self.assertFalse(router['enabled'])
-            self.assertFalse(any('runtime-resume' in command for command in events))
-            self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'failed')
+            self.assertFalse(any('runtime-maintenance-restore' in command for command in events))
+            failed = json.loads((private / 'remote-last.json').read_text())
+            self.assertEqual(failed['status'], 'failed')
+            self.assertEqual(failed['maintenanceRestore']['previous'], {'present': True, 'enabled': True, 'paused': False})
             with self.assertRaisesRegex(RuntimeError, 'REMOTE_PREVIOUS_DEPLOYMENT_REQUIRES_REVIEW'):
-                deploy.main(args)
+                deploy.main_locked(args)
+
+    def test_upgrade_restores_missing_and_disabled_lifecycle_intent_exactly(self):
+        for lifecycle, active in [(None, True), ({'schemaVersion': 1, 'enabled': False, 'paused': False}, True),
+                ({'schemaVersion': 1, 'enabled': False, 'paused': True}, False)]:
+            with self.subTest(lifecycle=lifecycle):
+                temporary, stack, private, before, events, router, args = self.scenario(lifecycle=lifecycle, core_active=active, router_enabled=active)
+                with temporary, stack:
+                    deploy.main_locked(args)
+                    marker = Path(before['runtime']['stateDirectory']) / 'lifecycle.json'
+                    self.assertEqual(marker.exists(), lifecycle is not None)
+                    if lifecycle is not None:
+                        self.assertEqual(json.loads(marker.read_text()), lifecycle)
+                    self.assertFalse(any('runtime-resume' in command for command in events))
+
+    def test_edit_completed_before_manager_stops_is_preserved_as_install_baseline(self):
+        temporary, stack, private, before, events, router, args = self.scenario(edit_during_stop=True)
+        with temporary, stack:
+            deploy.main_locked(args)
+            self.assertEqual(json.loads((Path(before['runtime']['stateDirectory']) / 'workspace.json').read_text()), {'revision': 8})
+            self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
+
 
 
 if __name__ == '__main__':
