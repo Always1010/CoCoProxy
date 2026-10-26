@@ -3,6 +3,7 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { parseSetupEnvironment, SetupError, type SetupEnvironment } from './input.ts';
 import { ManagedWebError, verifyManagedWeb, type ManagedWebInput } from './https.ts';
+import { inspectServiceAccount } from '../deployment/service-account.ts';
 
 export interface Check { id: string; status: 'pass' | 'fail' | 'unknown'; required: boolean; message: string; action?: string; code?: string }
 export interface DoctorHost {
@@ -29,14 +30,10 @@ function supportedNode(version: string): boolean {
 }
 
 export function parseServiceIdentity(accounts: string, name: string, expectedUid?: number): number {
-  const entries = accounts.trim().split('\n').map(line => line.split(':'));
-  const selected = entries.filter(a => a[0] === name);
-  if (selected.length !== 1) throw new SetupError('SETUP_SERVICE_ACCOUNT_REQUIRED');
-  const a = selected[0], uid = Number(a[2]);
-  if (a.length !== 7 || !/^\d+$/.test(a[2]) || !Number.isSafeInteger(uid) || uid <= 0 || uid > 4_294_967_294 ||
-      expectedUid !== undefined && uid !== expectedUid || !/\/(?:nologin|false)$/.test(a[6]) ||
-      entries.filter(e => Number(e[2]) === uid).length !== 1) throw new SetupError('SETUP_SERVICE_ACCOUNT_INVALID');
-  return uid;
+  const identity = inspectServiceAccount(accounts, name, expectedUid);
+  if (identity.status === 'required') throw new SetupError('SETUP_SERVICE_ACCOUNT_REQUIRED');
+  if (identity.status === 'invalid') throw new SetupError('SETUP_SERVICE_ACCOUNT_INVALID');
+  return identity.uid;
 }
 
 /** All probes are bounded reads or fixed read-only system commands. Never prepares network resources. */
