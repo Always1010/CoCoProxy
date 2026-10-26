@@ -9,7 +9,7 @@
   "devDependencies": { "@types/node": "22.18.13", "@types/ws": "8.18.2" },
   "scripts": {
     "setup": "node --experimental-strip-types apps/setup/main.ts",
-    "test:setup": "node --experimental-strip-types --test tests/setup.test.ts",
+    "test:setup": "node --experimental-strip-types --test tests/setup.test.ts tests/setup-https.test.ts tests/setup-lifecycle.test.ts",
     "test:gateway": "node --experimental-strip-types --test tests/gateway-profile.test.ts tests/gateway-host-plan.test.ts",
     "cli": "node --experimental-strip-types apps/cli/main.ts",
     "typecheck": "node tooling/node_modules/typescript/bin/tsc -p tsconfig.json",
