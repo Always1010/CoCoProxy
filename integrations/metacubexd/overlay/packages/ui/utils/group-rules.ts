@@ -47,3 +47,14 @@ export function templateRuleLabel(rule: string): string {
   }
   return `${domainRuleTypes.find(entry => entry.value === type)?.label ?? type}：${payload}`
 }
+
+export function localGroupNameError(name: string, view: { groups: { name: string }[]; nodes: string[]; catalog?: { id: string }[] }, shared = false): string {
+  const value = name.trim()
+  if (!value) return '请填写组名。'
+  if (value.length > 80 || /[,\r\n\u0000-\u001f\u007f]/.test(value)) return '组名最多 80 个字符，不能包含逗号或控制字符。'
+  if (['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE', 'GLOBAL', 'direct', 'block', 'reject', '__proto__', 'constructor', 'prototype'].includes(value)) return '此名称为系统保留名称，请更换。'
+  if (view.groups.some(group => group.name === value)) return '此策略组已存在，请更换名称。'
+  if (view.nodes.includes(value)) return '组名不能与节点名称相同。'
+  if (view.catalog?.some(service => service.id === value)) return shared ? '共享出口不能使用预置服务名称。' : '这是预置服务名称，请在上方启用对应服务组。'
+  return ''
+}

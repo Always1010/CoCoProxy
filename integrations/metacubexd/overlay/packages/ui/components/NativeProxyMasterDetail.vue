@@ -3,6 +3,7 @@ import type { Proxy as ProxyType } from '~/types'
 import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
 import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
 import AutomaticSelectionSettings from '~/components/AutomaticSelectionSettings.vue'
+import GroupRuleSummary from '~/components/GroupRuleSummary.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
 import { siteGroupMembers } from '~/composables/useSiteProbes'
 import {
@@ -131,7 +132,12 @@ const allMembers = computed(() => activeGroup.value ? siteGroupMembers(activeGro
 const hasTcpNodes = computed(() => allMembers.value.some(name => view.value?.tcpNodes?.some(node => node.name === name && node.applicable)))
 const detectionBusy = computed(() => props.batchTesting || props.tcpTesting || props.siteTesting || busy.value)
 const detectionMenu = ref<HTMLDetailsElement>()
-const groupSettings = ref<{ openSites: () => void }>()
+const groupSettings = ref<{ openSites: () => void; openRules: () => void }>()
+async function configureGroupRules(name: string) {
+  activeName.value = name
+  await nextTick()
+  groupSettings.value?.openRules()
+}
 function detect(kind: 'latency' | 'tcp' | 'sites') {
   if (!activeGroup.value || detectionBusy.value) return
   if (detectionMenu.value) detectionMenu.value.open = false
@@ -229,7 +235,7 @@ function aliveCount(group: ProxyType) {
     <div
       class="flex shrink-0 gap-1 overflow-x-auto pb-1 sm:w-48 sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0"
     >
-      <WorkspaceGroupsMenu :active-group="activeName" />
+      <WorkspaceGroupsMenu :active-group="activeName" :configure="configureGroupRules" />
       <button
         v-for="group in groups"
         :key="group.name"
@@ -333,6 +339,7 @@ function aliveCount(group: ProxyType) {
         </div>
 
         <p v-if="automaticEnabled" class="text-xs text-primary" role="status">点击节点可切换为手动选择</p>
+        <GroupRuleSummary :group-name="activeGroup.name" @configure="groupSettings?.openRules()" />
 
         <!-- Quick-filter rail: region · protocol · features. Each facet group
              gets its own row so a long region list (many flags) can never push

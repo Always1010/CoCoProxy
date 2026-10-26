@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
 import test from 'node:test';
 import ts from '../tooling/node_modules/typescript/lib/typescript.js';
+import { localGroupNameError } from '../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts';
 
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useWorkspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -228,7 +229,7 @@ test('group manager creates a shared exit from Proxy and blocks deletion while s
   let saves = 0;
   const exports: Record<string, any> = {};
   new Script(code, { filename: 'WorkspaceGroupsMenu.js' }).runInNewContext({
-    exports, defineProps: () => ({ activeGroup: 'AI Exit' }),
+    exports, localGroupNameError, defineProps: () => ({ activeGroup: 'AI Exit' }),
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useProxyRefresh: () => ({ refresh: async () => {} }),
     useWorkspace: () => ({ view, workspace: { value: { mode: 'local' } }, overrides: { value: settings.local }, busy: { value: false },

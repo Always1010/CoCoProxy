@@ -97,3 +97,42 @@ test('group domain form rejects URLs, malformed expressions and duplicate rules'
   assert.equal(rules.ruleTarget('MATCH,Other'), 'Other');
   assert.match(rules.templateRuleLabel('RULE-SET,cocoproxy-domestic-domain-v2,Domestic'), /国内域名集合/);
 });
+
+test('group creation opens rule settings only after successful creation and preserves existing settings', async () => {
+  const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/WorkspaceGroupsMenu.vue', import.meta.url), 'utf8');
+  const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') + '\nexport { add, addShared, customName };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const settings = { local: { rules: ['DOMAIN,existing.example,OpenAI'], selections: { Proxy: 'node-a', OpenAI: 'Proxy' } as Record<string, string> } };
+  const view = { value: { nodes: ['node-a'], catalog: [{ id: 'Proxy', default: true }, { id: 'OpenAI', default: true }, { id: 'Steam', default: false }], groups: [
+    { name: 'Proxy', role: 'shared', selected: 'node-a' }, { name: 'OpenAI', role: 'service', selected: 'Proxy' },
+  ] } };
+  const calls: string[] = [];
+  let failed = false;
+  const exports: Record<string, any> = {};
+  new Script(code).runInNewContext({
+    ...rules, exports,
+    defineProps: () => ({ activeGroup: 'Proxy', configure: (name: string) => calls.push(`configure:${name}`) }),
+    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    useProxyRefresh: () => ({ refresh: async () => { calls.push('refresh'); } }),
+    useWorkspace: () => ({ view, workspace: { value: { mode: 'local' } }, overrides: { value: settings.local }, busy: { value: false },
+      run: async (fn: () => Promise<void>) => { try { await fn(); } catch { calls.push('failed'); } },
+      save: async (edit: (value: typeof settings) => void) => { if (failed) throw new Error('合成应用失败'); edit(settings); calls.push('save'); } }),
+  });
+  await exports.add(' Work ');
+  assert.equal(settings.local.selections.Work, 'Proxy');
+  assert.equal(settings.local.selections.OpenAI, 'Proxy');
+  assert.deepEqual(settings.local.rules, ['DOMAIN,existing.example,OpenAI']);
+  assert.deepEqual(calls, ['save', 'refresh', 'configure:Work']);
+  calls.length = 0;
+  await exports.add('Steam', true);
+  assert.deepEqual(calls, ['save', 'refresh']); // Preset service already has built-in matching rules.
+  calls.length = 0;
+  failed = true;
+  await exports.add('Failed');
+  assert.deepEqual(calls, ['failed']);
+  assert.equal(settings.local.selections.Failed, undefined);
+  assert.match(rules.localGroupNameError('node-a', view.value), /节点名称/);
+  assert.match(rules.localGroupNameError('DIRECT', view.value), /保留/);
+  assert.match(rules.localGroupNameError('Steam', view.value), /预置服务/);
+  assert.match(rules.localGroupNameError('AI,Exit', view.value), /逗号/);
+});
