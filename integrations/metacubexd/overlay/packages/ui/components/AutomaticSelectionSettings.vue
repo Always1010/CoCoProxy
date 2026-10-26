@@ -108,7 +108,7 @@ onUnmounted(() => { disposed = true; close() })
 
 <template>
   <span class="shrink-0" :title="selectable ? '自动选择设置' : '此订阅策略组保留核心自动算法，无法叠加自动选择'">
-    <button type="button" class="btn btn-ghost btn-sm" :class="overrides.automatic?.[groupName] && overrides.automatic[groupName].enabled !== false ? 'text-primary' : ''" :disabled="!selectable" :title="selectable ? '自动选择设置' : '此订阅策略组保留核心自动算法'" :aria-label="`${groupName} 自动选择设置`" @click="open"><IconSettings :size="18" /><span>自动选择</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" :class="overrides.automatic?.[groupName] && overrides.automatic?.[groupName]?.enabled !== false ? 'text-primary' : ''" :disabled="!selectable" :title="selectable ? '自动选择设置' : '此订阅策略组保留核心自动算法'" :aria-label="`${groupName} 自动选择设置`" @click="open"><IconSettings :size="18" /><span>自动选择</span></button>
   </span>
   <dialog ref="dialog" class="modal" @close="close">
     <div class="modal-box max-w-2xl">

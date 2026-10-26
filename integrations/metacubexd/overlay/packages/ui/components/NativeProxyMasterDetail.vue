@@ -47,7 +47,7 @@ const groupNames = computed(() => props.groups.map((g) => g.name))
 const { workspace } = useWorkspace()
 const { view, busy, overrides } = useWorkspace()
 const automaticEnabled = computed(() => {
-  const policy = overrides.value.automatic?.[activeName.value]
+  const policy = activeName.value ? overrides.value.automatic?.[activeName.value] : undefined
   return !!policy && policy.enabled !== false
 })
 const { metadata: tcpMetadata, run: runTcp, cancel: cancelTcp, isRunning: tcpRunning, completed: tcpCompleted, total: tcpTotal } = useTcpDelay()
