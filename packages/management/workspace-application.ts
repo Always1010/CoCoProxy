@@ -6,13 +6,24 @@ import { WorkspaceStore, WorkspaceError, initialWorkspace, parseWorkspaceSetting
 import { ManagementError, exactRecord, readJsonBody } from './http.ts';
 import { describeTcpNode, probeTcpEndpoint, tcpEndpoint } from './tcp-delay.ts';
 import { memoizePolicyCompiler } from './shared-work.ts';
+import { createHash } from 'node:crypto';
+import { DEFAULT_AUTO_PROBES, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings, type ProbeTarget } from './automatic-policy.ts';
+import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
+import { readAutomaticBindings, writeAutomaticBindings, type AutomaticBindings } from './automatic-bindings.ts';
+import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
+import { selectionChanges } from '../runtime/selections.ts';
+import { privateRead } from '../storage/private-files.ts';
 
-type Plan = { workspace: Workspace; policy: JsonObject; nodeDnsPolicy?: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string };
+type Plan = { workspace: Workspace; policy: JsonObject; nodeDnsPolicy?: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string;
+  automatic: { scope: string; key: string; signatures: Record<string, string>; policies: Record<string, AutoGroupPolicy>; choices: Record<string, string[]> }; bindingKey: string };
 const asGroups = (policy: JsonObject): JsonObject[] => Array.isArray(policy['proxy-groups']) ? policy['proxy-groups'].filter((value): value is JsonObject => !!value && typeof value === 'object' && !Array.isArray(value)) : [];
 const asNodes = (policy: JsonObject): JsonObject[] => Array.isArray(policy.proxies) ? policy.proxies as JsonObject[] : [];
 function invalid(code = 'WORKSPACE_INVALID'): never { throw new WorkspaceError(code); }
 const emptyOverrides = (): RoutingOverrides => ({ selections: {}, rules: [] });
 const settingsOf = ({ revision: _revision, ...settings }: Workspace) => settings;
+const hash = (value: unknown) => createHash('sha256').update(canonicalJson(value as JsonObject)).digest('hex');
+const scopeOf = (workspace: Workspace) => JSON.stringify([workspace.mode, workspace.mode === 'subscription' ? workspace.subscriptionId : workspace.sourceIds]);
+const editsOf = (workspace: Workspace) => workspace.mode === 'local' ? workspace.local : workspace.subscriptionOverrides[workspace.mode === 'legacy' ? 'legacy' : workspace.subscriptionId ?? ''] ?? emptyOverrides();
 
 /** Check group references before a candidate reaches the runtime validator. */
 function checkReferences(policy: JsonObject): void {
@@ -72,6 +83,9 @@ export function createWorkspaceApplication(options: {
   compile: (policy: JsonObject, nodeDnsPolicy?: JsonObject) => Candidate;
   legacyPolicy: () => Promise<JsonObject | null>;
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
+  allowedProbeOrigins?: readonly string[];
+  automaticStatus?: () => unknown;
+  automaticProbe?: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult>;
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
   const { subscriptions, store, manager } = options;
@@ -79,6 +93,14 @@ export function createWorkspaceApplication(options: {
   const compile = (plan: Plan) => cachedCompile({ policy: plan.policy, ...(plan.nodeDnsPolicy ? { nodeDnsPolicy: plan.nodeDnsPolicy } : {}) });
   const building = new Map<string, Promise<Plan>>();
   let tcpProbes = 0;
+  let testingProbes = false;
+  let automaticChanging = false;
+  let snapshotCache: { revision: number; generation: string; expires: number; value: AutoSnapshot } | undefined;
+
+  function checkProbePermission(probes: AutoProbeSettings): void {
+    const permitted = options.allowedProbeOrigins ?? ['https://www.gstatic.com'];
+    if (![probes.primary, probes.secondary].every(target => permitted.includes(new URL(target.url).origin))) invalid('AUTO_PROBE_DENIED');
+  }
 
   async function load(): Promise<Workspace> {
     return await preferences.read() ?? initialWorkspace(await options.legacyPolicy(), (await subscriptions.list()).filter(source => source.snapshotCurrent).map(source => source.id));
@@ -111,15 +133,22 @@ export function createWorkspaceApplication(options: {
   }
 
   function build(workspace: Workspace, repair = false): Promise<Plan> {
-    const key = canonicalJson({ workspace: workspace as unknown as JsonObject, repair });
+    // Bindings may change without changing user intent/revision.
+    return readAutomaticBindings(options.stateDirectory).catch(error => {
+      if (Object.keys(editsOf(workspace).automatic ?? {}).length) throw error;
+      return null; // Corrupt automatic state must not prevent an explicit manual recovery.
+    }).then(bindings => buildWithBindings(workspace, repair, bindings));
+  }
+  function buildWithBindings(workspace: Workspace, repair: boolean, bindings: AutomaticBindings | null): Promise<Plan> {
+    const key = canonicalJson({ workspace: workspace as unknown as JsonObject, repair, bindings: bindings as unknown as JsonObject });
     const existing = building.get(key);
     if (existing) return existing;
-    const pending = buildPlan(workspace, repair).finally(() => { building.delete(key); });
+    const pending = buildPlan(workspace, repair, bindings).finally(() => { building.delete(key); });
     building.set(key, pending);
     return pending;
   }
 
-  async function buildPlan(workspace: Workspace, repair: boolean): Promise<Plan> {
+  async function buildPlan(workspace: Workspace, repair: boolean, bindings: AutomaticBindings | null): Promise<Plan> {
     const captures: Plan['captures'] = [];
     const nodeDnsPolicy: JsonObject = {};
     async function snapshot(id: string) {
@@ -165,10 +194,32 @@ export function createWorkspaceApplication(options: {
         policy = overridePolicy({ ...base, proxies }, workspace.subscriptionOverrides.legacy ?? emptyOverrides(), workspace.runMode, workspace.revision > 0, repair);
       }
     }
-    return { workspace, policy, captures, ...(Object.keys(nodeDnsPolicy).length ? { nodeDnsPolicy } : {}), ...(legacy ? { legacy } : {}) };
+    const scope = scopeOf(workspace), policies = editsOf(workspace).automatic ?? {};
+    const signatures: Record<string, string> = Object.create(null);
+    const nodes = asNodes(policy), groups = asGroups(policy);
+    const choices = Object.fromEntries(groups.map(group => [String(group.name), Array.isArray(group.proxies) ? [...group.proxies] as string[] : []]));
+    if (Object.keys(policies).length || workspace.autoProbes) checkProbePermission(workspace.autoProbes ?? DEFAULT_AUTO_PROBES);
+    for (const [name, automatic] of Object.entries(policies)) {
+      const group = groups.find(group => group.name === name);
+      const pool = [...automatic.preferred, ...automatic.fallback];
+      if (!group || group.type !== 'select' || !Array.isArray(group.proxies) || pool.some(target =>
+        !nodes.some(node => node.name === target) || !(group.proxies as string[]).includes(target))) {
+        if (repair) continue;
+        invalid('AUTO_GROUP_INVALID');
+      }
+      signatures[name] = hash({ automatic, nodes: pool.map(target => nodes.find(node => node.name === target)) });
+      const binding = bindings?.scope === scope ? bindings.targets[name] : undefined;
+      const selected = binding?.signature === signatures[name] && pool.includes(binding.target) ? binding.target :
+        pool.includes(String(group.proxies[0])) ? String(group.proxies[0]) : automatic.preferred[0];
+      // Only concrete permitted candidates and REJECT are reachable in this group.
+      group.proxies = [selected, ...pool.filter(target => target !== selected), 'REJECT'];
+    }
+    return { workspace, policy, captures, automatic: { scope, signatures, policies, choices,
+      key: hash({ scope, policies, signatures, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES, mode: workspace.runMode }) },
+      bindingKey: hash(bindings), ...(Object.keys(nodeDnsPolicy).length ? { nodeDnsPolicy } : {}), ...(legacy ? { legacy } : {}) };
   }
 
-  async function apply(workspace: Workspace, expectedActive: unknown) {
+  async function apply(workspace: Workspace, expectedActive: unknown, automatic = false) {
     if (!(expectedActive === null || (typeof expectedActive === 'string' && /^[a-f0-9]{64}$/.test(expectedActive)))) invalid();
     const plan = await build(workspace);
     const candidate = compile(plan);
@@ -178,6 +229,8 @@ export function createWorkspaceApplication(options: {
     const result = await manager.apply(candidate.id, expectedActive as string | null, async () => {
       try {
         if ((await load()).revision !== workspace.revision) invalid('WORKSPACE_CONFLICT');
+        if (automatic && (await readRuntimeLifecycle(options.stateDirectory)).paused) invalid('AUTO_PAUSED');
+        if (Object.keys(plan.automatic.policies).length && hash(await readAutomaticBindings(options.stateDirectory)) !== plan.bindingKey) invalid('AUTO_STATE_CONFLICT');
         if (plan.legacy !== undefined && canonicalJson(await options.legacyPolicy()) !== plan.legacy) invalid('DRAFT_CONFLICT');
         for (const capture of plan.captures) {
           const snapshot = await subscriptions.snapshot(capture.id, capture.revision);
@@ -206,7 +259,7 @@ export function createWorkspaceApplication(options: {
     const user = workspace.mode === 'local' ? workspace.local : workspace.subscriptionOverrides[workspace.mode === 'legacy' ? 'legacy' : workspace.subscriptionId ?? ''] ?? emptyOverrides();
     const groups = policy ? asGroups(policy).map(group => ({ name: String(group.name), type: String(group.type),
       selected: String(Array.isArray(group.proxies) ? group.proxies[0] ?? '' : ''), activeSelected: null as string | null,
-      options: Array.isArray(group.proxies) ? group.proxies as string[] : [] })) : [];
+      options: plan!.automatic.choices[String(group.name)] ?? [] })) : [];
     if (status.active && options.observeSelections) {
       try {
         const observed = await options.observeSelections();
@@ -228,10 +281,146 @@ export function createWorkspaceApplication(options: {
       catalog: serviceCatalog.map(({ id, name, default: enabled }) => ({ id, name, default: enabled })),
       rules: allRules.slice(0, 2000).map((value, index) => ({ value, source: !error && workspace.runMode === 'rule' && index < user.rules.length ? 'user' :
         workspace.mode === 'local' ? 'template' : workspace.mode === 'subscription' ? 'subscription' : 'legacy', editable: !error && index < user.rules.length && workspace.runMode === 'rule' })),
-      ruleCount: allRules.length, invalidSelections, ...(error ? { error } : {}) };
+      ruleCount: allRules.length, invalidSelections, automatic: options.automaticStatus?.() ?? { groups: [], events: [] },
+      allowedProbeOrigins: [...(options.allowedProbeOrigins ?? ['https://www.gstatic.com'])], ...(error ? { error } : {}) };
   }
 
-  return async (request: Request): Promise<unknown> => {
+  async function automaticSnapshot(fresh = false): Promise<AutoSnapshot | null> {
+    if (automaticChanging) return null;
+    const workspace = await load();
+    if (workspace.runMode === 'direct' || !Object.keys(editsOf(workspace).automatic ?? {}).length) return null;
+    const state = await store.status();
+    if (!state.active || state.transaction || state.fault || !options.observeSelections) return null;
+    // The 1 s decision timer normally reads only small state files. Compiling
+    // the complete routing template and observing the core is bounded to 30 s;
+    // every write below independently refreshes and verifies this evidence.
+    if (!fresh && snapshotCache?.revision === workspace.revision && snapshotCache.generation === state.active && snapshotCache.expires > Date.now()) {
+      return structuredClone(snapshotCache.value);
+    }
+    let plan = await build(workspace);
+    if (automaticChanging) return null;
+    if (compile(plan).id !== state.active) {
+      // A crash can happen after the private binding is written but before the
+      // configuration transaction commits. Repair only selection differences
+      // belonging to automatic groups; real pending user edits stay pending.
+      await store.exclusive(async () => {
+        if (automaticChanging) return;
+        const settled = await store.status();
+        if (settled.active !== state.active || settled.transaction || settled.fault || (await load()).revision !== workspace.revision) return;
+        const currentPlan = await build(workspace);
+        const active = JSON.parse(await privateRead(await store.readCandidate(state.active!))) as JsonObject;
+        const differences = selectionChanges(active, compile(currentPlan).config);
+        if (!differences || differences.some(change => !currentPlan.automatic.policies[change.group])) return;
+        const observed = await options.observeSelections!();
+        if (observed.generation !== state.active) return;
+        const bindings = await readAutomaticBindings(options.stateDirectory);
+        const repaired: AutomaticBindings = bindings?.scope === currentPlan.automatic.scope ? structuredClone(bindings) :
+          { version: 1, scope: currentPlan.automatic.scope, targets: {}, events: [] };
+        for (const change of differences) {
+          const committed = asGroups(active).find(group => group.name === change.group)?.proxies;
+          const selected = Array.isArray(committed) ? committed[0] : null;
+          const policy = currentPlan.automatic.policies[change.group];
+          if (typeof selected !== 'string' || observed.selections[change.group] !== selected || ![...policy.preferred, ...policy.fallback].includes(selected)) return;
+          repaired.targets[change.group] = { signature: currentPlan.automatic.signatures[change.group], target: selected };
+        }
+        await writeAutomaticBindings(options.stateDirectory, repaired);
+      });
+      plan = await build(workspace);
+      if (compile(plan).id !== state.active) return null;
+    }
+    const observed = await options.observeSelections();
+    if (observed.generation !== state.active) return null;
+    const value = { key: plan.automatic.key, generation: state.active, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES,
+      groups: Object.entries(plan.automatic.policies).map(([name, policy]) => ({ name, current: observed.selections[name], policy }))
+        .filter(group => typeof group.current === 'string' && [...group.policy.preferred, ...group.policy.fallback].includes(group.current)) };
+    snapshotCache = { revision: workspace.revision, generation: state.active, expires: Date.now() + 30_000, value };
+    return structuredClone(value);
+  }
+
+  async function automaticSwitch(snapshot: AutoSnapshot, name: string, target: string, reason: string): Promise<boolean> {
+    if (automaticChanging) return false;
+    const live = await automaticSnapshot(true);
+    const source = snapshot.groups.find(group => group.name === name);
+    const group = live?.groups.find(group => group.name === name);
+    if (!live || !group || !source || live.key !== snapshot.key || live.generation !== snapshot.generation || group.current !== source.current ||
+        ![...group.policy.preferred, ...group.policy.fallback].includes(target) || target === source.current || automaticChanging) return false;
+    automaticChanging = true;
+    try {
+    const workspace = await load(), plan = await build(workspace);
+    let before: AutomaticBindings | null = null;
+    let proposed: AutomaticBindings;
+    await store.exclusive(async () => {
+      if ((await readRuntimeLifecycle(options.stateDirectory)).paused) throw new TransactionError('AUTO_PAUSED');
+      if ((await load()).revision !== workspace.revision || (await store.status()).active !== snapshot.generation ||
+          hash(await readAutomaticBindings(options.stateDirectory)) !== plan.bindingKey) throw new TransactionError('AUTO_STATE_CONFLICT');
+      before = await readAutomaticBindings(options.stateDirectory);
+      proposed = before?.scope === plan.automatic.scope ? structuredClone(before) : { version: 1, scope: plan.automatic.scope, targets: {}, events: [] };
+      proposed.targets[name] = { signature: plan.automatic.signatures[name], target };
+      await writeAutomaticBindings(options.stateDirectory, proposed);
+    });
+    try {
+      await apply(workspace, snapshot.generation, true);
+    } catch {
+      // Roll back this binding only. A newer editor/selection must never be overwritten.
+      await store.exclusive(async () => {
+        const current = await readAutomaticBindings(options.stateDirectory);
+        if (hash(current) === hash(proposed)) await writeAutomaticBindings(options.stateDirectory,
+          before ?? { version: 1, scope: plan.automatic.scope, targets: {}, events: [] });
+      });
+      return false;
+    }
+    await store.exclusive(async () => {
+      const current = await readAutomaticBindings(options.stateDirectory);
+      if (current?.scope === plan.automatic.scope) {
+        current.events = [...current.events, { at: Date.now(), group: name, from: source.current, to: target,
+          reason: /^[a-z_-]{1,80}$/i.test(reason) ? reason : 'automatic' }].slice(-50);
+        await writeAutomaticBindings(options.stateDirectory, current);
+      }
+    }).catch(() => { /* A confirmed switch must not be retried when event storage alone fails. */ });
+    return true;
+    } finally { automaticChanging = false; snapshotCache = undefined; }
+  }
+
+  async function automaticRoute(request: Request): Promise<unknown> {
+    const path = new URL(request.url).pathname;
+    if (path === '/api/cocoproxy/automatic/status' && request.method === 'GET') {
+      const status = options.automaticStatus?.() as { groups: unknown[]; events: unknown[] } | undefined;
+      const bindings = await readAutomaticBindings(options.stateDirectory);
+      const current = await load();
+      return { groups: status?.groups ?? [], events: bindings?.scope === scopeOf(current) ? bindings.events : status?.events ?? [] };
+    }
+    if (path === '/api/cocoproxy/automatic/probes' && request.method === 'GET') return { defaults: DEFAULT_AUTO_PROBES,
+      allowedOrigins: [...(options.allowedProbeOrigins ?? ['https://www.gstatic.com'])] };
+    if (path === '/api/cocoproxy/automatic/test' && request.method === 'POST') {
+      if (!options.automaticProbe) invalid('AUTO_PROBE_UNAVAILABLE');
+      if (testingProbes) invalid('AUTO_PROBE_BUSY');
+      const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'expectedActive', 'probes']);
+      let probes: AutoProbeSettings;
+      try { probes = parseAutoProbeSettings(body.probes); } catch { return invalid('AUTO_SETTINGS_INVALID'); }
+      checkProbePermission(probes);
+      const workspace = await load(), state = await store.status();
+      if (workspace.revision !== body.expectedRevision || !state.active || state.active !== body.expectedActive || state.transaction || state.fault) invalid('WORKSPACE_CONFLICT');
+      const plan = await build(workspace);
+      if (compile(plan).id !== state.active || !options.observeSelections) invalid('WORKSPACE_PENDING');
+      const observed = await options.observeSelections();
+      if (observed.generation !== state.active) invalid('ACTIVE_CONFLICT');
+      const nodes = new Set(asNodes(plan.policy).map(node => String(node.name)));
+      const node = Object.values(observed.selections).find(target => nodes.has(target));
+      if (!node) invalid('AUTO_PROBE_UNAVAILABLE');
+      if (testingProbes) invalid('AUTO_PROBE_BUSY');
+      testingProbes = true;
+      try {
+        const snapshot = { key: plan.automatic.key, generation: state.active, probes, groups: [] };
+        const primary = await options.automaticProbe(snapshot, node, probes.primary);
+        const secondary = await options.automaticProbe(snapshot, node, probes.secondary);
+        if ((await load()).revision !== workspace.revision || (await store.status()).active !== state.active) invalid('WORKSPACE_CONFLICT');
+        return { ok: primary.ok && secondary.ok, primary, secondary };
+      } finally { testingProbes = false; }
+    }
+    throw new ManagementError('NOT_FOUND', 404);
+  }
+
+  const handler = async (request: Request): Promise<unknown> => {
     const path = new URL(request.url).pathname;
     if (path === '/api/cocoproxy/workspace' && request.method === 'GET') return view();
     if (path === '/api/cocoproxy/workspace/tcp-delay' && request.method === 'POST') {
@@ -258,6 +447,10 @@ export function createWorkspaceApplication(options: {
       const current = await load();
       if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
       const settings = await seedLegacyChoices(current, parseWorkspaceSettings(body.settings));
+      // Validate automatic pools and probe permissions before persisting any settings.
+      if (Object.keys(editsOf({ ...settings, revision: current.revision }).automatic ?? {}).length || settings.autoProbes) {
+        await build({ ...settings, revision: current.revision });
+      }
       if (settings.mode !== 'subscription' && settings.sourceIds.length !== 1 &&
           (await subscriptions.list()).some(source => source.snapshotCurrent)) invalid('SOURCE_REQUIRED');
       return { workspace: await preferences.save(settings, current.revision) };
@@ -276,11 +469,13 @@ export function createWorkspaceApplication(options: {
       if ((await store.status()).active !== body.expectedActive) invalid('ACTIVE_CONFLICT');
       const plan = await build(current);
       if (compile(plan).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
-      const group = asGroups(plan.policy).find(group => group.name === body.group);
-      if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(body.name)) invalid('GROUP_SELECTION_CONFLICT');
-      if (group.type !== 'select') invalid('GROUP_SELECTION_UNSUPPORTED');
       const settings = await seedLegacyChoices(current, settingsOf(current), plan);
       const edits = current.mode === 'local' ? settings.local : settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] ?? emptyOverrides();
+      if (edits.automatic) delete edits.automatic[body.group];
+      if (current.mode !== 'local') settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] = edits;
+      const group = asGroups((await build({ ...settings, revision: current.revision })).policy).find(group => group.name === body.group);
+      if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(body.name)) invalid('GROUP_SELECTION_CONFLICT');
+      if (group.type !== 'select') invalid('GROUP_SELECTION_UNSUPPORTED');
       edits.selections[body.group] = body.name;
       if (current.mode !== 'local') settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] = edits;
       const next = { ...settings, revision: current.revision + 1 };
@@ -290,4 +485,5 @@ export function createWorkspaceApplication(options: {
     }
     throw new ManagementError('NOT_FOUND', 404);
   };
+  return Object.assign(handler, { automaticSnapshot, automaticSwitch, automaticRoute });
 }

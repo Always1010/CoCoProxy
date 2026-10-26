@@ -50,6 +50,43 @@ function client() {
   return { frames, closes, send: (text: string) => { frames.push(text); }, close: (code: number, reason: string) => { closes.push({ code, reason }); } };
 }
 
+test('automatic probes require expected-status evidence, preserve rate limits and never expose a browser expected override', async t => {
+  const target = { url: 'https://probe.example/check', expectedStatus: 204 };
+  let alive = false, limited = false;
+  const f = await fixture(t, (req, res) => {
+    if (req.url?.includes('/delay?')) {
+      const query = new URL(req.url, origin).searchParams;
+      assert.equal(query.get('expected'), '204');
+      if (limited) { res.writeHead(429, { 'retry-after': '60' }); res.end('{}'); }
+      else res.end('{"delay":25}');
+    } else res.end(JSON.stringify({ extra: { [target.url]: { alive } } }));
+  });
+  const proxy = createControllerProxy({ ...f.options, allowedProbeOrigins: ['https://probe.example'] });
+  assert.deepEqual(await proxy.probeNode('generation-1', 'node', target, 3000), { ok: false, delay: null });
+  alive = true;
+  assert.deepEqual(await proxy.probeNode('generation-1', 'node', target, 3000), { ok: true, delay: 25 });
+  limited = true;
+  assert.deepEqual(await proxy.probeNode('generation-1', 'node', target, 3000), { ok: false, delay: null, retryAfterMs: 60_000 });
+  await assert.rejects(proxy.probeNode('generation-1', 'node', { ...target, url: 'https://foreign.example/check' }, 3000), { code: 'AUTO_PROBE_DENIED' });
+  assert.equal((await proxy.fetch(request('/proxies/node/delay?url=https%3A%2F%2Fprobe.example%2Fcheck&timeout=3000&expected=204'))).status, 400);
+  f.changeGeneration();
+  await assert.rejects(proxy.probeNode('generation-1', 'node', target, 3000), { code: 'ACTIVE_CONFLICT' });
+});
+
+test('manual and automatic probes cannot overwrite each other during automatic expected-status readback', async t => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = await fixture(t, (_req, res) => { void gate.then(() => res.end('{"delay":25,"extra":{}}')); });
+  const proxy = createControllerProxy({ ...f.options, allowedProbeOrigins: ['https://probe.example'] });
+  const target = { url: 'https://probe.example/check', expectedStatus: 204 };
+  const pending = proxy.probeNode('generation-1', 'node', target, 3000);
+  await until(() => f.calls.length === 1);
+  assert.equal((await proxy.fetch(request('/proxies/node/delay?url=https%3A%2F%2Fprobe.example%2Fcheck&timeout=3000'))).status, 429);
+  assert.deepEqual(await proxy.probeNode('generation-1', 'node', target, 3000), { ok: false, delay: null, retryAfterMs: 5000 });
+  release(); await pending;
+  assert.equal((await proxy.fetch(request('/proxies/node/delay?url=https%3A%2F%2Fprobe.example%2Fcheck&timeout=3000'))).status, 200);
+});
+
 test('concurrent reads share only the unfinished runtime verification and recheck each generation', async t => {
   const f = await fixture(t);
   const target = f.options.target;

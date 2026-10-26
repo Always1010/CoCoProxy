@@ -8,6 +8,7 @@ import { useProxyRefresh } from '~/composables/useProxyRefresh'
 import { useBatchLatencyTest } from '~/composables/useBatchLatencyTest'
 import NativeProxyMasterDetail from '~/components/NativeProxyMasterDetail.vue'
 import ConnectivityBoard from '~/components/ConnectivityBoard.vue'
+import AutoProbeSettings from '~/components/AutoProbeSettings.vue'
 
 const { t, locale } = useI18n()
 const proxiesStore = useProxiesStore()
@@ -116,6 +117,7 @@ watch(activeTab, () => { showScrollToTop.value = false })
 
     <Modal ref="settingsModal" :title="t('proxiesSettings')">
       <div class="flex flex-col gap-4">
+        <AutoProbeSettings />
         <label class="flex items-center justify-between gap-3">{{ t('autoCloseConns') }}<input v-model="configStore.autoCloseConns" type="checkbox" class="toggle toggle-primary" /></label>
         <label class="flex flex-col gap-2">代理延迟测试网址<input v-model="configStore.urlForLatencyTest" class="input w-full" type="url" /></label>
         <label class="flex flex-col gap-2">{{ t('latencyTestUrlSource') }}<select v-model="configStore.latencyTestUrlSource" class="select w-full"><option value="core">{{ t('latencyTestUrlSourceCore') }}</option><option value="dashboard">{{ t('latencyTestUrlSourceDashboard') }}</option></select></label>

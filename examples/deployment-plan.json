@@ -29,6 +29,6 @@
       "bootstrapResolvers": ["192.0.2.53"]
     },
     "subscriptionPolicy": { "allowedOrigins": ["https://subscription.example"] },
-    "controllerPolicy": { "allowedProbeOrigins": ["https://www.gstatic.com"] }
+    "controllerPolicy": { "allowedProbeOrigins": ["https://www.gstatic.com", "https://cp.cloudflare.com"] }
   }
 }

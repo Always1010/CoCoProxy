@@ -2,6 +2,7 @@
 import type { Proxy as ProxyType } from '~/types'
 import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
 import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
+import AutomaticSelectionSettings from '~/components/AutomaticSelectionSettings.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
 import { useTcpDelay } from '~/composables/useTcpDelay'
 import {
@@ -42,7 +43,8 @@ const groupNames = computed(() => props.groups.map((g) => g.name))
 // A configuration generation changes on every persisted node selection. Keep
 // browsing state under the scheme identity instead, including across navigation.
 const { workspace } = useWorkspace()
-const { view, busy } = useWorkspace()
+const { view, busy, overrides } = useWorkspace()
+const automaticEnabled = computed(() => !!activeName.value && !!overrides.value.automatic?.[activeName.value])
 const { metadata: tcpMetadata, run: runTcp, cancel: cancelTcp, isRunning: tcpRunning, completed: tcpCompleted, total: tcpTotal } = useTcpDelay()
 const scope = `${workspace.value?.mode ?? 'initial'}:${workspace.value?.mode === 'subscription' ? workspace.value.subscriptionId ?? '' : ''}`
 const { activeName, scrollTop } = useProxyWorkbench(scope, groupNames)
@@ -160,7 +162,7 @@ function onScroll(event: Event) {
 
 async function selectNode(name: string) {
   const group = activeGroup.value
-  if (!group || busy.value || group.now === name) return
+  if (!group || busy.value || (group.now === name && !automaticEnabled.value)) return
   const top = nodeListEl.value?.scrollTop ?? 0
   const outerTop = props.scrollContainer?.scrollTop ?? 0
   try { await proxiesStore.selectProxyInGroup(group, name) }
@@ -256,6 +258,7 @@ function aliveCount(group: ProxyType) {
           <span class="shrink-0 text-xs text-base-content/45">
             {{ displayNodes.length }}/{{ activeNodes.length }}
           </span>
+          <AutomaticSelectionSettings :group-name="activeGroup.name" :selectable="canSelect" />
           <span v-if="tcpRunning" role="status" class="shrink-0 text-xs text-primary">{{ tcpCompleted }}/{{ tcpTotal }}</span>
           <button type="button" class="btn btn-ghost btn-sm" :disabled="!tcpRunning && (busy || !hasTcpNodes)" :title="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟（从网关建连）'" :aria-label="tcpRunning ? '取消 TCP 延迟测试' : '测试当前组可见节点 TCP 延迟'" @click="tcpRunning ? cancelTcp() : runTcp(displayNodes)"><IconX v-if="tcpRunning" :size="18" /><IconBolt v-else :size="18" /></button>
           <details class="dropdown dropdown-end shrink-0">
@@ -275,6 +278,8 @@ function aliveCount(group: ProxyType) {
             <span>定位</span>
           </button>
         </div>
+
+        <p v-if="automaticEnabled" class="text-xs text-primary" role="status">自动选择已启用 · 点击节点将切换为手动</p>
 
         <!-- Quick-filter rail: region · protocol · features. Each facet group
              gets its own row so a long region list (many flags) can never push

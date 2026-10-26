@@ -25,7 +25,10 @@ async function remove() {
   const name = props.activeGroup
   if (!name || !removable.value || referenced.value || busy.value) return
   await run(async () => {
-    await save(settings => { delete settings.local.selections[name] })
+    await save(settings => {
+      delete settings.local.selections[name]
+      if (settings.local.automatic) delete settings.local.automatic[name]
+    })
     menu.value?.close()
     await proxyRefresh.refresh()
   })
