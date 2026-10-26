@@ -214,3 +214,37 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   exports.toggleNode(fullPool[0]);
   assert.equal(exports.nodeDisabled('unused'), false);
 });
+
+test('group manager creates a shared exit from Proxy and blocks deletion while services use it', async () => {
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/WorkspaceGroupsMenu.vue', import.meta.url), 'utf8');
+  const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
+    .replace(/^import .*$/gm, '') + '\nexport { props, addShared, remove, sharedName, referenced, referenceMessage };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const settings: any = { local: { sharedGroups: ['AI Exit'], selections: { Proxy: 'node-a', 'AI Exit': 'node-a', OpenAI: 'AI Exit' }, rules: [] } };
+  const view = { value: { nodes: ['node-a'], catalog: [{ id: 'Proxy', default: true }], groups: [
+    { name: 'Proxy', role: 'shared', selected: 'node-a' }, { name: 'AI Exit', role: 'shared', selected: 'node-a' },
+    { name: 'OpenAI', role: 'service', selected: 'AI Exit' },
+  ] } };
+  let saves = 0;
+  const exports: Record<string, any> = {};
+  new Script(code, { filename: 'WorkspaceGroupsMenu.js' }).runInNewContext({
+    exports, defineProps: () => ({ activeGroup: 'AI Exit' }),
+    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    useProxyRefresh: () => ({ refresh: async () => {} }),
+    useWorkspace: () => ({ view, workspace: { value: { mode: 'local' } }, overrides: { value: settings.local }, busy: { value: false },
+      run: async (fn: () => Promise<void>) => fn(), save: async (edit: (value: unknown) => void) => { saves++; edit(settings); } }),
+  });
+  exports.sharedName.value = 'Work Exit';
+  await exports.addShared();
+  assert.deepEqual(Array.from(settings.local.sharedGroups), ['AI Exit', 'Work Exit']);
+  assert.equal(settings.local.selections['Work Exit'], 'node-a');
+  assert.equal(exports.referenced.value, true);
+  assert.match(exports.referenceMessage.value, /OpenAI/);
+  await exports.remove();
+  assert.equal(saves, 1);
+  delete settings.local.selections.OpenAI;
+  await exports.remove();
+  assert.equal(saves, 2);
+  assert.equal(settings.local.selections['AI Exit'], undefined);
+  assert.deepEqual(Array.from(settings.local.sharedGroups), ['Work Exit']);
+});

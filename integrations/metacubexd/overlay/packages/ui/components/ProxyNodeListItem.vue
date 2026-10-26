@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconCircleCheckFilled } from '@tabler/icons-vue'
+import { IconCircleCheckFilled, IconLink } from '@tabler/icons-vue'
 
 interface Props {
   proxyName: string
@@ -8,6 +8,7 @@ interface Props {
   isSelected?: boolean
   providerName?: string
   groupName?: string
+  kindLabel?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -55,7 +56,7 @@ function onClick() {
         role="button"
         tabindex="0"
         :aria-pressed="isSelected"
-        :aria-label="proxyName"
+        :aria-label="kindLabel ? `${kindLabel} ${proxyName}` : proxyName"
         @click="onClick"
         @keydown.enter.self.prevent="onClick"
         @keydown.space.self.prevent="onClick"
@@ -69,6 +70,11 @@ function onClick() {
         <!-- Proxy name -->
         <span class="line-clamp-1 min-w-0 flex-1 text-sm font-medium break-all">
           <ProxyNodeName :name="proxyName" />
+        </span>
+
+        <span v-if="kindLabel" class="inline-flex shrink-0 items-center gap-1 rounded border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[0.65rem] text-primary">
+          <IconLink :size="12" aria-hidden="true" />
+          <span>{{ kindLabel }}</span>
         </span>
 
         <!-- UDP indicator -->

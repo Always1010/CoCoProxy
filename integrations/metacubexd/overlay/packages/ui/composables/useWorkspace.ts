@@ -24,6 +24,7 @@ export interface WorkspaceOverrides {
   selections: Record<string, string>
   rules: string[]
   automatic?: Record<string, AutoGroupPolicy>
+  sharedGroups?: string[]
 }
 
 export interface WorkspaceSettings {
@@ -48,7 +49,7 @@ export interface WorkspaceSource extends CoCoProxySource {
 export interface WorkspaceView {
   workspace: WorkspaceSettings & { revision: number }
   sources: WorkspaceSource[]
-  groups: { name: string; type: string; selected: string; activeSelected?: string | null; options: string[] }[]
+  groups: { name: string; type: string; role: 'service' | 'shared'; selected: string; activeSelected?: string | null; options: string[] }[]
   nodes: string[]
   tcpNodes?: { name: string; fingerprint: string; applicable: boolean }[]
   catalog?: { id: string; name: string; default: boolean }[]
