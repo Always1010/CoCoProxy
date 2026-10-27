@@ -20,8 +20,8 @@ async function editor(initial: string[], groupName = 'Work') {
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
     '\nexport { entries, original, type, payload, editing, error, dirty, ownRules, templateRules, dependents, effectiveRulesLink, customRulesLink, add, edit, remove, persist };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const settings = { local: { rules: [...initial], selections: { Work: 'Proxy', Stream: 'node-a' } } };
-  const view = { value: { groups: [{ name: 'Work', role: 'service', selected: 'Proxy' }], rules: [] } };
+  const settings = { local: { rules: [...initial], selections: { Work: 'Proxy', Stream: 'node-a' } as Record<string, string> } };
+  const view = { value: { groups: [{ name: 'Work', role: 'service', selected: 'Proxy' }], rules: [] as { value: string; source: string }[] } };
   const workspace = { value: { mode: 'local', runMode: 'rule' } };
   const exports: Record<string, any> = {};
   let saves = 0, failApply = false;
@@ -75,7 +75,13 @@ test('effective group rules ignore saved filters, track the group and keep navig
       resetRulesFilters() { this.rulesTypeFilter = []; this.rulesPolicyFilter = []; this.rulesStatusFilter = 'all'; } };
     const original = JSON.stringify(saved);
     const watchers: (() => void)[] = [];
-    const exports: Record<string, any> = {};
+    const exports = {} as {
+      filteredRules: { readonly value: typeof sampleRules };
+      tabs: { readonly value: { count: number }[] };
+      toggleRuleTypeFilter: (value: string) => void;
+      toggleRulePolicyFilter: (value: string) => void;
+      clearRuleFilters: () => void;
+    };
     new Script(code, { filename: 'NativeRules.js' }).runInNewContext({
       exports, defineProps: () => props,
       ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
