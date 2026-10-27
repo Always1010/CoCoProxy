@@ -64,14 +64,20 @@ async function persist() {
   <div class="flex min-h-0 flex-1 flex-col gap-3" aria-label="组内匹配规则">
     <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 [scrollbar-gutter:stable]">
       <p v-if="workspace?.runMode !== 'rule'" class="rounded-lg bg-warning/10 p-3 text-sm">当前为{{ workspace?.runMode === 'global' ? '全局' : '直连' }}模式，域名分流暂不参与匹配；保存后切换到规则模式使用。</p>
-      <template v-if="shared">
-        <p class="text-sm">本组是共享出口，供普通策略组共同引用；请在普通组中配置域名规则。</p>
-        <section class="space-y-2" aria-label="直接跟随本组的策略组">
-          <h3 class="text-sm">直接跟随本组 · {{ dependents.length }} 个</h3>
-          <ul v-if="dependents.length" class="flex flex-wrap gap-2"><li v-for="name in dependents" :key="name" class="max-w-full break-all rounded-lg bg-base-200 px-3 py-2 text-sm">{{ name }}</li></ul>
-          <p v-else class="text-sm text-base-content/60">暂无普通组直接跟随本组。</p>
+      <div v-if="shared" class="space-y-6">
+        <p class="text-xs leading-relaxed text-base-content/65">
+          <span class="block">本组作为共享出口，供普通策略组引用。</span>
+          <span class="block">域名规则请在普通组中配置。</span>
+        </p>
+        <section class="space-y-3" aria-label="引用本组的策略组">
+          <div class="flex items-baseline justify-between gap-3">
+            <h3 class="text-sm font-semibold">引用本组的策略组</h3>
+            <span class="shrink-0 text-xs text-base-content/60">{{ dependents.length }} 个</span>
+          </div>
+          <ul v-if="dependents.length" class="flex flex-wrap gap-2"><li v-for="name in dependents" :key="name" class="max-w-full break-all rounded-md bg-base-content/5 px-2.5 py-1 text-sm leading-5">{{ name }}</li></ul>
+          <p v-else class="text-xs leading-relaxed text-base-content/60">暂无普通策略组引用本组。</p>
         </section>
-      </template>
+      </div>
       <template v-else-if="editable">
         <p class="text-xs leading-relaxed text-base-content/65">自定义规则先于内置规则匹配；多条自定义规则同时匹配时，以规则页中的顺序为准。新规则追加到自定义规则末尾。</p>
         <form class="space-y-3 rounded-lg border border-base-content/10 p-3" @submit.prevent="add">
@@ -103,7 +109,9 @@ async function persist() {
           <p v-if="groupName === 'Other'" class="text-sm text-base-content/60">本组承担最终兜底，其他规则均未命中的流量使用本组。</p>
         </section>
       </template>
-      <NuxtLink :to="effectiveRulesLink" class="btn btn-ghost min-h-11" @click="emit('close')"><IconList :size="16" /><span>查看本组生效规则</span></NuxtLink>
+      <div class="border-t border-base-content/10 pt-4">
+        <NuxtLink :to="effectiveRulesLink" class="btn btn-outline min-h-11 w-full border-base-content/20 sm:w-auto" @click="emit('close')"><IconList :size="16" /><span>查看本组生效规则</span></NuxtLink>
+      </div>
     </div>
     <p v-if="dirty" class="shrink-0 text-xs text-warning">规则有未保存修改；关闭或取消将丢弃。节点设置需单独保存。</p>
     <p v-if="error" role="alert" class="shrink-0 break-words text-sm text-error">{{ error }}</p>
