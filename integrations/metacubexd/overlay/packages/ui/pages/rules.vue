@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { IconChevronDown, IconChevronUp, IconDeviceFloppy, IconPlus, IconTrash } from '@tabler/icons-vue'
+import { IconChevronDown, IconChevronUp, IconDeviceFloppy, IconList, IconPlus, IconTrash } from '@tabler/icons-vue'
 import { customRuleTargets, ruleTarget } from '~/utils/group-rules'
 useHead({ title: '规则 · CoCoProxy' })
 const { view, workspace, overrides, busy, load, run, save, editOverrides } = useWorkspace()
 const route = useRoute()
 const tab = ref<'effective' | 'custom'>(route.query.tab === 'custom' ? 'custom' : 'effective')
 const groupFilter = ref(typeof route.query.group === 'string' ? route.query.group : '')
+watch(() => [route.query.tab, route.query.group], () => {
+  tab.value = route.query.tab === 'custom' ? 'custom' : 'effective'
+  groupFilter.value = typeof route.query.group === 'string' ? route.query.group : ''
+})
 const entries = ref<string[]>([])
 const visibleEntries = computed(() => entries.value.map((value, index) => ({ value, index })).filter(entry => !groupFilter.value || ruleTarget(entry.value) === groupFilter.value))
 const dirty = computed(() => JSON.stringify(entries.value) !== JSON.stringify(overrides.value.rules))
@@ -48,7 +52,11 @@ onMounted(() => run(load))
       <button role="tab" class="tab" :class="{ 'tab-active': tab === 'effective' }" :aria-selected="tab === 'effective'" @click="tab = 'effective'">生效规则</button>
       <button role="tab" class="tab" :class="{ 'tab-active': tab === 'custom' }" :aria-selected="tab === 'custom'" @click="tab = 'custom'">自定义规则<span v-if="entries.length" class="badge badge-sm ml-2">{{ entries.length }}</span></button>
     </div>
-    <NativeRules v-if="tab === 'effective'" :key="view?.active ?? 'initial'" class="min-h-0 flex-1" />
+    <div v-if="tab === 'effective' && groupFilter" class="flex shrink-0 flex-wrap items-center gap-2 text-sm">
+      <span class="break-all">当前目标：{{ targetName(groupFilter) }}</span>
+      <button type="button" class="btn btn-ghost btn-sm min-h-11" @click="groupFilter = ''"><IconList :size="16" /><span>查看全部目标</span></button>
+    </div>
+    <NativeRules v-if="tab === 'effective'" :key="view?.active ?? 'initial'" :group="groupFilter" class="min-h-0 flex-1" />
     <div v-else class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
       <label class="flex flex-wrap items-center gap-2 text-sm">按目标筛选<select v-model="groupFilter" class="select select-sm min-h-11" aria-label="按目标筛选规则"><option value="">全部目标</option><option v-for="value in [...new Set([...targets, groupFilter].filter(Boolean))]" :key="value" :value="value">{{ targetName(value) }}</option></select><span class="text-xs text-base-content/60">列表编号和移动操作沿用全部自定义规则的顺序</span></label>
       <div class="flex items-center justify-between gap-2 px-1"><span class="text-xs text-base-content/50">优先匹配 · {{ workspace?.mode === 'local' ? '本地规则' : '仅覆盖当前配置' }} · 保存即生效</span><button class="btn btn-ghost btn-sm" title="保存规则并立即生效" aria-label="保存规则" :disabled="!dirty || busy" @click="run(saveRules)"><IconDeviceFloppy :size="18" />保存</button></div>
@@ -59,8 +67,11 @@ onMounted(() => run(load))
           <select v-model="target" class="select select-sm max-w-52 flex-1" aria-label="目标策略"><option v-for="value in targets" :key="value" :value="value">{{ targetName(value) }}</option></select>
           <button class="btn btn-primary btn-sm" type="submit" title="添加规则" aria-label="添加规则" :disabled="busy"><IconPlus :size="18" />添加</button>
         </form>
-        <div v-if="!entries.length" class="py-16 text-center text-sm text-base-content/45">暂无自定义规则</div>
-        <div v-if="entries.length && !visibleEntries.length" class="py-8 text-center text-sm text-base-content/45">当前目标暂无自定义规则</div>
+        <div v-if="!visibleEntries.length" class="space-y-2 py-8 text-center text-sm text-base-content/45">
+          <p>{{ groupFilter ? '当前目标暂无自定义规则' : '暂无自定义规则' }}</p>
+          <p>内置规则请在生效规则中查看。</p>
+          <button type="button" class="btn btn-ghost btn-sm min-h-11" @click="tab = 'effective'"><IconList :size="16" /><span>{{ groupFilter ? '查看本组生效规则' : '查看生效规则' }}</span></button>
+        </div>
         <div v-for="{ index } in visibleEntries" :key="index" class="flex flex-wrap items-center gap-1 rounded-xl border border-base-content/8 bg-base-200/60 p-2">
           <span class="w-7 shrink-0 text-center text-xs text-base-content/35">{{ index + 1 }}</span>
           <input v-model="entries[index]" class="input input-ghost input-sm min-w-0 flex-1 font-mono text-xs" :aria-label="`规则 ${index + 1}`" :disabled="busy" spellcheck="false" />

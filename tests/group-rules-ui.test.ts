@@ -18,7 +18,7 @@ test('group rule utility passes strict indexed-access type checks', () => {
 async function editor(initial: string[], groupName = 'Work') {
   const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupMatchingRules.vue', import.meta.url), 'utf8');
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { entries, original, type, payload, editing, error, dirty, ownRules, dependents, add, edit, remove, persist };';
+    '\nexport { entries, original, type, payload, editing, error, dirty, ownRules, templateRules, dependents, effectiveRulesLink, customRulesLink, add, edit, remove, persist };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const settings = { local: { rules: [...initial], selections: { Work: 'Proxy', Stream: 'node-a' } } };
   const view = { value: { groups: [{ name: 'Work', role: 'service', selected: 'Proxy' }], rules: [] } };
@@ -39,6 +39,83 @@ async function editor(initial: string[], groupName = 'Work') {
   });
   return Object.assign(exports, { settings, workspace, view, saves: () => saves, fail: () => { failApply = true; } });
 }
+
+test('group rule viewing opens effective rules while editing keeps the custom destination', async () => {
+  const ui = await editor([], 'Microsoft');
+  ui.view.value.rules = [{ value: 'DOMAIN-SUFFIX,microsoft.com,Microsoft', source: 'template' }];
+  assert.equal(ui.ownRules.value.length, 0);
+  assert.equal(ui.templateRules.value.length, 1);
+  assert.equal(ui.effectiveRulesLink.value.query.tab, 'effective');
+  assert.equal(ui.effectiveRulesLink.value.query.group, 'Microsoft');
+  assert.equal(ui.customRulesLink.value.query.tab, 'custom');
+  assert.equal(ui.customRulesLink.value.query.group, 'Microsoft');
+
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupMatchingRules.vue', import.meta.url), 'utf8');
+  assert.match(component, /:to="effectiveRulesLink"[^>]*>[\s\S]*?查看本组生效规则/);
+  assert.match(component, /:to="customRulesLink"[^>]*>[\s\S]*?前往规则页编辑/);
+  const page = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/pages/rules.vue', import.meta.url), 'utf8');
+  assert.match(page, /<NativeRules[^>]*:group="groupFilter"/);
+});
+
+test('effective group rules ignore saved filters, track the group and keep navigation filters temporary', async () => {
+  const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/NativeRules.vue', import.meta.url), 'utf8');
+  const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
+    .replace(/^import[\s\S]*?from '[^']+'\r?$/gm, '') +
+    '\nexport { filteredRules, filters, tabs, toggleRuleTypeFilter, toggleRulePolicyFilter, clearRuleFilters };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const sampleRules = [
+    { index: 0, type: 'DomainSuffix', payload: 'microsoft.com', proxy: 'Microsoft' },
+    { index: 1, type: 'Domain', payload: 'custom.example', proxy: 'Microsoft' },
+    { index: 2, type: 'DomainSuffix', payload: 'other.example', proxy: 'Other' },
+    { index: 3, type: 'DomainSuffix', payload: 'similar.example', proxy: 'Microsoft Extra' },
+  ];
+  function mount(group?: string) {
+    const props = { group };
+    const saved = { rulesTypeFilter: ['IPCIDR'], rulesPolicyFilter: ['Other'], rulesStatusFilter: 'disabled', rulesOrderingType: 'order',
+      resetRulesFilters() { this.rulesTypeFilter = []; this.rulesPolicyFilter = []; this.rulesStatusFilter = 'all'; } };
+    const original = JSON.stringify(saved);
+    const watchers: (() => void)[] = [];
+    const exports: Record<string, any> = {};
+    new Script(code, { filename: 'NativeRules.js' }).runInNewContext({
+      exports, defineProps: () => props,
+      ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
+      watch: (_get: unknown, callback: () => void) => watchers.push(callback),
+      useI18n: () => ({ t: (key: string) => key, locale: { value: 'zh' } }), useHead() {},
+      useConfigStore: () => saved, RULES_ORDERING_TYPE_ORDER: [],
+      useRulesQuery: () => ({ data: { value: sampleRules }, isLoading: { value: false } }),
+      useRuleProvidersQuery: () => ({ data: { value: [] }, isLoading: { value: false } }),
+      useUpdateRuleProviderMutation: () => ({}), useToggleRuleDisabledMutation: () => ({}),
+      useStringBooleanMap: () => ({ map: {}, setWithCallback() {} }), useVirtualizer: () => ({}),
+      filterRules: (values: typeof sampleRules, options: { types: string[]; policies: string[]; status: string }) => values.filter(rule =>
+        (!options.types.length || options.types.includes(rule.type)) && (!options.policies.length || options.policies.includes(rule.proxy)) && options.status !== 'disabled'),
+      sortRulesByOrderingType: (values: unknown) => values,
+    });
+    return { ...exports, props, saved, original, changeGroup: (value?: string) => { props.group = value; watchers[0](); } };
+  }
+  const ui = mount('Microsoft');
+  assert.deepEqual(Array.from(ui.filteredRules.value), sampleRules.slice(0, 2));
+  assert.equal(ui.tabs.value[0].count, 2);
+  ui.toggleRuleTypeFilter('Domain');
+  assert.deepEqual(Array.from(ui.filteredRules.value), [sampleRules[1]]);
+  ui.clearRuleFilters();
+  assert.deepEqual(Array.from(ui.filteredRules.value), sampleRules.slice(0, 2));
+  ui.changeGroup('Other');
+  assert.deepEqual(Array.from(ui.filteredRules.value), [sampleRules[2]]);
+  ui.changeGroup('Microsoft');
+  assert.deepEqual(Array.from(ui.filteredRules.value), sampleRules.slice(0, 2));
+  ui.changeGroup(''); // View all targets without restoring unrelated saved filters.
+  assert.deepEqual(Array.from(ui.filteredRules.value), sampleRules);
+  ui.toggleRulePolicyFilter('Microsoft');
+  assert.equal(JSON.stringify(ui.saved), ui.original);
+
+  const ordinary = mount();
+  assert.equal(ordinary.filteredRules.value.length, 0); // Ordinary visits retain saved filters.
+  ordinary.clearRuleFilters();
+  assert.deepEqual(Array.from(ordinary.filteredRules.value), sampleRules);
+  ordinary.toggleRulePolicyFilter('Other');
+  assert.deepEqual(Array.from(ordinary.filteredRules.value), [sampleRules[2]]);
+  assert.deepEqual(Array.from(ordinary.saved.rulesPolicyFilter), ['Other']);
+});
 
 test('shared exit dependents include default selections and track only current direct service references', async () => {
   const ui = await editor([], 'Proxy');
