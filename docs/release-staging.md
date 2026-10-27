@@ -4,6 +4,8 @@
 
 ## GitHub Actions 发布
 
+每份新载荷记录 `buildInputs.backendInputSha256`，覆盖除 UI、文档和测试之外的保守构建输入集合。日常前端构建可声明 `frontendUpdate`，绑定基线 manifest 和相同的后端输入摘要；装配器复核摘要，不接受将已变化的后端声明为前端更新。此类产物仍包含完整文件清单，但其部署范围固定为前端，不能用于首次安装。普通全量载荷和 GitHub 正式发行不带此局部部署声明。
+
 [Release 工作流](../.github/workflows/release.yml) 在推送 `v<package.json 版本>` 的 Tag 时运行，例如首版 `v0.1.0-preview.1`。Tag 必须符合 SemVer，且与根 package.json、package-lock.json 版本一致；带预发布后缀的版本自动标记为 GitHub Pre-release。
 
 GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游源码校验、overlay、发行元数据、文档链接、安装配置、发行装配及部署测试；随后核验固定上游源码与锁文件、构建 UI/Server，并复用现有装配器生成 ARM64 和 x86-64 载荷。构建入口为 `scripts/build-github-release.mjs`，完整构建只允许在 Actions Linux 环境执行。两个平台均不在构建中执行外来 Mihomo；构建成功不替代目标设备验收。

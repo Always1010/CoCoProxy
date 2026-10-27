@@ -6,7 +6,7 @@ import { posix } from 'node:path';
 import { assertDeploymentAccount, assertDeploymentExecutable, assertDeploymentStopped, assertDeploymentLifecycle, assertOwnedDeploymentFiles,
   assertPrivateDeploymentFile, assertRootPath, deploymentPathInfo, deploymentProcessIdentity, InstallError,
   parseDeploymentLock, readRegularDeploymentFile, runDeploymentTool, validateReceipt, verifyRelease,
-  writeAtomicDeploymentFile, releaseTarget, type DeploymentLock, type Receipt } from './install.ts';
+  writeAtomicDeploymentFile, releaseTarget, verifyRuntimeRelease, type DeploymentLock, type Receipt } from './install.ts';
 import { renderDeploymentPlan } from './plan.ts';
 
 const STORE = '/var/lib/cocoproxy-deployment';
@@ -66,6 +66,7 @@ export function deploymentOwnerGone(lock: DeploymentLock, observed: { bootId: st
   return lock.bootId !== observed.bootId || observed.startTime === null || lock.startTime !== observed.startTime;
 }
 async function releaseEvidence(receipt: Receipt) {
+  await verifyRuntimeRelease(receipt);
   await assertRootPath(receipt.release);
   await assertRootPath(receipt.release + '/manifest.json');
   const release = await verifyRelease(receipt.release, receipt.manifestSha256);
@@ -85,6 +86,7 @@ export async function loadInstalledDeployment(inputPath: string) {
   require(previous.receipt.status === 'complete' && previous.receipt.serviceUid === input.runtime.serviceUid &&
     previous.receipt.stateDirectory === input.runtime.stateDirectory && previous.receipt.credentialPath === input.management.credentialPath &&
     previous.receipt.release === releaseTarget(input, previous.receipt.manifestSha256) && previous.receipt.files.length === plan.files.length &&
+    posix.dirname(input.runtime.sourceDirectory) === posix.join(posix.dirname(previous.receipt.release), previous.receipt.runtimeManifestSha256 ?? previous.receipt.manifestSha256) &&
     plan.files.every(file => previous.receipt.files.some(old => old.path === file.path && old.mode === file.mode &&
       old.owner === file.owner && old.sensitive === file.sensitive && old.sha256 === digest(file.content))), 'INSTALL_RECEIPT_MISMATCH_OR_INCOMPLETE');
   await assertOwnedDeploymentFiles(previous.receipt.files);
@@ -201,20 +203,21 @@ export async function recoverDeployment(options: { apply?: boolean; reviewedReco
   rootHost();
   require(!(await deploymentPathInfo(STORE + '/recovery.lock')), 'INSTALL_RECOVERY_PREVIOUS_ATTEMPT_INCOMPLETE');
   const previous = await readReceipt(), owner = await readLock();
-  const units = [...baseUnits, ...(previous.receipt.files.some(file => file.path === '/etc/systemd/system/cocoproxy-web.service') ? ['cocoproxy-web.service'] : [])];
+  const frontend = previous.receipt.runtimeManifestSha256 !== undefined && previous.receipt.runtimeManifestSha256 !== previous.receipt.manifestSha256;
+  const units = [...(frontend ? ['cocoproxy-management.service'] : baseUnits), ...(previous.receipt.files.some(file => file.path === '/etc/systemd/system/cocoproxy-web.service') ? ['cocoproxy-web.service'] : [])];
   assertFinalizableReceipt(previous.receipt, owner.lock);
   require(deploymentOwnerGone(owner.lock, await deploymentProcessIdentity(owner.lock.pid)), 'INSTALL_RECOVERY_OWNER_ALIVE');
   await assertOwnedDeploymentFiles(previous.receipt.files);
   await releaseEvidence(previous.receipt);
   const credential = await assessRecoveryCredential(previous.receipt);
-  await assertDeploymentLifecycle(previous.receipt.stateDirectory, previous.receipt.serviceUid);
+  await assertDeploymentLifecycle(previous.receipt.stateDirectory, previous.receipt.serviceUid, frontend);
   const systemctl = '/usr/bin/systemctl';
   await assertDeploymentExecutable(systemctl);
   await assertDeploymentStopped(systemctl, units, true);
   const reviewedRecoverySha256 = digest(Buffer.concat([previous.bytes, Buffer.from('\n'), owner.bytes, Buffer.from('\n' + JSON.stringify(credential))]));
   const result = { operation: 'recover', apply: Boolean(options.apply), action: 'finalize-installed-files', reviewedRecoverySha256,
     receiptStatus: previous.receipt.status, credential: credential.status, administratorInitializationRequired: credential.status === 'initialization-required',
-    services: 'remain stopped and disabled', state: 'preserved-in-place',
+    services: frontend ? 'management and dependent HTTPS remain stopped; runtime preserved' : 'remain stopped and disabled', state: 'preserved-in-place',
     automaticProgramRollback: false, actions: ['systemd daemon-reload', 'mark receipt complete', 'remove matching abandoned install lock'] };
   if (!options.apply) return result;
   require(options.reviewedRecoverySha256 === reviewedRecoverySha256, 'INSTALL_RECOVERY_REVIEW_REQUIRED');
@@ -230,7 +233,7 @@ export async function recoverDeployment(options: { apply?: boolean; reviewedReco
     await assertOwnedDeploymentFiles(previous.receipt.files);
     await releaseEvidence(previous.receipt);
     await assessRecoveryCredential(previous.receipt, undefined, credential);
-    await assertDeploymentLifecycle(previous.receipt.stateDirectory, previous.receipt.serviceUid);
+    await assertDeploymentLifecycle(previous.receipt.stateDirectory, previous.receipt.serviceUid, frontend);
     await assertDeploymentStopped(systemctl, units, true);
     await runDeploymentTool(systemctl, ['daemon-reload']);
     await assertDeploymentStopped(systemctl, units);

@@ -150,14 +150,15 @@ def run(args, timeout=120):
     return result.stdout
 
 
-def new_input(previous, manifest_sha, core_sha):
+def new_input(previous, manifest_sha, core_sha, frontend=False):
     """Change release references only; all network and private identity stays exact."""
     value = copy.deepcopy(previous)
     runtime = value['runtime']
     source = Path(runtime['sourceDirectory'])
     need(source.name == 'source' and re.fullmatch('[a-f0-9]{64}', source.parent.name), 'REMOTE_OLD_RELEASE_INVALID')
     release = source.parent.parent / manifest_sha
-    runtime.update(sourceDirectory=str(release / 'source'), binaryPath=str(release / 'bin/mihomo'), binarySha256=core_sha)
+    if not frontend:
+        runtime.update(sourceDirectory=str(release / 'source'), binaryPath=str(release / 'bin/mihomo'), binarySha256=core_sha)
     value['management']['serverEntry'] = str(release / 'server/.output/server/index.mjs')
     return value
 
@@ -246,6 +247,73 @@ def stage_payload(source, manifest_sha):
     return stage, manifest
 
 
+def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
+                    systemctl, service, node, inspect_complete, web_unit, journal):
+    """Only management-side maintenance. The installer proves the pinned runtime."""
+    update = manifest['frontendUpdate']
+    need(isinstance(update, dict) and update.get('schemaVersion') == 1 and
+         update.get('baseManifestSha256') == receipt['manifestSha256'], 'REMOTE_FRONTEND_BASE_CHANGED')
+    managed = ['cocoproxy-management.service']
+    if web_unit or any(item['path'] == '/etc/systemd/system/cocoproxy-web.service' for item in receipt['files']):
+        managed.append('cocoproxy-web.service')
+    preserved = ['cocoproxy-mihomo.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']
+    def properties(unit, names):
+        return run([systemctl, 'show', unit, '--property=' + ','.join(names)]).decode().strip()
+    stable = {unit: properties(unit, ['ActiveState', 'MainPID', 'ExecMainStartTimestampMonotonic', 'UnitFileState']) for unit in preserved}
+    network = regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None
+    before = {}
+    for unit in managed:
+        active = run([systemctl, 'show', unit, '-p', 'ActiveState', '--value']).decode().strip()
+        enabled = run([systemctl, 'show', unit, '-p', 'UnitFileState', '--value']).decode().strip()
+        need(active in ['active', 'inactive'] and enabled in ['enabled', 'disabled', 'static', 'indirect'], 'REMOTE_SERVICE_STATE_UNSUPPORTED')
+        before[unit] = {'active': active == 'active', 'enabled': enabled}
+    if options.preview:
+        print(json.dumps({'prepared': True, 'apply': False, 'components': 'frontend', 'commit': manifest['commit'],
+                          'services': managed, 'preservedServices': preserved}))
+        return
+    progress = {'status': 'running', 'phase': 'frontend-maintenance', 'manifestSha256': options.manifest_sha256,
+                'previousServices': before, 'components': 'frontend'}
+    replace(journal, progress)
+    try:
+        for unit in reversed(managed):
+            run([systemctl, 'stop', unit])
+        enabled_units = [unit for unit, value in before.items() if value['enabled'] == 'enabled']
+        if enabled_units:
+            run([systemctl, 'disable', *enabled_units])
+        def preservation():
+            return json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
+                payload / 'source/apps/deployment/preservation.ts', '--management-settings', candidate['management']['settingsPath']]))
+        baseline = preservation()
+        need(baseline.get('ready') is True, 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
+        run(installer + ['--operation', 'upgrade', *common])
+        run(installer + ['--operation', 'upgrade', *common, '--apply'])
+        progress['phase'] = 'frontend-files-installed'
+        replace(journal, progress)
+        replace(input_path, candidate)
+        inspect_complete(options.manifest_sha256)
+        if enabled_units:
+            run([systemctl, 'enable', *enabled_units])
+        for unit in managed:
+            if before[unit]['active']:
+                run([systemctl, 'start', unit])
+        for unit in managed:
+            active = run([systemctl, 'show', unit, '-p', 'ActiveState', '--value']).decode().strip()
+            enabled = run([systemctl, 'show', unit, '-p', 'UnitFileState', '--value']).decode().strip()
+            need(active == ('active' if before[unit]['active'] else 'inactive') and enabled == before[unit]['enabled'],
+                 'REMOTE_SERVICE_NOT_RESTORED')
+        need(all(properties(unit, ['ActiveState', 'MainPID', 'ExecMainStartTimestampMonotonic', 'UnitFileState']) == value
+                 for unit, value in stable.items()), 'REMOTE_FRONTEND_RUNTIME_CHANGED')
+        need((regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None) == network, 'REMOTE_NETWORK_RECEIPT_CHANGED')
+        preserved_state = compare_preservation(baseline, preservation())
+        need(preserved_state['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
+        replace(journal, {**progress, 'status': 'complete', 'phase': 'verified', 'preservation': preserved_state})
+        print(json.dumps({'installed': True, 'updated': True, 'components': 'frontend', 'commit': manifest['commit'],
+                          'manifestSha256': options.manifest_sha256, 'runtimePreserved': True, 'preservation': preserved_state}))
+    except Exception:
+        replace(journal, {**progress, 'status': 'failed', 'lastCompletedPhase': progress['phase'], 'phase': 'manual-review-required'})
+        raise
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--payload', required=True)
@@ -276,6 +344,7 @@ def main_locked(options):
     if journal.exists():
         need(json.loads(regular(journal, True))['status'] == 'complete', 'REMOTE_PREVIOUS_DEPLOYMENT_REQUIRES_REVIEW')
     payload, manifest = stage_payload(Path(options.payload), options.manifest_sha256)
+    frontend = 'frontendUpdate' in manifest
     profile = json.loads(regular(PRIVATE / 'remote.json', True)) if (PRIVATE / 'remote.json').exists() else {}
     hook = options.router_hook or profile.get('routerHook')
     web_unit = options.web_unit or profile.get('webUnit')
@@ -287,11 +356,12 @@ def main_locked(options):
         need(receipt['status'] == 'complete', 'REMOTE_RECEIPT_NOT_COMPLETE')
         need(options.input or input_path.exists(), 'REMOTE_EXISTING_INPUT_REQUIRED')
         old = json.loads(regular(options.input) if options.input else regular(input_path, True))
-        candidate = new_input(old, options.manifest_sha256, next(item['sha256'] for item in manifest['files'] if item['path'] == 'bin/mihomo'))
+        candidate = new_input(old, options.manifest_sha256, next(item['sha256'] for item in manifest['files'] if item['path'] == 'bin/mihomo'), frontend)
     else:
+        need(not frontend, 'REMOTE_FRONTEND_EXISTING_INSTALL_REQUIRED')
         need(options.environment and options.admin_input, 'REMOTE_FIRST_INSTALL_INPUT_REQUIRED')
         old = None
-    if hook:
+    if hook and not frontend:
         trusted(hook)
         need(os.access(hook, os.X_OK), 'REMOTE_ROUTER_HOOK_NOT_EXECUTABLE')
     with tempfile.TemporaryDirectory(prefix='cocoproxy-remote-', dir='/run') as temporary:
@@ -353,6 +423,9 @@ def main_locked(options):
             initial_credential = temporary / 'credential.json'
             put(admin, regular(options.admin_input))
             run([node, '--experimental-strip-types', payload / 'source/apps/cli/main.ts', 'admin-init', '--input', admin, '--output', initial_credential])
+        if frontend:
+            return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
+                                   systemctl, service, node, inspect_complete, web_unit, journal)
         gateway = bool(runtime.get('automaticGateway'))
         need(not installed or not gateway or router_command, 'REMOTE_ROUTER_HOOK_REQUIRED')
         router_enabled = False

@@ -8,7 +8,8 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { executeBuildCommand, runBuildRelease } from '../scripts/build-release.mjs';
+import { executeBuildCommand, runBuildRelease, readBuildSelection } from '../scripts/build-release.mjs';
+import { backendInputSha256 } from '../packages/deployment/update-scope.mjs';
 
 const exec = promisify(execFile);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -56,7 +57,8 @@ async function fixture(t, failure) {
       stagedOutput = args[args.indexOf('--output') + 1];
       const path = 'source/scripts/deploy-ssh.mjs'; const bytes = 'synthetic deploy entry\n';
       await write(join(stagedOutput, path), bytes);
-      const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, commit, files: [{ path, size: Buffer.byteLength(bytes), sha256: sha256(bytes), mode: '0644' }] }));
+      const frontendUpdate = args.includes('--frontend-update') ? JSON.parse(args[args.indexOf('--frontend-update') + 1]) : undefined;
+      const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, commit, ...(frontendUpdate ? { frontendUpdate } : {}), files: [{ path, size: Buffer.byteLength(bytes), sha256: sha256(bytes), mode: '0644' }] }));
       await write(join(stagedOutput, 'manifest.json'), manifest, 0o600);
       if (failure === 'payload-drift') await write(join(stagedOutput, path), 'altered payload');
       return JSON.stringify({ staged: true, commit, manifestSha256: sha256(manifest), fileCount: 1 });
@@ -73,6 +75,28 @@ test('build or source verification failures stop before staging and privilege el
     assert.equal(state.commands.some(({ args }) => args[0]?.endsWith('stage-explicit-release.mjs')), false);
     assert.equal(state.commands.some(({ command }) => command === 'sudo'), false);
   });
+});
+
+test('component selection rejects unsupported modes; a frontend base must match every backend input', async t => {
+  assert.equal(readBuildSelection([]).components, 'all');
+  assert.throws(() => readBuildSelection(['--components', 'backend']), { code: 'BUILD_COMPONENTS_UNSUPPORTED' });
+  assert.throws(() => readBuildSelection(['--components', 'frontend', '--components', 'all']), { code: 'BUILD_ARGUMENTS_INVALID' });
+  const state = await fixture(t);
+  const base = join(state.config.workspace, 'base'); await mkdir(base);
+  const path = 'synthetic.txt'; await write(join(base, path), 'base');
+  const raw = await executeBuildCommand('git', ['-C', state.config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
+  const entries = raw.split('\0').filter(Boolean).map(line => { const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line); return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] }; });
+  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: { backendInputSha256: backendInputSha256(entries) },
+    files: [{ path, size: 4, sha256: sha256('base'), mode: '0644' }] };
+  await write(join(base, 'manifest.json'), JSON.stringify(manifest));
+  const plan = await runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base, preview: true });
+  assert.equal(plan.components, 'frontend'); assert.equal(state.commands.some(item => item.command === 'tar'), false);
+  const result = await runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base });
+  assert.equal(result.components, 'frontend');
+  assert.equal(state.commands.some(item => item.command === 'npm'), false);
+  manifest.buildInputs.backendInputSha256 = '0'.repeat(64);
+  await write(join(base, 'manifest.json'), JSON.stringify(manifest));
+  await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BACKEND_CHANGED' });
 });
 
 test('changed payload cannot deploy even when a previous release exists', async t => {

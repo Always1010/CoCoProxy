@@ -4,6 +4,7 @@ export interface StageExplicitReleaseOptions {
   runtimeDependencies: string;
   core: string;
   output: string;
+  frontendUpdate?: { schemaVersion: 1; backendInputSha256: string; baseManifestSha256: string };
   /** Code-only fixture override. Never supplied by deployment JSON or CLI. */
   reviewedCoreSha256?: string;
 }

@@ -78,6 +78,7 @@ export async function deployFromLocalBuild(args, dependencies = {}) {
     try {
       const release = await (dependencies.readBuild ?? readLocalBuild)({ source: paths.source, workspace: paths.workspace });
       const installation = await (dependencies.detect ?? detectLocalInstallation)();
+      if (release.components === 'frontend' && installation !== 'existing') fail('LOCAL_FRONTEND_EXISTING_INSTALL_REQUIRED');
       const deployArgs = ['--local', '--payload', release.output, '--manifest-sha256', release.manifestSha256];
       for (const option of forwarded) if (options[option]) deployArgs.push(option, options[option]);
       if (options['--preview']) deployArgs.push('--preview');
@@ -94,7 +95,7 @@ export async function deployFromLocalBuild(args, dependencies = {}) {
           deploy: async inputs => { deployArgs.push('--environment', inputs.environment, '--admin-input', inputs.administrator); await deploy(); } });
       }
       if (installation === 'existing' && (options['--environment'] || options['--admin-input'])) fail('LOCAL_EXISTING_INSTALL_INPUT_REJECTED');
-      if (installation === 'existing' && !options['--router-config'] && !options['--router-hook'] &&
+      if (installation === 'existing' && release.components !== 'frontend' && !options['--router-config'] && !options['--router-hook'] &&
           await (dependencies.adapterMissing ?? needsUpdateRouterAdapter)(release.manifestSha256)) {
         return await (dependencies.routerWizard ?? withRouterAdapterWizard)({ signal, preview: Boolean(options['--preview']),
           deploy: async (flag, path) => { deployArgs.push(flag, path); await deploy(); } });
