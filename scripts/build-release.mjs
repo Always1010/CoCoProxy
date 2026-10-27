@@ -2,10 +2,10 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, fstatSync } from 'node:fs';
-import { lstat, mkdir, open, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
+import { cp, lstat, mkdir, open, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { backendInputSha256, parseComponents } from '../packages/deployment/update-scope.mjs';
+import { backendInputSha256, reusedInputSha256, parseComponents } from '../packages/deployment/update-scope.mjs';
 
 export function readBuildSelection(args) {
   const rest = []; let components = 'all'; let baseRelease; let preview = false; const seen = new Set();
@@ -20,7 +20,7 @@ export function readBuildSelection(args) {
     if (option === '--components') components = parseComponents(value);
     else { if (!isAbsolute(value)) fail('BUILD_ARGUMENTS_INVALID'); baseRelease = value; }
   }
-  if (baseRelease && components !== 'frontend') fail('BUILD_ARGUMENTS_INVALID');
+  if (baseRelease && components === 'all') fail('BUILD_ARGUMENTS_INVALID');
   return { rest, components, baseRelease, preview };
 }
 
@@ -33,7 +33,9 @@ export function buildFailureMessage(error) {
     BUILD_FRONTEND_BASE_UPGRADE_REQUIRED: '旧安装缺少局部更新基线。请先不带 --components frontend 完成一次全量构建部署。',
     BUILD_FRONTEND_BACKEND_CHANGED: '前端以外的构建输入已变化，不能局部更新；请使用默认全量构建部署。',
     BUILD_FRONTEND_BASE_REQUIRED: '未找到可核验的管理服务基线；核对安装，或使用 --base-release 指定已有发行目录。',
-    BUILD_COMPONENTS_UNSUPPORTED: '当前只支持 --components all 或 frontend。',
+    BUILD_COMPONENTS_UNSUPPORTED: '当前支持 --components all、frontend 或 backend。',
+    BUILD_COMPONENT_BASE_UPGRADE_REQUIRED: '基线缺少组件复用摘要，请先完成一次全量构建部署。',
+    BUILD_REUSED_INPUT_CHANGED: '本次未选择的组件输入已变化，请使用全量构建部署。',
   };
   return `${code}${guidance[code] ? '\n' + guidance[code] : ''}`;
 }
@@ -186,10 +188,10 @@ export async function verifyBuiltRelease(output, receipt, expectedCommit) {
   }
   expected.files.push(['manifest.json', bytes.length, hash(bytes), false]); expected.dirs = [...dirs];
   await selection(output, expected);
-  return { ...receipt, output, components: manifest.frontendUpdate ? 'frontend' : 'all' };
+  return { ...receipt, output, components: manifest.frontendUpdate ? 'frontend' : manifest.componentUpdate?.components ?? 'all' };
 }
 
-export async function frontendBaseline(config, baseRelease, execute) {
+export async function componentBaseline(config, baseRelease, execute, components) {
   if (!baseRelease) {
     const command = await execute('systemctl', ['show', 'cocoproxy-management.service', '--property=ExecStart', '--value'], { capture: true });
     const match = /path=\S+ ; argv\[\]=\S+ (\/[^\s;]+)\/server\/\.output\/server\/index\.mjs ;/u.exec(command);
@@ -206,10 +208,16 @@ export async function frontendBaseline(config, baseRelease, execute) {
     if (!match) fail('BUILD_SNAPSHOT_INVALID');
     return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] };
   });
-  const backendSHA = backendInputSha256(entries);
-  if (!manifest.buildInputs?.backendInputSha256) fail('BUILD_FRONTEND_BASE_UPGRADE_REQUIRED');
-  if (manifest.buildInputs?.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
-  return { schemaVersion: 1, baseManifestSha256, backendInputSha256: backendSHA };
+  if (components === 'frontend') {
+    const backendSHA = backendInputSha256(entries);
+    if (!manifest.buildInputs?.backendInputSha256) fail('BUILD_FRONTEND_BASE_UPGRADE_REQUIRED');
+    if (manifest.buildInputs.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
+    return { baseRelease, frontendUpdate: { schemaVersion: 1, baseManifestSha256, backendInputSha256: backendSHA } };
+  }
+  const reusedSHA = reusedInputSha256(entries, components);
+  if (!manifest.buildInputs?.frontendInputSha256) fail('BUILD_COMPONENT_BASE_UPGRADE_REQUIRED');
+  if (manifest.buildInputs.frontendInputSha256 !== reusedSHA) fail('BUILD_REUSED_INPUT_CHANGED');
+  return { baseRelease, componentUpdate: { schemaVersion: 1, components, baseManifestSha256, reusedInputSha256: reusedSHA } };
 }
 
 /** The CLI holds the shared workspace lock for this entire operation. Injection is for synthetic orchestration tests. */
@@ -217,11 +225,12 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
   parseComponents(components);
   await validateBuildConfig(config);
   await verifyBuildInputs(config, execute);
-  const frontendUpdate = components === 'frontend' ? await frontendBaseline(config, baseRelease, execute) : undefined;
+  const baseline = components !== 'all' ? await componentBaseline(config, baseRelease, execute, components) : undefined;
+  const { frontendUpdate, componentUpdate } = baseline ?? {};
   if (preview) return { preview: true, components, commit: config.expected.commit,
-    build: components === 'frontend' ? ['frontend', 'server-public-assets'] : ['frontend', 'backend', 'release'],
+    build: components === 'frontend' ? ['frontend', 'server-public-assets'] : components === 'backend' ? ['backend', 'release'] : ['frontend', 'backend', 'release'],
     deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance',
-    ...(frontendUpdate ? { frontendUpdate } : {}) };
+    ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}) };
   const catalog = await json(join(config.source, 'integrations/metacubexd/components.json'));
   const tooling = await json(join(config.source, 'tooling/package.json'));
   const installedPnpm = await json(join(config.toolingDependencies, 'pnpm/package.json'));
@@ -252,16 +261,20 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
       if (!(await lstat(existing)).isDirectory()) fail('BUILD_DEPENDENCY_MISSING');
       await dependencyLink(join(upstream, path), existing);
     }
-    if (components === 'all') await command('npm', ['run', 'typecheck']);
-    await pnpm(['--filter', '@metacubexd/ui', 'generate']);
-    await node(['scripts/typecheck-metacubexd-ui.mjs', '--directory', upstream]);
+    if (components !== 'frontend') await command('npm', ['run', 'typecheck']);
+    if (components === 'backend') await cp(join(baseline.baseRelease, 'server/.output/public'), env.UI_DIST, { recursive: true });
+    else {
+      await pnpm(['--filter', '@metacubexd/ui', 'generate']);
+      await node(['scripts/typecheck-metacubexd-ui.mjs', '--directory', upstream]);
+    }
     await pnpm(['--filter', '@metacubexd/server', 'build']);
     if (hash(await regular(join(upstream, 'pnpm-lock.yaml'))) !== management.lockfileSha256
       || hash(await regular(join(config.upstreamDependencies, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_UPSTREAM_LOCK_CHANGED');
     await verifyBuildInputs(config, execute, workName);
     const receipt = JSON.parse(await node([join(config.snapshot, 'scripts/stage-explicit-release.mjs'), '--source-dir', config.snapshot,
       '--server-dir', join(upstream, 'apps/server/.output'), '--runtime-dependencies', config.runtimeDependencies, '--core', config.core, '--output', output,
-      ...(frontendUpdate ? ['--frontend-update', JSON.stringify(frontendUpdate)] : [])], { capture: true }));
+      ...(frontendUpdate ? ['--frontend-update', JSON.stringify(frontendUpdate)] : []),
+      ...(componentUpdate ? ['--component-update', JSON.stringify(componentUpdate)] : [])], { capture: true }));
     const result = await verifyBuiltRelease(output, receipt, config.expected.commit);
     await verifyBuildInputs(config, execute, workName);
     if (deploy) {
@@ -276,7 +289,7 @@ export async function buildReleaseMain(deploy = false) {
   let lock;
   try {
     if (process.argv.slice(2).includes('--help')) {
-      console.log('已准备工作区：node scripts/build-release.mjs --config ABSOLUTE_JSON [--components all|frontend] [--base-release ABSOLUTE_RELEASE] [--preview]\n一步构建部署：node scripts/build-deploy.mjs，参数相同。普通克隆仓库使用 bash scripts/build-release.sh。'); return;
+      console.log('已准备工作区：node scripts/build-release.mjs --config ABSOLUTE_JSON [--components all|frontend|backend] [--base-release ABSOLUTE_RELEASE] [--preview]\n一步构建部署：node scripts/build-deploy.mjs，参数相同。普通克隆仓库使用 bash scripts/build-release.sh。'); return;
     }
     const { rest: args, ...selection } = readBuildSelection(process.argv.slice(2));
     const internal = args.length === 4 && args[2] === '--internal-lock' && args[3] === process.env.COCOPROXY_BUILD_LOCK_TOKEN;

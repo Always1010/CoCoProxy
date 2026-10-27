@@ -47,11 +47,15 @@ node scripts/build-deploy.mjs --config /absolute/private/build-config.json
 
 ### 按组件构建
 
-默认 `--components all` 保留完整构建和维护部署。当前只额外支持 `frontend`，暂不支持 `backend`、`core` 或组合值；无效范围直接拒绝，不自动扩大为全量。
+默认 `--components all` 保留完整构建和维护部署。支持 `frontend`、`backend` 单项范围，暂不支持 `core` 或组合值；无效范围直接拒绝，不自动扩大为全量。
 
 ```sh
 # 普通克隆仓库：构建前端更新，再部署成功记录中的同一范围。
 bash scripts/build-release.sh --components frontend
+sudo bash scripts/deploy-local.sh
+
+# 只构建后端，复用基线 UI；部署仍进入完整维护窗口。
+bash scripts/build-release.sh --components backend
 sudo bash scripts/deploy-local.sh
 
 # 已准备工作区：一步构建部署。
@@ -61,6 +65,8 @@ node scripts/build-deploy.mjs --config /absolute/private/build-config.json --com
 基线默认从当前管理服务的 ExecStart 获取，也可用 `--base-release /absolute/installed-release` 显式指定。基线必须有本版本生成的后端输入摘要且完整载荷校验通过；旧发行包缺少该信息时，先全量构建部署一次。前端以外的源码、依赖、构建输入变化会拒绝局部更新，文档和测试变化不计入后端输入。
 
 前端模式重新生成 UI 并完成承载新资源所需的 Server 打包，省略根项目类型检查；它不是完全跳过 Server 打包。构建清单绑定基线 manifest 摘要，部署时重新核验；不得选择另一个基线强行安装。默认全量构建和 GitHub 正式发行始终从当前提交构建，不依赖已安装版本。
+
+后端模式要求基线具有 `frontendInputSha256`，复用已核验的 `server/.output/public`，跳过 UI generate 和 UI 类型检查，执行项目类型检查及 Server build。UI、上游或共享构建输入变化时拒绝。装配清单携带 `componentUpdate`，安装预检再次核对基线、全部静态资源和核心摘要；部署使用完整维护及恢复流程，会中断代理。它仅减少构建范围，不保证仅重启后端。所有局部模式均要求已有安装，旧基线缺少所需摘要时先全量构建部署。
 
 构建入口附加 `--preview` 只验证输入并输出计划，不编译、不装配、不部署、不覆盖成功记录；会使用已有工作区锁。普通克隆仓库预览要求已有构建工作区，不可与 `--prepare` 同用。部署 `--preview` 的暂存和锁语义见[部署说明](deployment.md)。
 

@@ -4,7 +4,7 @@ import { chmod, copyFile, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
-import { runBuildRelease, readBuildSelection, frontendBaseline, buildFailureMessage } from './build-release.mjs';
+import { runBuildRelease, readBuildSelection, componentBaseline, buildFailureMessage } from './build-release.mjs';
 import { validateReleaseMetadata, validateReleaseTooling } from './release-metadata.mjs';
 import { canonicalLocalPath, cleanLocalCommit, localFail, readLocalJSON, resolveLocalPaths, runLocalCommand,
   within, withLocalBuildLock, writeLocalJSON } from './local-release-state.mjs';
@@ -153,8 +153,9 @@ export async function runLocalBuild({ source, workspace, prepare = false, compon
   return withLocalBuildLock(paths, async ({ signal, assertHeld }) => {
     if (preview) {
       const commit = await cleanLocalCommit(paths.source, execute);
-      const frontendUpdate = components === 'frontend' ? await frontendBaseline({ snapshot: paths.source }, baseRelease, execute) : undefined;
-      return { preview: true, components, commit, deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance', ...(frontendUpdate ? { frontendUpdate } : {}) };
+      const baseline = components !== 'all' ? await componentBaseline({ snapshot: paths.source }, baseRelease, execute, components) : {};
+      const { frontendUpdate, componentUpdate } = baseline;
+      return { preview: true, components, commit, deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance', ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}) };
     }
     await writeLocalJSON(paths.receipt, { schemaVersion: 1, status: 'building', source: paths.source });
     let run;
@@ -193,7 +194,7 @@ export async function runLocalBuild({ source, workspace, prepare = false, compon
 
 export async function localBuildMain(args) {
   if (args.includes('--help')) {
-    console.log('bash scripts/build-release.sh [--prepare] [--workspace /absolute/build-directory] [--components all|frontend] [--base-release ABSOLUTE_RELEASE] [--preview]\n默认全量；frontend 要求可核验且后端输入一致的基线。预览不构建、不覆盖成功记录，需要已有构建工作区。首次 --prepare 允许按锁下载构建输入和安装项目依赖；不安装系统软件。'); return;
+    console.log('bash scripts/build-release.sh [--prepare] [--workspace /absolute/build-directory] [--components all|frontend|backend] [--base-release ABSOLUTE_RELEASE] [--preview]\n默认全量；frontend 要求可核验且后端输入一致的基线。预览不构建、不覆盖成功记录，需要已有构建工作区。首次 --prepare 允许按锁下载构建输入和安装项目依赖；不安装系统软件。'); return;
   }
   const { rest, ...selection } = readBuildSelection(args);
   args = rest;

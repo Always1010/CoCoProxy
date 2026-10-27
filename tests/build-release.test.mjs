@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { executeBuildCommand, runBuildRelease, readBuildSelection } from '../scripts/build-release.mjs';
-import { backendInputSha256 } from '../packages/deployment/update-scope.mjs';
+import { backendInputSha256, reusedInputSha256 } from '../packages/deployment/update-scope.mjs';
 
 const exec = promisify(execFile);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -58,7 +58,8 @@ async function fixture(t, failure) {
       const path = 'source/scripts/deploy-ssh.mjs'; const bytes = 'synthetic deploy entry\n';
       await write(join(stagedOutput, path), bytes);
       const frontendUpdate = args.includes('--frontend-update') ? JSON.parse(args[args.indexOf('--frontend-update') + 1]) : undefined;
-      const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, commit, ...(frontendUpdate ? { frontendUpdate } : {}), files: [{ path, size: Buffer.byteLength(bytes), sha256: sha256(bytes), mode: '0644' }] }));
+      const componentUpdate = args.includes('--component-update') ? JSON.parse(args[args.indexOf('--component-update') + 1]) : undefined;
+      const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, commit, ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}), files: [{ path, size: Buffer.byteLength(bytes), sha256: sha256(bytes), mode: '0644' }] }));
       await write(join(stagedOutput, 'manifest.json'), manifest, 0o600);
       if (failure === 'payload-drift') await write(join(stagedOutput, path), 'altered payload');
       return JSON.stringify({ staged: true, commit, manifestSha256: sha256(manifest), fileCount: 1 });
@@ -79,7 +80,7 @@ test('build or source verification failures stop before staging and privilege el
 
 test('component selection rejects unsupported modes; a frontend base must match every backend input', async t => {
   assert.equal(readBuildSelection([]).components, 'all');
-  assert.throws(() => readBuildSelection(['--components', 'backend']), { code: 'BUILD_COMPONENTS_UNSUPPORTED' });
+  assert.throws(() => readBuildSelection(['--components', 'unknown']), { code: 'BUILD_COMPONENTS_UNSUPPORTED' });
   assert.throws(() => readBuildSelection(['--components', 'frontend', '--components', 'all']), { code: 'BUILD_ARGUMENTS_INVALID' });
   const state = await fixture(t);
   const base = join(state.config.workspace, 'base'); await mkdir(base);
@@ -99,6 +100,24 @@ test('component selection rejects unsupported modes; a frontend base must match 
   manifest.buildInputs.backendInputSha256 = '0'.repeat(64);
   await write(join(base, 'manifest.json'), JSON.stringify(manifest));
   await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BACKEND_CHANGED' });
+});
+
+test('backend build reuses verified UI, skips UI generation and refuses UI drift before building', async t => {
+  const state = await fixture(t); const base = join(state.config.workspace, 'base');
+  const path = 'server/.output/public/index.html'; await write(join(base, path), 'synthetic UI');
+  const raw = await executeBuildCommand('git', ['-C', state.config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
+  const entries = raw.split('\0').filter(Boolean).map(line => { const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line); return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] }; });
+  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: { frontendInputSha256: reusedInputSha256(entries, 'backend') },
+    files: [{ path, size: 12, sha256: sha256('synthetic UI'), mode: '0644' }] };
+  await write(join(base, 'manifest.json'), JSON.stringify(manifest));
+  const result = await runBuildRelease(state.config, { execute: state.execute, components: 'backend', baseRelease: base });
+  assert.equal(result.components, 'backend');
+  assert.equal(state.commands.some(item => item.args.includes('generate') || item.args[0] === 'scripts/typecheck-metacubexd-ui.mjs'), false);
+  assert.ok(state.commands.some(item => item.args.includes('@metacubexd/server') && item.args.includes('build')));
+  state.commands.length = 0;
+  manifest.buildInputs.frontendInputSha256 = '0'.repeat(64); await write(join(base, 'manifest.json'), JSON.stringify(manifest));
+  await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'backend', baseRelease: base }), { code: 'BUILD_REUSED_INPUT_CHANGED' });
+  assert.equal(state.commands.some(item => item.command === 'tar' || item.command === 'sudo'), false);
 });
 
 test('changed payload cannot deploy even when a previous release exists', async t => {

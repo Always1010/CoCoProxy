@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, compatibleOwnedFiles, configurationReviewDigest, deployRelease,
-  parseDeploymentLock, prepareUpgrade, releaseTarget, validateReceipt, verifyRelease, assertFrontendFiles, type Receipt } from '../packages/deployment/install.ts';
+  parseDeploymentLock, prepareUpgrade, releaseTarget, validateReceipt, verifyRelease, assertFrontendFiles, assertComponentReuse, type Receipt } from '../packages/deployment/install.ts';
 import { assertDeploymentStateCompatibility } from '../packages/deployment/install.ts';
 import { inspectStateCompatibility, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/compatibility.ts';
@@ -15,6 +15,16 @@ import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
+
+test('backend updates bind the installed base and preserve all UI files and the reviewed core', () => {
+  const file = { path: 'server/.output/public/index.html', size: 2, mode: '0644', sha256: digest('UI') };
+  const previous = { files: [file], coreSHA: digest('core'), frontendInputSha256: digest('inputs') };
+  const next = { ...previous, componentUpdate: { schemaVersion: 1 as const, components: 'backend' as const, baseManifestSha256: digest('base'), reusedInputSha256: digest('inputs') } };
+  assert.doesNotThrow(() => assertComponentReuse(previous, next, digest('base')));
+  assert.throws(() => assertComponentReuse(previous, next, digest('other base')), code('INSTALL_COMPONENT_BASE_CHANGED'));
+  assert.throws(() => assertComponentReuse(previous, { ...next, files: [{ ...file, sha256: digest('changed UI') }] }, digest('base')), code('INSTALL_REUSED_PAYLOAD_CHANGED'));
+  assert.throws(() => assertComponentReuse(previous, { ...next, coreSHA: digest('changed core') }, digest('base')), code('INSTALL_REUSED_PAYLOAD_CHANGED'));
+});
 
 test('frontend updates allow only the manager unit to change while preserving runtime paths and owned settings', () => {
   const previous = ['/etc/systemd/system/cocoproxy-management.service', '/etc/systemd/system/cocoproxy-mihomo.service', '/etc/sample/runtime.json']
