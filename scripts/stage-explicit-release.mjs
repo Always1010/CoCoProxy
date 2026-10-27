@@ -9,6 +9,7 @@ import { isDeepStrictEqual, promisify } from 'node:util';
 import { validateReleaseMetadata } from './release-metadata.mjs';
 import { assertReleaseSourcePaths, releaseIntegrationFiles, releaseLauncher, releaseReadme, selectedReleaseSource, verifyDocumentationLinks } from './release-layout.mjs';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/state-compatibility.mjs';
+import { backendInputSha256, validateFrontendUpdate } from '../packages/deployment/update-scope.mjs';
 
 const execute = promisify(execFile);
 const FILE_LIMIT = 256 * 1024 * 1024;
@@ -123,6 +124,9 @@ export async function stageExplicitRelease(options) {
     if (tree.length > COUNT_LIMIT) fail('PAYLOAD_LIMIT');
     try { assertReleaseSourcePaths(tree.map(entry => entry.path)); } catch (error) { fail(error.code); }
     const entries = new Map(tree.map(entry => [entry.path, entry]));
+    const backendSHA = backendInputSha256(tree);
+    const frontendUpdate = options.frontendUpdate && validateFrontendUpdate(options.frontendUpdate);
+    if (frontendUpdate && frontendUpdate.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
     const blob = async path => {
       const entry = entries.get(path);
       if (!entry) fail('SOURCE_REQUIRED_FILE_MISSING');
@@ -277,6 +281,8 @@ export async function stageExplicitRelease(options) {
     catch (error) { if (error?.code) fail(error.code); throw error; }
     const manifest = {
       schemaVersion: 1, scope: 'local-explicit-proxy-payload', commit,
+      buildInputs: { backendInputSha256: backendSHA },
+      ...(frontendUpdate ? { frontendUpdate } : {}),
       compatibility: DEPLOYMENT_STATE_COMPATIBILITY,
       components: { cocoproxy: { version: pkg.version, lockSha256: sha256(lockBytes), componentCatalogSha256: sha256(componentsBytes) },
         metacubexd: { version: uiTag, commit: uiCommit }, mihomo: { version: coreTag, commit: coreCommit, binarySha256: reviewedHash, ...(corePlatform ? { platform: corePlatform } : {}) },
@@ -302,7 +308,7 @@ export async function stageExplicitRelease(options) {
 }
 
 if (process.argv[1] && same(resolve(process.argv[1]), fileURLToPath(import.meta.url))) {
-  const flags = { '--source-dir': 'sourceDir', '--server-dir': 'serverDir', '--runtime-dependencies': 'runtimeDependencies', '--core': 'core', '--output': 'output' };
+  const flags = { '--source-dir': 'sourceDir', '--server-dir': 'serverDir', '--runtime-dependencies': 'runtimeDependencies', '--core': 'core', '--output': 'output', '--frontend-update': 'frontendUpdate' };
   try {
     const options = {};
     const args = process.argv.slice(2);
@@ -311,7 +317,8 @@ if (process.argv[1] && same(resolve(process.argv[1]), fileURLToPath(import.meta.
       if (!key || options[key] || !args[i + 1] || args[i + 1].startsWith('--')) fail('CLI_ARGUMENTS_INVALID');
       options[key] = args[i + 1];
     }
-    if (Object.keys(options).length !== 5) fail('CLI_ARGUMENTS_INVALID');
+    if (!['sourceDir', 'serverDir', 'runtimeDependencies', 'core', 'output'].every(key => options[key])) fail('CLI_ARGUMENTS_INVALID');
+    if (options.frontendUpdate) options.frontendUpdate = JSON.parse(options.frontendUpdate);
     process.stdout.write(`${JSON.stringify(await stageExplicitRelease(options))}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof ReleaseStageError ? error.code : 'RELEASE_STAGE_FAILED'}\n`);

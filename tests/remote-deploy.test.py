@@ -17,7 +17,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a'):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -45,8 +45,10 @@ class RemoteDeploymentTests(unittest.TestCase):
                 'serverEntry': '/old/server', 'deployment': {'controllerSecret': 'synthetic secret'}}}
         (private / 'deployment.json').write_text(json.dumps(before))
         receipt = root / 'receipt.json'
-        receipt.write_text(json.dumps({'status': 'complete', 'release': '/old/release', 'manifestSha256': 'a' * 64}))
+        receipt.write_text(json.dumps({'status': 'complete', 'release': '/old/release', 'manifestSha256': 'a' * 64, 'files': []}))
         manifest = {'commit': 'e' * 40, 'files': [{'path': 'bin/mihomo', 'sha256': 'c' * 64}]}
+        if frontend:
+            manifest['frontendUpdate'] = {'schemaVersion': 1, 'baseManifestSha256': frontend_base * 64, 'backendInputSha256': 'f' * 64}
         events = []
         active = {'cocoproxy-management.service': True, 'cocoproxy-mihomo.service': core_active,
             'cocoproxy-gateway-network.service': core_active, 'cocoproxy-gateway-guard.service': True}
@@ -109,6 +111,8 @@ class RemoteDeploymentTests(unittest.TestCase):
             if args[0] == '/usr/bin/systemctl':
                 action = args[1]
                 if action == 'show':
+                    if args[3].startswith('--property='):
+                        return ('ActiveState=' + ('active' if active[args[2]] else 'inactive') + '\nMainPID=42\nExecMainStartTimestampMonotonic=1234\nUnitFileState=' + enabled[args[2]]).encode()
                     return (('active' if active[args[2]] else 'inactive') if args[4] == 'ActiveState' else enabled[args[2]]).encode()
                 for unit in args[2:]:
                     if action in ['start', 'stop']:
@@ -140,6 +144,37 @@ class RemoteDeploymentTests(unittest.TestCase):
         args = SimpleNamespace(payload=str(root), manifest_sha256='b' * 64, router_hook=str(hook), router_config=None,
             input=None, environment=None, admin_input=None, web_unit=None, preview=False)
         return temporary, stack, private, before, events, router, args
+
+    def test_frontend_update_pins_runtime_and_never_enters_router_or_runtime_maintenance(self):
+        temporary, stack, private, before, events, router, args = self.scenario(frontend=True)
+        with temporary, stack:
+            deploy.main_locked(args)
+            installed = json.loads((private / 'deployment.json').read_text())
+            self.assertEqual(installed['runtime'], before['runtime'])
+            self.assertNotEqual(installed['management']['serverEntry'], before['management']['serverEntry'])
+            self.assertTrue(router['enabled'])
+            self.assertFalse(any('runtime-maintenance-pause' in event or 'runtime-maintenance-restore' in event for event in events))
+            self.assertFalse(any('router-hook' in event[0] for event in events))
+            mutations = [event for event in events if event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable']]
+            self.assertTrue(mutations)
+            self.assertTrue(all(event[2:] == ['cocoproxy-management.service'] for event in mutations))
+            self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
+
+    def test_frontend_preview_does_not_stop_services_or_write_install_input(self):
+        temporary, stack, private, before, events, router, args = self.scenario(frontend=True)
+        with temporary, stack:
+            args.preview = True
+            deploy.main_locked(args)
+            self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
+            self.assertFalse(any(event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable'] for event in events))
+
+    def test_frontend_stale_base_is_rejected_before_service_mutation(self):
+        temporary, stack, private, before, events, router, args = self.scenario(frontend=True, frontend_base='c')
+        with temporary, stack:
+            with self.assertRaisesRegex(RuntimeError, 'REMOTE_FRONTEND_BASE_CHANGED'):
+                deploy.main_locked(args)
+            self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
+            self.assertFalse(any(event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable'] for event in events))
 
     def test_update_preserves_identity_and_restores_only_after_core_ready(self):
         temporary, stack, private, before, events, router, args = self.scenario()

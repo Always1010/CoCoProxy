@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, compatibleOwnedFiles, configurationReviewDigest, deployRelease,
-  parseDeploymentLock, prepareUpgrade, releaseTarget, validateReceipt, verifyRelease, type Receipt } from '../packages/deployment/install.ts';
+  parseDeploymentLock, prepareUpgrade, releaseTarget, validateReceipt, verifyRelease, assertFrontendFiles, type Receipt } from '../packages/deployment/install.ts';
 import { assertDeploymentStateCompatibility } from '../packages/deployment/install.ts';
 import { inspectStateCompatibility, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/compatibility.ts';
@@ -15,6 +15,16 @@ import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
+
+test('frontend updates allow only the manager unit to change while preserving runtime paths and owned settings', () => {
+  const previous = ['/etc/systemd/system/cocoproxy-management.service', '/etc/systemd/system/cocoproxy-mihomo.service', '/etc/sample/runtime.json']
+    .map(path => ({ path, mode: '0644', owner: 'root' as const, sensitive: false, sha256: digest(path) }));
+  const next = previous.map(file => file.path.endsWith('management.service') ? { ...file, sha256: digest('new manager') } : file);
+  assert.doesNotThrow(() => assertFrontendFiles(previous, next));
+  assert.throws(() => assertFrontendFiles(previous, next.map(file => file.path.endsWith('mihomo.service') ? { ...file, sha256: digest('changed core') } : file)), code('INSTALL_FRONTEND_SCOPE_CHANGED'));
+  const parent = '/opt/sample/releases/'; const runtime = parent + 'a'.repeat(64); const manager = parent + 'b'.repeat(64);
+  assert.equal(releaseTarget({ runtime: { sourceDirectory: runtime + '/source', binaryPath: runtime + '/bin/mihomo' }, management: { serverEntry: manager + '/server/.output/server/index.mjs' } }, 'b'.repeat(64)), manager);
+});
 
 test('maintenance refuses enabled automatic recovery until it has been explicitly paused', () => {
   assertMaintenanceLifecycle({ schemaVersion: 1, enabled: true, paused: true });

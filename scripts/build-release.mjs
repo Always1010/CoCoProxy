@@ -5,6 +5,24 @@ import { constants, fstatSync } from 'node:fs';
 import { lstat, mkdir, open, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { backendInputSha256, parseComponents } from '../packages/deployment/update-scope.mjs';
+
+export function readBuildSelection(args) {
+  const rest = []; let components = 'all'; let baseRelease; let preview = false; const seen = new Set();
+  for (let index = 0; index < args.length; index++) {
+    const option = args[index];
+    if (!['--components', '--base-release', '--preview'].includes(option)) { rest.push(option); continue; }
+    if (seen.has(option)) fail('BUILD_ARGUMENTS_INVALID');
+    seen.add(option);
+    if (option === '--preview') { preview = true; continue; }
+    const value = args[++index];
+    if (!value || value.startsWith('--')) fail('BUILD_ARGUMENTS_INVALID');
+    if (option === '--components') components = parseComponents(value);
+    else { if (!isAbsolute(value)) fail('BUILD_ARGUMENTS_INVALID'); baseRelease = value; }
+  }
+  if (baseRelease && components !== 'frontend') fail('BUILD_ARGUMENTS_INVALID');
+  return { rest, components, baseRelease, preview };
+}
 
 const pathKeys = ['workspace', 'source', 'mirror', 'snapshot', 'runtimeDependencies', 'toolingDependencies', 'upstreamArchive', 'upstreamDependencies', 'core', 'releases'];
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -158,13 +176,41 @@ export async function verifyBuiltRelease(output, receipt, expectedCommit) {
   }
   expected.files.push(['manifest.json', bytes.length, hash(bytes), false]); expected.dirs = [...dirs];
   await selection(output, expected);
-  return { ...receipt, output };
+  return { ...receipt, output, components: manifest.frontendUpdate ? 'frontend' : 'all' };
+}
+
+export async function frontendBaseline(config, baseRelease, execute) {
+  if (!baseRelease) {
+    const command = await execute('systemctl', ['show', 'cocoproxy-management.service', '--property=ExecStart', '--value'], { capture: true });
+    const match = /path=\S+ ; argv\[\]=\S+ (\/[^\s;]+)\/server\/\.output\/server\/index\.mjs ;/u.exec(command);
+    if (!match) fail('BUILD_FRONTEND_BASE_REQUIRED');
+    baseRelease = match[1];
+  }
+  await canonical(baseRelease);
+  const bytes = await regular(join(baseRelease, 'manifest.json')); const manifest = JSON.parse(bytes.toString('utf8'));
+  const baseManifestSha256 = hash(bytes);
+  await verifyBuiltRelease(baseRelease, { staged: true, commit: manifest.commit, manifestSha256: baseManifestSha256, fileCount: manifest.files?.length }, manifest.commit);
+  const raw = await execute('git', ['-C', config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
+  const entries = raw.split('\0').filter(Boolean).map(line => {
+    const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line);
+    if (!match) fail('BUILD_SNAPSHOT_INVALID');
+    return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] };
+  });
+  const backendSHA = backendInputSha256(entries);
+  if (manifest.buildInputs?.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
+  return { schemaVersion: 1, baseManifestSha256, backendInputSha256: backendSHA };
 }
 
 /** The CLI holds the shared workspace lock for this entire operation. Injection is for synthetic orchestration tests. */
-export async function runBuildRelease(config, { deploy = false, execute = executeBuildCommand } = {}) {
+export async function runBuildRelease(config, { deploy = false, execute = executeBuildCommand, components = 'all', baseRelease, preview = false } = {}) {
+  parseComponents(components);
   await validateBuildConfig(config);
   await verifyBuildInputs(config, execute);
+  const frontendUpdate = components === 'frontend' ? await frontendBaseline(config, baseRelease, execute) : undefined;
+  if (preview) return { preview: true, components, commit: config.expected.commit,
+    build: components === 'frontend' ? ['frontend', 'server-public-assets'] : ['frontend', 'backend', 'release'],
+    deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance',
+    ...(frontendUpdate ? { frontendUpdate } : {}) };
   const catalog = await json(join(config.source, 'integrations/metacubexd/components.json'));
   const tooling = await json(join(config.source, 'tooling/package.json'));
   const installedPnpm = await json(join(config.toolingDependencies, 'pnpm/package.json'));
@@ -195,7 +241,7 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
       if (!(await lstat(existing)).isDirectory()) fail('BUILD_DEPENDENCY_MISSING');
       await dependencyLink(join(upstream, path), existing);
     }
-    await command('npm', ['run', 'typecheck']);
+    if (components === 'all') await command('npm', ['run', 'typecheck']);
     await pnpm(['--filter', '@metacubexd/ui', 'generate']);
     await node(['scripts/typecheck-metacubexd-ui.mjs', '--directory', upstream]);
     await pnpm(['--filter', '@metacubexd/server', 'build']);
@@ -203,7 +249,8 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
       || hash(await regular(join(config.upstreamDependencies, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_UPSTREAM_LOCK_CHANGED');
     await verifyBuildInputs(config, execute, workName);
     const receipt = JSON.parse(await node([join(config.snapshot, 'scripts/stage-explicit-release.mjs'), '--source-dir', config.snapshot,
-      '--server-dir', join(upstream, 'apps/server/.output'), '--runtime-dependencies', config.runtimeDependencies, '--core', config.core, '--output', output], { capture: true }));
+      '--server-dir', join(upstream, 'apps/server/.output'), '--runtime-dependencies', config.runtimeDependencies, '--core', config.core, '--output', output,
+      ...(frontendUpdate ? ['--frontend-update', JSON.stringify(frontendUpdate)] : [])], { capture: true }));
     const result = await verifyBuiltRelease(output, receipt, config.expected.commit);
     await verifyBuildInputs(config, execute, workName);
     if (deploy) {
@@ -217,7 +264,10 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
 export async function buildReleaseMain(deploy = false) {
   let lock;
   try {
-    const args = process.argv.slice(2);
+    if (process.argv.slice(2).includes('--help')) {
+      console.log('已准备工作区：node scripts/build-release.mjs --config ABSOLUTE_JSON [--components all|frontend] [--base-release ABSOLUTE_RELEASE] [--preview]\n一步构建部署：node scripts/build-deploy.mjs，参数相同。普通克隆仓库使用 bash scripts/build-release.sh。'); return;
+    }
+    const { rest: args, ...selection } = readBuildSelection(process.argv.slice(2));
     const internal = args.length === 4 && args[2] === '--internal-lock' && args[3] === process.env.COCOPROXY_BUILD_LOCK_TOKEN;
     if ((!internal && args.length !== 2) || args[0] !== '--config' || !isAbsolute(args[1] ?? '') || process.platform !== 'linux') fail('BUILD_ARGUMENTS_INVALID');
     await canonical(args[1], false);
@@ -231,13 +281,14 @@ export async function buildReleaseMain(deploy = false) {
       // invocation must acquire the real workspace lock before doing any work.
       const acquire = spawn('flock', ['--nonblock', '3'], { stdio: ['ignore', 2, 2, 3], windowsHide: true });
       await new Promise((resolveLock, reject) => { acquire.on('error', reject); acquire.on('close', code => code === 0 ? resolveLock() : reject(Object.assign(new Error('BUILD_LOCK_BUSY'), { code: 'BUILD_LOCK_BUSY' }))); });
-      process.stdout.write(`${JSON.stringify(await runBuildRelease(config, { deploy }))}\n`);
+      process.stdout.write(`${JSON.stringify(await runBuildRelease(config, { deploy, ...selection }))}\n`);
     } else {
       lock = await open(lockPath, constants.O_CREAT | constants.O_RDWR | (constants.O_NOFOLLOW ?? 0), 0o600);
       if (!(await lock.stat()).isFile()) fail('BUILD_LOCK_INVALID');
       const token = randomUUID();
       const child = spawn(process.execPath, [fileURLToPath(new URL(deploy ? './build-deploy.mjs' : './build-release.mjs', import.meta.url)),
-        '--config', args[1], '--internal-lock', token], { stdio: ['inherit', 'inherit', 'inherit', lock.fd],
+        '--config', args[1], '--internal-lock', token, '--components', selection.components,
+        ...(selection.baseRelease ? ['--base-release', selection.baseRelease] : []), ...(selection.preview ? ['--preview'] : [])], { stdio: ['inherit', 'inherit', 'inherit', lock.fd],
         env: { ...process.env, COCOPROXY_BUILD_LOCK_TOKEN: token }, windowsHide: true });
       await new Promise((resolveChild, reject) => { child.on('error', reject); child.on('close', code => code === 0 ? resolveChild() : reject(Object.assign(new Error('BUILD_LOCK_OR_CHILD_FAILED'), { code: 'BUILD_LOCK_OR_CHILD_FAILED' }))); });
     }

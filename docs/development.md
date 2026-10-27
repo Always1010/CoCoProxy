@@ -17,6 +17,8 @@ npm run cli -- help
 
 ### Ubuntu 纯克隆仓库的本地构建
 
+日常只需记住两个公共入口：`bash scripts/build-release.sh` 构建，`sudo bash scripts/deploy-local.sh` 部署本次成功结果。Shell 文件只转发参数；`build-local.mjs` 准备普通 Git 仓库输入，`build-release.mjs` 统一执行构建与装配。部署传输交给 `deploy-ssh.mjs`（也支持本机），目标端维护决策集中在 `remote-deploy.py`；不要直接调用内部安装器替代协调器。
+
 在 ARM64 或 x86-64 Ubuntu 上克隆仓库后，不需要其他机器的私有目录、源码同步回执或已有构建配置。先准备 Node.js ≥22.18、npm、Git、Python 3、tar、flock；首次下载还需要 curl。构建以普通用户执行，首次明确允许准备项目依赖及固定构建输入：
 
 ```sh
@@ -34,12 +36,33 @@ sudo bash scripts/deploy-local.sh
 
 ### 已准备工作区的一步构建
 
+这是集成工具入口，普通克隆仓库用户继续使用上面的两条命令。两类输入最终使用相同构建实现，不维护独立的组件策略。
+
 Linux 开发工作区可使用通用入口，前提是同步流程已经核验源码，并准备现成的 Node、npm、Git、tar、flock、运行依赖、tooling、上游限定依赖、固定上游源码包和已审阅核心。入口只接受一份绝对路径的私有配置：
 
 ```sh
 node scripts/build-release.mjs --config /absolute/private/build-config.json
 node scripts/build-deploy.mjs --config /absolute/private/build-config.json
 ```
+
+### 按组件构建
+
+默认 `--components all` 保留完整构建和维护部署。当前只额外支持 `frontend`，暂不支持 `backend`、`core` 或组合值；无效范围直接拒绝，不自动扩大为全量。
+
+```sh
+# 普通克隆仓库：构建前端更新，再部署成功记录中的同一范围。
+bash scripts/build-release.sh --components frontend
+sudo bash scripts/deploy-local.sh
+
+# 已准备工作区：一步构建部署。
+node scripts/build-deploy.mjs --config /absolute/private/build-config.json --components frontend
+```
+
+基线默认从当前管理服务的 ExecStart 获取，也可用 `--base-release /absolute/installed-release` 显式指定。基线必须有本版本生成的后端输入摘要且完整载荷校验通过；旧发行包缺少该信息时，先全量构建部署一次。前端以外的源码、依赖、构建输入变化会拒绝局部更新，文档和测试变化不计入后端输入。
+
+前端模式重新生成 UI 并完成承载新资源所需的 Server 打包，省略根项目类型检查；它不是完全跳过 Server 打包。构建清单绑定基线 manifest 摘要，部署时重新核验；不得选择另一个基线强行安装。默认全量构建和 GitHub 正式发行始终从当前提交构建，不依赖已安装版本。
+
+构建入口附加 `--preview` 只验证输入并输出计划，不编译、不装配、不部署、不覆盖成功记录；会使用已有工作区锁。普通克隆仓库预览要求已有构建工作区，不可与 `--prepare` 同用。部署 `--preview` 的暂存和锁语义见[部署说明](deployment.md)。
 
 配置包含绝对、规范且不经过符号链接的 `workspace`、`source`、`mirror`、`snapshot`、`runtimeDependencies`、`toolingDependencies`、`upstreamArchive`、`upstreamDependencies`、`core`、`releases`。其中 `source` 是可构建源码，`mirror` 是纯源码镜像，`snapshot` 是同次同步生成的干净 Git 根目录，`releases` 是发行输出父目录；这四者须位于 `workspace` 内且彼此及依赖输入没有包含关系。`runtimeDependencies` 和 `toolingDependencies` 分别指向已准备好的 `node_modules` 根目录；`upstreamDependencies` 指向保留 `pnpm-lock.yaml` 及上游各包 `node_modules` 的依赖工作区。pnpm 依赖内部链接可以保留，源码、快照、归档和核心路径不能通过链接重定向。
 

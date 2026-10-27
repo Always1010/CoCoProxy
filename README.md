@@ -6,6 +6,8 @@ CoCoProxy 是部署在 Linux 外接设备上的局域网代理方案，使用 Mi
 
 ## 从哪里开始
 
+源码日常操作使用 `bash scripts/build-release.sh` 构建、`sudo bash scripts/deploy-local.sh` 部署。默认全量；只改界面时可构建 `--components frontend`，部署自动遵循产物范围。首次启用及兼容限制见[按组件构建](docs/development.md#按组件构建)。
+
 | 需要做什么 | 阅读入口 |
 | --- | --- |
 | 第一次搭建，从接线到日常使用 | [从零部署与使用总指南](docs/getting-started.md) |

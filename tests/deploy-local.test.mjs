@@ -42,6 +42,16 @@ test('missing/failed build aborts before host installation detection and never f
   assert.deepEqual(events, ['lock', 'unlock']);
 });
 
+test('frontend build scope bypasses router wizard and cannot enter first installation', async () => {
+  const { events, dependencies } = deploymentHarness();
+  dependencies.readBuild = async () => ({ ...release, components: 'frontend' });
+  dependencies.adapterMissing = async () => assert.fail('frontend must not require router maintenance');
+  await deployFromLocalBuild([], dependencies);
+  assert.ok(events.some(event => event.deploy));
+  dependencies.detect = async () => 'first';
+  await assert.rejects(deployFromLocalBuild([], dependencies), { code: 'LOCAL_FRONTEND_EXISTING_INSTALL_REQUIRED' });
+});
+
 test('fresh install receives private file arguments; changed build during interactive setup prevents deployment', async () => {
   const { events, dependencies } = deploymentHarness(); let reads = 0;
   dependencies.detect = async () => 'first';
@@ -167,7 +177,7 @@ test('fresh clone deployment entry loads without source node_modules or setup de
   const directory = await mkdtemp(join(tmpdir(), 'cocoproxy-local-clean-clone-'));
   try {
     for (const path of ['scripts/deploy-local.mjs', 'scripts/local-install.mjs', 'scripts/deploy-ssh.mjs',
-      'scripts/local-release-state.mjs', 'scripts/build-release.mjs', 'packages/deployment/service-account.ts', 'packages/deployment/path-evidence.ts']) {
+      'scripts/local-release-state.mjs', 'scripts/build-release.mjs', 'packages/deployment/update-scope.mjs', 'packages/deployment/service-account.ts', 'packages/deployment/path-evidence.ts']) {
       const target = join(directory, path);
       await mkdir(dirname(target), { recursive: true });
       await cp(resolve(path), target);

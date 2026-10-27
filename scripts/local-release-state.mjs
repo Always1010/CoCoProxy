@@ -141,6 +141,6 @@ export async function readLocalBuild({ source, workspace }) {
   if (receipt.schemaVersion !== 1 || receipt.status !== 'ready' || receipt.source !== paths.source) localFail('LOCAL_BUILD_NOT_READY', '本轮构建尚未成功，不能部署以前的包。');
   if (await cleanLocalCommit(paths.source) !== receipt.commit) localFail('LOCAL_BUILD_COMMIT_CHANGED', '源码提交已改变，请重新构建。');
   if (!within(join(paths.workspace, 'releases'), receipt.output)) localFail('LOCAL_RELEASE_SCOPE');
-  await verifyBuiltRelease(receipt.output, receipt, receipt.commit);
-  return receipt;
+  const verified = await verifyBuiltRelease(receipt.output, receipt, receipt.commit);
+  return { ...receipt, components: verified.components };
 }

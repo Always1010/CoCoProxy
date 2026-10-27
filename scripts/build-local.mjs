@@ -4,7 +4,7 @@ import { chmod, copyFile, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
-import { runBuildRelease } from './build-release.mjs';
+import { runBuildRelease, readBuildSelection, frontendBaseline } from './build-release.mjs';
 import { validateReleaseMetadata, validateReleaseTooling } from './release-metadata.mjs';
 import { canonicalLocalPath, cleanLocalCommit, localFail, readLocalJSON, resolveLocalPaths, runLocalCommand,
   within, withLocalBuildLock, writeLocalJSON } from './local-release-state.mjs';
@@ -148,9 +148,14 @@ async function prepareSnapshot(paths, commit, run, execute) {
   return { snapshot, mirror, source, expected: { commit, files, dirs: [...dirs] } };
 }
 
-export async function runLocalBuild({ source, workspace, prepare = false, execute = runLocalCommand, build = runBuildRelease, inputs = prepareLocalInputs, prerequisites = async () => {} }) {
-  const paths = await resolveLocalPaths(source, workspace);
+export async function runLocalBuild({ source, workspace, prepare = false, components = 'all', baseRelease, preview = false, execute = runLocalCommand, build = runBuildRelease, inputs = prepareLocalInputs, prerequisites = async () => {} }) {
+  const paths = await resolveLocalPaths(source, workspace, { create: !preview });
   return withLocalBuildLock(paths, async ({ signal, assertHeld }) => {
+    if (preview) {
+      const commit = await cleanLocalCommit(paths.source, execute);
+      const frontendUpdate = components === 'frontend' ? await frontendBaseline({ snapshot: paths.source }, baseRelease, execute) : undefined;
+      return { preview: true, components, commit, deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance', ...(frontendUpdate ? { frontendUpdate } : {}) };
+    }
     await writeLocalJSON(paths.receipt, { schemaVersion: 1, status: 'building', source: paths.source });
     let run;
     const command = (name, args, options = {}) => execute(name, args, { cwd: paths.source, ...options, signal });
@@ -168,7 +173,7 @@ export async function runLocalBuild({ source, workspace, prepare = false, execut
         upstreamArchive: dependencies.upstreamArchive, upstreamDependencies: dependencies.upstreamDependencies, core: dependencies.core,
         releases: join(paths.workspace, 'releases') };
       await mkdir(config.releases, { recursive: true, mode: 0o700 }); await canonicalLocalPath(config.releases);
-      const result = await build(config, { execute: command });
+      const result = await build(config, { execute: command, components, baseRelease });
       if (await cleanLocalCommit(paths.source, command) !== commit) localFail('LOCAL_SOURCE_CHANGED');
       assertHeld();
       const receipt = { ...result, schemaVersion: 1, status: 'ready', source: paths.source, platform: dependencies.platform };
@@ -188,8 +193,10 @@ export async function runLocalBuild({ source, workspace, prepare = false, execut
 
 export async function localBuildMain(args) {
   if (args.includes('--help')) {
-    console.log('bash scripts/build-release.sh [--prepare] [--workspace /absolute/build-directory]\n首次 --prepare 允许按锁下载构建输入和安装项目依赖；不安装系统软件。'); return;
+    console.log('bash scripts/build-release.sh [--prepare] [--workspace /absolute/build-directory] [--components all|frontend] [--base-release ABSOLUTE_RELEASE] [--preview]\n默认全量；frontend 要求可核验且后端输入一致的基线。预览不构建、不覆盖成功记录，需要已有构建工作区。首次 --prepare 允许按锁下载构建输入和安装项目依赖；不安装系统软件。'); return;
   }
+  const { rest, ...selection } = readBuildSelection(args);
+  args = rest;
   let prepare = false; let workspace;
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--prepare' && !prepare) prepare = true;
@@ -204,9 +211,10 @@ export async function localBuildMain(args) {
   const prerequisites = async execute => {
     for (const tool of ['git', 'npm', 'tar', 'python3', 'flock', ...(prepare ? ['curl'] : [])]) await execute(tool, ['--version'], { capture: true });
   };
-  const result = await runLocalBuild({ source, workspace, prepare, prerequisites });
+  if (prepare && selection.preview) localFail('LOCAL_ARGUMENTS_INVALID');
+  const result = await runLocalBuild({ source, workspace, prepare, prerequisites, ...selection });
   console.log(JSON.stringify(result));
-  console.error('构建与安装包校验成功。部署：sudo bash scripts/deploy-local.sh' + (workspace ? ` --workspace ${JSON.stringify(workspace)}` : ''));
+  if (!selection.preview) console.error('构建与安装包校验成功。部署：sudo bash scripts/deploy-local.sh' + (workspace ? ` --workspace ${JSON.stringify(workspace)}` : ''));
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   localBuildMain(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });
