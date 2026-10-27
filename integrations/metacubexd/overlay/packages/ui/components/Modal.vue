@@ -6,12 +6,14 @@ interface Props {
   size?: 'md' | 'xl'
   fixedHeight?: boolean
   beforeClose?: () => boolean
+  closeDisabled?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   size: 'md',
   fixedHeight: true,
   beforeClose: undefined,
+  closeDisabled: false,
 })
 
 const emit = defineEmits<{
@@ -56,7 +58,7 @@ function open() {
 }
 
 function close(force = false) {
-  if (!force && props.beforeClose && !props.beforeClose()) return
+  if (!force && (props.closeDisabled || (props.beforeClose && !props.beforeClose()))) return
   isOpen.value = false
   cancelCloseTimer()
   // Wait for the exit transition to finish before unmounting the dialog.
@@ -125,6 +127,7 @@ defineExpose({ open, close })
           class="modal-close flex h-8 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-lg bg-transparent px-2 text-sm"
           title="关闭弹窗"
           aria-label="关闭弹窗"
+          :disabled="closeDisabled"
           :style="{
             border: '1px solid var(--modal-border)',
             color:

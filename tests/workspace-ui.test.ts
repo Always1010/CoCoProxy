@@ -5,6 +5,12 @@ import test from 'node:test';
 import ts from '../tooling/node_modules/typescript/lib/typescript.js';
 import { localGroupNameError } from '../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts';
 
+const apiExports: Record<string, any> = {};
+new Script(ts.transpileModule(await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useCoCoProxy.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText).runInNewContext({ exports: apiExports, Error });
+const { CoCoProxyError, cocoproxyErrorMessage } = apiExports;
+
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useWorkspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 
@@ -215,22 +221,38 @@ for (const mode of ['local', 'subscription', 'legacy'] as const) {
 test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
-    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode };';
+    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const original = { preferred: ['second', 'first'], fallback: ['backup'], returnToPreferred: false };
   const settings = { local: { selections: {}, automatic: { Stream: structuredClone(original) } } };
   const view = { value: { nodes: ['first', 'second', 'backup', 'unused'], groups: [{ name: 'Stream', options: ['first', 'backup', 'second', 'unused'], activeSelected: 'backup' }] } };
   const exports: Record<string, any> = {};
+  let saves = 0, refreshFails = false, applyBeforeFailure = false;
+  let failure: Error | undefined, deferred: Promise<void> | undefined;
+  const proxyError = { value: '' };
+  const navigations: unknown[] = [], closes: boolean[] = [];
   new Script(code, { filename: 'AutomaticSelectionSettings.js' }).runInNewContext({
-    exports, defineProps: () => ({ groupName: 'Stream', selectable: true }), defineExpose: () => {},
+    exports, CoCoProxyError, cocoproxyErrorMessage, defineProps: () => ({ groupName: 'Stream', selectable: true }), defineExpose: () => {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: () => {}, onUnmounted: () => {}, document: { hidden: true }, setTimeout: () => 0, clearTimeout: () => {},
-    useProxyRefresh: () => ({ refresh: async () => {} }),
+    navigateTo: (target: unknown) => navigations.push(target),
+    useProxyRefresh: () => ({ error: proxyError, refresh: async () => { proxyError.value = refreshFails ? '合成刷新失败' : ''; } }),
     useWorkspace: () => ({ view, overrides: { value: settings.local }, busy: { value: false }, error: { value: '' },
-      run: async (fn: () => Promise<void>) => fn(), save: async (edit: (value: unknown) => void) => edit(settings),
+      run: async (fn: () => Promise<void>) => fn(), load: async () => {},
+      save: async (edit: (value: unknown) => void) => {
+        saves++;
+        if (deferred) await deferred;
+        if (applyBeforeFailure) edit(settings);
+        if (failure) throw failure;
+        edit(settings);
+      },
       editOverrides: () => settings.local }),
   });
   exports.open();
+  assert.equal(exports.beforeClose(), true);
+  assert.equal(exports.saved.value, false);
+  await exports.persist();
+  assert.equal(saves, 0); // Opening alone never writes or claims success.
   assert.equal(exports.enabled.value, true); // Existing policy without enabled stays active.
   exports.enabled.value = false;
   await exports.persist();
@@ -293,6 +315,118 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   assert.equal(exports.nodeDisabled(fullPool[0]), false);
   exports.toggleNode(fullPool[0]);
   assert.equal(exports.nodeDisabled('unused'), false);
+
+  exports.open();
+  exports.returnToPreferred.value = !exports.returnToPreferred.value;
+  let finish!: () => void;
+  deferred = new Promise(resolve => { finish = resolve; });
+  const pending = exports.persist();
+  const before = saves;
+  assert.equal(exports.saving.value, true);
+  assert.equal(exports.beforeClose(), false);
+  exports.selectTab('sites');
+  assert.equal(exports.tab.value, 'selection');
+  await exports.persist();
+  assert.equal(saves, before); // A second click cannot submit while saving.
+  finish(); await pending; deferred = undefined;
+  assert.equal(exports.saved.value, true);
+  assert.equal(exports.changed.value, false);
+  assert.equal(exports.beforeClose(), true);
+
+  exports.returnToPreferred.value = !exports.returnToPreferred.value;
+  failure = new CoCoProxyError('AUTO_SETTINGS_INVALID');
+  await exports.persist();
+  assert.equal(exports.changed.value, true);
+  assert.match(exports.saveError.value, /设置无效/);
+  assert.equal(exports.needsRead.value, false);
+  failure = new CoCoProxyError('NETWORK_UNKNOWN');
+  applyBeforeFailure = true;
+  await exports.persist();
+  assert.equal(exports.needsRead.value, true);
+  const interrupted = saves;
+  await exports.persist();
+  assert.equal(saves, interrupted);
+  await exports.reread(); // The lost response is reconciled without another write.
+  assert.equal(exports.changed.value, false);
+  assert.equal(exports.needsRead.value, false);
+  assert.equal(exports.saveError.value, '');
+
+  failure = undefined; applyBeforeFailure = false; refreshFails = true;
+  exports.returnToPreferred.value = !exports.returnToPreferred.value;
+  await exports.persist();
+  assert.equal(exports.changed.value, false);
+  assert.equal(exports.saveError.value, '');
+  assert.match(exports.refreshWarning.value, /已生效，列表刷新失败/);
+
+  exports.dialog.value = { close: (force: boolean) => closes.push(force) };
+  exports.rulesEditor.value = { dirty: true, saving: false };
+  exports.sitesEditor.value = { dirty: true, saving: false };
+  assert.equal(exports.beforeClose(), false);
+  assert.equal(exports.confirmClose.value, true);
+  exports.continueEditing();
+  assert.equal(exports.rulesEditor.value.dirty, true);
+  const target = { path: '/rules', query: { group: 'Stream' } };
+  exports.requestNavigation(target);
+  assert.equal(navigations.length, 0);
+  exports.discardAndClose();
+  assert.deepEqual(navigations, [target]);
+  assert.deepEqual(closes, [true]);
+});
+
+test('site settings retain failed drafts and reconcile an interrupted save before allowing another write', async () => {
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/SiteTargetSettings.vue', import.meta.url), 'utf8');
+  const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
+    '\nexport { refresh, persist, selected, dirty, selectionChanged, formPending, name, url, feedback, needsRead, error };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const exports: Record<string, any> = {};
+  let current = ['google'], writes = 0, failure: Error | undefined, applyBeforeFailure = false;
+  const sites = {
+    data: { value: { targets: [] } }, pending: { value: false },
+    load: async () => {}, selectedIds: () => [...current],
+    save: async (change: { selected: string[] }) => {
+      writes++;
+      if (applyBeforeFailure) current = [...change.selected];
+      if (failure) throw failure;
+      current = [...change.selected];
+    },
+  };
+  new Script(code).runInNewContext({
+    exports, CoCoProxyError, cocoproxyErrorMessage,
+    defineProps: () => ({ groupName: 'Work', scrollList: false }), withDefaults: (value: unknown) => value,
+    defineExpose() {}, watch() {}, onMounted() {}, onUnmounted() {},
+    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    useSiteSettings: () => sites, useWorkspace: () => ({ busy: { value: false } }),
+  });
+  await exports.refresh(false);
+  assert.equal(exports.dirty.value, false);
+  assert.equal(exports.feedback.value, '');
+  await exports.persist();
+  assert.equal(writes, 0);
+  exports.selected.value = ['example'];
+  exports.name.value = 'Unstaged Site';
+  assert.equal(exports.formPending.value, true);
+  await exports.persist();
+  assert.equal(writes, 0);
+  exports.name.value = '';
+  failure = new CoCoProxyError('SITE_SETTINGS_INVALID');
+  await exports.persist();
+  assert.equal(exports.dirty.value, true);
+  assert.match(exports.error.value, /设置无效/);
+  failure = new CoCoProxyError('NETWORK_UNKNOWN'); applyBeforeFailure = true;
+  await exports.persist();
+  assert.equal(exports.needsRead.value, true);
+  const interrupted = writes;
+  await exports.persist();
+  assert.equal(writes, interrupted);
+  await exports.refresh();
+  assert.equal(writes, interrupted);
+  assert.equal(exports.needsRead.value, false);
+  assert.equal(exports.dirty.value, false);
+  assert.equal(exports.feedback.value, '检测目标已保存');
+  exports.selected.value = ['google'];
+  await exports.refresh();
+  assert.deepEqual(Array.from(exports.selected.value), ['google']); // Rereading never discards a different local draft.
+  assert.equal(exports.dirty.value, true);
 });
 
 test('group manager creates a shared exit from Proxy and blocks deletion while services use it', async () => {

@@ -6,6 +6,12 @@ import test from 'node:test';
 import ts from '../tooling/node_modules/typescript/lib/typescript.js';
 import * as rules from '../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts';
 
+const apiExports: Record<string, any> = {};
+new Script(ts.transpileModule(await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useCoCoProxy.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText).runInNewContext({ exports: apiExports, Error });
+const { CoCoProxyError } = apiExports;
+
 test('group rule utility passes strict indexed-access type checks', () => {
   const program = ts.createProgram({
     rootNames: [fileURLToPath(new URL('../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts', import.meta.url))],
@@ -18,7 +24,7 @@ test('group rule utility passes strict indexed-access type checks', () => {
 async function editor(initial: string[], groupName = 'Work') {
   const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupMatchingRules.vue', import.meta.url), 'utf8');
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { entries, original, type, payload, editing, error, dirty, ownRules, templateRules, dependents, effectiveRulesLink, customRulesLink, add, edit, remove, persist };';
+    '\nexport { entries, original, type, payload, editing, error, dirty, saved, saving, ownRules, templateRules, dependents, effectiveRulesLink, customRulesLink, add, edit, remove, persist };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const settings = { local: { rules: [...initial], selections: { Work: 'Proxy', Stream: 'node-a' } as Record<string, string> } };
   const view = { value: { groups: [{ name: 'Work', role: 'service', selected: 'Proxy' }], rules: [] as { value: string; source: string }[] } };
@@ -26,9 +32,10 @@ async function editor(initial: string[], groupName = 'Work') {
   const exports: Record<string, any> = {};
   let saves = 0, failApply = false;
   new Script(code, { filename: 'GroupMatchingRules.js' }).runInNewContext({
-    ...rules, exports, Error, defineProps: () => ({ groupName }), defineEmits: () => () => {},
+    ...rules, exports, Error, CoCoProxyError, defineProps: () => ({ groupName }), defineEmits: () => () => {}, defineExpose() {}, watch() {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useWorkspace: () => ({ view, workspace, overrides: { value: settings.local }, busy: { value: false },
+      run: async (action: () => Promise<void>) => action(),
       save: async (edit: (value: typeof settings) => void) => {
         saves++;
         const draft = structuredClone(settings);
@@ -156,6 +163,7 @@ test('group rule edits preserve global positions and unrelated groups, then appe
   assert.deepEqual(ui.settings.local.rules, [initial[0], 'DOMAIN,edited.example,Work', initial[2], 'DOMAIN-SUFFIX,new.example,Work']);
   assert.deepEqual(ui.settings.local.selections, { Work: 'Proxy', Stream: 'node-a' });
   assert.equal(ui.dirty.value, false);
+  assert.match(ui.saved.value, /已保存并生效/);
   const reopened = await editor(ui.settings.local.rules);
   assert.deepEqual(Array.from(reopened.ownRules.value, (entry: any) => entry.value), ['DOMAIN,edited.example,Work', 'DOMAIN-SUFFIX,new.example,Work']);
   ui.payload.value = 'discarded.example';
@@ -177,6 +185,7 @@ test('group rules block stale drafts, keep failed drafts and require staging the
   failed.payload.value = 'new.example';
   failed.add();
   failed.payload.value = 'unstaged.example';
+  assert.equal(failed.dirty.value, true);
   await failed.persist();
   assert.match(failed.error.value, /添加到列表/);
   assert.equal(failed.saves(), 0);
@@ -187,6 +196,11 @@ test('group rules block stale drafts, keep failed drafts and require staging the
   assert.equal(failed.dirty.value, true);
   assert.deepEqual(Array.from(failed.entries.value), ['DOMAIN-SUFFIX,new.example,Work']);
   assert.deepEqual(failed.settings.local.rules, []);
+  const unstaged = await editor([]);
+  unstaged.payload.value = 'draft.example';
+  assert.equal(unstaged.dirty.value, true); // Closing also protects text not yet added to the list.
+  unstaged.payload.value = '';
+  assert.equal(unstaged.dirty.value, false);
 });
 
 test('group domain form rejects URLs, malformed expressions and duplicate rules', async () => {
