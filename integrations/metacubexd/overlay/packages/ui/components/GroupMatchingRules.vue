@@ -17,7 +17,9 @@ const shared = computed(() => view.value?.groups.find(group => group.name === pr
 const editable = computed(() => workspace.value?.mode === 'local' && !shared.value)
 const ownRules = computed(() => entries.value.map((value, index) => ({ value, index })).filter(rule => ruleTarget(rule.value) === props.groupName))
 const templateRules = computed(() => view.value?.rules.filter(rule => rule.source === 'template' && ruleTarget(rule.value) === props.groupName) ?? [])
-const dependents = computed(() => Object.entries(overrides.value.selections).filter(([name, target]) => name !== props.groupName && target === props.groupName).map(([name]) => name))
+const dependents = computed(() => view.value?.groups
+  .filter(group => group.role === 'service' && group.name !== props.groupName && group.selected === props.groupName)
+  .map(group => group.name) ?? [])
 const allRulesLink = computed(() => ({ path: '/rules', query: { group: props.groupName, tab: 'custom' } }))
 
 function resetForm() { editing.value = null; type.value = 'DOMAIN-SUFFIX'; payload.value = ''; error.value = '' }
@@ -63,7 +65,11 @@ async function persist() {
       <p v-if="workspace?.runMode !== 'rule'" class="rounded-lg bg-warning/10 p-3 text-sm">当前为{{ workspace?.runMode === 'global' ? '全局' : '直连' }}模式，域名分流暂不参与匹配；保存后切换到规则模式使用。</p>
       <template v-if="shared">
         <p class="text-sm">本组是共享出口，供普通策略组共同引用；请在普通组中配置域名规则。</p>
-        <p class="break-all text-sm">直接跟随本组：{{ dependents.length ? dependents.join('、') : '暂无普通组' }}</p>
+        <section class="space-y-2" aria-label="直接跟随本组的策略组">
+          <h3 class="text-sm">直接跟随本组 · {{ dependents.length }} 个</h3>
+          <ul v-if="dependents.length" class="flex flex-wrap gap-2"><li v-for="name in dependents" :key="name" class="max-w-full break-all rounded-lg bg-base-200 px-3 py-2 text-sm">{{ name }}</li></ul>
+          <p v-else class="text-sm text-base-content/60">暂无普通组直接跟随本组。</p>
+        </section>
       </template>
       <template v-else-if="editable">
         <p class="text-xs leading-relaxed text-base-content/65">自定义规则先于内置规则匹配；多条自定义规则同时匹配时，以规则页中的顺序为准。新规则追加到自定义规则末尾。</p>
