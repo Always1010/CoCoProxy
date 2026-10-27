@@ -26,6 +26,14 @@ test('backend updates bind the installed base and preserve all UI files and the 
   assert.throws(() => assertComponentReuse(previous, { ...next, coreSHA: digest('changed core') }, digest('base')), code('INSTALL_REUSED_PAYLOAD_CHANGED'));
 });
 
+test('core updates permit a new reviewed binary only with unchanged complete server output', () => {
+  const files = ['server/.output/public/index.html', 'server/.output/server/index.mjs'].map(path => ({ path, size: 2, mode: '0644', sha256: digest(path) }));
+  const previous = { files, coreSHA: digest('core'), serverInputSha256: digest('inputs') };
+  const next = { ...previous, coreSHA: digest('new core'), componentUpdate: { schemaVersion: 1 as const, components: 'core' as const, baseManifestSha256: digest('base'), reusedInputSha256: digest('inputs') } };
+  assert.doesNotThrow(() => assertComponentReuse(previous, next, digest('base')));
+  assert.throws(() => assertComponentReuse(previous, { ...next, files: files.map(file => ({ ...file, sha256: digest('changed server') })) }, digest('base')), code('INSTALL_REUSED_PAYLOAD_CHANGED'));
+});
+
 test('frontend updates allow only the manager unit to change while preserving runtime paths and owned settings', () => {
   const previous = ['/etc/systemd/system/cocoproxy-management.service', '/etc/systemd/system/cocoproxy-mihomo.service', '/etc/sample/runtime.json']
     .map(path => ({ path, mode: '0644', owner: 'root' as const, sensitive: false, sha256: digest(path) }));

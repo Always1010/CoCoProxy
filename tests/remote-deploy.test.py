@@ -178,10 +178,10 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
             self.assertFalse(any(event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable'] for event in events))
 
-    def test_backend_update_uses_full_maintenance_and_rejects_a_stale_base(self):
-        for base in ['a', 'c']:
-            with self.subTest(base=base):
-                temporary, stack, private, before, events, router, args = self.scenario(component='backend', component_base=base)
+    def test_backend_and_core_updates_use_full_maintenance_and_reject_a_stale_base(self):
+        for component, base in [('backend', 'a'), ('backend', 'c'), ('core', 'a'), ('core', 'c')]:
+            with self.subTest(component=component, base=base):
+                temporary, stack, private, before, events, router, args = self.scenario(component=component, component_base=base)
                 with temporary, stack:
                     if base == 'c':
                         with self.assertRaisesRegex(RuntimeError, 'REMOTE_COMPONENT_BASE_CHANGED'):
@@ -191,7 +191,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                         deploy.main_locked(args)
                         self.assertTrue(any('runtime-maintenance-pause' in event for event in events))
                         self.assertTrue(router['enabled'])
-                        self.assertEqual(json.loads((private / 'remote-last.json').read_text())['components'], 'backend')
+                        self.assertEqual(json.loads((private / 'remote-last.json').read_text())['components'], component)
 
     def test_update_preserves_identity_and_restores_only_after_core_ready(self):
         temporary, stack, private, before, events, router, args = self.scenario()

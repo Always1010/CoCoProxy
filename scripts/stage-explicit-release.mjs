@@ -129,7 +129,6 @@ export async function stageExplicitRelease(options) {
     const frontendUpdate = options.frontendUpdate && validateFrontendUpdate(options.frontendUpdate);
     const componentUpdate = options.componentUpdate && validateComponentUpdate(options.componentUpdate);
     if (frontendUpdate && componentUpdate) fail('BUILD_COMPONENT_BASE_INVALID');
-    if (componentUpdate && componentUpdate.reusedInputSha256 !== frontendSHA) fail('BUILD_REUSED_INPUT_CHANGED');
     if (frontendUpdate && frontendUpdate.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
     const blob = async path => {
       const entry = entries.get(path);
@@ -149,6 +148,8 @@ export async function stageExplicitRelease(options) {
     for (const path of ['apps/setup/main.ts', 'scripts/cocoproxy-setup.sh']) if (!entries.has(path)) fail('SOURCE_REQUIRED_FILE_MISSING');
     const componentsBytes = await blob('integrations/metacubexd/components.json');
     const catalog = json(componentsBytes);
+    const serverSHA = reusedInputSha256(tree, 'core', catalog.management);
+    if (componentUpdate && componentUpdate.reusedInputSha256 !== (componentUpdate.components === 'core' ? serverSHA : frontendSHA)) fail('BUILD_REUSED_INPUT_CHANGED');
     try { validateReleaseMetadata(catalog, review, json(await blob('integrations/metacubexd/source-tree.json'))); }
     catch (error) { if (error?.code) fail(error.code); throw error; }
     const coreReview = catalog.mihomo;
@@ -285,7 +286,7 @@ export async function stageExplicitRelease(options) {
     catch (error) { if (error?.code) fail(error.code); throw error; }
     const manifest = {
       schemaVersion: 1, scope: 'local-explicit-proxy-payload', commit,
-      buildInputs: { backendInputSha256: backendSHA, frontendInputSha256: frontendSHA },
+      buildInputs: { backendInputSha256: backendSHA, frontendInputSha256: frontendSHA, serverInputSha256: serverSHA },
       ...(frontendUpdate ? { frontendUpdate } : {}),
       ...(componentUpdate ? { componentUpdate } : {}),
       compatibility: DEPLOYMENT_STATE_COMPATIBILITY,

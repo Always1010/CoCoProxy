@@ -33,7 +33,7 @@ export function buildFailureMessage(error) {
     BUILD_FRONTEND_BASE_UPGRADE_REQUIRED: '旧安装缺少局部更新基线。请先不带 --components frontend 完成一次全量构建部署。',
     BUILD_FRONTEND_BACKEND_CHANGED: '前端以外的构建输入已变化，不能局部更新；请使用默认全量构建部署。',
     BUILD_FRONTEND_BASE_REQUIRED: '未找到可核验的管理服务基线；核对安装，或使用 --base-release 指定已有发行目录。',
-    BUILD_COMPONENTS_UNSUPPORTED: '当前支持 --components all、frontend 或 backend。',
+    BUILD_COMPONENTS_UNSUPPORTED: '当前支持 --components all、frontend、backend 或 core。',
     BUILD_COMPONENT_BASE_UPGRADE_REQUIRED: '基线缺少组件复用摘要，请先完成一次全量构建部署。',
     BUILD_REUSED_INPUT_CHANGED: '本次未选择的组件输入已变化，请使用全量构建部署。',
   };
@@ -214,9 +214,11 @@ export async function componentBaseline(config, baseRelease, execute, components
     if (manifest.buildInputs.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
     return { baseRelease, frontendUpdate: { schemaVersion: 1, baseManifestSha256, backendInputSha256: backendSHA } };
   }
-  const reusedSHA = reusedInputSha256(entries, components);
-  if (!manifest.buildInputs?.frontendInputSha256) fail('BUILD_COMPONENT_BASE_UPGRADE_REQUIRED');
-  if (manifest.buildInputs.frontendInputSha256 !== reusedSHA) fail('BUILD_REUSED_INPUT_CHANGED');
+  const management = components === 'core' ? (await json(join(config.snapshot, 'integrations/metacubexd/components.json'))).management : undefined;
+  const reusedSHA = reusedInputSha256(entries, components, management);
+  const inputKey = components === 'core' ? 'serverInputSha256' : 'frontendInputSha256';
+  if (!manifest.buildInputs?.[inputKey]) fail('BUILD_COMPONENT_BASE_UPGRADE_REQUIRED');
+  if (manifest.buildInputs[inputKey] !== reusedSHA) fail('BUILD_REUSED_INPUT_CHANGED');
   return { baseRelease, componentUpdate: { schemaVersion: 1, components, baseManifestSha256, reusedInputSha256: reusedSHA } };
 }
 
@@ -228,17 +230,17 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
   const baseline = components !== 'all' ? await componentBaseline(config, baseRelease, execute, components) : undefined;
   const { frontendUpdate, componentUpdate } = baseline ?? {};
   if (preview) return { preview: true, components, commit: config.expected.commit,
-    build: components === 'frontend' ? ['frontend', 'server-public-assets'] : components === 'backend' ? ['backend', 'release'] : ['frontend', 'backend', 'release'],
+    build: components === 'frontend' ? ['frontend', 'server-public-assets'] : components === 'backend' ? ['backend', 'release'] : components === 'core' ? ['reviewed-core', 'release'] : ['frontend', 'backend', 'release'],
     deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance',
     ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}) };
   const catalog = await json(join(config.source, 'integrations/metacubexd/components.json'));
   const tooling = await json(join(config.source, 'tooling/package.json'));
   const installedPnpm = await json(join(config.toolingDependencies, 'pnpm/package.json'));
   const management = catalog.management;
-  if (!management || !/^[a-f0-9]{64}$/u.test(management.sourceArchiveSha256) || !/^[a-f0-9]{64}$/u.test(management.lockfileSha256)
+  if (components !== 'core' && (!management || !/^[a-f0-9]{64}$/u.test(management.sourceArchiveSha256) || !/^[a-f0-9]{64}$/u.test(management.lockfileSha256)
     || management.packageManager !== `pnpm@${tooling.dependencies?.pnpm}` || installedPnpm.version !== tooling.dependencies.pnpm
     || hash(await regular(config.upstreamArchive)) !== management.sourceArchiveSha256
-    || hash(await regular(join(config.upstreamDependencies, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_DEPENDENCIES_MISMATCH');
+    || hash(await regular(join(config.upstreamDependencies, 'pnpm-lock.yaml'))) !== management.lockfileSha256)) fail('BUILD_DEPENDENCIES_MISMATCH');
   await dependencyLink(join(config.source, 'node_modules'), config.runtimeDependencies);
   await dependencyLink(join(config.source, 'tooling/node_modules'), config.toolingDependencies);
   const workName = `.build-release-${randomUUID()}`; const work = join(config.source, workName); const upstream = join(work, 'upstream');
@@ -252,27 +254,34 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
     const command = (name, args, options = {}) => execute(name, args, { cwd: config.source, env, ...options });
     const node = (args, options) => command(process.execPath, args, options);
     const pnpm = args => node([join(config.toolingDependencies, 'pnpm/bin/pnpm.cjs'), '--dir', upstream, ...args]);
-    await command('tar', ['-xzf', config.upstreamArchive, '--strip-components=1', '-C', upstream]);
-    await node(['scripts/verify-git-tree.mjs', '--directory', upstream, '--manifest', join(config.source, 'integrations/metacubexd/source-tree.json')]);
-    if (hash(await regular(join(upstream, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_UPSTREAM_LOCK_CHANGED');
-    await node(['scripts/apply-metacubexd-overlay.mjs', '--directory', upstream]);
-    for (const path of ['node_modules', 'packages/ui/node_modules', 'packages/agent/node_modules', 'packages/config-editor/node_modules', 'apps/server/node_modules']) {
-      const existing = join(config.upstreamDependencies, path);
-      if (!(await lstat(existing)).isDirectory()) fail('BUILD_DEPENDENCY_MISSING');
-      await dependencyLink(join(upstream, path), existing);
+    let serverDir;
+    if (components === 'core') {
+      serverDir = join(work, 'server-output');
+      await cp(join(baseline.baseRelease, 'server/.output'), serverDir, { recursive: true });
+    } else {
+      await command('tar', ['-xzf', config.upstreamArchive, '--strip-components=1', '-C', upstream]);
+      await node(['scripts/verify-git-tree.mjs', '--directory', upstream, '--manifest', join(config.source, 'integrations/metacubexd/source-tree.json')]);
+      if (hash(await regular(join(upstream, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_UPSTREAM_LOCK_CHANGED');
+      await node(['scripts/apply-metacubexd-overlay.mjs', '--directory', upstream]);
+      for (const path of ['node_modules', 'packages/ui/node_modules', 'packages/agent/node_modules', 'packages/config-editor/node_modules', 'apps/server/node_modules']) {
+        const existing = join(config.upstreamDependencies, path);
+        if (!(await lstat(existing)).isDirectory()) fail('BUILD_DEPENDENCY_MISSING');
+        await dependencyLink(join(upstream, path), existing);
+      }
+      if (components !== 'frontend') await command('npm', ['run', 'typecheck']);
+      if (components === 'backend') await cp(join(baseline.baseRelease, 'server/.output/public'), env.UI_DIST, { recursive: true });
+      else {
+        await pnpm(['--filter', '@metacubexd/ui', 'generate']);
+        await node(['scripts/typecheck-metacubexd-ui.mjs', '--directory', upstream]);
+      }
+      await pnpm(['--filter', '@metacubexd/server', 'build']);
+      if (hash(await regular(join(upstream, 'pnpm-lock.yaml'))) !== management.lockfileSha256
+        || hash(await regular(join(config.upstreamDependencies, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_UPSTREAM_LOCK_CHANGED');
+      serverDir = join(upstream, 'apps/server/.output');
     }
-    if (components !== 'frontend') await command('npm', ['run', 'typecheck']);
-    if (components === 'backend') await cp(join(baseline.baseRelease, 'server/.output/public'), env.UI_DIST, { recursive: true });
-    else {
-      await pnpm(['--filter', '@metacubexd/ui', 'generate']);
-      await node(['scripts/typecheck-metacubexd-ui.mjs', '--directory', upstream]);
-    }
-    await pnpm(['--filter', '@metacubexd/server', 'build']);
-    if (hash(await regular(join(upstream, 'pnpm-lock.yaml'))) !== management.lockfileSha256
-      || hash(await regular(join(config.upstreamDependencies, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_UPSTREAM_LOCK_CHANGED');
     await verifyBuildInputs(config, execute, workName);
     const receipt = JSON.parse(await node([join(config.snapshot, 'scripts/stage-explicit-release.mjs'), '--source-dir', config.snapshot,
-      '--server-dir', join(upstream, 'apps/server/.output'), '--runtime-dependencies', config.runtimeDependencies, '--core', config.core, '--output', output,
+      '--server-dir', serverDir, '--runtime-dependencies', config.runtimeDependencies, '--core', config.core, '--output', output,
       ...(frontendUpdate ? ['--frontend-update', JSON.stringify(frontendUpdate)] : []),
       ...(componentUpdate ? ['--component-update', JSON.stringify(componentUpdate)] : [])], { capture: true }));
     const result = await verifyBuiltRelease(output, receipt, config.expected.commit);
@@ -289,7 +298,7 @@ export async function buildReleaseMain(deploy = false) {
   let lock;
   try {
     if (process.argv.slice(2).includes('--help')) {
-      console.log('已准备工作区：node scripts/build-release.mjs --config ABSOLUTE_JSON [--components all|frontend|backend] [--base-release ABSOLUTE_RELEASE] [--preview]\n一步构建部署：node scripts/build-deploy.mjs，参数相同。普通克隆仓库使用 bash scripts/build-release.sh。'); return;
+      console.log('已准备工作区：node scripts/build-release.mjs --config ABSOLUTE_JSON [--components all|frontend|backend|core] [--base-release ABSOLUTE_RELEASE] [--preview]\n一步构建部署：node scripts/build-deploy.mjs，参数相同。普通克隆仓库使用 bash scripts/build-release.sh。'); return;
     }
     const { rest: args, ...selection } = readBuildSelection(process.argv.slice(2));
     const internal = args.length === 4 && args[2] === '--internal-lock' && args[3] === process.env.COCOPROXY_BUILD_LOCK_TOKEN;

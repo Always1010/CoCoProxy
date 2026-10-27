@@ -120,6 +120,26 @@ test('backend build reuses verified UI, skips UI generation and refuses UI drift
   assert.equal(state.commands.some(item => item.command === 'tar' || item.command === 'sudo'), false);
 });
 
+test('core build reuses the complete server without UI/server compilation and rejects server input drift', async t => {
+  const state = await fixture(t); const base = join(state.config.workspace, 'base');
+  const path = 'server/.output/public/index.html'; await write(join(base, path), 'synthetic UI');
+  const serverPath = 'server/.output/server/index.mjs'; await write(join(base, serverPath), 'server');
+  const raw = await executeBuildCommand('git', ['-C', state.config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
+  const entries = raw.split('\0').filter(Boolean).map(line => { const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line); return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] }; });
+  const catalog = JSON.parse(await readFile(join(state.config.snapshot, 'integrations/metacubexd/components.json')));
+  const coreOnlyEntries = entries.map(entry => entry.path === 'integrations/metacubexd/components.json' ? { ...entry, oid: 'f'.repeat(40) } : entry);
+  assert.equal(reusedInputSha256(coreOnlyEntries, 'core', catalog.management), reusedInputSha256(entries, 'core', catalog.management));
+  assert.notEqual(reusedInputSha256(entries, 'core', { ...catalog.management, commit: 'f'.repeat(40) }), reusedInputSha256(entries, 'core', catalog.management));
+  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: { serverInputSha256: reusedInputSha256(entries, 'core', catalog.management) },
+    files: [{ path, size: 12, sha256: sha256('synthetic UI'), mode: '0644' }, { path: serverPath, size: 6, sha256: sha256('server'), mode: '0644' }] };
+  await write(join(base, 'manifest.json'), JSON.stringify(manifest));
+  const result = await runBuildRelease(state.config, { execute: state.execute, components: 'core', baseRelease: base });
+  assert.equal(result.components, 'core');
+  assert.equal(state.commands.some(item => ['tar', 'npm'].includes(item.command) || item.args.some(arg => ['generate', 'build', '@metacubexd/ui', '@metacubexd/server'].includes(arg))), false);
+  manifest.buildInputs.serverInputSha256 = '0'.repeat(64); await write(join(base, 'manifest.json'), JSON.stringify(manifest));
+  await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'core', baseRelease: base }), { code: 'BUILD_REUSED_INPUT_CHANGED' });
+});
+
 test('changed payload cannot deploy even when a previous release exists', async t => {
   const state = await fixture(t, 'payload-drift');
   await mkdir(join(state.config.releases, 'old-release'));
