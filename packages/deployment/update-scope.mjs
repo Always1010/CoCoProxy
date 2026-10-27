@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 
 const fail = code => { throw Object.assign(new Error(code), { code }); };
+const sourceInput = entry => !/^(docs|tests|\.github)\//u.test(entry.path) && !/\.md$/iu.test(entry.path);
+const identity = entries => createHash('sha256').update(JSON.stringify(entries.map(entry => [entry.path, entry.mode, entry.oid])
+  .sort((a, b) => a[0].localeCompare(b[0], 'en')))).digest('hex');
 export function parseComponents(value = 'all') {
-  if (!['all', 'frontend'].includes(value)) fail('BUILD_COMPONENTS_UNSUPPORTED');
+  if (!['all', 'frontend', 'backend'].includes(value)) fail('BUILD_COMPONENTS_UNSUPPORTED');
   return value;
 }
 
@@ -10,9 +13,24 @@ export function parseComponents(value = 'all') {
 // is conservative: an unknown build input requires a full build and update.
 export function backendInputSha256(entries) {
   const inputs = entries.filter(entry => !entry.path.startsWith('integrations/metacubexd/overlay/packages/ui/')
-    && !/^(docs|tests|\.github)\//u.test(entry.path) && !/\.md$/iu.test(entry.path));
-  return createHash('sha256').update(JSON.stringify(inputs.map(entry => [entry.path, entry.mode, entry.oid])
-    .sort((a, b) => a[0].localeCompare(b[0], 'en')))).digest('hex');
+    && sourceInput(entry));
+  return identity(inputs);
+}
+
+// UI has no imports from the root apps/packages. Keep shared build tooling and
+// upstream inputs in this identity so backend-only builds cannot hide UI drift.
+export function reusedInputSha256(entries, components) {
+  if (components !== 'backend') fail('BUILD_COMPONENTS_UNSUPPORTED');
+  return identity(entries.filter(entry => sourceInput(entry) && (!/^(apps|packages)\//u.test(entry.path)
+    || entry.path === 'packages/deployment/update-scope.mjs')
+    && !entry.path.startsWith('integrations/metacubexd/overlay/apps/server/')));
+}
+
+export function validateComponentUpdate(value) {
+  if (!value || Object.keys(value).sort().join(',') !== 'baseManifestSha256,components,reusedInputSha256,schemaVersion'
+    || value.schemaVersion !== 1 || value.components !== 'backend'
+    || ![value.reusedInputSha256, value.baseManifestSha256].every(item => typeof item === 'string' && /^[a-f0-9]{64}$/u.test(item))) fail('BUILD_COMPONENT_BASE_INVALID');
+  return value;
 }
 
 export function validateFrontendUpdate(value) {

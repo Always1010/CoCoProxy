@@ -17,7 +17,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a'):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a'):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -49,6 +49,8 @@ class RemoteDeploymentTests(unittest.TestCase):
         manifest = {'commit': 'e' * 40, 'files': [{'path': 'bin/mihomo', 'sha256': 'c' * 64}]}
         if frontend:
             manifest['frontendUpdate'] = {'schemaVersion': 1, 'baseManifestSha256': frontend_base * 64, 'backendInputSha256': 'f' * 64}
+        if component:
+            manifest['componentUpdate'] = {'schemaVersion': 1, 'components': component, 'baseManifestSha256': component_base * 64, 'reusedInputSha256': 'f' * 64}
         events = []
         active = {'cocoproxy-management.service': True, 'cocoproxy-mihomo.service': core_active,
             'cocoproxy-gateway-network.service': core_active, 'cocoproxy-gateway-guard.service': True}
@@ -175,6 +177,21 @@ class RemoteDeploymentTests(unittest.TestCase):
                 deploy.main_locked(args)
             self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
             self.assertFalse(any(event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable'] for event in events))
+
+    def test_backend_update_uses_full_maintenance_and_rejects_a_stale_base(self):
+        for base in ['a', 'c']:
+            with self.subTest(base=base):
+                temporary, stack, private, before, events, router, args = self.scenario(component='backend', component_base=base)
+                with temporary, stack:
+                    if base == 'c':
+                        with self.assertRaisesRegex(RuntimeError, 'REMOTE_COMPONENT_BASE_CHANGED'):
+                            deploy.main_locked(args)
+                        self.assertFalse(any('runtime-maintenance-pause' in event for event in events))
+                    else:
+                        deploy.main_locked(args)
+                        self.assertTrue(any('runtime-maintenance-pause' in event for event in events))
+                        self.assertTrue(router['enabled'])
+                        self.assertEqual(json.loads((private / 'remote-last.json').read_text())['components'], 'backend')
 
     def test_update_preserves_identity_and_restores_only_after_core_ready(self):
         temporary, stack, private, before, events, router, args = self.scenario()

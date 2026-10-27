@@ -12,7 +12,7 @@ import { inspectServiceAccount, validServiceAccountRequest } from './service-acc
 import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory, assertPrivatePath,
   PathEvidenceError, type PathEvidenceHost } from './path-evidence.ts';
 import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, networkReceiptRemoved, NetworkObservationError } from './network-evidence.ts';
-import { validateFrontendUpdate } from './update-scope.mjs';
+import { validateComponentUpdate, validateFrontendUpdate } from './update-scope.mjs';
 
 // This is deliberately an offline file installer. Service lifecycle, router
 // activation and the existing root network helper remain separate operations.
@@ -211,7 +211,8 @@ export function assertDeploymentStateCompatibility(files: Awaited<ReturnType<typ
 }
 /** No links, sockets, devices, private areas or unlisted files enter a release. */
 export async function verifyRelease(payload: string, expected: string): Promise<{ files: Entry[]; coreSHA: string;
-  frontendUpdate?: ReturnType<typeof validateFrontendUpdate>; backendInputSha256?: string }> {
+  frontendUpdate?: ReturnType<typeof validateFrontendUpdate>; backendInputSha256?: string;
+  componentUpdate?: ReturnType<typeof validateComponentUpdate>; frontendInputSha256?: string }> {
   require(HASH.test(expected), 'INSTALL_MANIFEST_HASH_REQUIRED');
   // Cross-platform artifact verification is also used by the synthetic tests.
   require(resolve(payload) === payload && !(await lstat(payload)).isSymbolicLink(), 'INSTALL_PAYLOAD_PATH_INVALID');
@@ -265,7 +266,25 @@ export async function verifyRelease(payload: string, expected: string): Promise<
     try { frontendUpdate = validateFrontendUpdate(value.frontendUpdate); } catch { throw new InstallError('INSTALL_FRONTEND_DECLARATION_INVALID'); }
     require(value.buildInputs?.backendInputSha256 === frontendUpdate.backendInputSha256, 'INSTALL_FRONTEND_DECLARATION_INVALID');
   }
-  return { files: value.files as Entry[], coreSHA: core.sha256 as string, frontendUpdate, backendInputSha256: value.buildInputs?.backendInputSha256 as string | undefined };
+  let componentUpdate;
+  if (value.componentUpdate !== undefined) {
+    try { componentUpdate = validateComponentUpdate(value.componentUpdate); } catch { throw new InstallError('INSTALL_COMPONENT_DECLARATION_INVALID'); }
+    require(!frontendUpdate && componentUpdate.reusedInputSha256 === value.buildInputs?.frontendInputSha256, 'INSTALL_COMPONENT_DECLARATION_INVALID');
+  }
+  return { files: value.files as Entry[], coreSHA: core.sha256 as string, frontendUpdate, componentUpdate,
+    backendInputSha256: value.buildInputs?.backendInputSha256 as string | undefined,
+    frontendInputSha256: value.buildInputs?.frontendInputSha256 as string | undefined };
+}
+
+/** Reusing UI requires both matching inputs and the exact installed public bytes. */
+export function assertComponentReuse(previous: Awaited<ReturnType<typeof verifyRelease>>, next: Awaited<ReturnType<typeof verifyRelease>>, previousSHA: string) {
+  const update = next.componentUpdate;
+  require(update && update.baseManifestSha256 === previousSHA && update.reusedInputSha256 === previous.frontendInputSha256,
+    'INSTALL_COMPONENT_BASE_CHANGED');
+  const publicFiles = (release: typeof previous) => JSON.stringify(release.files.filter(file => file.path.startsWith('server/.output/public/'))
+    .map(file => [file.path, file.sha256, file.size, file.mode]).sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'en')));
+  require(next.coreSHA === previous.coreSHA && next.files.some(file => file.path.startsWith('server/.output/public/')) && publicFiles(previous) === publicFiles(next),
+    'INSTALL_REUSED_PAYLOAD_CHANGED');
 }
 const pathHost: PathEvidenceHost = { resolve: realpath, info: async path => {
   const stat = await info(path);
@@ -415,6 +434,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
   const release = await verifyRelease(payload, options.manifestSha256);
   const frontend = Boolean(release.frontendUpdate) && options.operation !== 'uninstall';
   require(!release.frontendUpdate || ['upgrade', 'uninstall'].includes(options.operation), 'INSTALL_FRONTEND_EXISTING_INSTALL_REQUIRED');
+  require(!release.componentUpdate || ['upgrade', 'uninstall'].includes(options.operation), 'INSTALL_COMPONENT_EXISTING_INSTALL_REQUIRED');
   await trusted(payload + '/manifest.json');
   for (const entry of release.files) await trusted(payload + '/' + entry.path);
   const inputBytes = await regular(inputPath, 128 * 1024);
@@ -474,6 +494,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
     await trusted(previous.release);
     await trusted(previous.release + '/manifest.json');
     const oldRelease = await verifyRelease(previous.release, previous.manifestSha256);
+    if (release.componentUpdate && options.operation === 'upgrade') assertComponentReuse(oldRelease, release, previous.manifestSha256);
     if (frontend && options.operation === 'upgrade') {
       require(previous.manifestSha256 === release.frontendUpdate!.baseManifestSha256 &&
         oldRelease.backendInputSha256 === release.frontendUpdate!.backendInputSha256 && oldRelease.coreSHA === release.coreSHA,

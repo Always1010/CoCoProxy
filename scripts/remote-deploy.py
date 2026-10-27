@@ -345,6 +345,8 @@ def main_locked(options):
         need(json.loads(regular(journal, True))['status'] == 'complete', 'REMOTE_PREVIOUS_DEPLOYMENT_REQUIRES_REVIEW')
     payload, manifest = stage_payload(Path(options.payload), options.manifest_sha256)
     frontend = 'frontendUpdate' in manifest
+    component_update = manifest.get('componentUpdate')
+    components = 'frontend' if frontend else component_update['components'] if component_update else 'all'
     profile = json.loads(regular(PRIVATE / 'remote.json', True)) if (PRIVATE / 'remote.json').exists() else {}
     hook = options.router_hook or profile.get('routerHook')
     web_unit = options.web_unit or profile.get('webUnit')
@@ -354,11 +356,14 @@ def main_locked(options):
     if installed:
         receipt = json.loads(regular(RECEIPT, True))
         need(receipt['status'] == 'complete', 'REMOTE_RECEIPT_NOT_COMPLETE')
+        if component_update and receipt['manifestSha256'] != options.manifest_sha256:
+            need(component_update['baseManifestSha256'] == receipt['manifestSha256'], 'REMOTE_COMPONENT_BASE_CHANGED')
         need(options.input or input_path.exists(), 'REMOTE_EXISTING_INPUT_REQUIRED')
         old = json.loads(regular(options.input) if options.input else regular(input_path, True))
         candidate = new_input(old, options.manifest_sha256, next(item['sha256'] for item in manifest['files'] if item['path'] == 'bin/mihomo'), frontend)
     else:
         need(not frontend, 'REMOTE_FRONTEND_EXISTING_INSTALL_REQUIRED')
+        need(not component_update, 'REMOTE_COMPONENT_EXISTING_INSTALL_REQUIRED')
         need(options.environment and options.admin_input, 'REMOTE_FIRST_INSTALL_INPUT_REQUIRED')
         old = None
     if hook and not frontend:
@@ -451,7 +456,7 @@ def main_locked(options):
             return {'status': value['status'], 'sha256': hashlib.sha256(data).hexdigest()}
         previous_network = network_receipt()
         if options.preview:
-            print(json.dumps({'prepared': True, 'apply': False, 'operation': 'upgrade' if installed else 'install', 'commit': manifest['commit']}))
+            print(json.dumps({'prepared': True, 'apply': False, 'operation': 'upgrade' if installed else 'install', 'commit': manifest['commit'], 'components': components, 'deployment': 'full-maintenance'}))
             return
         units = ['cocoproxy-management.service', 'cocoproxy-mihomo.service']
         if gateway:
@@ -485,7 +490,7 @@ def main_locked(options):
             need(snapshot.get('schemaVersion') == 1 and isinstance(snapshot.get('files'), dict) and
                  isinstance(snapshot.get('directories'), dict) and isinstance(snapshot.get('contentChecks'), list), 'REMOTE_PRESERVATION_SNAPSHOT_INVALID')
             return snapshot
-        progress = {'status': 'running', 'phase': 'maintenance', 'manifestSha256': options.manifest_sha256,
+        progress = {'status': 'running', 'phase': 'maintenance', 'manifestSha256': options.manifest_sha256, 'components': components,
                     'previousServices': before_units, 'routerPreviouslyEnabled': router_enabled,
                     'previousNetworkReceipt': previous_network,
                     'previousLifecycle': {'present': before_lifecycle is not None,
@@ -591,9 +596,9 @@ def main_locked(options):
             if installed:
                 preservation = {'schemaVersion': 1, 'status': 'pass', 'scope': 'verified-install-window-and-restored-stable-state',
                     'windows': preservation_windows, 'notAssessed': ['real-restored-authentication', 'long-running-business-availability']}
-            replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit'],
+            replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit'], 'components': components,
                 'preservation': preservation})
-            print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256,
+            print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256, 'components': components,
                 'preservation': preservation, 'routerRestored': bool(router_enabled), 'initialConfigurationRequired': not installed}))
         except Exception:
             progress.update(status='failed', lastCompletedPhase=progress['phase'], phase='manual-review-required')
