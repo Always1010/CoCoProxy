@@ -27,9 +27,18 @@ import {
   useStringBooleanMap,
 } from '~/utils'
 
+const props = defineProps<{ group?: string }>()
 const { t, locale } = useI18n()
 
 const configStore = useConfigStore()
+// Group navigation gets temporary filters; ordinary visits retain saved filters.
+const scopedFilters = ref(Boolean(props.group))
+const localFilters = ref({
+  rulesTypeFilter: [] as string[],
+  rulesPolicyFilter: [] as string[],
+  rulesStatusFilter: 'all' as 'all' | 'enabled' | 'disabled',
+})
+const filters = computed(() => scopedFilters.value ? localFilters.value : configStore)
 
 useHead({ title: computed(() => t('rules')) })
 
@@ -49,6 +58,14 @@ const toggleRuleDisabledMutation = useToggleRuleDisabledMutation()
 
 const activeTab = ref<'rules' | 'ruleProviders'>('rules')
 const globalFilter = ref('')
+const scopedRules = computed(() => (rules.value ?? []).filter(rule => !props.group || rule.proxy === props.group))
+
+watch(() => props.group, () => {
+  if (!props.group && !scopedFilters.value) return
+  scopedFilters.value = true
+  clearRuleFilters()
+  activeTab.value = 'rules'
+})
 
 const { map: updatingMap, setWithCallback: setUpdatingMap } =
   useStringBooleanMap()
@@ -61,7 +78,7 @@ const tabs = computed(() => [
   {
     type: 'rules' as const,
     name: t('rules'),
-    count: rules.value?.length ?? 0,
+    count: scopedRules.value.length,
   },
   {
     type: 'ruleProviders' as const,
@@ -72,18 +89,18 @@ const tabs = computed(() => [
 
 // Chip lists derived from the UNFILTERED rules so counts stay stable as the
 // user toggles filters.
-const ruleTypeFacets = computed(() => getRuleFacets(rules.value ?? [], 'type'))
+const ruleTypeFacets = computed(() => getRuleFacets(scopedRules.value, 'type'))
 const rulePolicyFacets = computed(() =>
-  getRuleFacets(rules.value ?? [], 'proxy'),
+  getRuleFacets(scopedRules.value, 'proxy'),
 )
 
 const filteredRules = computed(() => {
   // 1. structured filter (chips + status) — always applied first so the search
   //    and sort below operate on the narrowed set.
-  const filtered = filterRules(rules.value ?? [], {
-    types: configStore.rulesTypeFilter,
-    policies: configStore.rulesPolicyFilter,
-    status: configStore.rulesStatusFilter,
+  const filtered = filterRules(scopedRules.value, {
+    types: filters.value.rulesTypeFilter,
+    policies: filters.value.rulesPolicyFilter,
+    status: filters.value.rulesStatusFilter,
   })
 
   // 2. global search owns ordering (relevance ranking) — short-circuit sort
@@ -100,28 +117,30 @@ const filteredRules = computed(() => {
 
 const hasActiveRuleFilters = computed(
   () =>
-    configStore.rulesTypeFilter.length > 0 ||
-    configStore.rulesPolicyFilter.length > 0 ||
-    configStore.rulesStatusFilter !== 'all' ||
+    filters.value.rulesTypeFilter.length > 0 ||
+    filters.value.rulesPolicyFilter.length > 0 ||
+    filters.value.rulesStatusFilter !== 'all' ||
     !!globalFilter.value,
 )
 
 function toggleRuleTypeFilter(value: string) {
-  const arr = configStore.rulesTypeFilter
-  configStore.rulesTypeFilter = arr.includes(value)
+  const arr = filters.value.rulesTypeFilter
+  filters.value.rulesTypeFilter = arr.includes(value)
     ? arr.filter((v) => v !== value)
     : [...arr, value]
 }
 
 function toggleRulePolicyFilter(value: string) {
-  const arr = configStore.rulesPolicyFilter
-  configStore.rulesPolicyFilter = arr.includes(value)
+  const arr = filters.value.rulesPolicyFilter
+  filters.value.rulesPolicyFilter = arr.includes(value)
     ? arr.filter((v) => v !== value)
     : [...arr, value]
 }
 
 function clearRuleFilters() {
-  configStore.resetRulesFilters()
+  if (scopedFilters.value) {
+    localFilters.value = { rulesTypeFilter: [], rulesPolicyFilter: [], rulesStatusFilter: 'all' }
+  } else configStore.resetRulesFilters()
   globalFilter.value = ''
 }
 
@@ -130,9 +149,10 @@ function clearRuleFilters() {
 watch(
   () => [
     configStore.rulesOrderingType,
-    configStore.rulesTypeFilter,
-    configStore.rulesPolicyFilter,
-    configStore.rulesStatusFilter,
+    props.group,
+    filters.value.rulesTypeFilter,
+    filters.value.rulesPolicyFilter,
+    filters.value.rulesStatusFilter,
     globalFilter.value,
   ],
   () => rulesParentRef.value?.scrollTo({ top: 0 }),
@@ -300,9 +320,9 @@ const providersTotalSize = computed(() =>
             class="rounded-lg px-2.5 py-1 text-xs font-medium text-base-content/70 transition-all duration-200 hover:bg-base-content/5"
             :class="{
               'bg-primary text-primary-content shadow-[0_2px_8px] shadow-primary/30':
-                configStore.rulesStatusFilter === opt,
+                filters.rulesStatusFilter === opt,
             }"
-            @click="configStore.rulesStatusFilter = opt"
+            @click="filters.rulesStatusFilter = opt"
           >
             {{ t(opt) }}
           </button>
@@ -317,7 +337,7 @@ const providersTotalSize = computed(() =>
             :key="`t-${facet.value}`"
             class="shrink-0 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all duration-200"
             :class="
-              configStore.rulesTypeFilter.includes(facet.value)
+              filters.rulesTypeFilter.includes(facet.value)
                 ? 'border-primary/30 bg-primary/15 text-primary'
                 : 'border-base-content/8 bg-base-200/60 text-base-content/70 hover:border-primary/25 hover:text-base-content'
             "
@@ -337,7 +357,7 @@ const providersTotalSize = computed(() =>
             :key="`p-${facet.value}`"
             class="shrink-0 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all duration-200"
             :class="
-              configStore.rulesPolicyFilter.includes(facet.value)
+              filters.rulesPolicyFilter.includes(facet.value)
                 ? 'border-secondary/30 bg-secondary/15 text-secondary'
                 : 'border-base-content/8 bg-base-200/60 text-base-content/70 hover:border-secondary/25 hover:text-base-content'
             "
@@ -351,11 +371,12 @@ const providersTotalSize = computed(() =>
         <!-- Clear (only when something is active) -->
         <Button
           v-if="hasActiveRuleFilters"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-base-content/8 bg-base-content/5 text-base-content/60 transition-colors duration-200 hover:border-error/30 hover:bg-error/10 hover:text-error"
+          class="flex min-h-11 shrink-0 items-center justify-center gap-1 rounded-lg border border-base-content/8 bg-base-content/5 px-2 text-xs text-base-content/60 transition-colors duration-200 hover:border-error/30 hover:bg-error/10 hover:text-error"
           :title="t('clearFilters')"
           @click="clearRuleFilters"
         >
           <IconX :size="14" />
+          <span>{{ t('clearFilters') }}</span>
         </Button>
 
         <!-- Sort dropdown (icon-only, mirrors the proxies toolbar). Disabled
@@ -396,7 +417,7 @@ const providersTotalSize = computed(() =>
             </template>
             <template v-else>
               <IconFilter :size="48" class="mb-4 opacity-20" />
-              <span class="text-base-content/50">{{ t('noRules') }}</span>
+              <span class="text-base-content/50">{{ group ? '当前目标暂无生效规则' : t('noRules') }}</span>
             </template>
           </div>
           <div

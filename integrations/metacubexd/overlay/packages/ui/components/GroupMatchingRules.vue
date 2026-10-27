@@ -20,7 +20,8 @@ const templateRules = computed(() => view.value?.rules.filter(rule => rule.sourc
 const dependents = computed(() => view.value?.groups
   .filter(group => group.role === 'service' && group.name !== props.groupName && group.selected === props.groupName)
   .map(group => group.name) ?? [])
-const allRulesLink = computed(() => ({ path: '/rules', query: { group: props.groupName, tab: 'custom' } }))
+const effectiveRulesLink = computed(() => ({ path: '/rules', query: { group: props.groupName, tab: 'effective' } }))
+const customRulesLink = computed(() => ({ path: '/rules', query: { group: props.groupName, tab: 'custom' } }))
 
 function resetForm() { editing.value = null; type.value = 'DOMAIN-SUFFIX'; payload.value = ''; error.value = '' }
 function edit(index: number) {
@@ -89,7 +90,7 @@ async function persist() {
             <p class="break-all text-sm">{{ templateRuleLabel(rule.value) }}</p>
             <div class="flex flex-wrap gap-2">
               <button v-if="isDomainRule(rule.value)" type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="busy" :aria-label="`编辑组内规则 ${rule.index + 1}`" @click="edit(rule.index)"><IconEdit :size="16" /><span>编辑</span></button>
-              <NuxtLink v-else :to="allRulesLink" class="btn btn-ghost btn-sm min-h-11" @click="emit('close')"><IconEdit :size="16" /><span>前往规则页编辑</span></NuxtLink>
+              <NuxtLink v-else :to="customRulesLink" class="btn btn-ghost btn-sm min-h-11" @click="emit('close')"><IconEdit :size="16" /><span>前往规则页编辑</span></NuxtLink>
               <button type="button" class="btn btn-ghost btn-sm min-h-11 text-error" :disabled="busy" :aria-label="`删除组内规则 ${rule.index + 1}`" @click="remove(rule.index)"><IconTrash :size="16" /><span>删除</span></button>
             </div>
           </div>
@@ -102,7 +103,7 @@ async function persist() {
           <p v-if="groupName === 'Other'" class="text-sm text-base-content/60">本组承担最终兜底，其他规则均未命中的流量使用本组。</p>
         </section>
       </template>
-      <NuxtLink :to="allRulesLink" class="btn btn-ghost min-h-11" @click="emit('close')"><IconList :size="16" /><span>查看全部规则</span></NuxtLink>
+      <NuxtLink :to="effectiveRulesLink" class="btn btn-ghost min-h-11" @click="emit('close')"><IconList :size="16" /><span>查看本组生效规则</span></NuxtLink>
     </div>
     <p v-if="dirty" class="shrink-0 text-xs text-warning">规则有未保存修改；关闭或取消将丢弃。节点设置需单独保存。</p>
     <p v-if="error" role="alert" class="shrink-0 break-words text-sm text-error">{{ error }}</p>
