@@ -100,7 +100,7 @@ test('subscription editor loads existing fields and current revision, preserves 
   const error = { value: '' };
   const exports: Record<string, any> = {};
   new Script(code, { filename: 'subscriptions.js' }).runInNewContext({
-    exports, useHead: () => {}, ref: (value: unknown) => ({ value }), onMounted: () => {},
+    exports, useHead: () => {}, ref: (value: unknown) => ({ value }), onMounted: () => {}, watch() {},
     onUnmounted: (fn: () => void) => { onLeave = fn; },
     useWorkspace: () => ({
       api: { request: async (_path: string, options?: { body?: unknown }) => {

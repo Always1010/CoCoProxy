@@ -6,7 +6,7 @@ import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 const props = defineProps<{ groupName: string; selectable: boolean }>()
 const { api, view, overrides } = useWorkspace()
 type HistoryEvent = AutomaticStatus['events'][number]
-const dialog = ref<HTMLDialogElement>()
+const dialog = ref<{ open: () => void; close: () => void }>()
 const scroller = ref<HTMLElement>()
 const visible = ref(false)
 const status = ref<AutomaticStatus>()
@@ -112,7 +112,7 @@ function open() {
   updatedAt.value = undefined
   confirmClear.value = false
   visible.value = true
-  dialog.value?.showModal()
+  dialog.value?.open()
   void poll(++session)
 }
 async function clearHistory() {
@@ -146,12 +146,10 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
   <span v-if="available" class="shrink-0">
     <button type="button" class="btn btn-ghost btn-sm min-h-11" :aria-label="`${groupName} 切换历史`" @click="open"><IconHistory :size="18" aria-hidden="true" /><span>切换历史</span></button>
   </span>
-  <dialog ref="dialog" class="modal modal-bottom sm:modal-middle" :aria-label="`${groupName} 切换历史`" @close="close">
-    <div class="modal-box flex h-[92dvh] max-h-[92dvh] max-w-2xl flex-col gap-3 overflow-hidden sm:h-auto sm:max-h-[85dvh]">
-      <div class="flex shrink-0 items-center justify-between gap-2">
-        <h2 class="min-w-0 break-all text-lg font-semibold">{{ groupName }} · 切换历史</h2>
-        <button type="button" class="btn btn-ghost min-h-11 shrink-0" @click="dialog?.close()"><IconX :size="18" aria-hidden="true" /><span>关闭</span></button>
-      </div>
+  <Modal ref="dialog" :title="`${groupName} · 切换历史`" @close="close">
+    <template #content>
+      <button v-if="newCount" type="button" class="btn btn-primary btn-sm mb-3 min-h-11 shrink-0" @click="showLatest()"><IconChevronUp :size="16" aria-hidden="true" /><span>有 {{ newCount }} 条新记录 · 查看最新</span></button>
+      <div ref="scroller" class="min-h-0 flex-1 space-y-3 overflow-y-auto [scrollbar-gutter:stable]" @scroll="onScroll">
       <section class="shrink-0 space-y-1 rounded-lg bg-base-200 p-3 text-sm" aria-label="当前自动选点状态" aria-live="polite">
         <p>{{ enabled ? '自动选点已开启' : '自动选点已关闭' }}</p>
         <p class="break-all">当前出口：{{ currentNode }}{{ currentPool ? ` · ${currentPool}` : '' }}</p>
@@ -164,8 +162,6 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
         <button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="loading || clearing" @click="readStatus"><IconRefresh :size="16" :class="{ 'animate-spin': loading }" aria-hidden="true" /><span>{{ loading ? '正在刷新' : '刷新' }}</span></button>
       </div>
       <p v-if="error" role="alert" class="shrink-0 text-sm text-warning">更新失败：{{ error }} 已显示的记录仍予保留。</p>
-      <button v-if="newCount" type="button" class="btn btn-primary btn-sm min-h-11 shrink-0" @click="showLatest()"><IconChevronUp :size="16" aria-hidden="true" /><span>有 {{ newCount }} 条新记录 · 查看最新</span></button>
-      <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto sm:max-h-[45dvh]" @scroll="onScroll">
         <ol v-if="displayed.length" class="space-y-3" aria-label="当前组切换记录">
           <li v-for="event in displayed" :key="eventKey(event)" class="space-y-2 rounded-lg border border-base-content/10 p-3 text-sm">
             <div class="flex flex-wrap items-center justify-between gap-2"><time :datetime="new Date(event.at).toISOString()" class="text-xs text-base-content/60">{{ timeLabel(event.at) }}</time><span class="badge badge-sm">{{ eventLabel(event.reason) }}</span></div>
@@ -175,7 +171,7 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
         </ol>
         <p v-else-if="!loading && !error" class="py-8 text-center text-sm text-base-content/60">{{ enabled ? '暂无保留的切换记录，之后确认的节点切换会显示在这里。' : '暂无保留的切换记录。' }}</p>
       </div>
-      <footer class="shrink-0 space-y-2 border-t border-base-content/10 pt-3">
+      <footer class="mt-3 max-h-[50%] shrink-0 space-y-2 overflow-y-auto border-t border-base-content/10 pt-3">
         <p class="text-xs text-base-content/60">每组最多保留 50 条，最长 7 天，较早记录自动清理。仅记录确认生效的自动切换。</p>
         <div v-if="confirmClear" class="space-y-2 rounded-lg bg-base-200 p-3 text-sm">
           <p class="break-all">清空“{{ groupName }}”的切换历史？此操作无法撤销，{{ enabled ? '自动选点将继续运行。' : '当前节点和自动选点设置不变。' }}</p>
@@ -183,7 +179,6 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
         </div>
         <div v-else class="flex justify-end"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="!events.length || loading || clearing || !updatedAt" @click="confirmClear = true"><IconTrash :size="16" aria-hidden="true" /><span>清空历史</span></button></div>
       </footer>
-    </div>
-    <form method="dialog" class="modal-backdrop"><button aria-label="关闭切换历史">关闭</button></form>
-  </dialog>
+    </template>
+  </Modal>
 </template>

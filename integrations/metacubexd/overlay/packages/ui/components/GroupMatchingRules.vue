@@ -61,7 +61,7 @@ async function persist() {
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-3" aria-label="组内匹配规则">
-    <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-1">
+    <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 [scrollbar-gutter:stable]">
       <p v-if="workspace?.runMode !== 'rule'" class="rounded-lg bg-warning/10 p-3 text-sm">当前为{{ workspace?.runMode === 'global' ? '全局' : '直连' }}模式，域名分流暂不参与匹配；保存后切换到规则模式使用。</p>
       <template v-if="shared">
         <p class="text-sm">本组是共享出口，供普通策略组共同引用；请在普通组中配置域名规则。</p>
