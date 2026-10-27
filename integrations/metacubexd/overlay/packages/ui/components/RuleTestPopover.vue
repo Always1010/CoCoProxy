@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconRoute, IconX } from '@tabler/icons-vue'
+import { IconRoute } from '@tabler/icons-vue'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
 interface Match {
@@ -15,8 +15,7 @@ interface Match {
 interface Result { target: string; generation: string; checkedAt: string; results: Match[] }
 
 const { api, view, workspace } = useWorkspace()
-const trigger = ref<HTMLButtonElement>()
-const panel = ref<HTMLElement>()
+const panel = ref<{ open: () => void; close: () => void }>()
 const input = ref<HTMLInputElement>()
 const opened = ref(false)
 const target = ref('')
@@ -27,20 +26,7 @@ const sourcePort = ref('')
 const testing = ref(false)
 const result = ref<Result | null>(null)
 const error = ref('')
-const position = ref({ left: '12px', top: '80px', maxHeight: 'calc(100dvh - 92px)' })
 let pending: AbortController | undefined
-
-function place() {
-  const rect = trigger.value?.getBoundingClientRect()
-  if (!rect) return
-  const width = Math.min(420, window.innerWidth - 24)
-  const top = Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 160))
-  position.value = {
-    left: `${Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12))}px`,
-    top: `${top}px`,
-    maxHeight: `${window.innerHeight - top - 12}px`,
-  }
-}
 
 function cancel() {
   pending?.abort()
@@ -48,16 +34,13 @@ function cancel() {
   testing.value = false
 }
 
-async function onToggle(event: Event) {
-  opened.value = (event as ToggleEvent).newState === 'open'
-  if (opened.value) {
-    place()
-    await nextTick()
-    input.value?.focus()
-  } else {
-    cancel()
-  }
+async function open() {
+  opened.value = true
+  panel.value?.open()
+  await nextTick()
+  input.value?.focus()
 }
+function close() { opened.value = false; cancel() }
 
 function reset() {
   cancel()
@@ -106,19 +89,15 @@ function policyName(name: string) {
   return label && label !== name ? `${label}（${name}）` : name
 }
 
-onMounted(() => window.addEventListener('resize', place))
-onBeforeUnmount(() => { cancel(); window.removeEventListener('resize', place) })
+onBeforeUnmount(cancel)
 </script>
 
 <template>
-  <button ref="trigger" class="btn btn-ghost btn-sm" title="测试规则" aria-label="测试规则" aria-haspopup="dialog" aria-controls="rule-test-popover" :aria-expanded="opened" @click="place(); panel?.togglePopover()">
+  <button class="btn btn-ghost btn-sm" title="测试规则" aria-label="测试规则" aria-haspopup="dialog" aria-controls="rule-test-popover" :aria-expanded="opened" @click="open">
     <IconRoute :size="18" />
+    <span>测试规则</span>
   </button>
-  <div id="rule-test-popover" ref="panel" popover="auto" role="dialog" aria-labelledby="rule-test-title" class="rule-test-popover fixed m-0 w-[420px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-2xl border border-base-content/15 bg-base-100 p-4 text-base-content shadow-xl" :style="position" @toggle="onToggle">
-    <div class="mb-3 flex items-center justify-between gap-2">
-      <h2 id="rule-test-title" class="text-sm font-semibold">规则测试</h2>
-      <button class="btn btn-ghost btn-xs" title="关闭" aria-label="关闭规则测试" @click="panel?.hidePopover()"><IconX :size="16" /></button>
-    </div>
+  <Modal id="rule-test-popover" ref="panel" title="规则测试" @close="close">
     <form class="flex flex-col gap-3" @submit.prevent="test">
       <label class="input input-sm flex w-full items-center gap-2">
         <span class="sr-only">域名或 IP</span>
@@ -126,7 +105,7 @@ onBeforeUnmount(() => { cancel(); window.removeEventListener('resize', place) })
       </label>
       <div class="flex items-center justify-between gap-2">
         <span class="text-xs text-base-content/50">按当前已生效配置测试</span>
-        <button type="submit" class="btn btn-primary btn-sm" :disabled="testing || !target.trim()"><span v-if="testing" class="loading loading-spinner loading-xs" />确认</button>
+        <button type="submit" class="btn btn-primary min-h-11" :disabled="testing || !target.trim()"><span v-if="testing" class="loading loading-spinner loading-xs" /><IconRoute v-else :size="16" /><span>{{ testing ? '正在测试' : '测试规则' }}</span></button>
       </div>
       <details class="text-xs">
         <summary class="w-fit cursor-pointer text-base-content/60">高级条件</summary>
@@ -156,9 +135,5 @@ onBeforeUnmount(() => { cancel(); window.removeEventListener('resize', place) })
       </div>
       <p class="text-xs leading-relaxed text-base-content/45">规则分析不会连接目标网站；需要时使用核心 DNS。真实连接还可能受域名嗅探、入站条件和自动选路影响。</p>
     </div>
-  </div>
+  </Modal>
 </template>
-
-<style scoped>
-.rule-test-popover::backdrop { background: transparent; }
-</style>

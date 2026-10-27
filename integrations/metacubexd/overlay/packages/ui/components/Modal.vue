@@ -10,7 +10,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   size: 'md',
-  fixedHeight: false,
+  fixedHeight: true,
   beforeClose: undefined,
 })
 
@@ -114,10 +114,10 @@ defineExpose({ open, close })
         }"
       >
         <div
-          class="flex items-center gap-3 text-lg font-bold text-base-content [&>svg]:text-primary"
+          class="flex min-w-0 flex-1 items-center gap-3 text-lg font-bold text-base-content [&>svg]:text-primary"
         >
           <slot name="icon" />
-          <span :id="titleId">{{ title }}</span>
+          <span :id="titleId" class="min-w-0 break-all">{{ title }}</span>
         </div>
 
         <button
@@ -145,10 +145,10 @@ defineExpose({ open, close })
       <!-- Content -->
       <div
         v-if="isRendered"
-        class="min-h-0 flex-1 overflow-y-auto p-5 max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))]"
-        :class="{ '[scrollbar-gutter:stable]': fixedHeight }"
+        class="min-h-0 flex-1 p-5 max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+        :class="[$slots.content ? 'flex flex-col overflow-hidden' : 'overflow-y-auto', { '[scrollbar-gutter:stable]': fixedHeight && !$slots.content }]"
       >
-        <slot />
+        <slot name="content"><slot /></slot>
       </div>
 
       <!-- Actions -->
@@ -160,7 +160,7 @@ defineExpose({ open, close })
           borderTop: '1px solid var(--modal-border)',
         }"
       >
-        <div class="flex justify-end gap-2">
+        <div class="flex flex-wrap justify-end gap-2">
           <slot name="actions" />
         </div>
       </div>

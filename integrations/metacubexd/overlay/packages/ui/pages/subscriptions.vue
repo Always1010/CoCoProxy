@@ -6,6 +6,8 @@ import { CoCoProxyError } from '~/composables/useCoCoProxy'
 useHead({ title: '订阅 · CoCoProxy' })
 const { api, view, workspace, busy, error, load, run, save } = useWorkspace()
 const editorOpen = ref(false)
+const editorModal = ref<{ open: () => void; close: () => void }>()
+const deleteModal = ref<{ open: () => void; close: () => void }>()
 const editing = ref<WorkspaceSource | null>(null)
 const name = ref('')
 const url = ref('')
@@ -117,6 +119,8 @@ async function remove() {
   })
 }
 
+watch(editorOpen, open => { if (open) editorModal.value?.open(); else editorModal.value?.close() }, { flush: 'post' })
+watch(deleting, source => { if (source) deleteModal.value?.open(); else deleteModal.value?.close() }, { flush: 'post' })
 onMounted(() => run(load))
 onUnmounted(closeEditor)
 </script>
@@ -166,18 +170,18 @@ onUnmounted(closeEditor)
       </article>
     </div>
 
-    <dialog v-if="editorOpen" open class="modal modal-open" aria-labelledby="subscription-editor-title" @keydown.esc="closeEditor">
-      <form class="modal-box max-w-md space-y-4" @submit.prevent="submit">
-        <div class="flex items-center justify-between"><h2 id="subscription-editor-title" class="text-lg font-semibold">{{ editing ? '编辑订阅' : '导入订阅' }}</h2><button type="button" class="btn btn-ghost btn-sm" title="关闭" aria-label="关闭" @click="closeEditor"><IconX :size="18" />关闭</button></div>
+    <Modal ref="editorModal" :title="editing ? '编辑订阅' : '导入订阅'" @close="closeEditor">
+      <form id="subscription-editor-form" class="space-y-4" @submit.prevent="submit">
         <label class="fieldset"><span class="fieldset-legend">名称</span><input v-model="name" class="input w-full" placeholder="订阅名称" maxlength="128" /></label>
         <label class="fieldset"><span class="fieldset-legend">订阅地址</span><input v-model="url" class="input w-full" type="url" required placeholder="https://…" autocomplete="off" spellcheck="false" /></label>
         <div v-if="error" role="alert" class="text-sm text-error">{{ error }}</div>
-        <div class="modal-action"><button class="btn btn-primary btn-sm" type="submit" :disabled="busy"><IconCheck v-if="editing" :size="18" /><IconDownload v-else :size="18" />{{ editing ? '保存' : '导入' }}</button></div>
       </form>
-      <form method="dialog" class="modal-backdrop" @submit.prevent="closeEditor"><button>关闭</button></form>
-    </dialog>
-    <dialog v-if="deleting" open class="modal modal-open" aria-labelledby="subscription-delete-title" @keydown.esc="deleting = null">
-      <div class="modal-box max-w-sm"><h2 id="subscription-delete-title" class="font-semibold">删除 {{ deleting.name || deleting.host }}？</h2><div class="modal-action"><button class="btn btn-ghost btn-sm" :disabled="busy" @click="deleting = null">取消</button><button class="btn btn-error btn-sm" :disabled="busy" @click="remove">删除</button></div></div>
-    </dialog>
+      <template #actions><button class="btn btn-primary min-h-11" form="subscription-editor-form" type="submit" :disabled="busy"><IconCheck v-if="editing" :size="18" /><IconDownload v-else :size="18" /><span>{{ editing ? '保存' : '导入' }}</span></button></template>
+    </Modal>
+    <Modal ref="deleteModal" title="删除订阅" @close="deleting = null">
+      <p v-if="deleting" class="break-all">删除 {{ deleting.name || deleting.host }}？</p>
+      <p v-if="error" role="alert" class="mt-3 text-sm text-error">{{ error }}</p>
+      <template #actions><button class="btn btn-ghost min-h-11" :disabled="busy" @click="deleting = null"><IconX :size="18" /><span>取消</span></button><button class="btn btn-error min-h-11" :disabled="busy || !deleting" @click="remove"><IconTrash :size="18" /><span>删除</span></button></template>
+    </Modal>
   </div>
 </template>

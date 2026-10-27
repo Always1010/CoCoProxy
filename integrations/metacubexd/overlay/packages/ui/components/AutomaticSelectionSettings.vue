@@ -7,7 +7,7 @@ import GroupMatchingRules from '~/components/GroupMatchingRules.vue'
 const props = defineProps<{ groupName: string; selectable: boolean }>()
 const { api, view, workspace, overrides, busy, error, run, save, editOverrides } = useWorkspace()
 const proxyRefresh = useProxyRefresh()
-const dialog = ref<HTMLDialogElement>()
+const dialog = ref<{ open: () => void; close: () => void }>()
 const enabled = ref(false)
 const preferred = ref<string[]>([])
 const fallback = ref<string[]>([])
@@ -122,7 +122,7 @@ function open() {
   statusError.value = ''
   status.value = view.value?.automatic
   visible.value = true
-  dialog.value?.showModal()
+  dialog.value?.open()
   void refreshStatus(++session)
 }
 function openSites() { open(); tab.value = 'sites' }
@@ -155,29 +155,22 @@ onUnmounted(() => { disposed = true; close() })
   <span class="shrink-0">
     <button type="button" class="btn btn-ghost btn-sm" :aria-label="`${groupName} 组设置`" @click="open"><IconSettings :size="18" /><span>组设置</span></button>
   </span>
-  <dialog ref="dialog" class="modal modal-bottom sm:modal-middle" @close="close">
-    <div class="modal-box flex max-h-[90dvh] max-w-2xl flex-col overflow-hidden">
-      <div class="mb-3 flex shrink-0 items-center justify-between gap-2">
-        <template v-if="editorKind">
-          <button type="button" class="btn btn-ghost min-h-11 shrink-0" @click="editorKind = null"><IconArrowLeft :size="16" /><span>返回</span></button>
-          <h2 class="text-lg font-semibold">编辑{{ editorLabel }}</h2>
-        </template>
-        <template v-else>
-          <h2 class="min-w-0 break-all text-lg font-semibold">{{ groupName }} · 组设置</h2>
-          <button type="button" class="btn btn-ghost min-h-11 shrink-0" @click="dialog?.close()"><IconX :size="16" /><span>关闭</span></button>
-        </template>
-      </div>
-      <div v-if="!editorKind" class="mb-4 flex shrink-0 flex-wrap gap-2" role="tablist" aria-label="组设置类别">
+  <Modal ref="dialog" :title="editorKind ? `编辑${editorLabel}` : `${groupName} · 组设置`" @close="close">
+    <template #tabs>
+      <button v-if="editorKind" type="button" class="btn btn-ghost min-h-11" @click="editorKind = null"><IconArrowLeft :size="16" /><span>返回组设置</span></button>
+      <div v-else class="flex flex-wrap gap-2" role="tablist" aria-label="组设置类别">
         <button type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'selection' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'selection'" @click="tab = 'selection'"><IconList :size="16" /><span>节点选择</span></button>
         <button v-if="workspace?.mode === 'local'" type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'rules' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'rules'" @click="tab = 'rules'"><IconList :size="16" /><span>匹配规则</span></button>
         <button type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'sites' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'sites'" @click="tab = 'sites'"><IconWorld :size="16" /><span>站点连通</span></button>
       </div>
+    </template>
+    <template #content>
       <GroupMatchingRules v-if="visible && workspace?.mode === 'local'" v-show="tab === 'rules'" :group-name="groupName" @close="dialog?.close()" />
-      <div v-if="visible && tab === 'sites'" class="min-h-0 overflow-y-auto"><SiteTargetSettings :group-name="groupName" /></div>
-      <p v-if="tab === 'selection' && !selectable" class="text-sm text-base-content/65">此组保留核心的 {{ view?.groups.find(group => group.name === groupName)?.type }} 自动算法，不能叠加自动选点；仍可配置站点连通检测。</p>
-      <form v-if="tab === 'selection' && selectable" class="flex min-h-0 flex-1 flex-col gap-4" @submit.prevent="persist">
+      <div v-if="visible && tab === 'sites'" class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"><SiteTargetSettings :group-name="groupName" :scroll-list="false" /></div>
+      <p v-if="tab === 'selection' && !selectable" class="min-h-0 overflow-y-auto text-sm text-base-content/65">此组保留核心的 {{ view?.groups.find(group => group.name === groupName)?.type }} 自动算法，不能叠加自动选点；仍可配置站点连通检测。</p>
+      <form v-if="tab === 'selection' && selectable" class="flex min-h-0 flex-1 flex-col gap-4" :class="{ 'pool-editor': editorKind }" @submit.prevent="persist">
         <template v-if="!editorKind">
-          <div class="min-h-0 space-y-4 overflow-y-auto">
+          <div class="min-h-0 flex-1 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
             <label class="flex min-h-11 items-center justify-between gap-3">自动选点<input v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="busy" /></label>
             <template v-if="enabled">
               <label class="flex min-h-11 items-center justify-between gap-3 text-sm">优选恢复后自动回切<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="busy" /></label>
@@ -228,7 +221,7 @@ onUnmounted(() => { disposed = true; close() })
             <button type="button" class="btn btn-sm min-h-11" :class="onlySelected ? 'btn-primary' : 'btn-ghost'" :aria-pressed="onlySelected" @click="onlySelected = true"><IconCheck :size="16" /><span>仅看已选 {{ editingPool.length }}</span></button>
           </div>
           <p v-if="totalSelected >= 32" class="shrink-0 text-xs text-warning">已达 32 个上限，请先取消已有选择再添加节点。</p>
-          <div class="min-h-0 flex-1 space-y-1 overflow-y-auto" :aria-label="`${editorLabel}节点编辑列表`">
+          <div class="pool-list min-h-0 flex-1 space-y-1 overflow-y-auto [scrollbar-gutter:stable]" :aria-label="`${editorLabel}节点编辑列表`">
             <label v-for="name in visibleNodes" :key="name" class="flex min-h-11 items-center gap-3 rounded-lg px-2 py-3 text-sm" :class="nodeDisabled(name) ? 'cursor-not-allowed bg-base-200 text-base-content/40' : 'cursor-pointer hover:bg-base-200'">
               <input type="checkbox" class="checkbox checkbox-primary checkbox-sm shrink-0" :checked="editingPool.includes(name)" :disabled="nodeDisabled(name)" :aria-label="`${editorLabel}：${name}`" @change="toggleNode(name)" />
               <span class="min-w-0 break-all">
@@ -242,7 +235,20 @@ onUnmounted(() => { disposed = true; close() })
           <div class="flex shrink-0 flex-wrap justify-between gap-2 border-t border-base-content/10 pt-3 text-xs text-base-content/65" aria-live="polite"><span>{{ editorLabel }} {{ editingPool.length }} 个</span><span>合计已选 {{ totalSelected }} / 32</span></div>
         </template>
       </form>
-    </div>
-    <form method="dialog" class="modal-backdrop"><button aria-label="关闭自动选择设置">关闭</button></form>
-  </dialog>
+    </template>
+  </Modal>
 </template>
+
+<style scoped>
+/* Short viewports scroll the editor as one region so its controls cannot squeeze the list away. */
+@media (max-height: 540px) {
+  .pool-editor {
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  .pool-editor .pool-list {
+    flex: none;
+    overflow-y: visible;
+  }
+}
+</style>
