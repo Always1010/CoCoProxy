@@ -27,6 +27,16 @@ export function readBuildSelection(args) {
 const pathKeys = ['workspace', 'source', 'mirror', 'snapshot', 'runtimeDependencies', 'toolingDependencies', 'upstreamArchive', 'upstreamDependencies', 'core', 'releases'];
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = code => { throw Object.assign(new Error(code), { code }); };
+export function buildFailureMessage(error) {
+  const code = error.code?.startsWith('BUILD_') ? error.code : 'BUILD_FAILED';
+  const guidance = {
+    BUILD_FRONTEND_BASE_UPGRADE_REQUIRED: '旧安装缺少局部更新基线。请先不带 --components frontend 完成一次全量构建部署。',
+    BUILD_FRONTEND_BACKEND_CHANGED: '前端以外的构建输入已变化，不能局部更新；请使用默认全量构建部署。',
+    BUILD_FRONTEND_BASE_REQUIRED: '未找到可核验的管理服务基线；核对安装，或使用 --base-release 指定已有发行目录。',
+    BUILD_COMPONENTS_UNSUPPORTED: '当前只支持 --components all 或 frontend。',
+  };
+  return `${code}${guidance[code] ? '\n' + guidance[code] : ''}`;
+}
 const inside = (parent, child) => { const part = relative(parent, child); return part !== '' && part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part); };
 const json = async path => JSON.parse((await regular(path)).toString('utf8'));
 function relativePath(value) {
@@ -197,6 +207,7 @@ export async function frontendBaseline(config, baseRelease, execute) {
     return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] };
   });
   const backendSHA = backendInputSha256(entries);
+  if (!manifest.buildInputs?.backendInputSha256) fail('BUILD_FRONTEND_BASE_UPGRADE_REQUIRED');
   if (manifest.buildInputs?.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
   return { schemaVersion: 1, baseManifestSha256, backendInputSha256: backendSHA };
 }
@@ -290,10 +301,11 @@ export async function buildReleaseMain(deploy = false) {
         '--config', args[1], '--internal-lock', token, '--components', selection.components,
         ...(selection.baseRelease ? ['--base-release', selection.baseRelease] : []), ...(selection.preview ? ['--preview'] : [])], { stdio: ['inherit', 'inherit', 'inherit', lock.fd],
         env: { ...process.env, COCOPROXY_BUILD_LOCK_TOKEN: token }, windowsHide: true });
-      await new Promise((resolveChild, reject) => { child.on('error', reject); child.on('close', code => code === 0 ? resolveChild() : reject(Object.assign(new Error('BUILD_LOCK_OR_CHILD_FAILED'), { code: 'BUILD_LOCK_OR_CHILD_FAILED' }))); });
+      const code = await new Promise((resolveChild, reject) => { child.on('error', reject); child.on('close', code => resolveChild(code)); });
+      if (code !== 0) process.exitCode = Number.isInteger(code) && code > 0 ? code : 1;
     }
   } catch (error) {
-    process.stderr.write(`${error.code?.startsWith('BUILD_') ? error.code : 'BUILD_FAILED'}\n`); process.exitCode = 1;
+    process.stderr.write(`${buildFailureMessage(error)}\n`); process.exitCode = 1;
   } finally { await lock?.close(); }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await buildReleaseMain();
