@@ -1,13 +1,25 @@
 <script setup lang="ts">
-import { IconArrowLeft, IconCheck, IconChevronDown, IconChevronUp, IconEdit, IconInfoCircle, IconList, IconSettings, IconWorld, IconX } from '@tabler/icons-vue'
+import { IconArrowLeft, IconCheck, IconChevronDown, IconChevronUp, IconEdit, IconInfoCircle, IconList, IconReload, IconSettings, IconWorld, IconX } from '@tabler/icons-vue'
 import type { AutomaticStatus, AutoGroupPolicy } from '~/composables/useWorkspace'
-import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
+import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import GroupMatchingRules from '~/components/GroupMatchingRules.vue'
 
 const props = defineProps<{ groupName: string; selectable: boolean }>()
-const { api, view, workspace, overrides, busy, error, run, save, editOverrides } = useWorkspace()
+const { api, view, workspace, overrides, busy, run, save, load, editOverrides } = useWorkspace()
 const proxyRefresh = useProxyRefresh()
-const dialog = ref<{ open: () => void; close: () => void }>()
+const dialog = ref<{ open: () => void; close: (force?: boolean) => void }>()
+const rulesEditor = ref<{ dirty: boolean; saving: boolean }>()
+const sitesEditor = ref<{ dirty: boolean; saving: boolean }>()
+const sitesVisited = ref(false)
+const confirmClose = ref(false)
+type Destination = { path: string; query: Record<string, string> }
+const destination = ref<Destination>()
+const saving = ref(false)
+const saved = ref(false)
+const saveError = ref('')
+const refreshWarning = ref('')
+const needsRead = ref(false)
+const locked = computed(() => busy.value || saving.value || !!rulesEditor.value?.saving || !!sitesEditor.value?.saving)
 const enabled = ref(false)
 const preferred = ref<string[]>([])
 const fallback = ref<string[]>([])
@@ -36,6 +48,35 @@ const nodes = computed(() => {
 const totalSelected = computed(() => preferred.value.length + fallback.value.length)
 function draftSignature() { return JSON.stringify([enabled.value, preferred.value, fallback.value, returnToPreferred.value]) }
 const changed = computed(() => draftSignature() !== initialDraft.value)
+const dirtyTabs = computed(() => [
+  changed.value && props.selectable ? '节点选择' : '',
+  rulesEditor.value?.dirty ? '匹配规则' : '',
+  sitesEditor.value?.dirty ? '站点连通' : '',
+].filter(Boolean))
+function beforeClose() {
+  if (locked.value) return false
+  if (!dirtyTabs.value.length) return true
+  confirmClose.value = true
+  return false
+}
+function continueEditing() { confirmClose.value = false; destination.value = undefined }
+function discardAndClose() {
+  if (locked.value) return
+  const target = destination.value
+  confirmClose.value = false
+  dialog.value?.close(true)
+  if (target) void navigateTo(target)
+}
+function requestNavigation(target: Destination) {
+  if (locked.value) return
+  destination.value = target
+  if (beforeClose()) discardAndClose()
+}
+function selectTab(value: 'selection' | 'rules' | 'sites') {
+  if (locked.value) return
+  tab.value = value
+  if (value === 'sites') sitesVisited.value = true
+}
 const editingPool = computed(() => editorKind.value === 'fallback' ? fallback.value : preferred.value)
 const otherPool = computed(() => editorKind.value === 'fallback' ? preferred.value : fallback.value)
 const editorLabel = computed(() => editorKind.value === 'fallback' ? '备选' : '优选')
@@ -48,13 +89,14 @@ const visibleNodes = computed(() => {
 })
 function pool(kind: PoolKind) { return kind === 'preferred' ? preferred.value : fallback.value }
 function editPool(kind: PoolKind) {
+  if (locked.value) return
   editorKind.value = kind
   search.value = ''
   onlySelected.value = false
   editorSelected.value = [...pool(kind)]
 }
 function nodeDisabled(name: string) {
-  return busy.value || otherPool.value.includes(name)
+  return locked.value || otherPool.value.includes(name)
     || (!editingPool.value.includes(name) && (totalSelected.value >= 32 || !nodes.value.includes(name)))
 }
 function toggleNode(name: string) {
@@ -109,6 +151,13 @@ function close() {
   if (timer) clearTimeout(timer)
 }
 function open() {
+  confirmClose.value = false
+  destination.value = undefined
+  sitesVisited.value = false
+  saved.value = false
+  saveError.value = ''
+  refreshWarning.value = ''
+  needsRead.value = false
   tab.value = 'selection'
   editorKind.value = null
   expanded.value = { preferred: false, fallback: false }
@@ -125,29 +174,58 @@ function open() {
   dialog.value?.open()
   void refreshStatus(++session)
 }
-function openSites() { open(); tab.value = 'sites' }
-function openRules() { open(); tab.value = 'rules' }
+function openSites() { open(); selectTab('sites') }
+function openRules() { open(); selectTab('rules') }
 defineExpose({ open, openSites, openRules })
 async function persist() {
-  if (editorKind.value || invalid.value || busy.value) return
-  await run(async () => {
-    const policy: AutoGroupPolicy = { enabled: enabled.value, preferred: [...preferred.value], fallback: [...fallback.value], returnToPreferred: returnToPreferred.value }
-    await save(settings => {
-      const target = editOverrides(settings)
-      if (enabled.value || target.automatic?.[props.groupName] || preferred.value.length || fallback.value.length) {
-        (target.automatic ??= {})[props.groupName] = policy
+  if (editorKind.value || invalid.value || locked.value || !changed.value || needsRead.value) return
+  saving.value = true
+  saveError.value = ''; refreshWarning.value = ''
+  try {
+    await run(async () => {
+      try {
+        const policy: AutoGroupPolicy = { enabled: enabled.value, preferred: [...preferred.value], fallback: [...fallback.value], returnToPreferred: returnToPreferred.value }
+        await save(settings => {
+          const target = editOverrides(settings)
+          if (enabled.value || target.automatic?.[props.groupName] || preferred.value.length || fallback.value.length) {
+            (target.automatic ??= {})[props.groupName] = policy
+          }
+          if (!enabled.value) {
+            const current = view.value?.groups.find(group => group.name === props.groupName)?.activeSelected
+            if (current && nodes.value.includes(current)) target.selections[props.groupName] = current
+          }
+        }, '节点设置已保存并生效')
+        initialDraft.value = draftSignature()
+        saved.value = true
+      } catch (cause) {
+        saveError.value = cocoproxyErrorMessage(cause)
+        needsRead.value = cause instanceof CoCoProxyError && ['NETWORK_UNKNOWN', 'MANAGEMENT_UNAVAILABLE', 'CONFIRM_FAILED', 'WORKSPACE_CONFLICT'].includes(cause.code)
+        return
       }
-      if (!enabled.value) {
-        const current = view.value?.groups.find(group => group.name === props.groupName)?.activeSelected
-        if (current && nodes.value.includes(current)) target.selections[props.groupName] = current
-      }
-    }, enabled.value ? '自动选择已启用' : '已切换为手动选择')
-    await proxyRefresh.refresh()
-    initialDraft.value = draftSignature()
-  })
+      try {
+        await proxyRefresh.refresh()
+        if (proxyRefresh.error.value) refreshWarning.value = '节点设置已生效，列表刷新失败。'
+      } catch { refreshWarning.value = '节点设置已生效，列表刷新失败。' }
+    })
+  } finally { saving.value = false }
 }
-watch(() => props.groupName, () => { dialog.value?.close(); close() })
-watch(() => JSON.stringify([view.value?.workspace.mode, view.value?.workspace.subscriptionId, view.value?.workspace.sourceIds]), () => { dialog.value?.close(); close() })
+async function reread() {
+  if (locked.value) return
+  saving.value = true
+  try {
+    await load()
+    const policy = overrides.value.automatic?.[props.groupName]
+    const current = JSON.stringify([!!policy && policy.enabled !== false, policy?.preferred ?? [], policy?.fallback ?? [], policy?.returnToPreferred ?? true])
+    if (current === draftSignature() && !view.value?.pending) {
+      initialDraft.value = current; saved.value = true; saveError.value = ''
+    } else saveError.value = '状态已重新读取，修改尚未确认生效，请核对后重试。'
+    needsRead.value = false
+  } catch (cause) { saveError.value = cocoproxyErrorMessage(cause) }
+  finally { saving.value = false }
+}
+watch(draftSignature, () => { saveError.value = ''; refreshWarning.value = '' })
+watch(() => props.groupName, () => { dialog.value?.close(true); close() })
+watch(() => JSON.stringify([view.value?.workspace.mode, view.value?.workspace.subscriptionId, view.value?.workspace.sourceIds]), () => { dialog.value?.close(true); close() })
 onUnmounted(() => { disposed = true; close() })
 </script>
 
@@ -155,29 +233,33 @@ onUnmounted(() => { disposed = true; close() })
   <span class="shrink-0">
     <button type="button" class="btn btn-ghost btn-sm" :aria-label="`${groupName} 组设置`" @click="open"><IconSettings :size="18" /><span>组设置</span></button>
   </span>
-  <Modal ref="dialog" :title="editorKind ? `编辑${editorLabel}` : `${groupName} · 组设置`" @close="close">
+  <Modal ref="dialog" :title="editorKind ? `编辑${editorLabel}` : `${groupName} · 组设置`" :before-close="beforeClose" :close-disabled="locked" @close="close">
     <template #tabs>
-      <button v-if="editorKind" type="button" class="btn btn-ghost min-h-11" @click="editorKind = null"><IconArrowLeft :size="16" /><span>返回组设置</span></button>
+      <button v-if="editorKind" type="button" class="btn btn-ghost min-h-11" :disabled="locked || confirmClose" @click="editorKind = null"><IconArrowLeft :size="16" /><span>返回组设置</span></button>
       <div v-else class="flex flex-wrap gap-2" role="tablist" aria-label="组设置类别">
-        <button type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'selection' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'selection'" @click="tab = 'selection'"><IconList :size="16" /><span>节点选择</span></button>
-        <button v-if="workspace?.mode === 'local'" type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'rules' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'rules'" @click="tab = 'rules'"><IconList :size="16" /><span>匹配规则</span></button>
-        <button type="button" role="tab" class="btn btn-sm min-h-11" :class="tab === 'sites' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'sites'" @click="tab = 'sites'"><IconWorld :size="16" /><span>站点连通</span></button>
+        <button type="button" role="tab" class="btn btn-sm min-h-11" :disabled="locked || confirmClose" :class="tab === 'selection' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'selection'" @click="selectTab('selection')"><IconList :size="16" /><span>节点选择</span></button>
+        <button v-if="workspace?.mode === 'local'" type="button" role="tab" class="btn btn-sm min-h-11" :disabled="locked || confirmClose" :class="tab === 'rules' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'rules'" @click="selectTab('rules')"><IconList :size="16" /><span>匹配规则</span></button>
+        <button type="button" role="tab" class="btn btn-sm min-h-11" :disabled="locked || confirmClose" :class="tab === 'sites' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'sites'" @click="selectTab('sites')"><IconWorld :size="16" /><span>站点连通</span></button>
       </div>
     </template>
     <template #content>
-      <GroupMatchingRules v-if="visible && workspace?.mode === 'local'" v-show="tab === 'rules'" :group-name="groupName" @close="dialog?.close()" />
-      <div v-if="visible && tab === 'sites'" class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"><SiteTargetSettings :group-name="groupName" :scroll-list="false" /></div>
-      <p v-if="tab === 'selection' && !selectable" class="min-h-0 overflow-y-auto text-sm text-base-content/65">此组保留核心的 {{ view?.groups.find(group => group.name === groupName)?.type }} 自动算法，不能叠加自动选点；仍可配置站点连通检测。</p>
-      <form v-if="tab === 'selection' && selectable" class="flex min-h-0 flex-1 flex-col gap-4" :class="{ 'pool-editor': editorKind }" @submit.prevent="persist">
+      <div v-if="confirmClose" role="alertdialog" aria-label="放弃未保存修改" class="flex min-h-0 flex-1 flex-col justify-center gap-4">
+        <p class="text-sm">{{ dirtyTabs.join('、') }}有未保存修改，{{ destination ? '离开' : '关闭' }}将丢弃这些修改。已成功保存的设置不受影响。</p>
+        <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn btn-ghost min-h-11" @click="continueEditing"><IconArrowLeft :size="16" /><span>继续编辑</span></button><button type="button" class="btn btn-error min-h-11" @click="discardAndClose"><IconX :size="16" /><span>{{ destination ? '放弃并离开' : '放弃并关闭' }}</span></button></div>
+      </div>
+      <GroupMatchingRules v-if="visible && workspace?.mode === 'local'" ref="rulesEditor" v-show="tab === 'rules' && !confirmClose" :group-name="groupName" @navigate="requestNavigation" />
+      <SiteTargetSettings v-if="visible && sitesVisited" ref="sitesEditor" v-show="tab === 'sites' && !confirmClose" :group-name="groupName" :scroll-list="false" />
+      <p v-if="tab === 'selection' && !selectable && !confirmClose" class="min-h-0 overflow-y-auto text-sm text-base-content/65">此组保留核心的 {{ view?.groups.find(group => group.name === groupName)?.type }} 自动算法，不能叠加自动选点；仍可配置站点连通检测。</p>
+      <form v-if="tab === 'selection' && selectable" v-show="!confirmClose" class="flex min-h-0 flex-1 flex-col gap-4" :class="{ 'pool-editor': editorKind }" @submit.prevent="persist">
         <template v-if="!editorKind">
           <div class="min-h-0 flex-1 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
-            <label class="flex min-h-11 items-center justify-between gap-3">自动选点<input v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="busy" /></label>
+            <label class="flex min-h-11 items-center justify-between gap-3">自动选点<input v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
             <template v-if="enabled">
-              <label class="flex min-h-11 items-center justify-between gap-3 text-sm">优选恢复后自动回切<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="busy" /></label>
+              <label class="flex min-h-11 items-center justify-between gap-3 text-sm">优选恢复后自动回切<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
               <section v-for="kind in (['preferred', 'fallback'] as const)" :key="kind" class="rounded-lg border border-base-content/10 p-3" :aria-label="kind === 'preferred' ? '优选节点' : '备选节点'">
                 <div class="flex items-center justify-between gap-2">
                   <h3 class="text-sm font-medium">{{ kind === 'preferred' ? '优选' : '备选' }} · {{ pool(kind).length }} 个</h3>
-                  <button type="button" class="btn btn-ghost btn-sm min-h-11 shrink-0" :disabled="busy" @click="editPool(kind)"><IconEdit :size="16" /><span>编辑{{ kind === 'preferred' ? '优选' : '备选' }}</span></button>
+                  <button type="button" class="btn btn-ghost btn-sm min-h-11 shrink-0" :disabled="locked" @click="editPool(kind)"><IconEdit :size="16" /><span>编辑{{ kind === 'preferred' ? '优选' : '备选' }}</span></button>
                 </div>
                 <p class="mb-2 text-xs text-base-content/60">{{ kind === 'preferred' ? '优先使用这些节点' : '优选不可用时使用' }}</p>
                 <ul v-if="pool(kind).length" class="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -192,8 +274,6 @@ onUnmounted(() => { disposed = true; close() })
               <p class="text-xs text-base-content/60">已选 {{ totalSelected }} / 32 个节点；至少选择 1 个优选节点。</p>
             </template>
             <p v-else class="text-xs text-base-content/60">当前为手动选择；已保留优选、备选和回切设置。</p>
-            <p v-if="changed" class="text-xs text-warning">有未保存修改</p>
-            <p v-if="invalid || error" role="alert" class="text-sm text-error">{{ invalid || error }}</p>
             <section v-if="groupStatus || events.length || statusError" class="space-y-2 rounded-lg bg-base-200 p-3 text-xs" aria-label="自动选择运行状态" aria-live="polite">
               <template v-if="groupStatus">
                 <div>{{ phaseLabel(groupStatus.phase) }} · 当前：{{ groupStatus.current ?? '尚未选择' }}</div>
@@ -211,7 +291,16 @@ onUnmounted(() => { disposed = true; close() })
               <p class="leading-relaxed">开启后按检测结果自动选择节点；关闭后手动选择。正常时每 30 秒检测当前节点，故障时按需检测候选节点。优选不可用时使用备选；开启回切后按 5、10、15 分钟退避检测优选恢复。停用后保留候选和回切设置。此处的自动选点独立于手动站点连通检测。仅可选择此组内的具体代理节点；优选与备选不重复，合计最多 32 个。</p>
             </details>
           </div>
-          <div class="modal-action mt-0 shrink-0"><button type="button" class="btn btn-ghost min-h-11" :disabled="busy" @click="dialog?.close()"><IconX :size="16" /><span>取消</span></button><button type="submit" class="btn btn-primary min-h-11" :disabled="busy || !!invalid"><IconCheck :size="16" /><span>{{ busy ? '正在保存…' : '保存节点设置' }}</span></button></div>
+          <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-base-content/10 pt-3">
+            <div class="min-w-0 flex-1 basis-40 text-sm" aria-live="polite">
+              <p v-if="saving" role="status">正在保存或核对节点设置…</p>
+              <p v-else-if="saveError || needsRead || invalid" role="alert" class="text-error">{{ saveError || (needsRead ? '暂未确认节点设置是否生效。' : invalid) }}{{ needsRead ? ' 请重新读取状态后核对。' : '' }}</p>
+              <p v-else-if="changed" class="text-warning">有未保存修改</p>
+              <p v-else-if="saved" role="status" class="flex items-center gap-1" :class="refreshWarning ? 'text-warning' : 'text-success'"><IconCheck :size="16" class="shrink-0" />{{ refreshWarning || '节点设置已保存并生效' }}</p>
+            </div>
+            <button v-if="needsRead" type="button" class="btn btn-outline min-h-11" :disabled="locked" @click="reread"><IconReload :size="16" /><span>重新读取状态</span></button>
+            <button type="submit" class="btn btn-primary min-h-11" :disabled="locked || !!invalid || !changed || needsRead"><span v-if="saving" class="loading loading-spinner loading-xs" /><IconCheck v-else :size="16" /><span>{{ saving ? '正在保存…' : saved && !changed ? '已保存' : '保存节点设置' }}</span></button>
+          </div>
         </template>
         <template v-else>
           <p class="shrink-0 text-xs leading-relaxed text-base-content/65">勾选加入{{ editorLabel }}，取消勾选移出。修改暂存，返回组设置后点击“保存”生效。已在{{ otherLabel }}中的节点置灰并排在末尾，需先从{{ otherLabel }}移除后才能选择。</p>
