@@ -94,6 +94,8 @@ test('component selection rejects unsupported modes; a frontend base must match 
   const result = await runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base });
   assert.equal(result.components, 'frontend');
   assert.equal(state.commands.some(item => item.command === 'npm'), false);
+  await write(join(base, 'manifest.json'), JSON.stringify({ ...manifest, buildInputs: undefined }));
+  await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BASE_UPGRADE_REQUIRED' });
   manifest.buildInputs.backendInputSha256 = '0'.repeat(64);
   await write(join(base, 'manifest.json'), JSON.stringify(manifest));
   await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BACKEND_CHANGED' });

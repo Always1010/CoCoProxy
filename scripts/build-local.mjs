@@ -4,7 +4,7 @@ import { chmod, copyFile, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
-import { runBuildRelease, readBuildSelection, frontendBaseline } from './build-release.mjs';
+import { runBuildRelease, readBuildSelection, frontendBaseline, buildFailureMessage } from './build-release.mjs';
 import { validateReleaseMetadata, validateReleaseTooling } from './release-metadata.mjs';
 import { canonicalLocalPath, cleanLocalCommit, localFail, readLocalJSON, resolveLocalPaths, runLocalCommand,
   within, withLocalBuildLock, writeLocalJSON } from './local-release-state.mjs';
@@ -217,5 +217,5 @@ export async function localBuildMain(args) {
   if (!selection.preview) console.error('构建与安装包校验成功。部署：sudo bash scripts/deploy-local.sh' + (workspace ? ` --workspace ${JSON.stringify(workspace)}` : ''));
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  localBuildMain(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });
+  localBuildMain(process.argv.slice(2)).catch(error => { console.error(error.code?.startsWith('BUILD_') ? buildFailureMessage(error) : error.message); process.exitCode = 1; });
 }
