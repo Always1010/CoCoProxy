@@ -146,6 +146,10 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   const backendOutput = options.output + '-backend';
   const backendReceipt = await stageExplicitRelease({ ...options, output: backendOutput, componentUpdate });
   assert.deepEqual((await verifyRelease(backendOutput, backendReceipt.manifestSha256)).componentUpdate, componentUpdate);
+  const coreUpdate = { ...componentUpdate, components: 'core' as const, reusedInputSha256: verified.serverInputSha256! };
+  const coreOutput = options.output + '-core';
+  const coreReceipt = await stageExplicitRelease({ ...options, output: coreOutput, componentUpdate: coreUpdate });
+  assert.deepEqual((await verifyRelease(coreOutput, coreReceipt.manifestSha256)).componentUpdate, coreUpdate);
   await rejects(stageExplicitRelease({ ...options, output: options.output + '-invalid', frontendUpdate: { ...frontendUpdate, backendInputSha256: '0'.repeat(64) } }), 'BUILD_FRONTEND_BACKEND_CHANGED');
   for (const [path, changedPath, mode, code] of [
     ['README.md', 'README.md', '0755', 'INSTALL_MANIFEST_INVALID'],

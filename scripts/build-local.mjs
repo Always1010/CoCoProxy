@@ -194,7 +194,7 @@ export async function runLocalBuild({ source, workspace, prepare = false, compon
 
 export async function localBuildMain(args) {
   if (args.includes('--help')) {
-    console.log('bash scripts/build-release.sh [--prepare] [--workspace /absolute/build-directory] [--components all|frontend|backend] [--base-release ABSOLUTE_RELEASE] [--preview]\n默认全量；frontend 要求可核验且后端输入一致的基线。预览不构建、不覆盖成功记录，需要已有构建工作区。首次 --prepare 允许按锁下载构建输入和安装项目依赖；不安装系统软件。'); return;
+    console.log('bash scripts/build-release.sh [--prepare] [--workspace /absolute/build-directory] [--components all|frontend|backend|core] [--base-release ABSOLUTE_RELEASE] [--preview]\n默认全量；单项模式要求可核验且未选组件输入一致的基线。frontend 保留核心运行；backend/core 部署进入完整维护窗口。预览不构建、不覆盖成功记录，需要已有构建工作区。首次 --prepare 允许按锁下载构建输入和安装项目依赖；不安装系统软件。'); return;
   }
   const { rest, ...selection } = readBuildSelection(args);
   args = rest;

@@ -6,6 +6,8 @@
 
 后端产物的 `componentUpdate` 记录 `components: backend`、基线 manifest 和复用输入摘要，`buildInputs.frontendInputSha256` 标识可复用 UI 的输入。安装器核对基线和 UI 文件清单/字节，并拒绝改变核心；声明不改变完整维护流程，也不能用于首次安装。
 
+核心产物使用 `components: core` 和 `buildInputs.serverInputSha256`，仅允许复用完整 Server/UI 后装配审核核心。复用输入摘要排除核心清单/审核记录的文件摘要，但额外绑定管理组件元数据，防止同时升级管理组件。安装器对 Server/UI 全部文件的路径、模式、大小、摘要逐项比对，拒绝混用变化的服务端或前端产物。
+
 每份新载荷记录 `buildInputs.backendInputSha256`，覆盖除 UI、文档和测试之外的保守构建输入集合。日常前端构建可声明 `frontendUpdate`，绑定基线 manifest 和相同的后端输入摘要；装配器复核摘要，不接受将已变化的后端声明为前端更新。此类产物仍包含完整文件清单，但其部署范围固定为前端，不能用于首次安装。普通全量载荷和 GitHub 正式发行不带此局部部署声明。
 
 [Release 工作流](../.github/workflows/release.yml) 在推送 `v<package.json 版本>` 的 Tag 时运行，例如首版 `v0.1.0-preview.1`。Tag 必须符合 SemVer，且与根 package.json、package-lock.json 版本一致；带预发布后缀的版本自动标记为 GitHub Pre-release。

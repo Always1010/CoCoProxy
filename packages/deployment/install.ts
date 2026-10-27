@@ -212,7 +212,7 @@ export function assertDeploymentStateCompatibility(files: Awaited<ReturnType<typ
 /** No links, sockets, devices, private areas or unlisted files enter a release. */
 export async function verifyRelease(payload: string, expected: string): Promise<{ files: Entry[]; coreSHA: string;
   frontendUpdate?: ReturnType<typeof validateFrontendUpdate>; backendInputSha256?: string;
-  componentUpdate?: ReturnType<typeof validateComponentUpdate>; frontendInputSha256?: string }> {
+  componentUpdate?: ReturnType<typeof validateComponentUpdate>; frontendInputSha256?: string; serverInputSha256?: string }> {
   require(HASH.test(expected), 'INSTALL_MANIFEST_HASH_REQUIRED');
   // Cross-platform artifact verification is also used by the synthetic tests.
   require(resolve(payload) === payload && !(await lstat(payload)).isSymbolicLink(), 'INSTALL_PAYLOAD_PATH_INVALID');
@@ -269,21 +269,24 @@ export async function verifyRelease(payload: string, expected: string): Promise<
   let componentUpdate;
   if (value.componentUpdate !== undefined) {
     try { componentUpdate = validateComponentUpdate(value.componentUpdate); } catch { throw new InstallError('INSTALL_COMPONENT_DECLARATION_INVALID'); }
-    require(!frontendUpdate && componentUpdate.reusedInputSha256 === value.buildInputs?.frontendInputSha256, 'INSTALL_COMPONENT_DECLARATION_INVALID');
+    require(!frontendUpdate && componentUpdate.reusedInputSha256 === value.buildInputs?.[componentUpdate.components === 'core' ? 'serverInputSha256' : 'frontendInputSha256'], 'INSTALL_COMPONENT_DECLARATION_INVALID');
   }
   return { files: value.files as Entry[], coreSHA: core.sha256 as string, frontendUpdate, componentUpdate,
     backendInputSha256: value.buildInputs?.backendInputSha256 as string | undefined,
-    frontendInputSha256: value.buildInputs?.frontendInputSha256 as string | undefined };
+    frontendInputSha256: value.buildInputs?.frontendInputSha256 as string | undefined,
+    serverInputSha256: value.buildInputs?.serverInputSha256 as string | undefined };
 }
 
-/** Reusing UI requires both matching inputs and the exact installed public bytes. */
+/** Component reuse binds both inputs and every byte of the reused output. */
 export function assertComponentReuse(previous: Awaited<ReturnType<typeof verifyRelease>>, next: Awaited<ReturnType<typeof verifyRelease>>, previousSHA: string) {
   const update = next.componentUpdate;
-  require(update && update.baseManifestSha256 === previousSHA && update.reusedInputSha256 === previous.frontendInputSha256,
+  const core = update?.components === 'core';
+  require(update && update.baseManifestSha256 === previousSHA && update.reusedInputSha256 === (core ? previous.serverInputSha256 : previous.frontendInputSha256),
     'INSTALL_COMPONENT_BASE_CHANGED');
-  const publicFiles = (release: typeof previous) => JSON.stringify(release.files.filter(file => file.path.startsWith('server/.output/public/'))
+  const prefix = core ? 'server/.output/' : 'server/.output/public/';
+  const reusedFiles = (release: typeof previous) => JSON.stringify(release.files.filter(file => file.path.startsWith(prefix))
     .map(file => [file.path, file.sha256, file.size, file.mode]).sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'en')));
-  require(next.coreSHA === previous.coreSHA && next.files.some(file => file.path.startsWith('server/.output/public/')) && publicFiles(previous) === publicFiles(next),
+  require((core || next.coreSHA === previous.coreSHA) && next.files.some(file => file.path.startsWith('server/.output/public/')) && reusedFiles(previous) === reusedFiles(next),
     'INSTALL_REUSED_PAYLOAD_CHANGED');
 }
 const pathHost: PathEvidenceHost = { resolve: realpath, info: async path => {
