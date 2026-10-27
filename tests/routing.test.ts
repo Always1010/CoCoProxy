@@ -4,7 +4,7 @@ import { buildLocalPolicy, localGroupChoices, serviceCatalog } from '../packages
 import { domesticDomainRules, domesticIpRules } from '../packages/routing/domestic-data.ts';
 import { legacyDomesticDomainRules } from '../packages/routing/legacy-domestic-data.ts';
 import { overseasDomainRules } from '../packages/routing/overseas-data.ts';
-import { compileConfig, ConfigError } from '../packages/config/index.ts';
+import { compileConfig, ConfigError, deploymentDnsOptions } from '../packages/config/index.ts';
 import { DOMESTIC_DOMAIN_PROVIDER, DOMESTIC_IP_PROVIDER, OVERSEAS_DOMAIN_PROVIDER, overseasReferenceRule, domesticReferenceRules, localReferenceRules, expandCompilerRuleSets, upgradeCompilerRulePolicy } from '../packages/config/compact-rules.ts';
 import { compileAutomaticGatewayConfig, recompileAutomaticGatewayConfig } from '../packages/gateway/profile.ts';
 import type { JsonObject } from '../packages/config/index.ts';
@@ -87,6 +87,27 @@ test('pinned domestic resources retain exact, suffix, regex and IPv4 semantics',
   assert.equal(rules(value).filter((rule) => rule.startsWith('DOMAIN-REGEX,')).length, 3);
   assert.ok(!rules(value).some((rule) => rule.includes('no-resolve') || rule.startsWith('IP-CIDR6,')));
   assert.equal(rules(value).filter(rule => rule.startsWith('RULE-SET,')).length, 3);
+});
+
+test('Google service domains precede domestic suffixes and conflicting aggregates without taking YouTube rules', () => {
+  const value = policy({ selections: { Other: 'DIRECT' } });
+  for (const domain of ['services.googleapis.cn', 'other.googleapis.cn', 'gstatic.cn', 'fonts.gstatic.cn',
+    'google.cn', 'g.cn', 'googlecnapps.cn', 'gstaticcnapps.cn', 'gkecnapps.cn', 'googleapis-cn.com',
+    'gstatic-cn.com', 'googleplay.com', 'download.xn--ngstr-lra8j.com', 'redirector.gvt1.com',
+    'beacons.gvt2.com', 'gvt3.com', 'gvt1-cn.com', 'gvt2-cn.com', 'android.com', 'gmail.com',
+    'googlemail.com', 'pki.goog', 'recaptcha.net', 'recaptcha-cn.net', 'firebaseio.com',
+    'firebaseapp.com', 'crashlytics.com', 'app-measurement.com']) {
+    assert.equal(domainTarget(value, domain), 'Google', domain);
+  }
+  assert.ok(domesticDomainRules.includes('DOMAIN-SUFFIX,gvt2-cn.com'));
+  assert.ok(overseasDomainRules.includes('DOMAIN-SUFFIX,gvt2-cn.com'));
+  for (const domain of ['ggpht.com', 'ggpht.cn', 'googlevideo.com', 'youtubei.googleapis.com', 'yt3.googleusercontent.com']) {
+    assert.equal(domainTarget(value, domain), 'YouTube', domain);
+  }
+  assert.equal(domainTarget(value, 'unlisted.example.cn'), 'Domestic');
+  assert.equal(domainTarget(value, 'googleapis.cn.invalid'), 'Other');
+  assert.equal(domainTarget(value, 'notgoogleapis.cn'), 'Domestic');
+  assert.equal(domainTarget(policy({ rules: ['DOMAIN,services.googleapis.cn,DIRECT'] }), 'services.googleapis.cn'), 'DIRECT');
 });
 
 test('pinned overseas domains fill missing services while preserving domestic, business and manual priority', () => {
@@ -174,7 +195,7 @@ test('offline template compacts only pinned blocks and round-trips without accep
   const deployment = { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'EXAMPLE_ONLY', dnsPort: 15353, bootstrapResolvers: ['192.0.2.53'] };
   const result = compileConfig({ schemaVersion: 1, deployment, policy: value });
   assert.deepEqual(expandCompilerRuleSets(result.config).rules, value.rules);
-  assert.ok((result.config.rules as string[]).length < 110);
+  assert.ok((result.config.rules as string[]).length < 160);
   const sets = result.config['rule-providers'] as JsonObject;
   assert.deepEqual(Object.values(sets).map(set => (set as JsonObject).type), ['inline', 'inline', 'inline']);
   const restored = expandCompilerRuleSets(result.config);
@@ -215,8 +236,62 @@ test('offline template compacts only pinned blocks and round-trips without accep
   const directDns = deployment.bootstrapResolvers.map(server => `${server}#DIRECT`);
   assert.deepEqual((dns['nameserver-policy'] as JsonObject)[`rule-set:${DOMESTIC_DOMAIN_PROVIDER}`], directDns);
   assert.deepEqual((dns['nameserver-policy'] as JsonObject)['+.cn'], directDns);
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)['+.googleapis.cn'], dns.nameserver);
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)['+.gvt2-cn.com'], dns.nameserver);
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)['+.ggpht.cn'], dns.nameserver);
   const proxiedDomestic = compileConfig({ schemaVersion: 1, deployment, policy: policy({ selections: { Domestic: 'Proxy' } }) });
   assert.equal((proxiedDomestic.config.dns as JsonObject)['nameserver-policy'], undefined);
+});
+
+test('Google DNS exceptions use website resolvers, retain explicit overrides and round-trip through gateway recovery', () => {
+  const deployment = { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'EXAMPLE_ONLY', dnsPort: 15353,
+    bootstrapResolvers: ['192.0.2.53'], nameservers: ['https://resolver.example/dns-query'], directResolvers: ['192.0.2.54'] };
+  const value = policy(), result = compileConfig({ schemaVersion: 1, deployment, policy: value });
+  const dns = result.config.dns as JsonObject, nameservers = dns['nameserver-policy'] as JsonObject;
+  assert.deepEqual(nameservers['+.googleapis.cn'], deployment.nameservers);
+  assert.deepEqual(nameservers['+.gstatic.cn'], deployment.nameservers);
+  assert.deepEqual(nameservers['+.xn--ngstr-lra8j.com'], deployment.nameservers);
+  assert.deepEqual(nameservers['+.cn'], ['192.0.2.54#DIRECT']);
+  assert.deepEqual(nameservers[`rule-set:${DOMESTIC_DOMAIN_PROVIDER}`], ['192.0.2.54#DIRECT']);
+  assert.equal(deploymentDnsOptions(result.config).nameserverPolicy, undefined);
+  assert.equal(compileConfig({ schemaVersion: 1, policy: value, deployment: { ...deployment, ...deploymentDnsOptions(result.config) } }).id, result.id);
+
+  const explicit = { '+.googleapis.cn': ['https://custom.example/dns-query'], 'services.googleapis.cn': ['192.0.2.55'] };
+  const customized = compileConfig({ schemaVersion: 1, policy: value, deployment: { ...deployment, nameserverPolicy: explicit } });
+  assert.deepEqual(((customized.config.dns as JsonObject)['nameserver-policy'] as JsonObject)['+.googleapis.cn'], explicit['+.googleapis.cn']);
+  assert.deepEqual(deploymentDnsOptions(customized.config).nameserverPolicy, explicit);
+  assert.equal(compileConfig({ schemaVersion: 1, policy: value, deployment: { ...deployment, ...deploymentDnsOptions(customized.config) } }).id, customized.id);
+  const proxiedDomestic = compileConfig({ schemaVersion: 1, deployment: { ...deployment, ...deploymentDnsOptions(result.config) },
+    policy: policy({ selections: { Domestic: 'Proxy' } }) });
+  assert.equal((proxiedDomestic.config.dns as JsonObject)['nameserver-policy'], undefined);
+
+  // When domestic traffic is proxied there are no generated service entries;
+  // even an explicit policy equal to the website default must remain external.
+  const sameAsDefault = { '+.googleapis.cn': deployment.nameservers };
+  const proxiedPolicy = policy({ selections: { Domestic: 'Proxy' } });
+  const explicitProxied = compileConfig({ schemaVersion: 1, policy: proxiedPolicy,
+    deployment: { ...deployment, nameserverPolicy: sameAsDefault } });
+  assert.deepEqual(deploymentDnsOptions(explicitProxied.config).nameserverPolicy, sameAsDefault);
+  assert.equal(compileConfig({ schemaVersion: 1, policy: proxiedPolicy,
+    deployment: { ...deployment, ...deploymentDnsOptions(explicitProxied.config) } }).id, explicitProxied.id);
+
+  const network = { schemaVersion: 1, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', routerIPv4: '192.0.2.1',
+    routerMAC: '02:00:00:00:00:01', clientIPv4: '192.0.2.3', prefixLength: 24, dnsPort: 15353,
+    egressMark: 65536, egressTable: 2024, egressPriority: 8000, tunMtu: 1500 };
+  const gateway = compileAutomaticGatewayConfig({ schemaVersion: 1, deployment, policy: value }, network);
+  assert.equal(recompileAutomaticGatewayConfig(gateway.config, network).id, gateway.id);
+});
+
+test('previous local snapshots retain their original DNS behavior and configuration identity', () => {
+  const value = { ...policy(), 'x-cocoproxy-rule-mode': 'routing-v3' };
+  const deployment = { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'EXAMPLE_ONLY', dnsPort: 15353,
+    bootstrapResolvers: ['192.0.2.53'], nameservers: ['https://resolver.example/dns-query'] };
+  const old = compileConfig({ schemaVersion: 1, deployment, policy: value });
+  const dns = old.config.dns as JsonObject;
+  assert.equal((dns['nameserver-policy'] as JsonObject)['+.googleapis.cn'], undefined);
+  const restored = expandCompilerRuleSets(old.config);
+  for (const key of ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns']) delete restored[key];
+  assert.equal(compileConfig({ schemaVersion: 1, deployment: { ...deployment, ...deploymentDnsOptions(old.config) }, policy: restored }).id, old.id);
 });
 
 test('old fixed providers remain verifiable while a new workspace explicitly upgrades their assets', () => {

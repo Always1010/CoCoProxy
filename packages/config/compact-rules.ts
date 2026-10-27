@@ -4,12 +4,13 @@ import { legacyDomesticDomainRules } from '../routing/legacy-domestic-data.ts';
 import { overseasDomainRules } from '../routing/overseas-data.ts';
 
 export const DOMESTIC_POLICY_VERSION = 'domestic-v2';
-export const LOCAL_POLICY_VERSION = 'routing-v3';
+export const LOCAL_POLICY_VERSION = 'routing-v4';
 export const DOMESTIC_DOMAIN_PROVIDER = 'cocoproxy-domestic-domain-v2';
 export const DOMESTIC_IP_PROVIDER = 'cocoproxy-domestic-ip-v1';
 export const OVERSEAS_DOMAIN_PROVIDER = 'cocoproxy-overseas-domain-v1';
 const marker = 'x-cocoproxy-rule-mode';
 const legacyVersion = 'domestic-v1';
+const previousLocalVersion = 'routing-v3';
 const legacyDomains = 'cocoproxy-domestic-domain-v1';
 const legacyDomainRules = legacyDomesticDomainRules.map(rule => `${rule},Domestic`);
 const ipRules = domesticIpRules.map(rule => `${rule},Domestic`);
@@ -31,6 +32,22 @@ const legacyProviders: JsonObject = { [legacyDomains]: domainProvider(legacyDome
 const ownedDnsKey = `rule-set:${DOMESTIC_DOMAIN_PROVIDER}`;
 
 function invalid(): never { throw new ConfigError('PROTECTED_FIELD', '内部规则集合与固定资源不一致。'); }
+function isLocal(version: JsonValue | undefined): boolean { return version === LOCAL_POLICY_VERSION || version === previousLocalVersion; }
+function domesticDirect(config: JsonObject): boolean {
+  const domestic = (config['proxy-groups'] as JsonObject[] | undefined)?.find(group => group.name === 'Domestic');
+  return !!domestic && Array.isArray(domestic.proxies) && domestic.proxies[0] === 'DIRECT';
+}
+
+// Use the candidate's own service rules, so restoring an older snapshot does
+// not acquire new DNS entries when the service catalog changes later.
+function googleNameserverPolicy(config: JsonObject): JsonObject {
+  const dns = config.dns as JsonObject;
+  return Object.fromEntries((config.rules as string[]).flatMap(rule => {
+    const [type, domain, target] = rule.split(',');
+    if ((target !== 'Google' && target !== 'YouTube') || (type !== 'DOMAIN' && type !== 'DOMAIN-SUFFIX')) return [];
+    return [[type === 'DOMAIN' ? domain : `+.${domain}`, dns.nameserver]];
+  }));
+}
 function replaceOnce(rules: JsonValue[], original: readonly string[], replacement: readonly string[]): JsonValue[] {
   let offset = -1;
   for (let index = 0; index <= rules.length - original.length; index++) {
@@ -45,16 +62,16 @@ function replaceOnce(rules: JsonValue[], original: readonly string[], replacemen
 
 /** Only versioned, exact compiler references become legal. */
 export function isCompilerRuleReference(rule: string, policy: JsonObject): boolean {
-  return ((policy[marker] === DOMESTIC_POLICY_VERSION || policy[marker] === LOCAL_POLICY_VERSION) &&
+  return ((policy[marker] === DOMESTIC_POLICY_VERSION || isLocal(policy[marker])) &&
     (rule === domesticReferenceRules[0] || rule === compactIPs[0])) ||
-    (policy[marker] === LOCAL_POLICY_VERSION && rule === overseasReferenceRule);
+    (isLocal(policy[marker]) && rule === overseasReferenceRule);
 }
 
 /** The large immutable data enters only after bounded external input validation. */
 export function compactCompilerRuleSets(config: JsonObject): JsonObject {
   const version = config[marker];
   if (version === undefined) return config;
-  if ((version !== legacyVersion && version !== DOMESTIC_POLICY_VERSION && version !== LOCAL_POLICY_VERSION) || config['rule-providers'] !== undefined || !Array.isArray(config.rules)) invalid();
+  if ((version !== legacyVersion && version !== DOMESTIC_POLICY_VERSION && !isLocal(version)) || config['rule-providers'] !== undefined || !Array.isArray(config.rules)) invalid();
   // Logical global/direct modes intentionally have no domestic/overseas block.
   if (config.rules.length === 1 && ['MATCH,DIRECT', 'MATCH,Proxy'].includes(String(config.rules[0]))) {
     const result = { ...config }; delete result[marker]; return result;
@@ -64,26 +81,26 @@ export function compactCompilerRuleSets(config: JsonObject): JsonObject {
     if (rules.some(rule => typeof rule === 'string' && rule.startsWith('RULE-SET,') && rule !== legacyCompactDomains[0] && rule !== compactIPs[0])) invalid();
     return { ...config, rules, 'rule-providers': structuredClone(legacyProviders) };
   }
-  const references = version === LOCAL_POLICY_VERSION ? localReferenceRules : domesticReferenceRules;
-  const ownedRules = [domesticReferenceRules[0], ...compactIPs, ...(version === LOCAL_POLICY_VERSION ? [overseasReferenceRule] : [])];
+  const references = isLocal(version) ? localReferenceRules : domesticReferenceRules;
+  const ownedRules = [domesticReferenceRules[0], ...compactIPs, ...(isLocal(version) ? [overseasReferenceRule] : [])];
   const rules = replaceOnce(config.rules, references, references);
   if (rules.some(rule => typeof rule === 'string' && rule.startsWith('RULE-SET,') &&
       !ownedRules.includes(rule))) invalid();
   if (ownedRules.some(owned => rules.filter(rule => rule === owned).length !== 1)) invalid();
   const dns = config.dns as JsonObject;
-  const groups = config['proxy-groups'] as JsonObject[] | undefined;
-  const domestic = groups?.find(group => group.name === 'Domestic');
-  const direct = domestic && Array.isArray(domestic.proxies) && domestic.proxies[0] === 'DIRECT';
+  const direct = domesticDirect(config);
   const existing = dns['nameserver-policy'] as JsonObject | undefined;
   const localResolvers = dns['direct-nameserver'] ?? dns['default-nameserver'];
   // These queries resolve DIRECT destinations. Without an explicit DNS dialer,
   // respect-rules can send a private bootstrap address through Other/Proxy.
   const localDnsResolvers = (localResolvers as string[]).map(server => `${server}#DIRECT`);
-  return { ...config, rules, 'rule-providers': structuredClone(version === LOCAL_POLICY_VERSION ? localProviders : providers),
+  return { ...config, rules, 'rule-providers': structuredClone(isLocal(version) ? localProviders : providers),
     ...(direct ? { dns: { ...dns, 'respect-rules': true,
       'proxy-server-nameserver': dns['proxy-server-nameserver'] ?? dns['default-nameserver'],
       'direct-nameserver': localResolvers, 'nameserver-policy': {
-      '+.cn': localDnsResolvers, ...existing, [ownedDnsKey]: localDnsResolvers,
+      '+.cn': localDnsResolvers,
+      ...(version === LOCAL_POLICY_VERSION ? googleNameserverPolicy(config) : {}),
+      ...existing, [ownedDnsKey]: localDnsResolvers,
     } } } : {}) };
 }
 
@@ -93,12 +110,12 @@ export function compactCompilerRuleSets(config: JsonObject): JsonObject {
 export function expandCompilerRuleSets(config: JsonObject): JsonObject {
   if (config[marker] === undefined) return { ...config };
   const version = config[marker];
-  const expected = version === legacyVersion ? legacyProviders : version === DOMESTIC_POLICY_VERSION ? providers : version === LOCAL_POLICY_VERSION ? localProviders : null;
+  const expected = version === legacyVersion ? legacyProviders : version === DOMESTIC_POLICY_VERSION ? providers : isLocal(version) ? localProviders : null;
   if (!expected || !Array.isArray(config.rules) || canonicalJson(config['rule-providers'] ?? null) !== canonicalJson(expected)) invalid();
   const rules = version === legacyVersion
     ? replaceOnce(replaceOnce(config.rules, legacyCompactDomains, legacyDomainRules), compactIPs, ipRules)
-    : replaceOnce(config.rules, version === LOCAL_POLICY_VERSION ? localReferenceRules : domesticReferenceRules,
-      version === LOCAL_POLICY_VERSION ? localReferenceRules : domesticReferenceRules);
+    : replaceOnce(config.rules, isLocal(version) ? localReferenceRules : domesticReferenceRules,
+      isLocal(version) ? localReferenceRules : domesticReferenceRules);
   const result: JsonObject = { ...config, rules };
   delete result['rule-providers'];
   return result;
@@ -117,11 +134,16 @@ export function externalNameserverPolicy(config: JsonObject): JsonObject | undef
   const original = dns['nameserver-policy'] as JsonObject | undefined;
   if (!original) return undefined;
   const result = { ...original };
-  if (config[marker] === DOMESTIC_POLICY_VERSION || config[marker] === LOCAL_POLICY_VERSION) {
+  if (config[marker] === DOMESTIC_POLICY_VERSION || isLocal(config[marker])) {
     delete result[ownedDnsKey];
     const localResolvers = dns['direct-nameserver'] ?? dns['default-nameserver'];
     const generated = (localResolvers as string[]).map(server => `${server}#DIRECT`);
     if (canonicalJson(result['+.cn'] ?? null) === canonicalJson(generated)) delete result['+.cn'];
+    if (config[marker] === LOCAL_POLICY_VERSION && domesticDirect(config)) {
+      for (const [domain, servers] of Object.entries(googleNameserverPolicy(config))) {
+        if (canonicalJson(result[domain] ?? null) === canonicalJson(servers)) delete result[domain];
+      }
+    }
   }
   return Object.keys(result).length ? result : undefined;
 }
