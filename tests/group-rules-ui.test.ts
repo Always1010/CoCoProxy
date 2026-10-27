@@ -15,18 +15,18 @@ test('group rule utility passes strict indexed-access type checks', () => {
   assert.deepEqual(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')), []);
 });
 
-async function editor(initial: string[]) {
+async function editor(initial: string[], groupName = 'Work') {
   const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupMatchingRules.vue', import.meta.url), 'utf8');
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { entries, original, type, payload, editing, error, dirty, ownRules, add, edit, remove, persist };';
+    '\nexport { entries, original, type, payload, editing, error, dirty, ownRules, dependents, add, edit, remove, persist };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const settings = { local: { rules: [...initial], selections: { Work: 'Proxy', Stream: 'node-a' } } };
-  const view = { value: { groups: [{ name: 'Work', role: 'service' }], rules: [] } };
+  const view = { value: { groups: [{ name: 'Work', role: 'service', selected: 'Proxy' }], rules: [] } };
   const workspace = { value: { mode: 'local', runMode: 'rule' } };
   const exports: Record<string, any> = {};
   let saves = 0, failApply = false;
   new Script(code, { filename: 'GroupMatchingRules.js' }).runInNewContext({
-    ...rules, exports, Error, defineProps: () => ({ groupName: 'Work' }), defineEmits: () => () => {},
+    ...rules, exports, Error, defineProps: () => ({ groupName }), defineEmits: () => () => {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useWorkspace: () => ({ view, workspace, overrides: { value: settings.local }, busy: { value: false },
       save: async (edit: (value: typeof settings) => void) => {
@@ -37,8 +37,25 @@ async function editor(initial: string[]) {
         settings.local = draft.local;
       } }),
   });
-  return Object.assign(exports, { settings, workspace, saves: () => saves, fail: () => { failApply = true; } });
+  return Object.assign(exports, { settings, workspace, view, saves: () => saves, fail: () => { failApply = true; } });
 }
+
+test('shared exit dependents include default selections and track only current direct service references', async () => {
+  const ui = await editor([], 'Proxy');
+  ui.view.value.groups = [
+    { name: 'Proxy', role: 'shared', selected: 'node-a' },
+    { name: 'OpenAI', role: 'service', selected: 'Proxy' }, // No explicit user selection.
+    { name: 'Work', role: 'service', selected: 'Proxy' },
+    { name: 'Domestic', role: 'service', selected: 'DIRECT' },
+    { name: 'Stream', role: 'service', selected: 'Work' }, // Indirect references are excluded.
+    { name: 'Old', role: 'service', selected: 'node-a' },
+    { name: 'Other Exit', role: 'shared', selected: 'Proxy' },
+  ];
+  ui.settings.local.selections.Old = 'Proxy'; // Stale override must not win over the complete view.
+  assert.deepEqual(Array.from(ui.dependents.value), ['OpenAI', 'Work']);
+  ui.view.value.groups[1].selected = 'DIRECT';
+  assert.deepEqual(Array.from(ui.dependents.value), ['Work']);
+});
 
 test('group rule edits preserve global positions and unrelated groups, then append new rules', async () => {
   const initial = ['DOMAIN,first.example,Stream', 'DOMAIN,old.example,Work', 'IP-CIDR,192.0.2.0/24,Stream', 'DOMAIN,last.example,Work'];
