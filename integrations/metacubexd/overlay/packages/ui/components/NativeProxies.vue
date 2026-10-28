@@ -198,7 +198,7 @@ function resetDetection() {
           <button type="button" class="btn btn-outline btn-sm self-end" @click="resetGeneral"><IconReload :size="16" /><span>恢复通用默认值</span></button>
         </template>
         <template v-else-if="settingsTab === 'detection'">
-          <HelpTip>基准检测偏好保存在当前浏览器。站点结果独立展示，不覆盖基准延迟，也不参与自动选点。</HelpTip>
+          <HelpTip>基准检测偏好保存在当前浏览器。站点结果独立展示，不覆盖基准延迟，也不参与自动选择。</HelpTip>
           <label class="flex flex-col gap-2">基准检测网址<input v-model="configStore.urlForLatencyTest" class="input w-full" type="url" /></label>
           <label class="flex flex-col gap-2">检测网址来源<select v-model="configStore.latencyTestUrlSource" class="select w-full"><option value="core">优先使用策略组配置</option><option value="dashboard">统一使用基准网址</option></select></label>
           <label class="flex flex-col gap-2">检测超时（ms）<input v-model.number="configStore.latencyTestTimeoutDuration" class="input w-full" type="number" min="1" max="10000" /></label>

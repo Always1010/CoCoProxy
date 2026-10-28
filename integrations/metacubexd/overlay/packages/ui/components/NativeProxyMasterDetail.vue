@@ -336,7 +336,7 @@ function aliveCount(group: ProxyType) {
             >
               <IconRefresh v-if="automaticEnabled" :size="14" class="shrink-0" aria-hidden="true" />
               <span class="shrink-0 font-bold">{{
-                automaticEnabled ? '自动选点' : canSelect ? '手动选择' : formatProxyType(activeGroup.type, t)
+                automaticEnabled ? '自动选择' : canSelect ? '手动选择' : formatProxyType(activeGroup.type, t)
               }}</span>
               <template v-if="activeGroup.now?.length">
                 <IconChevronRight :size="16" class="shrink-0" />

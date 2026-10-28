@@ -50,8 +50,8 @@ const reasons: Record<string, string> = {
   'current-unavailable': '当前节点不可用', 'all-unavailable': '本轮未能确认可用出口',
   'no-better-candidate': '暂未找到明显更快的候选节点', 'preferred-check-failed': '优选尚未稳定恢复',
 }
-const phase = computed(() => !enabled.value ? '自动选点已停用，保留历史供回看'
-  : status.value?.paused ? '自动选点已暂停'
+const phase = computed(() => !enabled.value ? '自动选择已停用，保留历史供回看'
+  : status.value?.paused ? '自动选择已暂停'
     : status.value?.suspended || view.value?.pending ? '运行暂不可用或配置待生效'
       : groupStatus.value ? phases[groupStatus.value.phase] ?? '等待调度' : '等待调度或运行状态更新')
 const timeLabel = (at: number) => new Date(at).toLocaleString()
@@ -151,8 +151,8 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
     <template #content>
       <button v-if="newCount" type="button" class="btn btn-primary btn-sm mb-3 min-h-11 shrink-0" @click="showLatest()"><IconChevronUp :size="16" aria-hidden="true" /><span>有 {{ newCount }} 条新记录 · 查看最新</span></button>
       <div ref="scroller" class="min-h-0 flex-1 space-y-3 overflow-y-auto [scrollbar-gutter:stable]" @scroll="onScroll">
-      <section class="shrink-0 space-y-1 rounded-lg bg-base-200 p-3 text-sm" aria-label="当前自动选点状态" aria-live="polite">
-        <p>{{ enabled ? '自动选点已开启' : '自动选点已关闭' }}</p>
+      <section class="shrink-0 space-y-1 rounded-lg bg-base-200 p-3 text-sm" aria-label="当前自动选择状态" aria-live="polite">
+        <p>{{ enabled ? '自动选择已开启' : '自动选择已关闭' }}</p>
         <p class="break-all">当前出口：{{ currentNode }}{{ currentPool ? ` · ${currentPool}` : '' }}</p>
         <p :class="groupStatus?.phase === 'outage' && enabled ? 'text-warning' : 'text-base-content/70'">{{ phase }}</p>
         <p v-if="enabled && groupStatus?.reason" class="text-xs text-base-content/65">{{ reasons[groupStatus.reason] ?? '运行状态发生变化' }}</p>
@@ -175,7 +175,7 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
       <footer class="mt-3 max-h-[50%] shrink-0 space-y-2 overflow-y-auto border-t border-base-content/10 pt-3">
         <p class="text-xs text-base-content/60">每组最多保留 50 条，最长 7 天，较早记录自动清理。仅记录确认生效的自动切换。</p>
         <div v-if="confirmClear" class="space-y-2 rounded-lg bg-base-200 p-3 text-sm">
-          <p class="break-all">清空“{{ groupName }}”的切换历史？此操作无法撤销，{{ enabled ? '自动选点将继续运行。' : '当前节点和自动选点设置不变。' }}</p>
+          <p class="break-all">清空“{{ groupName }}”的切换历史？此操作无法撤销，{{ enabled ? '自动选择将继续运行。' : '当前节点和自动选择设置不变。' }}</p>
           <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="clearing" @click="confirmClear = false"><IconX :size="16" aria-hidden="true" /><span>取消</span></button><button type="button" class="btn btn-error btn-sm min-h-11" :disabled="clearing || loading" @click="clearHistory"><IconCheck :size="16" aria-hidden="true" /><span>{{ clearing ? '正在清空' : '确认清空' }}</span></button></div>
         </div>
         <div v-else class="flex justify-end"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="!events.length || loading || clearing || !updatedAt" @click="confirmClear = true"><IconTrash :size="16" aria-hidden="true" /><span>清空历史</span></button></div>
