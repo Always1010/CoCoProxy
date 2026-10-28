@@ -94,22 +94,22 @@ onMounted(load)
 <template>
   <section class="space-y-3 rounded-lg border border-base-content/10 p-3" aria-label="带宽辅助决策设置">
     <label class="flex min-h-11 items-center justify-between gap-3 text-sm font-medium">带宽辅助决策<input :checked="settings?.enabled ?? false" type="checkbox" class="toggle toggle-primary" :disabled="disabled || (!settings?.enabled && (loading || !definitions))" @change="toggle('enabled', $event)" /></label>
-    <p class="text-xs leading-relaxed text-base-content/65">默认关闭。关闭并保存即可回到原来的纯延迟自动选点，优选、备选与回切设置保留。开启后维护候选池，只有保守净收益足够才执行性能切换；故障恢复仍优先。</p>
+    <HelpTip>根据延迟与吞吐综合选择节点，故障恢复优先。关闭并保存后恢复纯延迟选点。多组共用最小总预算和最大劣化预留，扣除预留后须能完成每个组的普通比较。</HelpTip>
     <p v-if="loading" class="text-xs" role="status">正在读取参数…</p>
     <div v-if="error" class="flex flex-wrap items-center gap-2 text-xs text-warning"><span>{{ error }}</span><button type="button" class="btn btn-sm min-h-11" :disabled="disabled || loading" @click="load"><IconRefresh :size="16" /><span>重读参数</span></button></div>
     <template v-if="settings?.enabled && definitions">
       <label class="flex min-h-11 items-center justify-between gap-3 text-sm">仅观察，不执行带宽切换<input :checked="settings.observeOnly" type="checkbox" class="toggle toggle-sm" :disabled="disabled" @change="toggle('observeOnly', $event)" /></label>
-      <p class="text-xs text-base-content/65">开启带宽辅助决策后会按需自动下载验证并消耗流量，观察模式也会消耗验证流量。建议先用观察模式核对收益。多组共用最小总预算和最大劣化预留，扣除预留后须能完成每个组的普通比较。</p>
-      <div class="space-y-2">
+      <p class="text-xs text-warning">自动下载验证会消耗流量，观察模式亦然。</p>
+      <div class="grid gap-x-4 gap-y-2 sm:grid-cols-2">
         <label v-for="[key, field] in basic" :key="key" class="flex min-h-11 flex-wrap items-center justify-between gap-2 text-sm"><span>{{ field.label }}（{{ field.unit }}）</span><input :value="settings[key]" type="number" class="input input-sm w-28" :min="field.min" :max="field.max" :step="field.integer ? 1 : 0.01" :disabled="disabled" required @input="number(key, $event)" /></label>
       </div>
       <p class="text-xs text-base-content/65">目标 {{ settings.targetMbps }} Mbps，约 {{ (Number(settings.targetMbps) / 8).toFixed(2) }} MB/s；预算统计应用载荷，实际网络流量含协议开销。</p>
-      <p class="text-xs text-base-content/65">延迟与吞吐参考线会随当前节点状况放宽：允许从很差切到明显较好。优选先检查，表现接近时优选优先；单个候选失败只让它退避。</p>
+
       <button type="button" class="btn btn-sm min-h-11" :disabled="disabled || !canCheck || checking || !!status?.testingNode" @click="check"><IconBrandSpeedtest :size="16" /><span>{{ checking ? '正在排队' : '检查吞吐' }}</span></button>
       <p v-if="!canCheck" class="text-xs text-base-content/65">保存组设置后可发起检查。</p>
       <p v-if="feedback" class="text-xs" role="status">{{ feedback }}</p>
       <details class="rounded-lg bg-base-200 p-3">
-        <summary class="flex min-h-11 cursor-pointer items-center gap-2 text-sm"><IconAdjustments :size="16" /><span>高级参数 · 收益、成本和检测调度</span></summary>
+        <summary class="flex min-h-11 cursor-pointer items-center gap-2 text-sm"><IconAdjustments :size="16" /><span>高级参数</span></summary>
         <p class="mb-2 text-xs text-base-content/65">损失 = 延迟秒数 + 吞吐不足重视程度 × max(0, 目标 / 有效吞吐 − 1)。达标吞吐封顶，评分不是实际断网时长；比较近期保守区间，并扣除陌生候选风险和切换成本。劣化预留包含在总预算内。</p>
         <label v-for="[key, field] in advanced" :key="key" class="flex min-h-11 flex-wrap items-center justify-between gap-2 text-sm"><span>{{ field.label }}（{{ field.unit }}）</span><input :value="settings[key]" type="number" class="input input-sm w-28" :min="field.min" :max="field.max" :step="field.integer ? 1 : 0.01" :disabled="disabled" required @input="number(key, $event)" /></label>
         <button type="button" class="btn btn-sm mt-3 min-h-11" :disabled="disabled" @click="restore"><IconRestore :size="16" /><span>恢复推荐参数</span></button>

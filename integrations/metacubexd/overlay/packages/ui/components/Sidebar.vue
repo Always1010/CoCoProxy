@@ -165,11 +165,6 @@ watch(
             id="sidebar-traffic-expanded"
             class="mb-2 hidden w-full lg:block"
           />
-          <!-- Traffic indicator target for PC (collapsed sidebar) -->
-          <div
-            id="sidebar-traffic-indicator"
-            class="mb-2 hidden w-full lg:block"
-          />
           <!-- Theme/Lang switchers (desktop only) -->
           <div
             class="mb-2 hidden flex-row items-center gap-1 lg:flex"

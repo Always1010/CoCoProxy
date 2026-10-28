@@ -68,7 +68,7 @@ onUnmounted(() => { disposed = true })
 <template>
     <section class="border-t border-base-content/10 pt-4">
       <h3 class="mb-2 text-sm font-semibold">自动选点检测 · 所有组共用</h3>
-      <p class="mb-3 text-xs leading-relaxed text-base-content/65">所有策略组共用，保存在服务端。验证会通过当前选中的具体节点访问两个网址；二者均通过后才保存。主检测失败或变慢时使用备用检测复核。</p>
+      <HelpTip>所有组共用，保存在服务端。通过当前节点验证两个网址，均通过后才保存；主检测失败或变慢时使用备用检测复核。</HelpTip>
       <p v-if="loading" role="status" class="text-sm">正在读取设置…</p>
       <form v-if="draft" class="flex flex-col gap-3" @submit.prevent="validateAndSave">
         <fieldset v-for="kind in (['primary', 'secondary'] as const)" :key="kind" class="space-y-2 rounded-lg border border-base-content/10 p-3" :disabled="busy">

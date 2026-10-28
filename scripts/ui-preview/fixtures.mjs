@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+// Load shared definitions at runtime; preview config type checking must not pull server modules into the browser program.
+const { BANDWIDTH_FIELDS, DEFAULT_BANDWIDTH_SETTINGS } = await import(new URL('../../packages/management/bandwidth-policy.ts', import.meta.url).href);
 
 export const scenarios = {
-  normal: '正常数据', empty: '空节点', many: '大量与长名称', error: '读取失败', slow: '慢速加载', timeout: '检测超时',
+  review: 'UI 整改验收', normal: '正常数据', empty: '空节点', many: '大量与长名称', error: '读取失败', slow: '慢速加载', timeout: '检测超时',
 };
 const clone = value => structuredClone(value);
 const stamp = () => new Date().toISOString();
@@ -23,6 +25,13 @@ export function createFixtures(initial = 'normal') {
       { id: 'google', name: '示例搜索', url: 'https://search.example/check', category: '预览', builtin: true, permitted: true },
       { id: 'streaming', name: '示例视频', url: 'https://video.example/check', category: '预览', builtin: true, permitted: true },
     ], selections: {} };
+    if (next === 'review') {
+      settings.local.automatic = { Proxy: { enabled: true, preferred: nodes.slice(0, 3), fallback: nodes.slice(3, 5), returnToPreferred: true } };
+      settings.local.rules = ['DOMAIN-SUFFIX,docs.example,Google', 'DOMAIN,api.search.example,Google'];
+      settings.local.sharedGroups = ['Shared'];
+      settings.local.selections.Shared = nodes[2];
+      sites.selections = { Proxy: ['google'], Google: ['google', 'streaming'] };
+    }
   }
   reset(initial);
   const active = () => createHash('sha256').update(`ui-preview:${scenario}:${revision}`).digest('hex');
@@ -34,7 +43,7 @@ export function createFixtures(initial = 'normal') {
       options: name === 'Proxy' || settings.local.sharedGroups.includes(name) ? [...nodes, 'DIRECT', 'REJECT'] : ['Proxy', ...settings.local.sharedGroups, ...nodes, 'DIRECT', 'REJECT'] }));
   }
   const automatic = () => ({ scope: 'preview', workspaceRevision: revision, paused: false, groups: groups().filter(g => overrides().automatic?.[g.name]?.enabled).map(g => ({
-    name: g.name, phase: 'healthy', current: g.selected, nextAt: Date.now() + 30000, reason: null,
+    name: g.name, phase: 'monitoring', current: g.selected, nextAt: Date.now() + 30000, reason: null,
   })), events: [] });
   function view() {
     return { workspace: { ...clone(settings), revision }, sources: [{ id: 'sample', name: '合成订阅', host: 'subscription.example', kind: 'profile', nodeCount: nodes.length,
@@ -91,6 +100,8 @@ export function createFixtures(initial = 'normal') {
     }
     if (path === '/api/cocoproxy/workspace/tcp-delay' && method === 'POST') return ok({ name: body.name, fingerprint: body.fingerprint,
       status: scenario === 'timeout' ? 'timeout' : 'success', delay: scenario === 'timeout' ? null : 36, checkedAt: stamp() });
+    if (path === '/api/cocoproxy/automatic/probes' && method === 'GET') return ok({ defaults: clone(settings.autoProbes), allowedOrigins: view().allowedProbeOrigins,
+      bandwidth: { defaults: clone(DEFAULT_BANDWIDTH_SETTINGS), fields: clone(BANDWIDTH_FIELDS) } });
     if (path === '/api/cocoproxy/automatic/status' && method === 'GET') return ok(automatic());
     if (path === '/api/cocoproxy/automatic/history' && method === 'DELETE') return ok(automatic());
     if (path === '/api/cocoproxy/status' && method === 'GET') return ok({ active: active(), desired: active(), transaction: null, fault: null, checkedAt: stamp(), draft: null,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconArrowLeft, IconCheck, IconChevronDown, IconChevronUp, IconEdit, IconInfoCircle, IconList, IconReload, IconSettings, IconWorld, IconX } from '@tabler/icons-vue'
+import { IconArrowLeft, IconCheck, IconChevronDown, IconChevronUp, IconEdit, IconList, IconReload, IconSettings, IconWorld, IconX } from '@tabler/icons-vue'
 import type { AutomaticStatus, AutoGroupPolicy, BandwidthSettings } from '~/composables/useWorkspace'
 import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import GroupMatchingRules from '~/components/GroupMatchingRules.vue'
@@ -36,6 +36,7 @@ const editorSelected = ref<string[]>([])
 const expanded = ref({ preferred: false, fallback: false })
 const initialDraft = ref('')
 const visible = ref(false)
+const fromManager = ref(false)
 const tab = ref<'selection' | 'rules' | 'sites'>('selection')
 const statusError = ref('')
 const status = ref<AutomaticStatus>()
@@ -156,6 +157,7 @@ function close() {
   if (timer) clearTimeout(timer)
 }
 function open() {
+  fromManager.value = false
   confirmClose.value = false
   destination.value = undefined
   sitesVisited.value = false
@@ -182,7 +184,8 @@ function open() {
 }
 function openSites() { open(); selectTab('sites') }
 function openRules() { open(); selectTab('rules') }
-defineExpose({ open, openSites, openRules })
+function openFromManager(rules = false) { open(); fromManager.value = true; if (rules) selectTab('rules') }
+defineExpose({ open, openSites, openRules, openFromManager })
 async function persist() {
   if (editorKind.value || invalid.value || locked.value || !changed.value || needsRead.value) return
   saving.value = true
@@ -240,10 +243,11 @@ onUnmounted(() => { disposed = true; close() })
   <span class="shrink-0">
     <button type="button" class="btn btn-ghost btn-sm" :aria-label="`${groupName} 组设置`" @click="open"><IconSettings :size="18" /><span>组设置</span></button>
   </span>
-  <Modal ref="dialog" :title="editorKind ? `编辑${editorLabel}` : `${groupName} · 组设置`" :before-close="beforeClose" :close-disabled="closeLocked" @close="close">
+  <Modal ref="dialog" compact :settings-layout="!editorKind" :title="editorKind ? `编辑${editorLabel}` : `${groupName} · 组设置`" :before-close="beforeClose" :close-disabled="closeLocked" @close="close">
     <template #tabs>
       <button v-if="editorKind" type="button" class="btn btn-ghost min-h-11" :disabled="locked || confirmClose" @click="editorKind = null"><IconArrowLeft :size="16" /><span>返回组设置</span></button>
-      <div v-else class="flex flex-wrap gap-2" role="tablist" aria-label="组设置类别">
+      <button v-if="fromManager && !editorKind" type="button" class="btn btn-ghost btn-sm mb-2" :disabled="locked || confirmClose" @click="dialog?.close()"><IconArrowLeft :size="16" /><span>返回组列表</span></button>
+      <div v-if="!editorKind" class="flex flex-wrap items-center gap-2" role="tablist" aria-label="组设置类别">
         <button type="button" role="tab" class="btn btn-sm min-h-11" :disabled="locked || confirmClose" :class="tab === 'selection' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'selection'" @click="selectTab('selection')"><IconList :size="16" /><span>节点选择</span></button>
         <button v-if="workspace?.mode === 'local'" type="button" role="tab" class="btn btn-sm min-h-11" :disabled="locked || confirmClose" :class="tab === 'rules' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'rules'" @click="selectTab('rules')"><IconList :size="16" /><span>匹配规则</span></button>
         <button type="button" role="tab" class="btn btn-sm min-h-11" :disabled="locked || confirmClose" :class="tab === 'sites' ? 'btn-primary' : 'btn-ghost'" :aria-selected="tab === 'sites'" @click="selectTab('sites')"><IconWorld :size="16" /><span>站点连通</span></button>
@@ -262,8 +266,6 @@ onUnmounted(() => { disposed = true; close() })
           <div class="min-h-0 flex-1 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
             <label class="flex min-h-11 items-center justify-between gap-3">自动选点<input v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
             <template v-if="enabled">
-              <label class="flex min-h-11 items-center justify-between gap-3 text-sm">优选恢复后自动回切<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
-              <BandwidthSelectionSettings ref="bandwidthEditor" v-model="bandwidth" :disabled="locked" :status="groupStatus?.bandwidth" :group-name="groupName" :can-check="!changed" />
               <section v-for="kind in (['preferred', 'fallback'] as const)" :key="kind" class="rounded-lg border border-base-content/10 p-3" :aria-label="kind === 'preferred' ? '优选节点' : '备选节点'">
                 <div class="flex items-center justify-between gap-2">
                   <h3 class="text-sm font-medium">{{ kind === 'preferred' ? '优选' : '备选' }} · {{ pool(kind).length }} 个</h3>
@@ -279,10 +281,16 @@ onUnmounted(() => { disposed = true; close() })
                   <span>{{ expanded[kind] ? '收起' : `展开其余 ${pool(kind).length - 6} 个` }}{{ kind === 'preferred' ? '优选' : '备选' }}节点</span>
                 </button>
               </section>
-              <p class="text-xs text-base-content/60">已选 {{ totalSelected }} / 32 个节点；至少选择 1 个优选节点。</p>
+              <div class="flex items-center justify-between gap-2 text-xs text-base-content/60"><span>已选 {{ totalSelected }} / 32</span><HelpTip>至少选择 1 个优选节点；优选不可用时使用备选，两个列表不能重复。</HelpTip></div>
+              <details class="rounded-xl border border-base-content/10 px-3">
+                <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm"><IconSettings :size="16" /><span>更多设置</span><IconChevronDown :size="14" class="ml-auto" /></summary>
+              <label class="flex min-h-11 items-center justify-between gap-3 text-sm">优选恢复后自动回切<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
+              <BandwidthSelectionSettings ref="bandwidthEditor" v-model="bandwidth" :disabled="locked" :status="groupStatus?.bandwidth" :group-name="groupName" :can-check="!changed" />
+              </details>
             </template>
             <p v-else class="text-xs text-base-content/60">当前为手动选择；已保留优选、备选和回切设置。</p>
-            <section v-if="groupStatus || events.length || statusError" class="space-y-2 rounded-lg bg-base-200 p-3 text-xs" aria-label="自动选择运行状态" aria-live="polite">
+            <p v-if="groupStatus" class="break-words text-xs text-base-content/60">{{ phaseLabel(groupStatus.phase) }} · {{ groupStatus.current ?? '尚未选择' }}</p>
+            <details v-if="groupStatus || events.length || statusError" :open="!!statusError" class="space-y-2 rounded-lg bg-base-content/5 px-3 pb-3 text-xs" aria-label="自动选择运行状态"><summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm"><IconList :size="16" /><span>运行详情</span><IconChevronDown :size="14" class="ml-auto" /></summary>
               <template v-if="groupStatus">
                 <div>{{ phaseLabel(groupStatus.phase) }} · 当前：{{ groupStatus.current ?? '尚未选择' }}</div>
                 <div v-if="groupStatus.reason">原因：{{ reasonLabel(groupStatus.reason) }}</div>
@@ -293,11 +301,8 @@ onUnmounted(() => { disposed = true; close() })
                 <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2"><IconList :size="16" /><span>最近切换记录</span><IconChevronDown :size="14" /></summary>
                 <ol class="space-y-1 border-t border-base-content/10 pt-2" aria-label="最近切换记录"><li v-for="(event, index) in events" :key="`${event.at}:${index}`">{{ timeLabel(event.at) }} · {{ event.from ?? '未选择' }} → {{ event.to ?? '未选择' }} · {{ reasonLabel(event.reason) }}</li></ol>
               </details>
-            </section>
-            <details class="text-xs text-base-content/65">
-              <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2"><IconInfoCircle :size="16" /><span>运行规则</span><IconChevronDown :size="14" /></summary>
-              <p class="leading-relaxed">开启后按检测结果自动选择节点；关闭后手动选择。正常时每 30 秒检测当前节点，故障时按需检测候选节点。优选不可用时使用备选；开启回切后按 5、10、15 分钟退避检测优选恢复。停用后保留候选和回切设置。此处的自动选点独立于手动站点连通检测。仅可选择此组内的具体代理节点；优选与备选不重复，合计最多 32 个。</p>
             </details>
+            <HelpTip label="自动选点说明">开启后按检测结果自动选择节点；优选不可用时使用备选，恢复后按回切设置处理。正常时每 30 秒检测当前节点，回切检查按 5、10、15 分钟退避。关闭后恢复手动选择并保留候选设置。自动选点独立于手动站点检测。</HelpTip>
           </div>
           <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-base-content/10 pt-3">
             <div class="min-w-0 flex-1 basis-40 text-sm" aria-live="polite">
@@ -311,7 +316,7 @@ onUnmounted(() => { disposed = true; close() })
           </div>
         </template>
         <template v-else>
-          <p class="shrink-0 text-xs leading-relaxed text-base-content/65">勾选加入{{ editorLabel }}，取消勾选移出。修改暂存，返回组设置后点击“保存”生效。已在{{ otherLabel }}中的节点置灰并排在末尾，需先从{{ otherLabel }}移除后才能选择。</p>
+          <HelpTip label="选择说明">勾选加入{{ editorLabel }}，返回后保存生效。已在{{ otherLabel }}中的节点需先移除后再选。</HelpTip>
           <input v-model="search" type="search" class="input min-h-11 w-full shrink-0" placeholder="搜索节点名称" :aria-label="`搜索${editorLabel}候选节点`" />
           <div class="flex shrink-0 gap-2" role="group" aria-label="节点筛选">
             <button type="button" class="btn btn-sm min-h-11" :class="!onlySelected ? 'btn-primary' : 'btn-ghost'" :aria-pressed="!onlySelected" @click="onlySelected = false"><IconList :size="16" /><span>全部节点</span></button>

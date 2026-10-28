@@ -73,9 +73,9 @@ onUnmounted(() => { disposed = true })
 <template>
   <div class="flex min-w-0 flex-col gap-3" :class="{ 'min-h-0 flex-1': !scrollList }">
     <div class="space-y-3" :class="{ 'min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]': !scrollList }">
-    <p class="text-xs text-base-content/65">{{ groupName ? '选择本组检测目标，保存到服务器，下次打开继续使用。最多选择 16 项。' : '所有策略组共用站点目录；在各组的“组设置 → 站点连通”选择检测目标。' }}</p>
-    <div class="flex flex-wrap gap-2"><input v-model="search" class="input input-sm min-w-0 flex-1" type="search" placeholder="搜索站点" aria-label="搜索站点" /><button type="button" class="btn btn-outline btn-sm min-h-11" :disabled="locked" @click="adding = !adding"><IconPlus :size="16" /><span>{{ adding ? '收起添加' : '添加站点' }}</span></button></div>
-    <form v-if="adding" class="flex flex-col gap-2 rounded-lg border border-base-content/10 p-3" @submit.prevent="persist(true)">
+    <HelpTip>{{ groupName ? '选择本组检测目标，最多 16 项。站点由各组共用，在站点目录统一维护。' : '在此添加或删除共用站点，再到“组设置 → 站点连通”选择各组检测目标。' }}</HelpTip>
+    <div class="flex flex-wrap gap-2"><input v-model="search" class="input input-sm min-w-0 flex-1" type="search" placeholder="搜索站点" aria-label="搜索站点" /><button v-if="!groupName" type="button" class="btn btn-outline btn-sm min-h-11" :disabled="locked" @click="adding = !adding"><IconPlus :size="16" /><span>{{ adding ? '收起添加' : '添加站点' }}</span></button></div>
+    <form v-if="adding && !groupName" class="flex flex-col gap-2 rounded-lg border border-base-content/10 p-3" @submit.prevent="persist(true)">
       <label class="text-xs">站点名称<input v-model="name" :disabled="locked" required maxlength="80" class="input input-sm mt-1 w-full" /></label>
       <label class="text-xs">检测网址<input v-model="url" :disabled="locked" required type="url" maxlength="2048" placeholder="https://service.example/check" class="input input-sm mt-1 w-full" /></label>
       <p class="text-xs text-base-content/60">使用不含账号、查询参数和片段的公开 HTTPS 网址。添加后即可用于站点检测。</p>

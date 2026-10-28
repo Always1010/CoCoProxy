@@ -49,7 +49,9 @@ const activeTab = ref<'proxies' | 'proxyProviders'>('proxies')
 const settingsModal = ref<{ open: () => void }>()
 const proxyMasterDetail = ref<{ scrollToTop: (behavior?: ScrollBehavior) => void; activeName: string | null }>()
 const scrollEl = ref<HTMLElement | null>(null)
-const showScrollToTop = ref(false)
+const outerScrollTop = ref(0)
+const innerScrollTop = ref(0)
+const showScrollToTop = computed(() => Math.max(outerScrollTop.value, innerScrollTop.value) > 24)
 const initialRead = ref(true)
 
 const renderProxies = computed(() => proxiesStore.proxies.filter(proxy =>
@@ -81,7 +83,11 @@ const sortedNamesByGroup = computed(() => Object.fromEntries(renderProxies.value
 function providerNames(provider: ProxyProvider & { proxies: ProxyNodeWithProvider[] }) {
   return sortedNames(provider.proxies.map(node => node.name), provider.testUrl || null)
 }
-function onScroll(event: Event) { showScrollToTop.value = (event.currentTarget as HTMLElement).scrollTop > 300 }
+function onScroll(event: Event) {
+  const target = event.currentTarget as HTMLElement
+  if (target === scrollEl.value) outerScrollTop.value = target.scrollTop
+  else innerScrollTop.value = target.scrollTop
+}
 function scrollToTop() {
   const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
   scrollEl.value?.scrollTo({ top: 0, behavior })
@@ -103,7 +109,7 @@ onMounted(() => {
 })
 onUnmounted(() => window.removeEventListener(MOBILE_NAV_RESELECT_EVENT, onReselect))
 watch(useWindowFocus(), useThrottleFn(focused => { if (focused) void proxyRefresh.refresh() }, 30000, true, true))
-watch(activeTab, () => { showScrollToTop.value = false })
+watch(activeTab, () => { outerScrollTop.value = 0; innerScrollTop.value = 0 })
 watch([workspace.api.generation, sites.scopeKey], cancelTcp, { flush: 'sync' })
 function resetGeneral() { configStore.autoCloseConns = true; configStore.hideUnAvailableProxies = false }
 function resetDetection() {
@@ -178,21 +184,21 @@ function resetDetection() {
         <div v-if="!proxiesStore.proxyProviders.length" class="py-12 text-center text-sm text-base-content/50">{{ t('noData') }}</div>
       </div>
     </div>
-    <button v-if="showScrollToTop" data-testid="scroll-to-top" class="btn btn-primary absolute right-3 bottom-3 z-30 rounded-full" :title="t('backToTop')" :aria-label="t('backToTop')" @click="scrollToTop"><IconArrowUp :size="20" /><span>回到顶部</span></button>
+    <button v-if="showScrollToTop" data-testid="scroll-to-top" class="btn btn-primary btn-sm btn-circle absolute right-3 bottom-3 z-30 size-9 min-h-9 shadow-sm" :title="t('backToTop')" :aria-label="t('backToTop')" @click="scrollToTop"><IconArrowUp :size="17" aria-hidden="true" /></button>
 
-    <Modal ref="settingsModal" title="代理设置" fixed-height>
+    <Modal ref="settingsModal" title="代理设置" compact settings-layout fixed-height>
       <template #tabs>
         <div class="flex gap-2" role="tablist" aria-label="代理设置类别"><button v-for="tab in [{ key: 'general', name: '通用', icon: IconSettings }, { key: 'detection', name: '检测', icon: IconBrandSpeedtest }, { key: 'sites', name: '站点目录', icon: IconWorld }]" :key="tab.key" type="button" role="tab" class="btn btn-sm" :class="settingsTab === tab.key ? 'btn-primary' : 'btn-ghost'" :aria-selected="settingsTab === tab.key" @click="settingsTab = tab.key as typeof settingsTab"><component :is="tab.icon" :size="16" aria-hidden="true" /><span>{{ tab.name }}</span></button></div>
       </template>
       <div class="flex flex-col gap-4">
         <template v-if="settingsTab === 'general'">
-          <p class="text-xs text-base-content/60">以下页面偏好保存在当前浏览器。</p>
-          <label class="flex items-center justify-between gap-3">切换节点时断开连接<input v-model="configStore.autoCloseConns" type="checkbox" class="toggle toggle-primary" /></label>
-          <label class="flex items-center justify-between gap-3">隐藏不可用节点<input v-model="configStore.hideUnAvailableProxies" type="checkbox" class="toggle toggle-primary" /></label>
+          <HelpTip>这些页面偏好只保存在当前浏览器。</HelpTip>
+          <label class="flex items-center gap-2"><input v-model="configStore.autoCloseConns" type="checkbox" class="checkbox checkbox-primary checkbox-xs" />切换节点时断开连接</label>
+          <label class="flex items-center gap-2"><input v-model="configStore.hideUnAvailableProxies" type="checkbox" class="checkbox checkbox-primary checkbox-xs" />隐藏不可用节点</label>
           <button type="button" class="btn btn-outline btn-sm self-end" @click="resetGeneral"><IconReload :size="16" /><span>恢复通用默认值</span></button>
         </template>
         <template v-else-if="settingsTab === 'detection'">
-          <p class="text-xs text-base-content/60">基准检测偏好保存在当前浏览器；站点结果不覆盖基准延迟，也不参与自动选点。</p>
+          <HelpTip>基准检测偏好保存在当前浏览器。站点结果独立展示，不覆盖基准延迟，也不参与自动选点。</HelpTip>
           <label class="flex flex-col gap-2">基准检测网址<input v-model="configStore.urlForLatencyTest" class="input w-full" type="url" /></label>
           <label class="flex flex-col gap-2">检测网址来源<select v-model="configStore.latencyTestUrlSource" class="select w-full"><option value="core">优先使用策略组配置</option><option value="dashboard">统一使用基准网址</option></select></label>
           <label class="flex flex-col gap-2">检测超时（ms）<input v-model.number="configStore.latencyTestTimeoutDuration" class="input w-full" type="number" min="1" max="10000" /></label>

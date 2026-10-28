@@ -142,11 +142,11 @@ function openBandwidthTest() {
   if (detectionMenu.value) detectionMenu.value.open = false
   bandwidthTest.value?.open()
 }
-const groupSettings = ref<{ openSites: () => void; openRules: () => void }>()
-async function configureGroupRules(name: string) {
+const groupSettings = ref<{ openSites: () => void; openRules: () => void; openFromManager: (rules?: boolean) => void }>()
+async function configureGroupRules(name: string, rules = false) {
   activeName.value = name
   await nextTick()
-  groupSettings.value?.openRules()
+  groupSettings.value?.openFromManager(rules)
 }
 function detect(kind: 'latency' | 'tcp' | 'sites') {
   if (!activeGroup.value || detectionBusy.value) return
