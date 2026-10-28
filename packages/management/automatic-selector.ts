@@ -28,6 +28,7 @@ type Group = {
   search?: Search; returning?: Returning; returnAt: number | null; returnRound: number;
   returnCursor: number; outageRound: number; outageCursor: number;
   returnedAt: number | null; flapCount: number; returnNotBefore: number;
+  bandwidthSwitchedAt?: number;
 };
 type Job = { group: Group; node: string; target: ProbeTarget; priority: number; auxiliary?: boolean; run: (result: ProbeResult, at: number) => Promise<void> | void };
 type Event = { at: number; group: string; from: string; to: string; reason: string };
@@ -102,7 +103,7 @@ export function createAutomaticSelector(options: Options) {
   async function select(s: AutoSnapshot, g: Group, node: string, reason: string, at: number): Promise<boolean> {
     if (closed || groups.get(g.name) !== g) return false;
     if (g.policy.bandwidth?.enabled && ['faster-candidate', 'preferred-restored'].includes(reason)) {
-      bandwidth.request(g.name, node); return false;
+      bandwidth.request(g.name, node, reason === 'faster-candidate' ? 'latency' : 'return'); return false;
     }
     if (reason === 'bandwidth-improvement' && selecting > 0) return false;
     selecting++;
@@ -121,11 +122,13 @@ export function createAutomaticSelector(options: Options) {
     if (node !== from) {
       events.push({ at, group: g.name, from, to: node, reason });
       if (events.length > 50) events.splice(0, events.length - 50);
+      if (g.policy.bandwidth?.enabled) bandwidth.selected(g.name, from, node, reason, s);
     }
     g.current = node; g.search = undefined; g.returning = undefined; g.secondaryAt = null; g.failureTarget = null;
     g.slowCount = 0; g.monitorAt = at + 30_000; g.residenceUntil = at + 120_000;
     g.outageRound = 0; g.reason = reason; g.health = 'healthy'; g.returnRound = 0;
     if (reason === 'preferred-restored') g.returnedAt = at;
+    if (reason === 'bandwidth-improvement') { g.bandwidthSwitchedAt = at; g.monitorAt = at + 5000; }
     scheduleReturn(g, at);
     return true;
     } finally { selecting--; }
@@ -136,7 +139,11 @@ export function createAutomaticSelector(options: Options) {
     if ((kind === 'failure' || kind === 'slow') && g.returnedAt !== null && at - g.returnedAt < 600_000) {
       g.flapCount++; g.returnNotBefore = at + (g.flapCount === 1 ? 900_000 : 1_800_000); g.returnedAt = null;
     }
-    const all = [...g.policy.preferred, ...g.policy.fallback].filter(node => node !== g.current);
+    let all = [...g.policy.preferred, ...g.policy.fallback].filter(node => node !== g.current);
+    if (kind === 'failure' && g.policy.bandwidth?.enabled) {
+      bandwidth.failure(g.name, g.current);
+      all = bandwidth.recoveryOrder(g.name, all);
+    }
     g.search = { kind, queue: all, index: 0, due: at, baseline: g.slowDelay };
     g.reason = kind === 'slow' ? 'current-slow' : 'current-unavailable';
     if (kind === 'failure') g.health = 'unavailable';
@@ -173,16 +180,22 @@ export function createAutomaticSelector(options: Options) {
           else { g.secondaryAt = end + 2000; g.failureTarget = isPrimary(s, target) ? s.probes.secondary : s.probes.primary; }
           return;
         }
-        g.secondaryAt = null; g.health = 'healthy'; g.monitorAt = end + 30_000;
+        g.secondaryAt = null; g.health = 'healthy';
+        g.monitorAt = end + (g.policy.bandwidth?.enabled && g.bandwidthSwitchedAt !== undefined && end - g.bandwidthSwitchedAt < 30000 ? 5000 : 30000);
         if (secondary) {
           g.slowCount = 0; g.failureTarget = null;
+          if (usePrimary !== isPrimary(s, target)) bandwidth.invalidateProbeTarget();
           usePrimary = isPrimary(s, target);
           primaryRecoveryAt = usePrimary ? null : end + 900_000;
           return;
         }
         g.slowCount = result.delay! > s.probes.slowMs ? g.slowCount + 1 : 0;
         g.slowDelay = result.delay!;
-        if (g.slowCount >= 3 && end >= g.slowCooldown && end >= g.residenceUntil && !g.search) beginSearch(g, 'slow', end);
+        if (g.slowCount >= 3 && end >= g.slowCooldown && end >= g.residenceUntil && !g.search) {
+          if (g.policy.bandwidth?.enabled) {
+            bandwidth.request(g.name, undefined, 'latency'); g.slowCooldown = end + AUTO_INTERVALS.slowCooldown;
+          } else beginSearch(g, 'slow', end);
+        }
       } }];
   }
 
@@ -243,6 +256,12 @@ export function createAutomaticSelector(options: Options) {
   function returnJobs(s: AutoSnapshot, g: Group, at: number): Job[] {
     if (g.policy.bandwidth?.enabled && bandwidth.isComparing(g.name)) return [];
     if (!g.policy.returnToPreferred || !isBackup(g) || g.search || g.secondaryAt !== null) return [];
+    if (g.policy.bandwidth?.enabled) {
+      if (g.returnAt !== null && at >= Math.max(g.returnAt, g.residenceUntil)) {
+        bandwidth.request(g.name, undefined, 'return'); g.returnRound++; scheduleReturn(g, at);
+      }
+      return [];
+    }
     if (!g.returning && g.returnAt !== null && at >= Math.max(g.returnAt, g.residenceUntil)) {
       const nodes: string[] = [], count = Math.min(2, g.policy.preferred.length);
       for (let i = 0; i < count; i++) nodes.push(g.policy.preferred[(g.returnCursor + i) % g.policy.preferred.length]);
@@ -282,6 +301,9 @@ export function createAutomaticSelector(options: Options) {
     if (closed) return;
     const fresh = await options.snapshot().catch(() => null);
     if (closed) return;
+    // A confirmed enhanced selection may briefly suspend runtime snapshots while its transaction applies.
+    // Keep its post-switch/failure state, but discard measurement evidence during the suspension.
+    if (!fresh && selecting && [...groups.values()].some(g => g.policy.bandwidth?.enabled)) { bandwidth.update(null); return; }
     reconcile(fresh, now());
     const s = snapshot;
     if (!s || now() < blockedUntil) return;
@@ -306,7 +328,7 @@ export function createAutomaticSelector(options: Options) {
       if (g) jobs.push({ group: g, node: g.current, target: s.probes.primary, priority: 3, run: (result, end) => {
         const retry = retryAt(result, end);
         if (retry !== null) { primaryRecoveryAt = retry; return; }
-        if (healthy(result)) { usePrimary = true; primaryRecoveryAt = null; }
+        if (healthy(result)) { bandwidth.invalidateProbeTarget(); usePrimary = true; primaryRecoveryAt = null; }
         else primaryRecoveryAt = end + 900_000;
       } });
     }
@@ -345,11 +367,15 @@ export function createAutomaticSelector(options: Options) {
         if (closed) return;
         const retry = retryAt(result, end);
         if (retry !== null) blockedUntil = Math.max(blockedUntil, retry);
-        for (const job of entries) if (groups.get(job.group.name) === job.group) await job.run(result, end);
+        for (const job of entries) if (groups.get(job.group.name) === job.group) {
+          await job.run(result, end);
+          if (job.group.policy.bandwidth?.enabled && job.target.url === activeTarget(s).url) bandwidth.observeProbe(job.group.name, job.node, result);
+        }
       }));
       if (allowance < 2) break;
     }
-    bandwidth.tick([...groups.values()].map(g => ({ name: g.name, ready: g.health === 'healthy' && !g.search && !g.returning && g.secondaryAt === null
+    bandwidth.tick([...groups.values()].map(g => ({ name: g.name, degraded: g.slowCount >= 3,
+      ready: g.health === 'healthy' && !g.search && !g.returning && g.secondaryAt === null
       && !selecting && starts.filter(start => start > now() - 60000).length < 18 })));
   }
 
