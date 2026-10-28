@@ -65,6 +65,9 @@ export function useBandwidthTest() {
   const persistent = ref(false)
   let disposed = false
   let timer: ReturnType<typeof setTimeout> | undefined
+  let reading = false
+  let readId = 0
+  let readController: AbortController | undefined
   const task = computed(() => status.value?.task ?? null)
   const locked = computed(() => sending.value || uncertain.value || !!(task.value?.running && task.value.owned))
   const canStart = computed(() => persistent.value && !!status.value && status.value.available !== false && !status.value.automaticRunning && !loading.value && !sending.value && !uncertain.value && !task.value?.running && !!view.value?.active && !view.value.pending)
@@ -87,29 +90,43 @@ export function useBandwidthTest() {
     if (timer !== undefined) clearTimeout(timer)
     timer = undefined
   }
+  function stopRead() {
+    readId++
+    readController?.abort()
+    readController = undefined
+    reading = false
+    loading.value = false
+  }
   function schedule() {
     stopPolling()
-    if (!disposed && visible.value && (task.value?.running || uncertain.value || status.value?.automaticRunning))
+    if (!disposed && visible.value && !sending.value && (task.value?.running || uncertain.value || status.value?.automaticRunning))
       timer = setTimeout(() => { void refresh() }, 900)
   }
   async function refresh(force = false): Promise<boolean> {
-    if (disposed || loading.value || sending.value || (!force && (!visible.value || document.hidden))) { schedule(); return false }
-    loading.value = true
+    if (disposed || (reading && !force) || sending.value || (!force && (!visible.value || document.hidden))) { schedule(); return false }
+    stopRead()
+    const id = ++readId
+    const controller = new AbortController()
+    readController = controller
+    reading = true
+    loading.value = force || !status.value
     try {
       const result = await api.request<BandwidthStatus>('/api/cocoproxy/bandwidth', {
-        headers: { 'X-CoCoProxy-Bandwidth-Client': client.value }, signal: AbortSignal.timeout(8000),
+        headers: { 'X-CoCoProxy-Bandwidth-Client': client.value }, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
       })
-      if (disposed) return false
+      if (disposed || id !== readId) return false
       accept(result)
       error.value = persistent.value ? '' : '无法保存浏览器任务标识，请允许会话存储后再开始测试。'
       return true
     } catch (cause) {
-      if (!disposed) error.value = message(cause)
+      if (!disposed && id === readId) error.value = message(cause)
       return false
-    } finally { loading.value = false; schedule() }
+    } finally { if (id === readId) { reading = false; readController = undefined; loading.value = false; schedule() } }
   }
   async function mutate(path: string, body: unknown) {
     sending.value = true
+    // Start/cancel wins over an older GET, even if abort arrives after its response.
+    stopRead()
     uncertain.value = true
     rememberPending(true)
     error.value = ''
@@ -132,6 +149,7 @@ export function useBandwidthTest() {
   async function start(node: string) {
     if (!visible.value || !node || !canStart.value) return
     sending.value = true
+    stopRead()
     error.value = ''
     stopPolling()
     try {
@@ -151,7 +169,7 @@ export function useBandwidthTest() {
     await mutate('/api/cocoproxy/bandwidth/cancel', { id: task.value.id })
   }
   function shown() { visible.value = true; void refresh(true) }
-  function hidden() { visible.value = false; stopPolling() }
+  function hidden() { visible.value = false; stopPolling(); stopRead() }
   function visibilityChanged() { if (!document.hidden && visible.value) void refresh() }
   async function restore(): Promise<boolean> {
     try {
@@ -168,6 +186,6 @@ export function useBandwidthTest() {
     return pending || !!(task.value?.running && task.value.owned)
   }
   onMounted(() => document.addEventListener('visibilitychange', visibilityChanged))
-  onUnmounted(() => { disposed = true; stopPolling(); document.removeEventListener('visibilitychange', visibilityChanged) })
+  onUnmounted(() => { disposed = true; stopPolling(); stopRead(); document.removeEventListener('visibilitychange', visibilityChanged) })
   return { status, task, visible, loading, sending, uncertain, error, locked, canStart, start, cancel, refresh, shown, hidden, restore }
 }

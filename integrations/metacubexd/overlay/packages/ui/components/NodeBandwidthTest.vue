@@ -115,7 +115,7 @@ defineExpose({ open })
       <p v-if="status?.available === false" class="text-sm text-warning">当前部署未启用节点带宽测试。</p>
     </div>
     <template #actions>
-      <button v-if="uncertain || error" type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="loading || sending" @click="refresh(true)"><IconRefresh :size="16" aria-hidden="true" /><span>读取状态</span></button>
+      <button v-if="uncertain || error" type="button" class="btn btn-ghost btn-sm min-h-11 min-w-28" :disabled="loading || sending" @click="refresh(true)"><IconRefresh :size="16" :class="{ 'animate-spin': loading }" aria-hidden="true" /><span>{{ loading ? '正在读取' : '读取状态' }}</span></button>
       <button v-if="task?.running && task.owned" type="button" class="btn btn-warning btn-sm min-h-11" :disabled="loading || sending || uncertain || task.phase === 'cancelling'" @click="cancel"><IconX :size="16" aria-hidden="true" /><span>{{ task.phase === 'cancelling' ? '正在取消' : '取消测试' }}</span></button>
       <button v-else-if="!task?.running" type="button" class="btn btn-primary btn-sm min-h-11" :disabled="!canStart || !selected || !nodes.includes(selected)" @click="start(selected)"><IconPlayerPlay :size="16" aria-hidden="true" /><span>{{ sending ? '正在开始' : task ? '重新测试' : '开始测试' }}</span></button>
       <button v-if="!locked" type="button" class="btn btn-ghost btn-square btn-sm min-h-11 min-w-11" title="关闭弹窗" aria-label="关闭弹窗" @click="dialog?.close()"><IconX :size="16" aria-hidden="true" /></button>
