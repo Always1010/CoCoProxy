@@ -194,6 +194,13 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
     return this.deps.observe(this.settings, generation, unit);
   }
 
+  /** Stable physical process identity for accounting; hot configuration selections do not reset usage. */
+  async accountingIdentity(generation: string): Promise<RuntimeProcessIdentity> {
+    const inspection = await this.deps.inspect(this.settings, generation, await this.unit());
+    if (!inspection.ready || !inspection.process) throw new RuntimeError('RUNTIME_OBSERVATION_UNAVAILABLE');
+    return inspection.process;
+  }
+
   async confirm(generation: string): Promise<boolean> {
     const hot = this.hotConfirmation;
     this.hotConfirmation = undefined;
