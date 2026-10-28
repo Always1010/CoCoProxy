@@ -167,7 +167,7 @@ export function createBandwidthSelector(options: {
     if (!campaign) {
       for (const g of groups) {
         const settings = g.policy.bandwidth!, state = view(g.name), switches = recent(g.name);
-        if (!settings.activeProbes || !options.measure) { state.reason = 'passive-only'; continue; }
+        if (!options.measure) { state.reason = 'measurement-unavailable'; continue; }
         const last = switches.at(-1);
         if (switches.length >= settings.maxSwitches || (last && at - last.at < settings.holdSeconds * 1000)) { state.phase = 'holding'; state.reason = 'switch-limit'; continue; }
         if (at < (cooldowns.get(key(g.name)) ?? 0)) continue;
@@ -240,7 +240,7 @@ export function createBandwidthSelector(options: {
   return { update, observe, tick,
     requestCheck(name: string) {
       const g = enabled(snapshot).find(g => g.name === name);
-      if (!g?.policy.bandwidth?.activeProbes || campaign || flight || closed) return false;
+      if (!g || !options.measure || campaign || flight || closed) return false;
       const node = [...g.policy.preferred, ...g.policy.fallback].find(n => n !== g.current);
       if (!node) return false;
       hints.set(name, node); cooldowns.delete(key(name)); return true;

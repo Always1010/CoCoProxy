@@ -8,7 +8,14 @@ test('bandwidth settings preserve legacy policies and validate coupled time and 
   assert.deepEqual(parseAutoGroupPolicy(legacy), legacy);
   assert.equal(parseBandwidthSettings({}).enabled, false);
   assert.equal(parseAutoGroupPolicy({ ...legacy, bandwidth: { enabled: true } }).bandwidth?.targetMbps, 8);
-  for (const value of [{ enabled: 1 }, { targetMbps: NaN }, { extra: true }, { confirmRounds: 2 }, { durationSeconds: 4 },
+  assert.deepEqual(parseBandwidthSettings({ enabled: true, activeProbes: true }), { ...defaults, enabled: true });
+  const optedOut = parseAutoGroupPolicy({ ...legacy, bandwidth: { enabled: true, activeProbes: false, observeOnly: true, targetMbps: 10, taskMiB: 10 } }).bandwidth!;
+  assert.equal(optedOut.enabled, false);
+  assert.equal(optedOut.observeOnly, true);
+  assert.equal(optedOut.targetMbps, 10);
+  assert.equal(Object.hasOwn(optedOut, 'activeProbes'), false);
+  assert.equal(parseBandwidthSettings({ ...optedOut, enabled: true }).enabled, true);
+  for (const value of [{ enabled: 1 }, { activeProbes: 0 }, { targetMbps: NaN }, { extra: true }, { confirmRounds: 2 }, { durationSeconds: 4 },
     { taskMiB: 1 }, { hourMiB: 16 }, { dayMiB: 32 }, { campaignSeconds: 120 }, { targetMbps: 100 }, { roundIntervalSeconds: 30 }]) {
     assert.throws(() => parseBandwidthSettings(value));
   }

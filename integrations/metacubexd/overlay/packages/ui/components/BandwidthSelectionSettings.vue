@@ -38,7 +38,7 @@ function number(key: string, event: Event) { set(key, Number((event.target as HT
 function toggle(key: string, event: Event) { set(key, (event.target as HTMLInputElement).checked) }
 function restore() {
   if (definitions.value && settings.value) emit('update:modelValue', { ...definitions.value.defaults,
-    enabled: settings.value.enabled, activeProbes: settings.value.activeProbes, observeOnly: settings.value.observeOnly })
+    enabled: settings.value.enabled, observeOnly: settings.value.observeOnly })
 }
 async function load() {
   loading.value = true; error.value = ''
@@ -60,7 +60,7 @@ async function check() {
 }
 const reasons: Record<string, string> = {
   'waiting-traffic': '等待持续低速业务证据', 'waiting-idle': '等待业务空闲或测速名额', 'budget-exhausted': '自动检测预算不足，保持当前节点',
-  'passive-only': '仅观察业务流量，不主动下载验证', collecting: '正在收集当前与候选的配对样本', 'current-sufficient': '当前节点无需为这点改善切换',
+  'measurement-unavailable': '下载验证服务不可用，无法比较节点吞吐', collecting: '正在收集当前与候选的配对样本', 'current-sufficient': '当前节点无需为这点改善切换',
   'no-candidate': '没有可比较的候选', 'candidate-unavailable': '候选未通过轻量检查', 'sample-unknown': '样本无效或不足，不给节点降级',
   'no-clear-gain': '扣除波动和成本后改善不足，保持当前节点', 'would-switch': '观察模式：已达到切换条件，未执行切换',
   'bandwidth-improvement': '已确认净收益并完成吞吐性能切换', 'switch-limit': '保持时间或近期切换上限尚未解除',
@@ -80,14 +80,13 @@ onMounted(load)
     <p v-if="loading" class="text-xs" role="status">正在读取参数…</p>
     <div v-if="error" class="flex flex-wrap items-center gap-2 text-xs text-warning"><span>{{ error }}</span><button type="button" class="btn btn-sm min-h-11" :disabled="disabled || loading" @click="load"><IconRefresh :size="16" /><span>重读参数</span></button></div>
     <template v-if="settings?.enabled && definitions">
-      <label class="flex min-h-11 items-center justify-between gap-3 text-sm">允许自动下载验证<input :checked="settings.activeProbes" type="checkbox" class="toggle toggle-sm" :disabled="disabled" @change="toggle('activeProbes', $event)" /></label>
       <label class="flex min-h-11 items-center justify-between gap-3 text-sm">仅观察，不执行带宽切换<input :checked="settings.observeOnly" type="checkbox" class="toggle toggle-sm" :disabled="disabled" @change="toggle('observeOnly', $event)" /></label>
-      <p class="text-xs text-base-content/65">自动验证会消耗流量；不允许下载时只积累业务证据，不执行带宽性能切换。建议先用观察模式核对收益。多组同时开启时，采用各组最小配置作为全局流量预算。</p>
+      <p class="text-xs text-base-content/65">开启带宽辅助决策后会按需自动下载验证并消耗流量，观察模式也会消耗验证流量。建议先用观察模式核对收益。多组同时开启时，采用各组最小配置作为全局流量预算。</p>
       <div class="space-y-2">
         <label v-for="[key, field] in basic" :key="key" class="flex min-h-11 flex-wrap items-center justify-between gap-2 text-sm"><span>{{ field.label }}（{{ field.unit }}）</span><input :value="settings[key]" type="number" class="input input-sm w-28" :min="field.min" :max="field.max" :step="field.integer ? 1 : 0.01" :disabled="disabled" required @input="number(key, $event)" /></label>
       </div>
       <p class="text-xs text-base-content/65">目标 {{ settings.targetMbps }} Mbps，约 {{ (Number(settings.targetMbps) / 8).toFixed(2) }} MB/s；预算统计应用载荷，实际网络流量含协议开销。</p>
-      <button type="button" class="btn btn-sm min-h-11" :disabled="disabled || !canCheck || !settings.activeProbes || checking || !!status?.testingNode" @click="check"><IconBrandSpeedtest :size="16" /><span>{{ checking ? '正在排队' : '检查吞吐' }}</span></button>
+      <button type="button" class="btn btn-sm min-h-11" :disabled="disabled || !canCheck || checking || !!status?.testingNode" @click="check"><IconBrandSpeedtest :size="16" /><span>{{ checking ? '正在排队' : '检查吞吐' }}</span></button>
       <p v-if="!canCheck" class="text-xs text-base-content/65">保存组设置后可发起检查。</p>
       <p v-if="feedback" class="text-xs" role="status">{{ feedback }}</p>
       <details class="rounded-lg bg-base-200 p-3">

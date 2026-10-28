@@ -388,7 +388,7 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   assert.equal(exports.saveError.value, '');
   assert.match(exports.refreshWarning.value, /已生效，列表刷新失败/);
 
-  exports.bandwidth.value = { enabled: true, activeProbes: true, observeOnly: true, targetMbps: 8 };
+  exports.bandwidth.value = { enabled: true, observeOnly: true, targetMbps: 8 };
   await exports.persist();
   exports.open();
   assert.equal(exports.bandwidth.value.enabled, true);
