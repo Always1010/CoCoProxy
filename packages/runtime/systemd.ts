@@ -9,7 +9,7 @@ import { assertManagedUnit, inspectCore, observeCore } from './observer.ts';
 import { loadRuntimeCandidate, loadRuntimeCandidateReadonly, parseRuntimeSettings, readRuntimeSelection, verifyBinary } from './settings.ts';
 import { selectionChanges, setControllerSelection } from './selections.ts';
 import { RuntimeError } from './types.ts';
-import type { CoreObservation, RuntimeSettings, RuntimeSelection, RuntimeUnitState } from './types.ts';
+import type { CoreObservation, RuntimeProcessIdentity, RuntimeSettings, RuntimeSelection, RuntimeUnitState } from './types.ts';
 
 const unitName = 'cocoproxy-mihomo.service';
 const networkAuditIntervalMs = 30_000;
@@ -69,6 +69,7 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
   readonly settings: RuntimeSettings;
   private readonly deps: RuntimeDependencies;
   private networkCheckedAt = -Infinity;
+  private hotConfirmation?: { generation: string; process: RuntimeProcessIdentity };
   constructor(settings: RuntimeSettings, dependencies: Partial<RuntimeDependencies> = {}) {
     this.settings = Object.freeze(parseRuntimeSettings(settings));
     this.deps = { command: runRuntimeCommand, assertUnit: assertManagedUnit, binary: verifyBinary,
@@ -96,10 +97,22 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
     return loaded;
   }
 
-  async validate(path: string): Promise<void> {
+  async validate(path: string, previousGeneration: string | null = null): Promise<void> {
+    this.hotConfirmation = undefined;
     const loaded = await this.candidate(path);
-    await this.unit();
+    const unit = await this.unit();
     const binary = await this.deps.binary(this.settings);
+    if (previousGeneration) {
+      try {
+        const selected = await this.deps.readSelection(this.settings);
+        const previous = await this.deps.load(this.settings, previousGeneration);
+        // A committed, currently healthy config with the same pinned deployment
+        // already proves syntax. Reordering existing selectors adds no new config.
+        if (selected?.generation === previousGeneration &&
+            selectionChanges(previous.candidate.config, loaded.candidate.config) !== null &&
+            (await this.deps.inspect(this.settings, previousGeneration, unit)).ready) return;
+      } catch { /* Unavailable or migrated predecessors require full validation. */ }
+    }
     await this.deps.validate(loaded.candidate, { binaryPath: binary });
   }
 
@@ -155,16 +168,12 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
       if (results.some(result => result.status === 'rejected')) throw new RuntimeError('CONTROLLER_SELECTION_FAILED');
     }
     await this.deps.writeSelection(this.settings, { schemaVersion: 1, generation, hot: before.process });
-    const after = await this.deps.inspect(this.settings, generation, await this.unit());
-    if (!after.ready || !after.process || after.process.pid !== before.process.pid ||
-        after.process.bootId !== before.process.bootId || after.process.startTime !== before.process.startTime ||
-        after.process.baseGeneration !== before.process.baseGeneration) {
-      throw new RuntimeError('RUNTIME_HOT_SELECTION_UNVERIFIED');
-    }
+    this.hotConfirmation = { generation, process: before.process };
     return true;
   }
 
   async activate(path: string, generation: string): Promise<void> {
+    this.hotConfirmation = undefined;
     const target = await this.candidate(path, generation);
     await this.deps.binary(this.settings);
     if (await this.hotSelect(target, generation)) return;
@@ -185,6 +194,16 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
   }
 
   async confirm(generation: string): Promise<boolean> {
+    const hot = this.hotConfirmation;
+    this.hotConfirmation = undefined;
+    if (hot?.generation === generation) {
+      // One post-PUT inspection is the transaction confirmation. A different
+      // process cannot become the expected physical process by waiting longer.
+      const after = await this.deps.inspect(this.settings, generation, await this.unit());
+      return after.ready && !!after.process && after.process.pid === hot.process.pid &&
+        after.process.bootId === hot.process.bootId && after.process.startTime === hot.process.startTime &&
+        after.process.baseGeneration === hot.process.baseGeneration;
+    }
     const deadline = performance.now() + 10_000;
     do {
       if ((await this.observe(generation)).ready) return true;
@@ -220,6 +239,7 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
   }
 
   async restore(previousPath: string | null, previousGeneration: string | null): Promise<void> {
+    this.hotConfirmation = undefined;
     if ((previousPath === null) !== (previousGeneration === null)) throw new RuntimeError('RUNTIME_RESTORE_INVALID');
     await this.stopAndConfirm();
     if (previousPath === null || previousGeneration === null) {

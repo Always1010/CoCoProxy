@@ -6,7 +6,7 @@ import { canonicalJson } from '../config/index.ts';
 import type { Candidate } from '../config/index.ts';
 
 export interface RuntimeAdapter {
-  validate(candidatePath: string): Promise<void>;
+  validate(candidatePath: string, previousGeneration?: string | null): Promise<void>;
   activate(candidatePath: string, generation: string): Promise<void>;
   confirm(generation: string): Promise<boolean>;
   restore(previousPath: string | null, previousGeneration: string | null): Promise<void>;
@@ -306,7 +306,7 @@ export class TransactionManager {
       state.pending = { id: randomUUID(), previous: state.active, target: id, phase: 'validating',
         ownerToken };
       await this.store.writeState(state);
-      try { await this.runtime.validate(path); }
+      try { await this.runtime.validate(path, state.active); }
       catch {
         state.pending = null;
         state.checkedAt = new Date().toISOString();
