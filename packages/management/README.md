@@ -68,7 +68,7 @@ policy 可能包含管理员编辑的节点凭据，因此仍是敏感的已认�
 
 Server 的异步启动插件通过 `startLifecycle()` 先等待一次 pending 恢复。空状态或已完成事务只读返回；未完成事务或持久故障交由既有 `TransactionManager.recover()` 在共同文件锁下恢复，可能停止未提交核心或重新启动上一确认核心。恢复失败保留事务／故障，管理端仍可检查；日志只输出固定错误码。缺失持久运行标记时保持原有行为，已完成 active 不隐式启动。
 
-明确启用 `lifecycle.json` 后，既有管理进程每 5 秒串行协调：优先恢复 pending，再在共同锁内重读启用/暂停标记及 committed active，核验并修复网关前置资源、保留健康核心或请求 systemd 恢复 active。不会捕获新草稿、应用 desired 或新提交代次，也不创建第二个核心进程监管器。暂时网络不可用、活锁竞争及启动失败持续稍后重试；配置损坏、资源冲突保留固定失败状态。持久维护暂停阻止自动 pending 恢复和 active 协调，核心启动器也拒绝 paused 状态，跨 boot 仍有效。退出时 `closeLifecycle()` 清定时器并等待在途协调完成。`tests/management-startup.test.ts` 验证草稿隔离、暂停、锁竞争、持续重试与关闭排空，启动器测试验证暂停和损坏标记拒绝 exec；真实 Server 检查另验证从 `/` 工作目录启动，所有配置和入口必须为绝对路径。
+明确启用 `lifecycle.json` 后，既有管理进程每轮结束约 5 秒后串行协调：优先恢复 pending，在锁外只读检查 committed active，健康且无到期网关核验时不占共同写锁。自动网关前置资源约每 30 秒核验一次；失败不更新核验时间，下一轮继续重试。需要修复或核验时，在共同锁内重读启用/暂停标记及 committed active，若 active 已变化则交由下一轮重新观察，再核验并修复网关前置资源、保留健康核心或请求 systemd 恢复 active。不会捕获新草稿、应用 desired 或新提交代次，也不创建第二个核心进程监管器。暂时网络不可用、活锁竞争及启动失败持续稍后重试；配置损坏、资源冲突保留固定失败状态。持久维护暂停阻止自动 pending 恢复和 active 协调，核心启动器也拒绝 paused 状态，跨 boot 仍有效。退出时 `closeLifecycle()` 清定时器并等待在途协调完成。`tests/management-startup.test.ts` 验证草稿隔离、暂停、锁竞争、持续重试与关闭排空，启动器测试验证暂停和损坏标记拒绝 exec；真实 Server 检查另验证从 `/` 工作目录启动，所有配置和入口必须为绝对路径。
 
 Server overlay 替换了上游原控制 router、自动启动、刷新调度和 token 注入；桌面 endpoint/sync 插件也已禁用。客户端固定同源 `/api/clash`，不会获取核心密钥或选择任意控制器。部署必须使用专用可信 origin，后端只绑定 loopback；HTTPS 终止代理须覆盖 Host/转发协议头并拒绝不可信转发头。管理与核心的私有状态要求相容的服务身份和权限，systemctl 授权只针对审阅的核心单元及原生模式的固定网络 unit start/reload，具体安装另行实施。
 

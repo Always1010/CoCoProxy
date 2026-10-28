@@ -27,7 +27,10 @@ export async function recoverManagementStartup(stateDirectory: string, runtime: 
   }
 }
 
-type PersistentRuntime = RuntimeAdapter & { reconcile(path: string, generation: string): Promise<boolean> };
+type PersistentRuntime = RuntimeAdapter & {
+  needsReconcile?(generation: string): Promise<boolean>;
+  reconcile(path: string, generation: string): Promise<boolean>;
+};
 
 /** No drafts or desired targets are consulted: only the transaction's committed active. */
 export async function reconcileManagementRuntime(stateDirectory: string, runtime: PersistentRuntime): Promise<void> {
@@ -36,11 +39,16 @@ export async function reconcileManagementRuntime(stateDirectory: string, runtime
   const recovered = await recoverManagementStartup(stateDirectory, runtime);
   if (!recovered.recovered) throw new TransactionError(recovered.reason ?? 'STARTUP_RECOVERY_UNAVAILABLE');
   const store = new FileTransactionStore(stateDirectory);
+  const observed = await store.status();
+  if (observed.transaction || observed.fault || observed.active === null) return;
+  // Healthy observations do not exclude a user's apply. This is only a hint:
+  // every repair still reloads lifecycle and committed state under the lock.
+  if (runtime.needsReconcile && !await runtime.needsReconcile(observed.active)) return;
   await store.exclusive(async () => {
     const current = await readRuntimeLifecycle(stateDirectory);
     if (!current.enabled || current.paused) return;
     const state = await store.readState();
-    if (state.pending || state.fault || state.active === null) return;
+    if (state.pending || state.fault || state.active === null || state.active !== observed.active) return;
     const path = await store.readCandidate(state.active);
     await runtime.reconcile(path, state.active);
   });

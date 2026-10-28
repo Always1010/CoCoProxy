@@ -218,30 +218,50 @@ test('persistent reconciliation retains a healthy process, defers systemd jobs a
   assert.equal((await f.store.status()).active, f.first.id);
 });
 
-test('gateway reconciliation uses only fixed start/reload permissions and never restarts a core after network rejection', { skip: !linux }, async t => {
-  const f = await fixture(t);
+test('gateway reconciliation audits periodically, retries rejected audits and never restarts a core after network rejection', async () => {
+  const f = { first: candidate('warning'), store: { candidatePath: (id: string) => `/synthetic/state/candidates/${id}.json` },
+    settings: { schemaVersion: 1 as const, stateDirectory: '/synthetic/state', binaryPath: '/synthetic/core', binarySha256: 'a'.repeat(64),
+      systemctlPath: '/synthetic/systemctl', unitPath: '/synthetic/cocoproxy-mihomo.service', unitSha256: 'b'.repeat(64), serviceUid: 12345 },
+    unit: { loadState: 'loaded', activeState: 'active', subState: 'running', mainPid: 22001, jobPending: false,
+      fragmentPath: '/synthetic/cocoproxy-mihomo.service', hasDropIns: false, needsReload: false, user: '12345' } };
   const commands: string[][] = [];
+  let now = 0, rejectNetwork = true;
+  Object.assign(f.unit, { activeState: 'active', subState: 'running', mainPid: 22001 });
   const settings: RuntimeSettings = { ...f.settings, binarySha256: AUTOMATIC_GATEWAY_CORE_SHA256,
     automaticGateway: { schemaVersion: 1, ingressInterface: 'lan0', gatewayIPv4: '192.0.2.2', routerIPv4: '192.0.2.1',
       routerMAC: '02:00:00:00:00:01', clientCIDR: '192.0.2.0/24', prefixLength: 24, dnsPort: 15353,
       egressMark: 3030, egressTable: 3030, egressPriority: 8000, tunMtu: 1500 } };
   const runtime = new SystemdMihomoRuntime(settings, {
     platform: 'linux', verifySystemctl: async () => settings.systemctlPath,
+    now: () => now,
     assertUnit: async () => {},
+    readSelection: async () => ({ schemaVersion: 1, generation: f.first.id }),
+    observe: async () => ({ ready: true, generation: f.first.id, checkedAt: new Date().toISOString(), reason: null }),
     load: async () => ({ candidate: f.first, path: f.store.candidatePath(f.first.id), home: '/synthetic/home', controller: { port: 19090, secret } }),
     command: async (_binary, args) => {
       commands.push(args);
       if (args[2] === 'show') return show(f.unit);
-      if (args[2] === 'reload') throw new RuntimeError('RUNTIME_COMMAND_FAILED');
+      if (args[2] === 'reload') {
+        if (rejectNetwork) throw new RuntimeError('RUNTIME_COMMAND_FAILED');
+        return '';
+      }
       assert.deepEqual(args, ['--no-ask-password', '--no-pager', 'start', 'cocoproxy-gateway-network.service']);
       return '';
     },
   });
+  assert.equal(await runtime.needsReconcile(f.first.id), true);
   await assert.rejects(runtime.reconcile(f.store.candidatePath(f.first.id), f.first.id), runtimeCode('RUNTIME_COMMAND_FAILED'));
   assert.deepEqual(commands.filter(args => args[2] !== 'show'), [
     ['--no-ask-password', '--no-pager', 'start', 'cocoproxy-gateway-network.service'],
     ['--no-ask-password', '--no-pager', 'reload', 'cocoproxy-gateway-network.service'],
   ]);
+  assert.equal(await runtime.needsReconcile(f.first.id), true);
+  rejectNetwork = false;
+  await runtime.reconcile(f.store.candidatePath(f.first.id), f.first.id);
+  now = 29_999;
+  assert.equal(await runtime.needsReconcile(f.first.id), false);
+  now = 30_000;
+  assert.equal(await runtime.needsReconcile(f.first.id), true);
 });
 
 test('systemd show parser rejects partial, duplicate, injected and malformed state', () => {
