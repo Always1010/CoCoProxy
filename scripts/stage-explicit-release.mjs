@@ -149,12 +149,13 @@ export async function stageExplicitRelease(options) {
     const componentsBytes = await blob('integrations/metacubexd/components.json');
     const catalog = json(componentsBytes);
     const serverSHA = reusedInputSha256(tree, 'core', catalog.management);
-    if (componentUpdate && componentUpdate.reusedInputSha256 !== (componentUpdate.components === 'core' ? serverSHA : frontendSHA)) fail('BUILD_REUSED_INPUT_CHANGED');
     try { validateReleaseMetadata(catalog, review, json(await blob('integrations/metacubexd/source-tree.json'))); }
     catch (error) { if (error?.code) fail(error.code); throw error; }
     const coreReview = catalog.mihomo;
     const managementReview = catalog.management;
     const coreBytes = await regular(core);
+    if (componentUpdate && componentUpdate.reusedInputSha256 !== (componentUpdate.components === 'management' ? sha256(coreBytes)
+      : componentUpdate.components === 'core' ? serverSHA : frontendSHA)) fail('BUILD_REUSED_INPUT_CHANGED');
     let reviewedHash = options.reviewedCoreSha256;
     if (reviewedHash !== undefined) requireString(reviewedHash, /^[a-f0-9]{64}$/u);
     let corePlatform;

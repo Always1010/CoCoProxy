@@ -52,6 +52,15 @@ test('frontend build scope bypasses router wizard and cannot enter first install
   await assert.rejects(deployFromLocalBuild([], dependencies), { code: 'LOCAL_FRONTEND_EXISTING_INSTALL_REQUIRED' });
 });
 
+test('management updates forward the verified payload and cannot enter first installation', async () => {
+  const { events, dependencies } = deploymentHarness();
+  dependencies.readBuild = async () => ({ ...release, components: 'management' });
+  await deployFromLocalBuild([], dependencies);
+  assert.ok(events.some(event => event.deploy));
+  dependencies.detect = async () => 'first';
+  await assert.rejects(deployFromLocalBuild([], dependencies), { code: 'LOCAL_COMPONENT_EXISTING_INSTALL_REQUIRED' });
+});
+
 test('fresh install receives private file arguments; changed build during interactive setup prevents deployment', async () => {
   const { events, dependencies } = deploymentHarness(); let reads = 0;
   dependencies.detect = async () => 'first';

@@ -79,7 +79,7 @@ export async function deployFromLocalBuild(args, dependencies = {}) {
       const release = await (dependencies.readBuild ?? readLocalBuild)({ source: paths.source, workspace: paths.workspace });
       const installation = await (dependencies.detect ?? detectLocalInstallation)();
       if (release.components === 'frontend' && installation !== 'existing') fail('LOCAL_FRONTEND_EXISTING_INSTALL_REQUIRED');
-      if (['backend', 'core'].includes(release.components) && installation !== 'existing') fail('LOCAL_COMPONENT_EXISTING_INSTALL_REQUIRED');
+      if (['backend', 'management', 'core'].includes(release.components) && installation !== 'existing') fail('LOCAL_COMPONENT_EXISTING_INSTALL_REQUIRED');
       const deployArgs = ['--local', '--payload', release.output, '--manifest-sha256', release.manifestSha256];
       for (const option of forwarded) if (options[option]) deployArgs.push(option, options[option]);
       if (options['--preview']) deployArgs.push('--preview');

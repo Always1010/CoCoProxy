@@ -178,8 +178,8 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
             self.assertFalse(any(event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable'] for event in events))
 
-    def test_backend_and_core_updates_use_full_maintenance_and_reject_a_stale_base(self):
-        for component, base in [('backend', 'a'), ('backend', 'c'), ('core', 'a'), ('core', 'c')]:
+    def test_component_updates_use_full_maintenance_and_reject_a_stale_base(self):
+        for component, base in [('backend', 'a'), ('backend', 'c'), ('management', 'a'), ('management', 'c'), ('core', 'a'), ('core', 'c')]:
             with self.subTest(component=component, base=base):
                 temporary, stack, private, before, events, router, args = self.scenario(component=component, component_base=base)
                 with temporary, stack:
