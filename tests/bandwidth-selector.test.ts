@@ -134,3 +134,32 @@ test('busy traffic aborts verification as unknown without condemning other candi
   assert.ok(f.saved.at(-1)!.charges[0].bytes > 0);
   await f.engine.close();
 });
+
+test('fresh latency deterioration or incumbent recovery invalidates an otherwise worthwhile switch', async () => {
+  for (const recovery of [false, true]) {
+    const f = fixture({ currentMbps: recovery ? 8 : 5, delays: { a: recovery ? 500 : 80, b: 100 } });
+    f.engine.requestCheck('media');
+    for (let i = 0; i < 100 && f.measures.filter(n => n === 'b').length < 2; i++) await f.step();
+    assert.equal(f.measures.filter(n => n === 'b').length, 2);
+    f.engine.observeProbe('media', recovery ? 'a' : 'b', { ok: true, delay: recovery ? 100 : 450 });
+    await f.step();
+    assert.deepEqual(f.switches, []);
+    assert.equal(f.engine.status('media')!.pool.find(n => n.name === 'b')!.state, 'backoff');
+    await f.engine.close();
+  }
+});
+
+test('custom no-gain backoff cap is honored on repeated unsuccessful comparisons', async () => {
+  const f = fixture({ currentMbps: 8, settings: { cooldownSeconds: 300 } });
+  f.engine.requestCheck('media');
+  const delays: number[] = [];
+  let previous = 0;
+  for (let i = 0; i < 1000 && delays.length < 3; i++) {
+    await f.step();
+    const retry = f.engine.status('media')!.pool.find(n => n.name === 'b')!.nextAt;
+    if (retry > previous) { delays.push(retry - f.now); previous = retry; }
+  }
+  assert.deepEqual(delays, [120000, 300000, 300000]);
+  assert.deepEqual(f.switches, []);
+  await f.engine.close();
+});

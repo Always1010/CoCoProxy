@@ -23,7 +23,7 @@ type NodeState = 'pending' | 'confirming' | 'verified' | 'backoff' | 'unavailabl
 type Node = { name: string; preferred: boolean; samples: BandwidthSample[];
   probe: { at: number; delay: number | null; ok: boolean } | null;
   state: NodeState; reason: string; nextAt: number; checkedAt: number | null; measuredAt: number | null;
-  failures: number; misses: number; earlyFailures: number; activeMs: number; useAt: number };
+  failures: number; misses: number; earlyFailures: number; activeMs: number; useSince: number };
 type Pool = { name: string; current: string; nodes: Map<string, Node>; active: string[];
   trigger: Trigger | null; urgentUntil: number; positiveUntil: number; pauseUntil: number;
   started: number | null; spent: number; candidateDownloads: number;
@@ -140,7 +140,7 @@ export function createBandwidthSelector(options: {
       if (p.current !== g.current) { interrupt('selection-conflict'); clearEvidence(p); p.current = g.current; p.trigger = null; }
       for (const name of [...g.policy.preferred, ...g.policy.fallback]) if (!p.nodes.has(name)) p.nodes.set(name,
         { name, preferred: g.policy.preferred.includes(name), samples: [], probe: null, state: 'pending', reason: 'waiting-evidence',
-          nextAt: 0, checkedAt: null, measuredAt: null, failures: 0, misses: 0, earlyFailures: 0, activeMs: 0, useAt: 0 });
+          nextAt: 0, checkedAt: null, measuredAt: null, failures: 0, misses: 0, earlyFailures: 0, activeMs: 0, useSince: 0 });
     }
   }
   function observe(sample: UsageSnapshot) {
@@ -167,8 +167,9 @@ export function createBandwidthSelector(options: {
         const p = pools.get(g.name), n = p?.nodes.get(node);
         // Only real traffic on the actual current outbound builds familiarity; idle time does not.
         if (p?.current === node && n && (bytes.get(node) ?? 0) > 0 && n.probe?.ok && at - n.probe.at <= 60000) {
-          if (at - n.useAt > DAY) n.activeMs = 0;
-          n.activeMs = Math.min(600000, n.activeMs + elapsed); n.useAt = at;
+          if (at - n.useSince >= DAY) n.activeMs = 0;
+          if (!n.activeMs) n.useSince = at;
+          n.activeMs = Math.min(600000, n.activeMs + elapsed);
         }
       }
     }
@@ -191,7 +192,8 @@ export function createBandwidthSelector(options: {
   function reject(p: Pool, n: Node, s: BandwidthSettings, reason: string, unavailable = false) {
     const steps = unavailable ? [30000, 60000, 120000, 300000] : [120000, 300000, 900000, s.cooldownSeconds * 1000];
     const count = unavailable ? n.failures++ : n.misses++;
-    n.nextAt = options.now() + steps[Math.min(count, steps.length - 1)];
+    const delay = steps[Math.min(count, steps.length - 1)];
+    n.nextAt = options.now() + (unavailable ? delay : Math.min(delay, s.cooldownSeconds * 1000));
     n.reason = reason; n.state = unavailable ? 'unavailable' : 'backoff'; n.samples = [];
     if (unavailable) n.activeMs = 0;
     p.active = p.active.filter(name => name !== n.name);
@@ -209,11 +211,16 @@ export function createBandwidthSelector(options: {
   }
   function preferences(p: Pool, n: Node) {
     return { currentPreferred: p.nodes.get(p.current)!.preferred, candidatePreferred: n.preferred,
-      unfamiliar: n.activeMs < 600000 || options.now() - n.useAt > DAY };
+      unfamiliar: n.activeMs < 600000 || options.now() - n.useSince >= DAY };
   }
   function comparison(p: Pool, n: Node, s: BandwidthSettings) {
     const switches = recent(p), reverse = switches.some(e => e.from === n.name && e.at > options.now() - s.reverseWindowSeconds * 1000);
-    return bandwidthDecision(values(p.nodes.get(p.current)!, s), values(n, s), s, options.now(), switches.length, reverse, preferences(p, n));
+    const evidence = (node: Node, current: boolean) => values(node, s).map(sample => {
+      if (!node.probe?.ok || node.probe.delay === null || options.now() - node.probe.at > PROBE_FRESH) return sample;
+      // A recovered incumbent or newly slower candidate must reduce, never inflate, expected gain.
+      return { ...sample, delayMs: (current ? Math.min : Math.max)(sample.delayMs, node.probe.delay) };
+    });
+    return bandwidthDecision(evidence(p.nodes.get(p.current)!, true), evidence(n, false), s, options.now(), switches.length, reverse, preferences(p, n));
   }
   function potential(p: Pool, n: Node, s: BandwidthSettings) {
     const current = bandwidthInterval(values(p.nodes.get(p.current)!, s), s, options.now(), false);
@@ -477,10 +484,10 @@ export function createBandwidthSelector(options: {
       return { phase: p.phase, reason: p.reason, candidate: p.candidate, testingNode: p.testingNode,
         round: p.candidate ? values(p.nodes.get(p.candidate)!, s).length : 0, nextAt: p.nextAt, decision: p.decision,
         ...budget(), searchBytes: p.spent, searchLimit: s.searchMiB * MiB, urgent: urgent(p, s),
-        pool: [...p.nodes.values()].map(n => ({ name: n.name, preferred: n.preferred, current: n.name === p.current,
-          state: n.state, reason: n.reason, samples: values(n, s).length, delayMs: n.probe?.delay ?? null,
+        pool: [...p.nodes.values()].map(n => { const samples = values(n, s); return { name: n.name, preferred: n.preferred, current: n.name === p.current,
+          state: n.state, reason: n.reason, samples: samples.length, delayMs: n.probe?.delay ?? null,
           mbps: bandwidthInterval(n.samples, s, options.now(), false)?.mbps ?? null,
-          measuredAt: n.samples.at(-1)?.at ?? null, nextAt: n.nextAt, active: p.active.includes(n.name) })) };
+          measuredAt: n.samples.at(-1)?.at ?? null, nextAt: n.nextAt, active: p.active.includes(n.name) }; }) };
     },
     async close() { closed = true; flight?.abort.abort(); await flight?.done; },
   };
