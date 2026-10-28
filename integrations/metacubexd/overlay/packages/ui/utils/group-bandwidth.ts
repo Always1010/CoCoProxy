@@ -5,14 +5,14 @@ export interface BandwidthSettings {
 }
 
 export const bandwidthPages = [
-  { id: 'bandwidth', label: '带宽判断', description: '决定下载吞吐是否参与自动切换判断。', keys: ['targetMbps'] },
-  { id: 'budget', label: '检测预算', description: '限制自动下载验证使用的流量；劣化处理预留包含在总额内。', keys: ['hourMiB', 'dayMiB', 'reserveHourMiB', 'reserveDayMiB'] },
-  { id: 'gain', label: '收益判断', description: '判断候选改善是否足以支持切换；参考线不是绝对淘汰线。', keys: ['delayReferenceMs', 'throughputReferenceMbps', 'tradeoffRatio', 'shortageSeconds', 'minGainMs', 'minGainRatio', 'fallbackPenaltyMs', 'unfamiliarPenaltyMs'] },
-  { id: 'protection', label: '切换保护', description: '通过保持时间、次数限制和切换成本减少反复切换。', keys: ['holdSeconds', 'maxSwitches', 'switchCostSeconds', 'recentCostSeconds', 'reverseCostSeconds', 'reverseWindowSeconds', 'horizonSeconds'] },
-  { id: 'sampling', label: '下载采样', description: '配置单次下载验证及同节点样本的确认要求。', keys: ['durationSeconds', 'warmupSeconds', 'minSampleSeconds', 'timeoutSeconds', 'taskMiB', 'confirmRounds', 'roundIntervalSeconds'] },
-  { id: 'evidence', label: '证据有效期', description: '限制旧证据的使用，并为测量波动保留裕量。', keys: ['freshSeconds', 'latestSeconds', 'positiveSeconds', 'marginMs', 'agingMs'] },
-  { id: 'trigger', label: '触发条件', description: '配置低速怀疑条件，以及下载验证所需的业务空闲条件。', keys: ['suspectRatio', 'activeSeconds', 'minTrafficMiB', 'busyStartMbps', 'busyStopMbps', 'quietSeconds'] },
-  { id: 'search', label: '搜索节奏', description: '限制连续搜索的时间和流量，并为无收益节点设置退避。', keys: ['campaignSeconds', 'searchMiB', 'yieldSeconds', 'cooldownSeconds'] },
+  { id: 'bandwidth', label: '辅助决策', description: '带宽辅助决策结合延迟与下载吞吐，评估候选改善是否值得切换。', keys: ['targetMbps'] },
+  { id: 'budget', label: '流量预算', description: '限制带宽辅助决策的自动下载验证流量；劣化处理预留包含在总额内。', keys: ['hourMiB', 'dayMiB', 'reserveHourMiB', 'reserveDayMiB'] },
+  { id: 'gain', label: '收益判断', summary: '改善门槛与候选偏好', description: '判断候选改善是否足以支持切换；参考线不是绝对淘汰线。', keys: ['delayReferenceMs', 'throughputReferenceMbps', 'tradeoffRatio', 'shortageSeconds', 'minGainMs', 'minGainRatio', 'fallbackPenaltyMs', 'unfamiliarPenaltyMs'] },
+  { id: 'protection', label: '切换保护', summary: '保持时间与切换成本', description: '通过保持时间、次数限制和切换成本减少反复切换。', keys: ['holdSeconds', 'maxSwitches', 'switchCostSeconds', 'recentCostSeconds', 'reverseCostSeconds', 'reverseWindowSeconds', 'horizonSeconds'] },
+  { id: 'sampling', label: '下载采样', summary: '下载验证与确认样本', description: '配置单次下载验证及同节点样本的确认要求。', keys: ['durationSeconds', 'warmupSeconds', 'minSampleSeconds', 'timeoutSeconds', 'taskMiB', 'confirmRounds', 'roundIntervalSeconds'] },
+  { id: 'evidence', label: '证据有效期', summary: '样本时效与测量裕量', description: '限制旧证据的使用，并为测量波动保留裕量。', keys: ['freshSeconds', 'latestSeconds', 'positiveSeconds', 'marginMs', 'agingMs'] },
+  { id: 'trigger', label: '触发条件', summary: '低速与业务空闲条件', description: '配置低速怀疑条件，以及下载验证所需的业务空闲条件。', keys: ['suspectRatio', 'activeSeconds', 'minTrafficMiB', 'busyStartMbps', 'busyStopMbps', 'quietSeconds'] },
+  { id: 'search', label: '搜索节奏', summary: '连续搜索与节点退避', description: '限制连续搜索的时间和流量，并为无收益节点设置退避。', keys: ['campaignSeconds', 'searchMiB', 'yieldSeconds', 'cooldownSeconds'] },
 ] as const
 
 export type BandwidthPage = typeof bandwidthPages[number]['id']

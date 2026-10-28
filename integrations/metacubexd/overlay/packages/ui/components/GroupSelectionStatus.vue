@@ -70,7 +70,7 @@ async function check() {
         <dt>自动选择</dt><dd>{{ !policyEnabled ? '已关闭' : group ? (phases[group.phase] ?? '自动选择运行中') : '等待运行状态' }}</dd>
         <template v-if="group?.reason"><dt>当前原因</dt><dd>{{ reason(group.reason) }}</dd></template>
         <template v-if="group?.nextAt"><dt>下次检测</dt><dd>{{ time(group.nextAt) }}</dd></template>
-        <dt>带宽判断</dt><dd>{{ !bandwidth?.enabled ? '已关闭' : !policyEnabled ? '自动选择关闭，未运行' : bandwidthStatus ? reason(bandwidthStatus.reason) : '等待运行状态' }}{{ bandwidth?.enabled && bandwidth.observeOnly ? ' · 仅观察' : '' }}</dd>
+        <dt>带宽辅助决策</dt><dd>{{ !bandwidth?.enabled ? '已关闭' : !policyEnabled ? '自动选择关闭，未运行' : bandwidthStatus ? reason(bandwidthStatus.reason) : '等待运行状态' }}{{ bandwidth?.enabled && bandwidth.observeOnly ? ' · 仅观察' : '' }}</dd>
       </dl>
       <div v-if="bandwidthStatus?.testingNode" class="flex items-start gap-2 text-sm" role="status"><span class="loading loading-spinner loading-sm shrink-0" /><span class="break-all">正在验证：{{ bandwidthStatus.testingNode }} · 有效样本 {{ bandwidthStatus.round }} / {{ bandwidth?.confirmRounds }}</span></div>
       <div v-if="bandwidthStatus" class="space-y-2 border-t border-base-content/10 pt-4 text-sm">
