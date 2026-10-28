@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconCheck, IconChevronDown, IconEdit, IconInfoCircle, IconList, IconPlus, IconReload, IconTrash, IconX } from '@tabler/icons-vue'
+import { IconCheck, IconChevronDown, IconEdit, IconList, IconPlus, IconReload, IconTrash, IconX } from '@tabler/icons-vue'
 import { domainRuleError, domainRuleTypes, isDomainRule, ruleTarget, saveGroupRules, templateRuleLabel } from '~/utils/group-rules'
 
 type RuleDraft = { id: number; type: string; payload: string }
@@ -241,14 +241,11 @@ async function reread() {
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 class="text-sm font-semibold">匹配规则</h3>
-              <p class="mt-1 text-xs text-base-content/65">自定义规则优先于内置规则，多条规则按列表顺序匹配。</p>
+
             </div>
             <button v-if="ownRules.length" type="button" class="btn btn-primary btn-sm min-h-11" :disabled="locked || needsRead" @click="openAdd"><IconPlus :size="16" /><span>添加规则</span></button>
           </div>
-          <details class="text-xs text-base-content/65">
-            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2"><IconInfoCircle :size="16" /><span>规则说明</span><IconChevronDown :size="14" /></summary>
-            <p class="rounded-lg bg-base-200 p-3 leading-relaxed">新增规则追加到自定义规则末尾；同一匹配方式可以每行输入一个内容并一次应用。内置规则由系统提供，不能在此编辑或删除。</p>
-          </details>
+          <HelpTip>自定义规则优先于内置规则，按列表顺序匹配。同一匹配方式可每行输入一个域名，新增规则追加到末尾。保存后立即应用；内置规则由系统维护。</HelpTip>
         </div>
 
         <div v-if="saving" role="status" class="flex items-center gap-2 rounded-lg bg-primary/10 p-3 text-sm"><span class="loading loading-spinner loading-sm" /><span>正在保存并应用规则，可以关闭组设置。</span></div>
@@ -264,34 +261,33 @@ async function reread() {
         <section class="space-y-2" aria-label="本组自定义规则">
           <h3 class="text-sm font-medium">自定义规则 · {{ ownRules.length }} 条</h3>
           <div v-if="!ownRules.length" class="space-y-3 rounded-lg border border-dashed border-base-content/15 p-4 text-center">
-            <p class="text-sm text-base-content/60">尚未配置自定义匹配规则。{{ templateRules.length || groupName === 'Other' ? '本组仍使用内置匹配规则。' : '添加规则，指定哪些网站使用本组。' }}</p>
+            <p class="text-sm text-base-content/60">暂无自定义规则。{{ templateRules.length || groupName === 'Other' ? '本组仍使用内置匹配规则。' : '添加规则，指定哪些网站使用本组。' }}</p>
             <button type="button" class="btn btn-primary min-h-11" :disabled="locked || needsRead" @click="openAdd"><IconPlus :size="16" /><span>添加规则</span></button>
           </div>
-          <div v-for="rule in ownRules" :key="rule.index" class="space-y-2 rounded-lg bg-base-200 p-3">
-            <p class="break-all text-sm font-medium">{{ templateRuleLabel(rule.value) }}</p>
-            <p class="text-xs text-base-content/60">目标策略：{{ groupName }}</p>
+          <div v-for="rule in ownRules" :key="rule.index" class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-base-content/10 py-2">
+            <p class="min-w-0 flex-1 basis-48 break-all text-sm font-medium">{{ templateRuleLabel(rule.value) }}</p>
             <div class="flex flex-wrap gap-2">
-              <button v-if="isDomainRule(rule.value)" type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="locked || needsRead" :aria-label="`编辑组内规则 ${rule.index + 1}`" @click="edit(rule.index)"><IconEdit :size="16" /><span>编辑规则</span></button>
+              <button v-if="isDomainRule(rule.value)" type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="locked || needsRead" :aria-label="`编辑组内规则 ${rule.index + 1}`" @click="edit(rule.index)"><IconEdit :size="16" /><span>编辑</span></button>
               <NuxtLink v-else :to="customRulesLink" custom v-slot="{ href }"><a :href="href ?? undefined" class="btn btn-ghost btn-sm min-h-11" :aria-disabled="locked" @click.prevent="emit('navigate', customRulesLink)"><IconEdit :size="16" /><span>前往规则页编辑</span></a></NuxtLink>
-              <button type="button" class="btn btn-ghost btn-sm min-h-11 text-error" :disabled="locked || needsRead" :aria-label="`删除组内规则 ${rule.index + 1}`" @click="requestRemove(rule.index)"><IconTrash :size="16" /><span>删除规则</span></button>
+              <button type="button" class="btn btn-ghost btn-sm min-h-11 text-error" :disabled="locked || needsRead" :aria-label="`删除组内规则 ${rule.index + 1}`" @click="requestRemove(rule.index)"><IconTrash :size="16" /><span>删除</span></button>
             </div>
           </div>
         </section>
 
-        <section class="space-y-2" aria-label="本组内置规则">
-          <h3 class="text-sm font-medium">内置规则 · {{ templateRules.length }} 条</h3>
+        <details class="space-y-2 rounded-xl border border-base-content/10 p-3" aria-label="本组内置规则">
+          <summary class="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 text-sm font-medium"><span>内置规则 · {{ templateRules.length }} 条</span><IconChevronDown :size="16" /></summary>
           <p v-if="workspace?.runMode !== 'rule'" class="text-sm text-base-content/60">切换到规则模式后可查看本组内置规则。</p>
           <p v-else-if="!templateRules.length" class="text-sm text-base-content/60">本组没有内置匹配规则。</p>
           <div v-else class="space-y-2"><div v-for="rule in templateRules" :key="rule.value" class="rounded-lg bg-base-200 p-3"><p class="break-all text-sm">{{ templateRuleLabel(rule.value) }}</p><span class="mt-2 inline-block rounded bg-base-content/10 px-2 py-1 text-xs text-base-content/60">内置 · 只读</span></div></div>
           <p v-if="groupName === 'Other'" class="text-sm text-base-content/60">本组承担最终兜底，其他规则均未命中的流量使用本组。</p>
-        </section>
+        </details>
       </template>
       <div class="border-t border-base-content/10 pt-4">
         <NuxtLink :to="effectiveRulesLink" custom v-slot="{ href }"><a :href="href ?? undefined" class="btn btn-outline min-h-11 w-full border-base-content/20 sm:w-auto" :aria-disabled="locked" @click.prevent="emit('navigate', effectiveRulesLink)"><IconList :size="16" /><span>查看本组生效规则</span></a></NuxtLink>
       </div>
     </div>
 
-    <Modal ref="editorDialog" :title="editing === null ? '添加匹配规则' : '编辑匹配规则'" :close-disabled="locked" @close="clearEditor">
+    <Modal compact ref="editorDialog" :title="editing === null ? '添加匹配规则' : '编辑匹配规则'" :close-disabled="locked" @close="clearEditor">
       <form class="space-y-4" @submit.prevent="submitEditor">
         <div v-for="(draft, index) in drafts" :key="draft.id" class="space-y-3 rounded-lg border border-base-content/10 p-3">
           <div v-if="editing === null && drafts.length > 1" class="flex items-center justify-between gap-2">
@@ -317,7 +313,7 @@ async function reread() {
       </template>
     </Modal>
 
-    <Modal ref="deleteDialog" title="删除匹配规则" :fixed-height="false" :close-disabled="locked" @close="clearDelete">
+    <Modal compact ref="deleteDialog" title="删除匹配规则" :fixed-height="false" :close-disabled="locked" @close="clearDelete">
       <div class="space-y-3 text-sm">
         <p>确定删除以下规则吗？确认后会立即保存并应用。</p>
         <p class="break-all rounded-lg bg-base-200 p-3 font-medium">{{ templateRuleLabel(deletingRule) }}</p>

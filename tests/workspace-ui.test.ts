@@ -501,7 +501,7 @@ test('site settings retain failed drafts and reconcile an interrupted save befor
   new Script(code).runInNewContext({
     exports, CoCoProxyError, cocoproxyErrorMessage,
     defineProps: () => ({ groupName: 'Work', scrollList: false }), withDefaults: (value: unknown) => value,
-    defineExpose() {}, watch() {}, onMounted() {}, onUnmounted() {},
+    defineEmits: () => () => {}, defineExpose() {}, watch() {}, onMounted() {}, onUnmounted() {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useSiteSettings: () => sites, useWorkspace: () => ({ busy: { value: false } }),
   });
@@ -540,9 +540,9 @@ test('site settings retain failed drafts and reconcile an interrupted save befor
 test('group manager creates a shared exit from Proxy and blocks deletion while services use it', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/WorkspaceGroupsMenu.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
-    .replace(/^import .*$/gm, '') + '\nexport { props, addShared, remove, sharedName, referenced, referenceMessage };';
+    .replace(/^import .*$/gm, '') + '\nexport { props, addShared, remove, sharedName, deleting, removalReason, requestRemove };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const settings: any = { local: { sharedGroups: ['AI Exit'], selections: { Proxy: 'node-a', 'AI Exit': 'node-a', OpenAI: 'AI Exit' }, rules: [] } };
+  const settings: any = { local: { sharedGroups: ['AI Exit'], selections: { Proxy: 'node-a', 'AI Exit': 'node-a', OpenAI: 'AI Exit' }, rules: ['DOMAIN,own.example,AI Exit', 'DOMAIN,keep.example,Proxy'] } };
   const view = { value: { nodes: ['node-a'], catalog: [{ id: 'Proxy', default: true }], groups: [
     { name: 'Proxy', role: 'shared', selected: 'node-a' }, { name: 'AI Exit', role: 'shared', selected: 'node-a' },
     { name: 'OpenAI', role: 'service', selected: 'AI Exit' },
@@ -550,7 +550,7 @@ test('group manager creates a shared exit from Proxy and blocks deletion while s
   let saves = 0;
   const exports: Record<string, any> = {};
   new Script(code, { filename: 'WorkspaceGroupsMenu.js' }).runInNewContext({
-    exports, localGroupNameError, defineProps: () => ({ activeGroup: 'AI Exit' }),
+    exports, localGroupNameError, defineProps: () => ({ activeGroup: 'Proxy' }),
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useProxyRefresh: () => ({ refresh: async () => {} }),
     useWorkspace: () => ({ view, workspace: { value: { mode: 'local' } }, overrides: { value: settings.local }, busy: { value: false },
@@ -560,13 +560,20 @@ test('group manager creates a shared exit from Proxy and blocks deletion while s
   await exports.addShared();
   assert.deepEqual(Array.from(settings.local.sharedGroups), ['AI Exit', 'Work Exit']);
   assert.equal(settings.local.selections['Work Exit'], 'node-a');
-  assert.equal(exports.referenced.value, true);
-  assert.match(exports.referenceMessage.value, /OpenAI/);
+  assert.match(exports.removalReason('Proxy'), /固定/);
+  exports.requestRemove('Proxy');
+  assert.equal(exports.deleting.value, null);
+  assert.match(exports.removalReason('AI Exit'), /OpenAI/);
+  exports.requestRemove('AI Exit');
+  assert.equal(exports.deleting.value, null);
+  exports.deleting.value = 'AI Exit';
   await exports.remove();
   assert.equal(saves, 1);
   delete settings.local.selections.OpenAI;
+  assert.equal(exports.removalReason('AI Exit'), '');
   await exports.remove();
   assert.equal(saves, 2);
   assert.equal(settings.local.selections['AI Exit'], undefined);
+  assert.deepEqual(Array.from(settings.local.rules), ['DOMAIN,keep.example,Proxy']);
   assert.deepEqual(Array.from(settings.local.sharedGroups), ['Work Exit']);
 });
