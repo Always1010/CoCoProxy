@@ -2,10 +2,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import { atomicWrite, inspectPrivateDirectory, privateDirectory, privateRead } from '../storage/private-files.ts';
 import { AuthError, parseAdminCredential, type AdminCredential } from './auth.ts';
+import { normalizeIP } from './request-address.ts';
 
 export type DeviceTrust = '90days' | 'until-revoked';
 export type TrustedDevice = {
   id: string; label: string; trust: DeviceTrust; createdAt: number; renewedAt: number; expiresAt: number | null;
+  lastIP: string | null; lastSeenAt: number | null;
 };
 type DeviceRecord = TrustedDevice & { tokenDigest: string };
 const DAY = 24 * 60 * 60 * 1000;
@@ -20,21 +22,28 @@ const digest = (token: unknown): string | null => {
 };
 const publicDevice = ({ tokenDigest: _tokenDigest, ...device }: DeviceRecord): TrustedDevice => ({ ...device });
 
-export type TrustedDeviceDocument = { schemaVersion: 1; credentialFingerprint: string; devices: DeviceRecord[] };
+export function deviceLabel(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > 160 || /[\u0000-\u001f\u007f]/.test(value)) throw new AuthError('AUTH_DEVICE_LABEL_INVALID');
+  return value.trim().normalize('NFC');
+}
+const labelKey = (label: string) => label.normalize('NFC').trim().toLowerCase();
+export type TrustedDeviceDocument = { schemaVersion: 1 | 2; credentialFingerprint: string; devices: DeviceRecord[] };
 export function parseTrustedDeviceDocument(value: unknown): TrustedDeviceDocument {
   if (!record(value) || Object.keys(value).sort().join(',') !== 'credentialFingerprint,devices,schemaVersion' ||
-      value.schemaVersion !== 1 || typeof value.credentialFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(value.credentialFingerprint) ||
+      ![1, 2].includes(value.schemaVersion as number) || typeof value.credentialFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(value.credentialFingerprint) ||
       !Array.isArray(value.devices) || value.devices.length > LIMIT) failure();
-  const ids = new Set<string>(), tokens = new Set<string>();
+  const ids = new Set<string>(), tokens = new Set<string>(), labels = new Set<string>();
   for (const item of value.devices) {
-    if (!record(item) || Object.keys(item).sort().join(',') !== 'createdAt,expiresAt,id,label,renewedAt,tokenDigest,trust' ||
+    if (!record(item) || Object.keys(item).sort().join(',') !== (value.schemaVersion === 1 ? 'createdAt,expiresAt,id,label,renewedAt,tokenDigest,trust' : 'createdAt,expiresAt,id,label,lastIP,lastSeenAt,renewedAt,tokenDigest,trust') ||
         typeof item.id !== 'string' || !/^[a-f0-9]{32}$/.test(item.id) || ids.has(item.id) ||
         typeof item.tokenDigest !== 'string' || !/^[a-f0-9]{64}$/.test(item.tokenDigest) || tokens.has(item.tokenDigest) ||
         typeof item.label !== 'string' || !item.label.trim() || item.label.length > 160 || /[\u0000-\u001f\u007f]/.test(item.label) ||
         !timestamp(item.createdAt) || !timestamp(item.renewedAt) || item.renewedAt < item.createdAt ||
         typeof item.trust !== 'string' || !['90days', 'until-revoked'].includes(item.trust) ||
         (item.trust === 'until-revoked' ? item.expiresAt !== null : !timestamp(item.expiresAt) || item.expiresAt !== item.renewedAt + 90 * DAY)) failure();
-    ids.add(item.id); tokens.add(item.tokenDigest);
+    if (value.schemaVersion === 2 && ((item.lastIP !== null && normalizeIP(item.lastIP) !== item.lastIP) ||
+        (item.lastSeenAt !== null && !timestamp(item.lastSeenAt)) || labels.has(labelKey(item.label)))) failure();
+    ids.add(item.id); tokens.add(item.tokenDigest); labels.add(labelKey(item.label));
   }
   return value as unknown as TrustedDeviceDocument;
 }
@@ -64,7 +73,20 @@ export class TrustedDeviceStore {
       await inspectPrivateDirectory(store.directory);
       const value = parseTrustedDeviceDocument(JSON.parse(await privateRead(join(store.directory, 'trusted-devices.json'), 128 * 1024)));
       // Changing credentials or the public origin invalidates every previous device.
-      if (value.credentialFingerprint === store.fingerprint) store.devices = value.devices as DeviceRecord[];
+      if (value.credentialFingerprint === store.fingerprint) {
+        store.devices = value.devices;
+        if (value.schemaVersion === 1) {
+          const used = new Set<string>();
+          const devices = store.devices.filter(item => store.live(item)).map(item => {
+            const base = item.label.trim().normalize('NFC');
+            let label = base, suffix = 2;
+            while (used.has(labelKey(label))) label = `${base.slice(0, 145)}（${suffix++}）`;
+            used.add(labelKey(label));
+            return { ...item, label, lastIP: null, lastSeenAt: null };
+          });
+          await store.save(devices);
+        }
+      }
       return store;
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return store;
@@ -102,35 +124,50 @@ export class TrustedDeviceStore {
   private async save(devices: DeviceRecord[]): Promise<void> {
     await privateDirectory(this.stateDirectory);
     await privateDirectory(this.directory);
-    await atomicWrite(this.directory, 'trusted-devices.json', JSON.stringify({ schemaVersion: 1, credentialFingerprint: this.fingerprint, devices }));
+    await atomicWrite(this.directory, 'trusted-devices.json', JSON.stringify({ schemaVersion: 2, credentialFingerprint: this.fingerprint, devices }));
     this.devices = devices;
   }
 
-  async issue(trust: DeviceTrust, label: string, previous?: unknown): Promise<{ device: TrustedDevice; token: string }> {
+  async issue(trust: DeviceTrust, label: string, previous?: unknown, ip: string | null = null): Promise<{ device: TrustedDevice; token: string }> {
     return this.mutate(async () => {
-      if (!['90days', 'until-revoked'].includes(trust) || typeof label !== 'string' || !label.trim() || label.length > 160 || /[\u0000-\u001f\u007f]/.test(label)) failure();
+      if (!['90days', 'until-revoked'].includes(trust)) failure();
+      label = deviceLabel(label);
       const previousDigest = digest(previous);
       const devices = this.devices.filter(item => this.live(item) && item.tokenDigest !== previousDigest);
+      if (devices.some(item => labelKey(item.label) === labelKey(label))) throw new AuthError('AUTH_DEVICE_LABEL_DUPLICATE');
       if (devices.length >= LIMIT) throw new AuthError('AUTH_DEVICE_LIMIT');
       const stamp = this.time();
       const token = randomBytes(32).toString('base64url');
       const device: DeviceRecord = { id: randomBytes(16).toString('hex'), tokenDigest: digest(token)!, label: label.trim(), trust,
-        createdAt: stamp, renewedAt: stamp, expiresAt: trust === '90days' ? stamp + 90 * DAY : null };
+        createdAt: stamp, renewedAt: stamp, expiresAt: trust === '90days' ? stamp + 90 * DAY : null,
+        lastIP: normalizeIP(ip), lastSeenAt: stamp };
       await this.save([...devices, device]);
       return { device: publicDevice(device), token };
     });
   }
 
   /** Renew at most daily, so normal requests do not cause disk writes. */
-  async renew(token: unknown): Promise<{ device: TrustedDevice; renewed: boolean } | null> {
+  async renew(token: unknown, ip: string | null = null): Promise<{ device: TrustedDevice; renewed: boolean } | null> {
     return this.mutate(async () => {
       const device = this.check(token);
       if (!device) return null;
       const stamp = this.time();
-      if (stamp - device.renewedAt < DAY) return { device, renewed: false };
-      const updated = { ...device, renewedAt: stamp, expiresAt: device.trust === '90days' ? stamp + 90 * DAY : null };
+      const renewed = stamp - device.renewedAt >= DAY;
+      if (!renewed && (!ip || device.lastIP === ip) && stamp - (device.lastSeenAt ?? 0) < 60_000) return { device, renewed: false };
+      const updated = { ...device, lastIP: normalizeIP(ip) ?? device.lastIP, lastSeenAt: stamp,
+        renewedAt: renewed ? stamp : device.renewedAt,
+        expiresAt: renewed && device.trust === '90days' ? stamp + 90 * DAY : device.expiresAt };
       await this.save(this.devices.filter(item => this.live(item)).map(item => item.id === device.id ? { ...item, ...updated } : item));
-      return { device: updated, renewed: true };
+      return { device: updated, renewed };
+    });
+  }
+
+  async rename(id: string, label: unknown): Promise<void> {
+    await this.mutate(async () => {
+      const normalized = deviceLabel(label);
+      if (!this.has(id)) throw new AuthError('AUTH_DEVICE_NOT_FOUND');
+      if (this.devices.some(item => this.live(item) && item.id !== id && labelKey(item.label) === labelKey(normalized))) throw new AuthError('AUTH_DEVICE_LABEL_DUPLICATE');
+      await this.save(this.devices.filter(item => this.live(item)).map(item => item.id === id ? { ...item, label: normalized } : item));
     });
   }
 

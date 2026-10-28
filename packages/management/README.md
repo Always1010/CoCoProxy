@@ -14,11 +14,11 @@ node --experimental-strip-types apps/cli/main.ts admin-init --input /absolute/pr
 
 输入须为当前身份所有的私有普通文件；输出权限为 600，只保存盐和哈希，不覆盖已有文件。创建真实账户属于实际部署步骤；测试只创建临时合成凭据。原始输入仍由操作者按自己的凭据保管规则处理，程序不额外复制或备份它。
 
-短期会话令牌为 32 字节随机数，仅在 HttpOnly cookie 中返回；内存中只保留 SHA-256 摘要。临时登录绝对有效期 8 小时、最多 256 个，不因请求续期，进程重启后失效。登录可选 `trust: "none" | "90days" | "until-revoked"`，省略保持临时登录，网页默认长期信任；可选 `deviceLabel` 标记设备。受信任设备另持有独立 HttpOnly cookie，在短期会话过期或服务重启后自动建立会话。90 天授权按使用续期，每日至多持久更新一次；长期授权服务端不设到期日，浏览器 cookie 最长 400 天并在每日使用时刷新，浏览器清理、限制存储或重装仍可能要求重新登录。
+短期会话令牌为 32 字节随机数，仅在 HttpOnly cookie 中返回；内存中只保留 SHA-256 摘要。临时登录绝对有效期 8 小时、最多 256 个，不因请求续期，进程重启后失效。登录可选 `trust: "none" | "90days" | "until-revoked"`，省略保持临时登录，网页默认长期信任；信任登录必须提供非空 `deviceLabel`；有效浏览器授权名称去除首尾空格、统一 Unicode 并忽略英文大小写后唯一，重复返回 409。临时登录不要求名称。受信任设备另持有独立 HttpOnly cookie，在短期会话过期或服务重启后自动建立会话。90 天授权按使用续期，每日至多持久更新一次；长期授权服务端不设到期日，浏览器 cookie 最长 400 天并在每日使用时刷新，浏览器清理、限制存储或重装仍可能要求重新登录。
 
-设备授权最多 128 项，持久保存在私有状态目录的 `auth/trusted-devices.json`，仅保存令牌 SHA-256 摘要、随机设备 ID、备注和时间，不保存原始令牌、密码或浏览器指纹。授权绑定管理员凭据和管理 origin；更换凭据或 origin 并重启服务后，旧授权失效。读取缺失文件不创建状态，损坏／不安全文件拒绝服务构造；同一进程内授权写入串行并原子持久提交后生效。当前管理进程仍须单实例运行，不支持多 worker 共享授权或撤销状态。单实例每分钟最多接受 8 次密码登录，最多并行 2 次密码派生；多进程或反向代理的额外限制尚未实现。
+设备授权最多 128 项，持久保存在私有状态目录的 `auth/trusted-devices.json`，仅保存令牌 SHA-256 摘要、随机设备 ID、名称、最近访问 IP 和时间，不保存原始令牌、密码或浏览器指纹。授权绑定管理员凭据和管理 origin；更换凭据或 origin 并重启服务后，旧授权失效。旧版授权读取时迁移为 schemaVersion 2，保持 ID、令牌摘要和期限，重名稳定补编号；已有迁移会持久写入。读取缺失文件不创建状态，损坏／不安全文件拒绝服务构造；同一进程内授权写入串行并原子持久提交后生效。当前管理进程仍须单实例运行，不支持多 worker 共享授权或撤销状态。单实例每分钟最多接受 8 次密码登录，最多并行 2 次密码派生；多进程或反向代理的额外限制尚未实现。
 
-设置页可列出和撤销设备，不返回令牌摘要。主动退出、撤销当前设备或切换为临时登录会撤销该设备授权及关联的现有短期会话；撤销其他设备也会使其现有 HTTP／WebSocket 授权失效。注销为同源、可重复的操作，即使短期会话已过期仍清除设备授权；关闭页面不注销。所有写操作继续要求同源 Origin，不按内网地址免除认证。
+不同浏览器独立授权，允许相同 IP 使用不同名称；IP 变化不影响认证，也不用于流量归属。设置页可列出、重命名和撤销浏览器授权，不返回令牌摘要。主动退出、撤销当前设备或切换为临时登录会撤销该设备授权及关联的现有短期会话；撤销其他设备也会使其现有 HTTP／WebSocket 授权失效。注销为同源、可重复的操作，即使短期会话已过期仍清除设备授权；关闭页面不注销。所有写操作继续要求同源 Origin，不按内网地址免除认证。
 
 HTTPS 使用 `__Host-cocoproxy_session` 和受信任设备的 `__Host-cocoproxy_device`，固定 `Secure; HttpOnly; SameSite=Strict; Path=/`。仅精确 loopback origin 可以使用 HTTP 测试 cookie；其他部署 origin 必须为 HTTPS。写操作要求精确匹配 Origin，跨站 Fetch、URL 查询令牌、Bearer 兼容入口与重复同名认证 cookie 均拒绝。所有 JSON 响应禁止缓存，错误只含固定码。JSON 请求有限量、严格 UTF-8 和读取时限；读取完成后才分派业务操作，不通过超时竞赛打断正在应用的事务。
 
@@ -45,7 +45,8 @@ HTTPS 使用 `__Host-cocoproxy_session` 和受信任设备的 `__Host-cocoproxy_
 | POST `/api/session/login` | `{username,password,trust?,deviceLabel?}`；仅 cookie 返回令牌 |
 | GET `/api/session` | 当前已认证用户名与到期时间 |
 | POST `/api/session/logout` | 空对象；撤销本机设备授权和关联会话，清除两个 cookie |
-| GET `/api/session/devices` | 已信任设备的 ID、备注、有效期与当前设备标记，不返回令牌摘要 |
+| GET `/api/session/devices` | 已信任浏览器的 ID、名称、最近访问 IP、有效期与当前设备标记，不返回令牌摘要 |
+| POST `/api/session/devices/rename` | `{id,label}`；重命名浏览器授权，不改变令牌或期限 |
 | POST `/api/session/devices/revoke` | `{id}`；撤销指定设备及关联会话，撤销当前设备时清除 cookie |
 | GET `/api/cocoproxy/health` | 无需认证，仅报告 management_only 响应，不报告核心健康 |
 | GET `/api/cocoproxy/status` | 历史状态、草稿摘要和独立 core_only 观察；gateway 明确未实现 |

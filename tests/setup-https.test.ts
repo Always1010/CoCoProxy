@@ -24,6 +24,7 @@ test('managed HTTPS rejects low ports, non-HTTPS, injection, private sandbox pat
     { ...original, web: { ...original.web, unknown: true } }, { ...original, serviceUid: 0 },
   ]) assert.throws(() => renderManagedWeb(value));
   assert.deepEqual(renderManagedWeb(original), renderManagedWeb(original));
+  assert.ok(renderManagedWeb(original).files.some(file => file.content.includes('proxy_set_header X-Real-IP $remote_addr;')));
 });
 
 test('managed HTTPS validates real SAN, validity and key identity with mocked read-only Linux ownership', {

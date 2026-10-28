@@ -66,7 +66,7 @@ export function renderManagedWeb(input: ManagedWebInput) {
     `            proxy_pass http://127.0.0.1:${input.listenPort};`, '            proxy_http_version 1.1;',
     `            proxy_set_header Host "${authority}";`, `            proxy_set_header X-Forwarded-Host "${authority}";`,
     '            proxy_set_header X-Forwarded-Proto https;', `            proxy_set_header X-Forwarded-Port ${port};`,
-    '            proxy_set_header X-Forwarded-For "";', '            proxy_set_header X-Real-IP "";', '            proxy_set_header Forwarded "";',
+    '            proxy_set_header X-Forwarded-For "";', '            proxy_set_header X-Real-IP $remote_addr;', '            proxy_set_header Forwarded "";',
     '            proxy_set_header Upgrade $http_upgrade;', '            proxy_set_header Connection $connection_upgrade;',
     '            proxy_buffering off;', '            proxy_read_timeout 75s;', '        }', '    }', '}', '',
   ].join('\n');
