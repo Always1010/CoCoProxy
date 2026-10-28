@@ -16,7 +16,7 @@ export type BandwidthTarget = { config: JsonObject; binaryPath: string; stateDir
 const pending = (): BandwidthDirection => ({ status: 'pending', mbps: null, liveMbps: null, bytes: 0 });
 const errorCodes = new Set(['ACTIVE_CONFLICT', 'CONTROLLER_UNAVAILABLE', 'BANDWIDTH_UNAVAILABLE', 'BANDWIDTH_NODE_INVALID',
   'BANDWIDTH_TIMEOUT', 'BANDWIDTH_LIMIT', 'BANDWIDTH_SAMPLE_INSUFFICIENT', 'BANDWIDTH_UPLOAD_FAILED',
-  'BANDWIDTH_DOWNLOAD_FAILED', 'BANDWIDTH_TLS_FAILED', 'BANDWIDTH_CORE_FAILED', 'BANDWIDTH_BYTE_LIMIT', 'BANDWIDTH_CANCELLED']);
+  'BANDWIDTH_DOWNLOAD_FAILED', 'BANDWIDTH_TLS_FAILED', 'BANDWIDTH_CORE_FAILED', 'BANDWIDTH_CONFIG_INVALID', 'BANDWIDTH_BYTE_LIMIT', 'BANDWIDTH_CANCELLED']);
 function failure(error: unknown): string {
   const value = error as { code?: unknown; message?: unknown } | null;
   for (const code of [value?.code, value?.message]) if (typeof code === 'string' && errorCodes.has(code)) return code;
