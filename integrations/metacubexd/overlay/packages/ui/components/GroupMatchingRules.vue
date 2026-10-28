@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { IconCheck, IconEdit, IconList, IconPlus, IconReload, IconTrash, IconX } from '@tabler/icons-vue'
 import { domainRuleError, domainRuleTypes, isDomainRule, ruleTarget, saveGroupRules, templateRuleLabel } from '~/utils/group-rules'
-import { CoCoProxyError } from '~/composables/useCoCoProxy'
 
 const props = defineProps<{ groupName: string }>()
 const emit = defineEmits<{ navigate: [target: { path: string; query: Record<string, string> }] }>()
@@ -15,10 +14,12 @@ const error = ref('')
 const saving = ref(false)
 const saved = ref('')
 const needsRead = ref(false)
+const pendingApply = ref(false)
 const listChanged = computed(() => JSON.stringify(entries.value) !== JSON.stringify(original.value))
 const formPending = computed(() => editing.value !== null || !!payload.value.trim())
 const dirty = computed(() => listChanged.value || formPending.value)
 const locked = computed(() => busy.value || saving.value)
+const editingLocked = computed(() => locked.value || needsRead.value)
 defineExpose({ dirty, saving })
 const shared = computed(() => view.value?.groups.find(group => group.name === props.groupName)?.role === 'shared')
 const editable = computed(() => workspace.value?.mode === 'local' && !shared.value)
@@ -32,12 +33,12 @@ const customRulesLink = computed(() => ({ path: '/rules', query: { group: props.
 
 function resetForm() { editing.value = null; type.value = 'DOMAIN-SUFFIX'; payload.value = ''; error.value = '' }
 function edit(index: number) {
-  if (locked.value || !isDomainRule(entries.value[index]!)) return
+  if (editingLocked.value || !isDomainRule(entries.value[index]!)) return
   const parts = entries.value[index]!.split(',')
   editing.value = index; type.value = parts[0]!; payload.value = parts[1]!; error.value = ''
 }
 function add() {
-  if (locked.value || !editable.value) return
+  if (editingLocked.value || !editable.value) return
   const value = payload.value.trim()
   error.value = domainRuleError(type.value, value)
   if (error.value) return
@@ -50,13 +51,13 @@ function add() {
   resetForm()
 }
 function remove(index: number) {
-  if (locked.value || !editable.value || ruleTarget(entries.value[index] ?? '') !== props.groupName) return
+  if (editingLocked.value || !editable.value || ruleTarget(entries.value[index] ?? '') !== props.groupName) return
   entries.value.splice(index, 1)
   if (editing.value === index) resetForm()
   else if (editing.value !== null && editing.value > index) editing.value--
 }
 async function persist() {
-  if (!dirty.value || locked.value || !editable.value || needsRead.value) return
+  if ((!dirty.value && !pendingApply.value) || locked.value || !editable.value || needsRead.value) return
   if (formPending.value) { error.value = '请先将当前表单添加到列表，或取消编辑。'; return }
   error.value = ''; saving.value = true
   try {
@@ -65,10 +66,12 @@ async function persist() {
         const message = workspace.value?.runMode === 'rule' ? '规则已保存并生效' : '规则已保存，切换到规则模式后生效'
         await save(settings => { settings.local.rules = saveGroupRules(settings.local.rules, original.value, entries.value, props.groupName) }, message)
         original.value = [...entries.value]
+        pendingApply.value = false
         saved.value = message
       } catch (cause) {
         error.value = cause instanceof Error ? cause.message : '保存失败，请重试。'
-        needsRead.value = cause instanceof CoCoProxyError && ['NETWORK_UNKNOWN', 'MANAGEMENT_UNAVAILABLE', 'CONFIRM_FAILED', 'WORKSPACE_CONFLICT'].includes(cause.code)
+        // Settings may already be persisted even when applying them failed.
+        needsRead.value = true
       }
     })
   }
@@ -79,12 +82,14 @@ async function reread() {
   saving.value = true
   try {
     await load()
-    const own = (values: string[]) => values.filter(value => ruleTarget(value) === props.groupName)
-    if (JSON.stringify(own(overrides.value.rules)) === JSON.stringify(own(entries.value)) && !view.value?.pending) {
+    if (JSON.stringify(overrides.value.rules) === JSON.stringify(entries.value)) {
       original.value = [...entries.value]
-      saved.value = workspace.value?.runMode === 'rule' ? '规则已保存并生效' : '规则已保存，切换到规则模式后生效'
-      error.value = ''
-    } else error.value = '状态已重新读取，规则尚未确认生效，请核对后重试。'
+      pendingApply.value = !!view.value?.pending
+      saved.value = pendingApply.value ? '' : workspace.value?.runMode === 'rule' ? '规则已保存并生效' : '规则已保存，切换到规则模式后生效'
+      error.value = pendingApply.value ? '规则已保存，但尚未生效，请重试保存规则。' : ''
+    } else error.value = JSON.stringify(overrides.value.rules) === JSON.stringify(original.value)
+      ? '状态已重新读取，修改仍保留，请重试保存规则。'
+      : '规则已发生变化，当前修改仍保留。请关闭后重新打开匹配规则，核对最新规则后编辑。'
     needsRead.value = false
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '读取失败，请重试。' }
   finally { saving.value = false }
@@ -113,12 +118,12 @@ watch(() => JSON.stringify([entries.value, type.value, payload.value, editing.va
       <template v-else-if="editable">
         <p class="text-xs leading-relaxed text-base-content/65">自定义规则先于内置规则匹配；多条自定义规则同时匹配时，以规则页中的顺序为准。新规则追加到自定义规则末尾。</p>
         <form class="space-y-3 rounded-lg border border-base-content/10 p-3" @submit.prevent="add">
-          <label class="flex flex-col gap-1 text-sm">匹配方式<select v-model="type" class="select min-h-11 w-full" aria-label="组内规则类型" :disabled="locked"><option v-for="entry in domainRuleTypes" :key="entry.value" :value="entry.value">{{ entry.label }}（{{ entry.value }}）</option></select></label>
-          <label class="flex flex-col gap-1 text-sm">{{ type === 'DOMAIN-REGEX' || type === 'DOMAIN-KEYWORD' ? '匹配内容' : '域名' }}<input v-model="payload" class="input min-h-11 w-full" aria-label="组内匹配内容" :placeholder="type === 'DOMAIN-REGEX' ? '^api\\.example\\.com$' : 'example.com'" :disabled="locked" maxlength="8000" spellcheck="false" autocapitalize="none" required /></label>
+          <label class="flex flex-col gap-1 text-sm">匹配方式<select v-model="type" class="select min-h-11 w-full" aria-label="组内规则类型" :disabled="editingLocked"><option v-for="entry in domainRuleTypes" :key="entry.value" :value="entry.value">{{ entry.label }}（{{ entry.value }}）</option></select></label>
+          <label class="flex flex-col gap-1 text-sm">{{ type === 'DOMAIN-REGEX' || type === 'DOMAIN-KEYWORD' ? '匹配内容' : '域名' }}<input v-model="payload" class="input min-h-11 w-full" aria-label="组内匹配内容" :placeholder="type === 'DOMAIN-REGEX' ? '^api\\.example\\.com$' : 'example.com'" :disabled="editingLocked" maxlength="8000" spellcheck="false" autocapitalize="none" required /></label>
           <p class="break-all text-sm">目标策略：{{ groupName }}</p>
           <div class="flex flex-wrap gap-2">
-            <button class="btn btn-primary min-h-11" type="submit" :disabled="locked"><IconCheck v-if="editing !== null" :size="16" /><IconPlus v-else :size="16" /><span>{{ editing !== null ? '更新到列表' : '添加到列表' }}</span></button>
-            <button v-if="editing !== null || payload" class="btn btn-ghost min-h-11" type="button" :disabled="locked" @click="resetForm"><IconX :size="16" /><span>取消编辑</span></button>
+            <button class="btn btn-primary min-h-11" type="submit" :disabled="editingLocked"><IconCheck v-if="editing !== null" :size="16" /><IconPlus v-else :size="16" /><span>{{ editing !== null ? '更新到列表' : '添加到列表' }}</span></button>
+            <button v-if="editing !== null || payload" class="btn btn-ghost min-h-11" type="button" :disabled="editingLocked" @click="resetForm"><IconX :size="16" /><span>取消编辑</span></button>
           </div>
         </form>
         <section class="space-y-2" aria-label="本组自定义规则">
@@ -127,9 +132,9 @@ watch(() => JSON.stringify([entries.value, type.value, payload.value, editing.va
           <div v-for="rule in ownRules" :key="rule.index" class="space-y-2 rounded-lg bg-base-200 p-3">
             <p class="break-all text-sm">{{ templateRuleLabel(rule.value) }}</p>
             <div class="flex flex-wrap gap-2">
-              <button v-if="isDomainRule(rule.value)" type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="locked" :aria-label="`编辑组内规则 ${rule.index + 1}`" @click="edit(rule.index)"><IconEdit :size="16" /><span>编辑</span></button>
+              <button v-if="isDomainRule(rule.value)" type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="editingLocked" :aria-label="`编辑组内规则 ${rule.index + 1}`" @click="edit(rule.index)"><IconEdit :size="16" /><span>编辑</span></button>
               <NuxtLink v-else :to="customRulesLink" custom v-slot="{ href }"><a :href="href ?? undefined" class="btn btn-ghost btn-sm min-h-11" :aria-disabled="locked" @click.prevent="emit('navigate', customRulesLink)"><IconEdit :size="16" /><span>前往规则页编辑</span></a></NuxtLink>
-              <button type="button" class="btn btn-ghost btn-sm min-h-11 text-error" :disabled="locked" :aria-label="`删除组内规则 ${rule.index + 1}`" @click="remove(rule.index)"><IconTrash :size="16" /><span>删除</span></button>
+              <button type="button" class="btn btn-ghost btn-sm min-h-11 text-error" :disabled="editingLocked" :aria-label="`删除组内规则 ${rule.index + 1}`" @click="remove(rule.index)"><IconTrash :size="16" /><span>删除</span></button>
             </div>
           </div>
         </section>
@@ -151,10 +156,11 @@ watch(() => JSON.stringify([entries.value, type.value, payload.value, editing.va
         <p v-else-if="error || needsRead" role="alert" class="break-words text-error">{{ error || '暂未确认规则是否生效。' }}{{ needsRead ? ' 请重新读取状态后核对。' : '' }}</p>
         <p v-else-if="formPending" class="text-warning">请先将当前表单添加到列表，或取消编辑。</p>
         <p v-else-if="dirty" class="text-warning">规则有未保存修改</p>
+        <p v-else-if="pendingApply" class="text-warning">规则已保存，尚未生效，请重试保存规则。</p>
         <p v-else-if="saved" role="status" class="flex items-center gap-1 text-success"><IconCheck :size="16" class="shrink-0" />{{ saved }}</p>
       </div>
       <button v-if="needsRead" type="button" class="btn btn-outline min-h-11" :disabled="locked" @click="reread"><IconReload :size="16" /><span>重新读取状态</span></button>
-      <button type="button" class="btn btn-primary min-h-11" :disabled="locked || !listChanged || formPending || needsRead" @click="persist"><span v-if="saving" class="loading loading-spinner loading-xs" /><IconCheck v-else :size="16" /><span>{{ saving ? '正在保存…' : saved && !dirty ? '已保存' : '保存规则' }}</span></button>
+      <button type="button" class="btn btn-primary min-h-11" :disabled="locked || (!listChanged && !pendingApply) || formPending || needsRead" @click="persist"><span v-if="saving" class="loading loading-spinner loading-xs" /><IconCheck v-else :size="16" /><span>{{ saving ? '正在保存…' : saved && !dirty ? '已保存' : '保存规则' }}</span></button>
     </div>
   </div>
 </template>
