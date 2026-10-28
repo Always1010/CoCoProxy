@@ -109,9 +109,10 @@ test('group status checks only saved active policies and binds requests to the d
     status: { scope: 'synthetic-scope', groups: [{ name: 'Stream', current: 'node-a', phase: 'monitoring' }], events: [] } };
   const view = { value: { active: 'synthetic-generation', pending: false, workspace: { revision: 7 } } };
   const calls: any[] = [];
+  const emitted: unknown[][] = [];
   const exports: Record<string, any> = {};
   new Script(code).runInNewContext({
-    exports, defineProps: () => props, defineEmits: () => () => {}, onUnmounted() {},
+    exports, defineProps: () => props, defineEmits: () => (...args: unknown[]) => emitted.push(args), onUnmounted() {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     cocoproxyErrorMessage: () => '读取失败',
     useWorkspace: () => ({ view, api: { request: async (path: string, options: unknown) => { calls.push({ path, options }); } } }),
@@ -135,6 +136,7 @@ test('group status checks only saved active policies and binds requests to the d
   await exports.check();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].path, '/api/cocoproxy/automatic/bandwidth/check');
+  assert.deepEqual(emitted, [['checking', true], ['checking', false], ['refresh']]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0].options.body)), {
     expectedRevision: 7, expectedActive: 'synthetic-generation', scope: 'synthetic-scope', group: 'Stream',
   });
@@ -394,7 +396,7 @@ test('selection never replays an ambiguous write or reports an unconfirmed respo
 test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
-    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving, pageDirty, invalidPage, invalid, activeNavigation };';
+    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving, pageDirty, invalidPage, invalid, activeNavigation, readStatus, checkingStatus, statusReading, status };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const original = { preferred: ['second', 'first'], fallback: ['backup'], returnToPreferred: false };
   const settings = { local: { selections: {}, automatic: { Stream: structuredClone(original) } } };
@@ -404,14 +406,16 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   let failure: Error | undefined, deferred: Promise<void> | undefined;
   const proxyError = { value: '' };
   const navigations: unknown[] = [], closes: boolean[] = [];
+  const document = { hidden: true };
+  let statusReply: (() => Promise<unknown>) | undefined;
   new Script(code, { filename: 'AutomaticSelectionSettings.js' }).runInNewContext({
     exports, bandwidthIssue, bandwidthPages, CoCoProxyError, cocoproxyErrorMessage, defineProps: () => ({ groupName: 'Stream', selectable: true }), defineExpose: () => {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
-    watch: () => {}, onUnmounted: () => {}, document: { hidden: true }, setTimeout: () => 0, clearTimeout: () => {},
+    watch: () => {}, onUnmounted: () => {}, document, setTimeout: () => 0, clearTimeout: () => {},
     navigateTo: (target: unknown) => navigations.push(target),
     useProxyRefresh: () => ({ error: proxyError, refresh: async () => { proxyError.value = refreshFails ? '合成刷新失败' : ''; } }),
     useWorkspace: () => ({ view, workspace: { value: { mode: 'local' } }, overrides: { value: settings.local }, busy: { value: false }, error: { value: '' },
-      api: { request: async () => ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS } }) },
+      api: { request: async (path: string) => path.endsWith('/status') && statusReply ? statusReply() : ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS } }) },
       run: async (fn: () => Promise<void>) => fn(), load: async () => {},
       save: async (edit: (value: unknown) => void) => {
         saves++;
@@ -602,6 +606,27 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   await exports.persist(); // A new group can stage bandwidth settings before enabling automatic selection or selecting candidates.
   assert.equal((settings.local.automatic.Stream as any).bandwidth.hourMiB, 80);
   assert.equal((settings.local.automatic.Stream as any).enabled, false);
+
+  document.hidden = false;
+  exports.tab.value = 'status';
+  const initial = { groups: [], events: [] };
+  exports.status.value = initial;
+  let finishStatus!: (value: unknown) => void;
+  statusReply = () => new Promise(resolve => { finishStatus = resolve; });
+  const poll = exports.readStatus(true);
+  assert.equal(exports.statusReading.value, false);
+  assert.equal(exports.status.value, initial);
+  exports.checkingStatus(true);
+  finishStatus({ groups: [{ name: 'stale' }], events: [] });
+  await poll;
+  assert.equal(exports.status.value, initial); // A pre-check read cannot overwrite the checked state.
+  exports.checkingStatus(false);
+  const manual = exports.readStatus();
+  assert.equal(exports.statusReading.value, true);
+  finishStatus({ groups: [{ name: 'fresh' }], events: [] });
+  await manual;
+  assert.equal(exports.statusReading.value, false);
+  assert.equal(exports.status.value.groups[0].name, 'fresh');
 });
 
 test('site settings retain failed drafts and reconcile an interrupted save before allowing another write', async () => {

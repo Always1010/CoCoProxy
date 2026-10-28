@@ -67,8 +67,10 @@ const configurationPage = computed(() => tab.value !== 'status' && tab.value !==
 const statusError = ref('')
 const status = ref<AutomaticStatus>()
 const statusReading = ref(false)
+const statusChecking = ref(false)
 let timer: ReturnType<typeof setTimeout> | undefined
 let reading = false
+let statusRequest = 0
 let disposed = false
 let session = 0
 
@@ -201,19 +203,24 @@ async function readDefinitions() {
   finally { if (requestSession === session) definitionsLoading.value = false }
 }
 
-async function readStatus() {
-  if (reading || !visible.value || document.hidden || tab.value !== 'status' || !props.selectable) return
+async function readStatus(background = false) {
+  if ((reading && background) || statusChecking.value || disposed || !visible.value || document.hidden || tab.value !== 'status' || !props.selectable) return
   const requestSession = session
-  reading = true; statusReading.value = true
+  const id = ++statusRequest
+  reading = true; statusReading.value = !background
   try {
     const result = await api.request<AutomaticStatus>('/api/cocoproxy/automatic/status')
-    if (visible.value && !disposed && requestSession === session) { status.value = result; statusError.value = '' }
+    if (visible.value && !disposed && requestSession === session && id === statusRequest) { status.value = result; statusError.value = '' }
   } catch (cause) {
-    if (visible.value && !disposed && requestSession === session) statusError.value = cocoproxyErrorMessage(cause)
-  } finally { if (requestSession === session) { reading = false; statusReading.value = false } }
+    if (visible.value && !disposed && requestSession === session && id === statusRequest) statusError.value = cocoproxyErrorMessage(cause)
+  } finally { if (requestSession === session && id === statusRequest) { reading = false; statusReading.value = false } }
+}
+function checkingStatus(value: boolean) {
+  statusChecking.value = value
+  if (value) { statusRequest++; reading = false; statusReading.value = false }
 }
 async function refreshStatus(requestSession: number) {
-  await readStatus()
+  await readStatus(true)
   if (visible.value && !disposed && requestSession === session) timer = setTimeout(() => { void refreshStatus(requestSession) }, 8000)
 }
 function close() {
@@ -221,6 +228,7 @@ function close() {
   visible.value = false
   reading = false
   statusReading.value = false
+  statusChecking.value = false
   definitionsLoading.value = false
   if (timer) clearTimeout(timer)
 }
@@ -228,6 +236,7 @@ function open() {
   if (timer) clearTimeout(timer)
   reading = false
   statusReading.value = false
+  statusChecking.value = false
   definitionsLoading.value = false
   fromManager.value = false
   confirmClose.value = false
@@ -358,7 +367,7 @@ onUnmounted(() => { disposed = true; close() })
         <GroupMatchingRules v-if="visible && workspace?.mode === 'local'" ref="rulesEditor" v-show="tab === 'rules'" :group-name="groupName" @navigate="requestNavigation" />
         <SiteTargetSettings v-if="visible && sitesVisited" ref="sitesEditor" v-show="tab === 'sites'" :group-name="groupName" :scroll-list="false" />
         <div v-if="tab === 'status'" class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-          <GroupSelectionStatus :key="groupName" :group-name="groupName" :status="status" :policy-enabled="!!savedPolicy && savedPolicy.enabled !== false" :bandwidth="savedPolicy?.bandwidth" :dirty="changed || needsRead" :disabled="locked" :reading="statusReading" :error="statusError" @refresh="readStatus" />
+          <GroupSelectionStatus :key="groupName" :group-name="groupName" :status="status" :policy-enabled="!!savedPolicy && savedPolicy.enabled !== false" :bandwidth="savedPolicy?.bandwidth" :dirty="changed || needsRead" :disabled="locked" :reading="statusReading" :error="statusError" @refresh="readStatus()" @checking="checkingStatus" />
         </div>
         <template v-if="configurationPage && selectable">
           <div class="settings-page-scroll min-h-0 flex-1 space-y-5 overflow-y-auto [scrollbar-gutter:stable]">
