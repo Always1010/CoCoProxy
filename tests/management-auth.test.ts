@@ -8,6 +8,7 @@ import {
   SessionStore, verifyAdminCredential,
 } from '../packages/management/auth.ts';
 import { TrustedDeviceStore } from '../packages/management/trusted-devices.ts';
+import { normalizeIP, recordRequestAddress, requestAddress } from '../packages/management/request-address.ts';
 
 const password = 'synthetic-password-for-tests';
 const login = { username: 'example-admin', password };
@@ -221,4 +222,40 @@ test('credential/origin changes invalidate remembered devices and corrupt or lin
     await symlink(target, path);
     await assert.rejects(TrustedDeviceStore.load(root, credential, origin), code('AUTH_TRUST_UNAVAILABLE'));
   }
+});
+
+test('browser labels serialize uniqueness, rename independently, and migrate legacy duplicates without revoking tokens', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-labels-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const credential = await createAdminCredential(login), origin = 'https://management.example';
+  let store = await TrustedDeviceStore.load(root, credential, origin);
+  const concurrent = await Promise.allSettled([store.issue('until-revoked', ' PC '), store.issue('until-revoked', 'pc')]);
+  assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal((concurrent.find(result => result.status === 'rejected') as PromiseRejectedResult).reason.code, 'AUTH_DEVICE_LABEL_DUPLICATE');
+  const first = (concurrent.find(result => result.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof store.issue>>>).value;
+  const second = await store.issue('90days', 'PC Edge', undefined, '192.0.2.20');
+  await store.rename(first.device.id, 'PC Chrome');
+  assert.equal(store.check(first.token)?.label, 'PC Chrome');
+  await assert.rejects(store.rename(second.device.id, ' pc chrome '), code('AUTH_DEVICE_LABEL_DUPLICATE'));
+  const path = join(root, 'auth', 'trusted-devices.json');
+  const legacy = JSON.parse(await readFile(path, 'utf8'));
+  legacy.schemaVersion = 1;
+  for (const item of legacy.devices) { item.label = '浏览器设备'; delete item.lastIP; delete item.lastSeenAt; }
+  await writeFile(path, JSON.stringify(legacy));
+  store = await TrustedDeviceStore.load(root, credential, origin);
+  assert.equal(store.list().length, 2);
+  assert.equal(new Set(store.list().map(item => item.label)).size, 2);
+  assert.ok(store.check(first.token) && store.check(second.token));
+  assert.equal(JSON.parse(await readFile(path, 'utf8')).schemaVersion, 2);
+});
+
+test('request IP uses adapter socket evidence and ignores untrusted forwarded headers', () => {
+  const request = new Request('https://management.example', { headers: { 'x-real-ip': '192.0.2.20' } });
+  assert.equal(requestAddress(request), null);
+  recordRequestAddress(request, '192.0.2.30');
+  assert.equal(requestAddress(request), '192.0.2.30');
+  recordRequestAddress(request, '::ffff:127.0.0.1');
+  assert.equal(requestAddress(request), '192.0.2.20');
+  assert.equal(normalizeIP('2001:0db8::1'), '2001:db8::1');
+  assert.equal(normalizeIP('192.0.2.20, 192.0.2.30'), null);
 });

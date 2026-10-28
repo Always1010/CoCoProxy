@@ -1,6 +1,7 @@
 import { AuthError, parseAdminCredential, SessionStore, verifyAdminCredential } from './auth.ts';
 import type { AdminCredential } from './auth.ts';
 import { TRUST_COOKIE_MAX_AGE, type TrustedDeviceStore } from './trusted-devices.ts';
+import { requestAddress } from './request-address.ts';
 
 export class ManagementError extends Error {
   readonly code: string;
@@ -151,6 +152,7 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
           const trust = input.trust ?? 'none';
           if (typeof trust !== 'string' || !['none', '90days', 'until-revoked'].includes(trust) ||
               (input.deviceLabel !== undefined && (typeof input.deviceLabel !== 'string' || !input.deviceLabel.trim() || input.deviceLabel.length > 160 || /[\u0000-\u001f\u007f]/.test(input.deviceLabel)))) throw new ManagementError('INVALID_REQUEST');
+          if (trust !== 'none' && input.deviceLabel === undefined) throw new ManagementError('DEVICE_LABEL_REQUIRED');
           if (!await verifyAdminCredential(credential, { username: input.username, password: input.password })) throw new ManagementError('INVALID_CREDENTIALS', 401);
           const previous = token(request);
           const previousDevice = token(request, deviceName);
@@ -159,7 +161,7 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
           if (trust !== 'none') {
             if (!trustedDevices) throw new ManagementError('DEVICE_TRUST_UNAVAILABLE', 503);
             const old = trustedDevices.check(previousDevice);
-            const issued = await trustedDevices.issue(trust as '90days' | 'until-revoked', (input.deviceLabel as string | undefined) ?? '浏览器设备', previousDevice);
+            const issued = await trustedDevices.issue(trust as '90days' | 'until-revoked', input.deviceLabel as string, previousDevice, requestAddress(request));
             if (old) sessions.revokeDevice(old.id);
             deviceId = issued.device.id;
             cookies.push(deviceCookie(issued.token, issued.device.expiresAt));
@@ -191,7 +193,7 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
       let principal = authorize(request);
       const cookies: string[] = [];
       const rememberedToken = token(request, deviceName);
-      const remembered = trustedDevices ? await trustedDevices.renew(rememberedToken) : null;
+      const remembered = trustedDevices ? await trustedDevices.renew(rememberedToken, requestAddress(request)) : null;
       // Serialize renewal before rechecking authorization, including concurrent revocation.
       principal = authorize(request);
       const session = sessions.check(token(request));
@@ -206,6 +208,11 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
       else if (url.pathname === '/api/session/devices' && request.method === 'GET') {
         const current = remembered?.device.id ?? session?.deviceId;
         result = { devices: (trustedDevices?.list() ?? []).map(device => ({ ...device, current: device.id === current })) };
+      } else if (url.pathname === '/api/session/devices/rename' && request.method === 'POST') {
+        const { id, label } = exactRecord(await readJsonBody(request, 1024), ['id', 'label']);
+        if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id) || !trustedDevices) throw new ManagementError('INVALID_REQUEST');
+        await trustedDevices.rename(id, label);
+        result = { renamed: true };
       } else if (url.pathname === '/api/session/devices/revoke' && request.method === 'POST') {
         const { id } = exactRecord(await readJsonBody(request, 256), ['id']);
         if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)) throw new ManagementError('INVALID_REQUEST');
@@ -228,6 +235,8 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
       return json(result, 200, cookies);
     } catch (error) {
       if (error instanceof ManagementError) return json({ error: { code: error.code } }, error.status);
+      if (error instanceof AuthError && error.code.startsWith('AUTH_DEVICE_LABEL_')) return json({ error: { code: error.code.slice(5) } }, error.code.endsWith('DUPLICATE') ? 409 : 400);
+      if (error instanceof AuthError && error.code === 'AUTH_DEVICE_NOT_FOUND') return json({ error: { code: 'DEVICE_NOT_FOUND' } }, 404);
       if (error instanceof AuthError) return json({ error: { code: error.code === 'AUTH_SESSION_LIMIT' ? 'SESSION_LIMIT' : error.code === 'AUTH_DEVICE_LIMIT' ? 'DEVICE_LIMIT' : 'AUTH_UNAVAILABLE' } }, 503);
       return json({ error: { code: 'MANAGEMENT_UNAVAILABLE' } }, 503);
     }

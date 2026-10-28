@@ -53,8 +53,9 @@ async function submit() {
           </select>
         </label>
         <label v-if="trust !== 'none'" class="flex flex-col gap-2 text-sm" for="cocoproxy-device-label">
-          设备备注（可选）
-          <input id="cocoproxy-device-label" v-model="deviceLabel" class="input input-bordered w-full" placeholder="例如：我的手机" maxlength="80" :disabled="busy" />
+          设备名称（必填，不可重复）
+          <input id="cocoproxy-device-label" v-model="deviceLabel" class="input input-bordered w-full" placeholder="例如：办公电脑 Chrome" required maxlength="80" :disabled="busy" />
+          <span class="text-xs text-base-content/55">不同浏览器分别授权，请使用不同名称。</span>
         </label>
         <p class="text-xs leading-relaxed text-base-content/55">{{ trust === 'none' ? '临时会话在 8 小时后或管理服务重启后失效。' : '此设备下次自动登录，管理服务重启后仍有效。主动退出或在设置中撤销设备后，需要重新登录。' }}</p>
         <p v-if="error" class="text-sm text-error" role="alert">{{ error }}</p>

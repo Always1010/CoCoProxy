@@ -79,6 +79,8 @@ test('remembered browsers reauthenticate after expiry and restart; logout and de
   };
   const first = await signIn('until-revoked', '合成手机');
   const second = await signIn('90days', '合成电脑');
+  assert.equal((await gateway.fetch(request('/api/session/login', 'POST', { username, password, trust: 'until-revoked' }))).status, 400);
+  assert.equal((await gateway.fetch(request('/api/session/login', 'POST', { username, password, trust: 'until-revoked', deviceLabel: '合成手机' }))).status, 409);
   const firstToken = first.split('; ')[1];
   const responseText = await (await gateway.fetch(request('/api/session/devices', 'GET', undefined, first))).text();
   assert.ok(!responseText.includes('tokenDigest') && !responseText.includes(firstToken.split('=')[1]));
@@ -86,6 +88,7 @@ test('remembered browsers reauthenticate after expiry and restart; logout and de
   const phone = listed.find((item: { label: string }) => item.label === '合成手机');
   assert.equal(phone.current, true);
   assert.equal(phone.expiresAt, null);
+  assert.equal((await gateway.fetch(request('/api/session/devices/rename', 'POST', { id: phone.id, label: '合成手机 Chrome' }, first))).status, 200);
   clock += 2000;
   const renewed = await gateway.fetch(request('/api/session', 'GET', undefined, first));
   assert.equal(renewed.status, 200);
