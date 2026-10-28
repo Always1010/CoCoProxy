@@ -6,6 +6,27 @@ export interface AutoGroupPolicy {
   preferred: string[]
   fallback: string[]
   returnToPreferred: boolean
+  bandwidth?: BandwidthSettings
+}
+
+export interface BandwidthSettings {
+  enabled: boolean
+  activeProbes: boolean
+  observeOnly: boolean
+  [key: string]: number | boolean
+}
+export interface BandwidthSelectionStatus {
+  phase: string
+  reason: string
+  candidate: string | null
+  testingNode: string | null
+  round: number
+  nextAt: number | null
+  hourBytes: number
+  dayBytes: number
+  hourLimit: number
+  dayLimit: number
+  decision: { current: { low: number; high: number }; candidate: { low: number; high: number }; gain: number; cost: number; threshold: number; worthwhile: boolean } | null
 }
 
 export interface AutoProbeSettings {
@@ -21,7 +42,7 @@ export interface AutomaticStatus {
   paused?: boolean
   suspended?: boolean
   error?: string
-  groups: { name: string; phase: string; current: string | null; nextAt: number | null; reason: string | null }[]
+  groups: { name: string; phase: string; current: string | null; nextAt: number | null; reason: string | null; bandwidth?: BandwidthSelectionStatus }[]
   events: { id?: string; at: number; group: string; from: string | null; to: string | null; reason: string;
     fromPool?: 'preferred' | 'fallback'; toPool?: 'preferred' | 'fallback' }[]
 }

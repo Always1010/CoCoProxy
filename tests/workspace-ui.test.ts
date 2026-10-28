@@ -251,7 +251,7 @@ test('selection never replays an ambiguous write or reports an unconfirmed respo
 test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
-    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving };';
+    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const original = { preferred: ['second', 'first'], fallback: ['backup'], returnToPreferred: false };
   const settings = { local: { selections: {}, automatic: { Stream: structuredClone(original) } } };
@@ -387,6 +387,17 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   assert.equal(exports.changed.value, false);
   assert.equal(exports.saveError.value, '');
   assert.match(exports.refreshWarning.value, /已生效，列表刷新失败/);
+
+  exports.bandwidth.value = { enabled: true, activeProbes: true, observeOnly: true, targetMbps: 8 };
+  await exports.persist();
+  exports.open();
+  assert.equal(exports.bandwidth.value.enabled, true);
+  exports.bandwidth.value.targetMbps = 10;
+  assert.equal((settings.local.automatic.Stream as any).bandwidth.targetMbps, 8); // Draft edits do not mutate the saved policy.
+  exports.bandwidth.value.enabled = false;
+  await exports.persist(); exports.open();
+  assert.equal(exports.bandwidth.value.enabled, false);
+  assert.equal(exports.bandwidth.value.targetMbps, 10);
 
   exports.dialog.value = { close: (force: boolean) => closes.push(force) };
   exports.rulesEditor.value = { dirty: true, saving: false };

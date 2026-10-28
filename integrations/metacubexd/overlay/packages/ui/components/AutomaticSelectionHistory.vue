@@ -44,6 +44,7 @@ const phases: Record<string, string> = {
   'failure-confirmation': '正在复核当前节点', 'return-confirmation': '正在确认优选恢复', backup: '使用备选，监测当前节点', monitoring: '监测当前节点',
 }
 const reasons: Record<string, string> = {
+  'bandwidth-improvement': '候选的保守吞吐收益超过切换成本，完成切换',
   'preferred-restored': '优选节点恢复，并通过稳定性确认', 'faster-candidate': '当前节点连续变慢，候选节点满足改善条件',
   'failure-recovery': '原节点检测失败，已确认替代节点可用', 'current-slow': '当前节点连续变慢',
   'current-unavailable': '当前节点不可用', 'all-unavailable': '本轮未能确认可用出口',
@@ -55,7 +56,7 @@ const phase = computed(() => !enabled.value ? '自动选点已停用，保留历
       : groupStatus.value ? phases[groupStatus.value.phase] ?? '等待调度' : '等待调度或运行状态更新')
 const timeLabel = (at: number) => new Date(at).toLocaleString()
 const poolLabel = (pool?: string) => pool === 'preferred' ? '优选' : pool === 'fallback' ? '备选' : ''
-const eventLabel = (reason: string) => reason === 'preferred-restored' ? '优选回切' : reason === 'faster-candidate' ? '性能切换' : reason === 'failure-recovery' ? '故障切换' : '自动切换'
+const eventLabel = (reason: string) => reason === 'bandwidth-improvement' ? '吞吐性能切换' : reason === 'preferred-restored' ? '优选回切' : reason === 'faster-candidate' ? '性能切换' : reason === 'failure-recovery' ? '故障切换' : '自动切换'
 
 function showLatest(scroll = true) {
   displayed.value = [...events.value]
