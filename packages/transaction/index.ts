@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, unlink, rmdir, lstat } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path';
 import { canonicalJson } from '../config/index.ts';
 import type { Candidate } from '../config/index.ts';
+import { measurePhase, recordOperationTiming } from '../diagnostics/operation-timing.ts';
 
 export interface RuntimeAdapter {
   validate(candidatePath: string, previousGeneration?: string | null): Promise<void>;
@@ -152,6 +153,8 @@ export class FileTransactionStore {
 
   /** Serializes all mutations across managers and processes; live contention fails closed. */
   async exclusive<T>(operation: (ownerToken: string) => Promise<T>): Promise<T> {
+    const started = performance.now();
+    let acquired = false;
     try {
       await this.initialize();
       const lock = join(this.root, '.lock');
@@ -165,13 +168,19 @@ export class FileTransactionStore {
       const identity = process.platform === 'linux' ? await linuxIdentity(process.pid) : { bootId: null, startTime: null };
       const owner: LockOwner = { pid: process.pid, token: randomUUID(), bootId: identity.bootId, startTime: identity.startTime };
       await atomicWrite(lock, 'owner.json', JSON.stringify(owner));
+      recordOperationTiming('lock', performance.now() - started);
+      acquired = true;
+      const held = performance.now();
       try { return await operation(owner.token); }
       finally {
-        await unlink(join(lock, 'owner.json'));
-        await rmdir(lock);
-        await syncDirectory(this.root);
+        try {
+          await unlink(join(lock, 'owner.json'));
+          await rmdir(lock);
+          await syncDirectory(this.root);
+        } finally { recordOperationTiming('held', performance.now() - held); }
       }
     } catch (error) {
+      if (!acquired) recordOperationTiming('lock', performance.now() - started);
       if (error instanceof PrivateFileError) throw new TransactionError(error.code); if (error instanceof TransactionError) throw error;
       throw new TransactionError('STORE_IO');
     }
@@ -275,7 +284,7 @@ export class TransactionManager {
     await this.store.writeState(state);
     try {
       const path = pending.previous === null ? null : await this.store.readCandidate(pending.previous);
-      await this.runtime.restore(path, pending.previous);
+      await measurePhase('restore', () => this.runtime.restore(path, pending.previous));
     } catch {
       pending.phase = 'fault';
       state.active = null;
@@ -306,7 +315,7 @@ export class TransactionManager {
       state.pending = { id: randomUUID(), previous: state.active, target: id, phase: 'validating',
         ownerToken };
       await this.store.writeState(state);
-      try { await this.runtime.validate(path, state.active); }
+      try { await measurePhase('validate', () => this.runtime.validate(path, state.active)); }
       catch {
         state.pending = null;
         state.checkedAt = new Date().toISOString();
@@ -317,12 +326,12 @@ export class TransactionManager {
       await this.store.readCandidate(id);
       state.pending!.phase = 'activating';
       await this.store.writeState(state);
-      try { await this.runtime.activate(path, id); }
+      try { await measurePhase('activate', () => this.runtime.activate(path, id)); }
       catch { await this.restore(state, ownerToken); fail('ACTIVATION_FAILED'); }
       state.pending!.phase = 'confirming';
       await this.store.writeState(state);
       let confirmed = false;
-      try { confirmed = await this.runtime.confirm(id) === true; } catch { /* opaque runtime failure */ }
+      try { confirmed = await measurePhase('confirm', () => this.runtime.confirm(id)) === true; } catch { /* opaque runtime failure */ }
       if (!confirmed) { await this.restore(state, ownerToken); fail('CONFIRM_FAILED'); }
       // The atomic state replacement is the sole commit point. A crash before
       // cleanup must retain the confirmed target, never restore the predecessor.
@@ -330,9 +339,11 @@ export class TransactionManager {
       state.fault = null;
       state.checkedAt = new Date().toISOString();
       state.pending!.phase = 'committed';
-      await this.store.writeState(state);
-      state.pending = null;
-      await this.store.writeState(state);
+      await measurePhase('commit', async () => {
+        await this.store.writeState(state);
+        state.pending = null;
+        await this.store.writeState(state);
+      });
       return publicStatus(state);
     });
   }

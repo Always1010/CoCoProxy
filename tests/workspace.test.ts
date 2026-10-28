@@ -16,6 +16,7 @@ import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts'
 import { setRuntimeLifecycle } from '../packages/runtime/lifecycle.ts';
 import { AutomaticHistoryStore, retainAutomaticEvents, AUTOMATIC_HISTORY_AGE, AUTOMATIC_HISTORY_FILE_LIMIT } from '../packages/management/automatic-history.ts';
 import { randomUUID } from 'node:crypto';
+import type { OperationTiming } from '../packages/diagnostics/operation-timing.ts';
 
 const deployment = { mixedPort: 17890, controllerPort: 19090, dnsPort: 15353,
   controllerSecret: 'EXAMPLE_ONLY_DEPLOYMENT_SECRET', bootstrapResolvers: ['192.0.2.53'] };
@@ -253,6 +254,8 @@ test('manual takeover and toggling automatic selection retain candidate pools an
   assert.equal(receipt.view.workspace.revision, saved.revision + 1);
   assert.equal(receipt.view.pending, false);
   assert.equal(receipt.view.groups.find(group => group.name === 'Proxy')!.activeSelected, 'outside');
+  assert.equal(f.timings.at(-1)!.outcome, 'ok');
+  assert.equal(typeof f.timings.at(-1)!.phases.readback, 'number');
   const manual = await f.view();
   assert.equal(manual.pending, false);
   assert.equal(manual.workspace.local.selections.Proxy, 'outside');
@@ -360,6 +363,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
   const root = await directory(t), state = join(root, 'state');
   const payloads = new Map<string, string>();
   const events: string[] = [];
+  const timings: OperationTiming[] = [];
   let failActivation = false;
   let observedChoices: Record<string, string> | null = null;
   const runtime = {
@@ -370,6 +374,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }),
   };
   const action = createManagementApplication({ stateDirectory: state, deployment: { ...deployment, ...deploymentOverrides }, runtime,
+    onTiming: timing => { timings.push(timing); },
     allowedProbeOrigins: ['https://www.gstatic.com', 'https://cp.cloudflare.com'],
     automaticProbe: async () => ({ ok: true, delay: 25 }),
     observeSelections: async () => {
@@ -397,7 +402,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
   const save = async (value: WorkspaceSettings, expectedRevision: number) => (await call<{ workspace: Workspace }>('/workspace', 'PUT', { settings: value, expectedRevision })).workspace;
   const apply = (workspace: Workspace, expectedActive: string | null) => call<{ active: string; workspaceRevision: number }>('/workspace/apply', 'POST', { expectedRevision: workspace.revision, expectedActive });
   const candidate = async (id: string) => JSON.parse(await readFile(await new FileTransactionStore(state).readCandidate(id), 'utf8')) as JsonObject;
-  return { state, events, call, view, save, apply, source, candidate, payloads, action, fail: () => { failActivation = true; },
+  return { state, events, timings, call, view, save, apply, source, candidate, payloads, action, fail: () => { failActivation = true; },
     observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
 
@@ -653,6 +658,8 @@ test('selection receipts require actual controller agreement even after the tran
   await assert.rejects(f.call('/workspace/select', 'POST', {
     expectedRevision: saved.revision, expectedActive: active.active, group: 'Proxy', name: 'DIRECT',
   }), { code: 'SELECTION_UNCONFIRMED', status: 503 });
+  assert.equal(f.timings.at(-1)!.outcome, 'failed');
+  assert.equal(typeof f.timings.at(-1)!.phases.readback, 'number');
   const after = await f.view();
   assert.notEqual(after.active, active.active); // A failed response must not be replayed as an unapplied write.
   assert.equal(after.workspace.revision, saved.revision + 1);

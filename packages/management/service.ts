@@ -17,6 +17,7 @@ import { createRuleTestHandler, type RoutingSnapshot } from './rule-test.ts';
 import { createAutomaticSelector } from './automatic-selector.ts';
 import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
 import { SiteProbeStore } from './site-probes.ts';
+import type { TimingObserver } from '../diagnostics/operation-timing.ts';
 
 export function stripControllerMount(request: Request): Request {
   const url = new URL(request.url);
@@ -118,7 +119,14 @@ export async function loadManagementGateway(path: string) {
         return addresses;
       } });
     let automatic: ReturnType<typeof createAutomaticSelector> | undefined;
+    const onTiming: TimingObserver = timing => {
+      // Keep healthy background samples quiet; all user switches and slow or
+      // failed reconciliation retain sanitized phase durations in the journal.
+      if (timing.operation === 'select' || timing.outcome === 'failed' || timing.totalMs >= 1000)
+        console.info(JSON.stringify({ event: 'COCOPROXY_OPERATION_TIMING', ...timing }));
+    };
     const action = createManagementApplication({ stateDirectory: runtimeSettings.stateDirectory, deployment: settings.deployment, ruleTest,
+      onTiming,
       allowedProbeOrigins: controllerPolicy.allowedProbeOrigins as string[] | undefined,
       automaticStatus: () => automatic?.status() ?? { groups: [], events: [] },
       automaticProbe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
@@ -141,7 +149,7 @@ export async function loadManagementGateway(path: string) {
     const gateway = createManagementGateway({ origin: settings.origin, credential, trustedDevices }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
     const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,
-      () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'));
+      () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'), undefined, onTiming);
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
       startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); return recovered; },
       closeLifecycle: async () => { await automatic!.close(); await lifecycle.close(); } };

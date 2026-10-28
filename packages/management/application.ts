@@ -16,6 +16,7 @@ import { createWorkspaceApplication } from './workspace-application.ts';
 import { WorkspaceError, WorkspaceStore, initialWorkspace } from './workspace.ts';
 import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
 import type { ProbeTarget } from './automatic-policy.ts';
+import { withOperationTiming, type TimingObserver } from '../diagnostics/operation-timing.ts';
 
 export interface ManagementRuntime extends RuntimeAdapter { observe(generation: string): Promise<CoreObservation> }
 const protectedKeys = ['mixed-port', 'allow-lan', 'bind-address', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer'];
@@ -28,6 +29,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
   allowedProbeOrigins?: readonly string[];
   automaticStatus?: () => unknown;
+  onTiming?: TimingObserver;
   automaticProbe?: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult> }) {
   // Compile before cloning so getters and non-JSON values cannot run here.
   compileConfig({ schemaVersion: 1, deployment: options.deployment, policy: { rules: ['MATCH,REJECT'] } });
@@ -69,6 +71,8 @@ export function createManagementApplication(options: { stateDirectory: string; d
         if (!options.ruleTest) throw new ManagementError('RULE_TEST_UNAVAILABLE', 503);
         return await options.ruleTest(request);
       }
+      if (path === '/api/cocoproxy/workspace/select' && request.method === 'POST')
+        return await withOperationTiming('select', options.onTiming, () => workspace(request));
       if (path === '/api/cocoproxy/workspace' || path.startsWith('/api/cocoproxy/workspace/')) return await workspace(request);
       if (path === '/api/cocoproxy/status' && request.method === 'GET') {
         const status = await store.status();

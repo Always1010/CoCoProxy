@@ -10,6 +10,7 @@ import { loadRuntimeCandidate, loadRuntimeCandidateReadonly, parseRuntimeSetting
 import { selectionChanges, setControllerSelection } from './selections.ts';
 import { RuntimeError } from './types.ts';
 import type { CoreObservation, RuntimeProcessIdentity, RuntimeSettings, RuntimeSelection, RuntimeUnitState } from './types.ts';
+import { measurePhase } from '../diagnostics/operation-timing.ts';
 
 const unitName = 'cocoproxy-mihomo.service';
 const networkAuditIntervalMs = 30_000;
@@ -229,11 +230,13 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
       const binary = await this.deps.verifySystemctl(this.settings);
       // Reload reruns the fixed root prerequisite check without BindsTo stops.
       // A failed first boot prepare leaves the oneshot inactive; start it first.
-      await this.deps.command(binary, ['--no-ask-password', '--no-pager', 'start', 'cocoproxy-gateway-network.service']);
-      await this.deps.command(binary, ['--no-ask-password', '--no-pager', 'reload', 'cocoproxy-gateway-network.service']);
+      await measurePhase('network', async () => {
+        await this.deps.command(binary, ['--no-ask-password', '--no-pager', 'start', 'cocoproxy-gateway-network.service']);
+        await this.deps.command(binary, ['--no-ask-password', '--no-pager', 'reload', 'cocoproxy-gateway-network.service']);
+      });
       this.networkCheckedAt = this.deps.now();
     }
-    if ((await this.observe(generation)).ready) return true;
+    if ((await measurePhase('observe', () => this.observe(generation))).ready) return true;
     await this.restore(path, generation);
     return true;
   }

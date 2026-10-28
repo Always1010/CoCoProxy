@@ -1,6 +1,7 @@
 import { FileTransactionStore, TransactionError, TransactionManager } from '../transaction/index.ts';
 import type { PublicStatus, RuntimeAdapter } from '../transaction/index.ts';
 import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
+import { measurePhase, withOperationTiming, type TimingObserver } from '../diagnostics/operation-timing.ts';
 
 export type StartupRecovery = { attempted: boolean; recovered: boolean; reason: string | null; status: PublicStatus };
 
@@ -43,7 +44,7 @@ export async function reconcileManagementRuntime(stateDirectory: string, runtime
   if (observed.transaction || observed.fault || observed.active === null) return;
   // Healthy observations do not exclude a user's apply. This is only a hint:
   // every repair still reloads lifecycle and committed state under the lock.
-  if (runtime.needsReconcile && !await runtime.needsReconcile(observed.active)) return;
+  if (runtime.needsReconcile && !await measurePhase('observe', () => runtime.needsReconcile!(observed.active!))) return;
   await store.exclusive(async () => {
     const current = await readRuntimeLifecycle(stateDirectory);
     if (!current.enabled || current.paused) return;
@@ -56,13 +57,13 @@ export async function reconcileManagementRuntime(stateDirectory: string, runtime
 
 /** One serialized manager timer; systemd remains the only process supervisor. */
 export function createManagementLifecycle(stateDirectory: string, runtime: PersistentRuntime,
-  onError: () => void = () => {}, intervalMs = 5000) {
+  onError: () => void = () => {}, intervalMs = 5000, onTiming?: TimingObserver) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running: Promise<void> | undefined;
   let stopped = false;
   const tick = () => {
     if (stopped || running) return;
-    running = reconcileManagementRuntime(stateDirectory, runtime).catch(onError).finally(() => {
+    running = withOperationTiming('reconcile', onTiming, () => reconcileManagementRuntime(stateDirectory, runtime)).catch(onError).finally(() => {
       running = undefined;
       if (!stopped) { timer = setTimeout(tick, intervalMs); timer.unref(); }
     });
