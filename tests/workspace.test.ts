@@ -246,8 +246,13 @@ test('manual takeover and toggling automatic selection retain candidate pools an
   const active = await f.apply(saved, null);
   f.observe({ Proxy: 'synthetic-node' });
   const before = await f.action.automaticSnapshot(); assert.ok(before);
-  await f.call('/workspace/select', 'POST', { expectedRevision: saved.revision, expectedActive: active.active, group: 'Proxy', name: 'outside' });
   f.observe({ Proxy: 'outside' });
+  const receipt = await f.call<{ active: string; view: View }>('/workspace/select', 'POST', {
+    expectedRevision: saved.revision, expectedActive: active.active, group: 'Proxy', name: 'outside' });
+  assert.equal(receipt.view.active, receipt.active);
+  assert.equal(receipt.view.workspace.revision, saved.revision + 1);
+  assert.equal(receipt.view.pending, false);
+  assert.equal(receipt.view.groups.find(group => group.name === 'Proxy')!.activeSelected, 'outside');
   const manual = await f.view();
   assert.equal(manual.pending, false);
   assert.equal(manual.workspace.local.selections.Proxy, 'outside');
@@ -640,6 +645,21 @@ test('failed selection apply restores the active generation while keeping review
   assert.equal(view.groups.find(group => group.name === 'Proxy')!.selected, 'DIRECT');
   assert.equal(f.events.at(-1), 'restore');
   assert.equal((await new FileTransactionStore(f.state).status()).transaction, null);
+});
+
+test('selection receipts require actual controller agreement even after the transaction commits', async t => {
+  const f = await fixture(t), saved = await f.save(settings(), 0), active = await f.apply(saved, null);
+  f.observe({ Proxy: 'REJECT' });
+  await assert.rejects(f.call('/workspace/select', 'POST', {
+    expectedRevision: saved.revision, expectedActive: active.active, group: 'Proxy', name: 'DIRECT',
+  }), { code: 'SELECTION_UNCONFIRMED', status: 503 });
+  const after = await f.view();
+  assert.notEqual(after.active, active.active); // A failed response must not be replayed as an unapplied write.
+  assert.equal(after.workspace.revision, saved.revision + 1);
+  assert.equal(after.groups.find(group => group.name === 'Proxy')!.activeSelected, 'REJECT');
+  await assert.rejects(f.call('/workspace/select', 'POST', {
+    expectedRevision: saved.revision, expectedActive: active.active, group: 'Proxy', name: 'DIRECT',
+  }), { code: 'WORKSPACE_CONFLICT', status: 409 });
 });
 
 test('available subscriptions require one current local source and reject cancellation without changing preferences', async t => {

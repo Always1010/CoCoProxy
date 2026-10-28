@@ -26,6 +26,8 @@ HTTPS 使用 `__Host-cocoproxy_session` 和受信任设备的 `__Host-cocoproxy_
 
 日常界面使用 `/api/cocoproxy/workspace`：GET 返回当前方案、来源摘要、带 `service`／`shared` 角色的策略组与规则来源；PUT 接收 `{expectedRevision, settings}` 保存独立的本地／订阅方案设置，本地覆盖可用 `sharedGroups` 保存用户共享出口名称，订阅覆盖不接受该字段。POST `/workspace/apply` 接收 `{expectedRevision, expectedActive}`，统一编译、校验并应用。POST `/workspace/select` 接收相同版本条件及 `{group, name}`，持久保存手动组选择并应用；存在未应用设置时要求先应用，避免节点操作顺带发布其他编辑。自动组保留原算法。设置使用私有原子文件和运行事务共用锁；旧草稿在明确切换前沿用，不自动替换现有运行配置。
 
+手动切点界面直接调用 `/workspace/select`。成功响应附带 `view`：服务端在提交后回读真实组选择，并复核工作区版本、active 和事务状态；前端据此更新工作区，无需依次保存、应用、重读工作区和再次读取 controller。结果未知或回读不符时保留错误，只重新读取状态，不自动重放写入；接口报错也可能发生在已经提交之后。
+
 订阅页独立管理来源，支持 PUT `{expectedRevision, name?, url?}` 重命名或替换地址、POST `/sources/:id/refresh` 更新、DELETE `{expectedRevision}` 删除。完整订阅保留策略组与规则，本地方案只使用其节点；来源更新不自动覆盖用户规则或替换当前配置。订阅自带方案只选一份基础配置，各方案分别保留用户覆盖。页面只返回节点名称与组引用，不向概览接口附加节点凭据或订阅地址。
 
 工作区编译从同一份来源快照提取节点专用 DNS，仅对实际导入的节点主机生效，分别支持本地和订阅方案。专用解析策略参与快照摘要、编译缓存和应用时的版本校验；刷新后须重新应用。不同来源为同一主机指定不同解析器时返回 `NODE_DNS_POLICY_CONFLICT`，不任意选取；部署指定的同名精确主机策略优先。解析器端点可能包含私有路径，仅随私有快照与候选保存，不进入工作区概览和错误消息。

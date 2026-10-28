@@ -157,7 +157,7 @@ test('subscription editor loads existing fields and current revision, preserves 
 });
 
 for (const mode of ['local', 'subscription', 'legacy'] as const) {
-  test(`manual takeover of the current node disables only the selected group's automatic policy (${mode})`, async () => {
+  test(`manual selection accepts the server-confirmed takeover in one request (${mode})`, async () => {
     const automatic = {
       Stream: { preferred: ['node-a'], fallback: ['node-b'], returnToPreferred: true },
       Work: { preferred: ['node-c'], fallback: ['node-d'], returnToPreferred: false },
@@ -172,21 +172,20 @@ for (const mode of ['local', 'subscription', 'legacy'] as const) {
     const calls: string[] = [];
     const api = {
       generation: { value: null },
-      async request(path: string, options?: { body?: { expectedRevision?: number; expectedActive?: string; settings?: typeof settings } }) {
+      async request(path: string, options?: { method?: string; body?: { expectedRevision?: number; expectedActive?: string; group?: string; name?: string } }) {
         calls.push(path);
-        if (path === '/api/cocoproxy/workspace' && options?.body?.settings) {
+        if (path === '/api/cocoproxy/workspace/select') {
+          assert.equal(options?.method, 'POST');
+          assert.equal(options?.body?.group, 'Stream');
+          assert.equal(options?.body?.name, 'node-a');
           assert.equal(options.body.expectedRevision, 7);
-          settings = { ...structuredClone(options.body.settings), revision: 8 };
-          return { workspace: structuredClone(settings) };
-        }
-        if (path === '/api/cocoproxy/workspace/apply') {
-          assert.equal(options?.body?.expectedRevision, 8);
-          assert.equal(options?.body?.expectedActive, 'before');
+          assert.equal(options.body.expectedActive, 'before');
+          settings = { ...structuredClone(settings), revision: 8 };
+          const target = mode === 'local' ? settings.local : settings.subscriptionOverrides[mode === 'legacy' ? 'legacy' : 'sample'];
+          Object.assign(target.automatic.Stream, { enabled: false });
           active = 'after';
-          return { active };
+          return { active, view: { workspace: settings, active, pending: false, groups: [{ name: 'Stream', activeSelected: 'node-a' }] } };
         }
-        if (path === '/api/cocoproxy/workspace') return { workspace: settings, active, pending: false };
-        if (path === '/api/clash/proxies') return { proxies: { Stream: { now: 'node-a' } } };
         throw new Error(`Unexpected request: ${path}`);
       },
     };
@@ -213,10 +212,41 @@ for (const mode of ['local', 'subscription', 'legacy'] as const) {
     assert.deepEqual(target.automatic.Work, automatic.Work);
     const untouched = mode === 'local' ? settings.subscriptionOverrides.sample : settings.local;
     assert.deepEqual(untouched.automatic, automatic);
-    assert.deepEqual(calls, ['/api/cocoproxy/workspace', '/api/cocoproxy/workspace/apply', '/api/cocoproxy/workspace', '/api/clash/proxies']);
+    assert.deepEqual(calls, ['/api/cocoproxy/workspace/select']);
+    assert.equal((states.get('cocoproxy-workspace')?.value as any).active, 'after');
+    assert.equal(api.generation.value, 'after');
+    assert.equal(states.get('cocoproxy-workspace-busy')?.value, false);
     assert.match(String(states.get('cocoproxy-workspace-feedback')?.value), /已切换/);
   });
 }
+
+test('selection never replays an ambiguous write or reports an unconfirmed response as success', async () => {
+  for (const failure of ['NETWORK_UNKNOWN', 'SELECTION_UNCONFIRMED']) {
+    const current = { workspace: { revision: 7 }, active: 'before', pending: false, groups: [{ name: 'Stream', activeSelected: 'node-a' }] };
+    const states = new Map<string, { value: any }>([['cocoproxy-workspace', { value: current }]]);
+    const calls: string[] = [];
+    const exports: Record<string, any> = {};
+    const api = { generation: { value: 'before' }, request: async (path: string) => {
+      calls.push(path);
+      if (path === '/api/cocoproxy/workspace') return current;
+      if (failure === 'NETWORK_UNKNOWN') throw new CoCoProxyError(failure);
+      return { active: 'after', view: { ...current, active: 'after', workspace: { revision: 8 } } };
+    } };
+    new Script(compiled).runInNewContext({ exports,
+      require: () => ({ CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy: () => api }),
+      useState: (key: string, initial: () => unknown) => {
+        if (!states.has(key)) states.set(key, { value: initial() });
+        return states.get(key);
+      },
+      computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    });
+    await assert.rejects(exports.useWorkspace().select('Stream', 'node-b'), { code: failure });
+    assert.deepEqual(calls, ['/api/cocoproxy/workspace/select', '/api/cocoproxy/workspace']);
+    assert.equal(states.get('cocoproxy-workspace-feedback')!.value, '');
+    assert.equal(states.get('cocoproxy-workspace-busy')!.value, false);
+    assert.equal(api.generation.value, 'before');
+  }
+});
 
 test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
