@@ -33,9 +33,11 @@ test('bandwidth opt-in cannot block legacy fault recovery or apply a late downlo
   await engine.close();
 });
 function harness(options: { current?: string; preferred?: string[]; fallback?: string[]; names?: string[];
+  bandwidth?: boolean;
   probe?: (node: string, secondary: boolean, at: number) => ProbeResult | Promise<ProbeResult> } = {}) {
   let time = 0;
-  const policy = { preferred: options.preferred ?? ['primary', 'alternate'], fallback: options.fallback ?? ['backup'], returnToPreferred: true };
+  const policy = { preferred: options.preferred ?? ['primary', 'alternate'], fallback: options.fallback ?? ['backup'], returnToPreferred: true,
+    ...(options.bandwidth === undefined ? {} : { bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: options.bandwidth } }) };
   let snapshot: AutoSnapshot | null = { key: 'synthetic-config', generation: '1', probes: structuredClone(DEFAULT_AUTO_PROBES),
     groups: (options.names ?? ['group']).map(name => ({ name, current: options.current ?? 'primary', policy: structuredClone(policy) })) };
   const calls: { node: string; secondary: boolean; at: number }[] = [];
@@ -278,4 +280,50 @@ test('a failing primary target changes the global active target and recovers thr
   assert.equal(h.calls.at(-1)!.secondary, false);
   assert.equal(h.switches.length, 0);
   await h.engine.close();
+});
+
+test('turning off bandwidth enhancement immediately restores the original latency-only switching path', async () => {
+  const h = harness({ bandwidth: true, fallback: [], probe: node => good(node === 'primary' ? 2000 : 1000) });
+  await h.at(0); await h.at(30000); await h.at(60000);
+  assert.equal(h.switches.length, 0);
+  assert.ok(h.engine.status().groups[0].bandwidth);
+  h.snapshot!.groups[0].policy.bandwidth!.enabled = false;
+  await h.at(60001); await h.at(90001); await h.at(120001); await h.at(120002); await h.at(122002);
+  assert.deepEqual(h.switches.map(s => s.reason), ['faster-candidate']);
+  assert.equal(h.engine.status().groups[0].bandwidth, undefined);
+  await h.engine.close();
+});
+
+test('enhanced switch probes promptly and recovers a failing new node without discarding its individual penalty', async () => {
+  let time = 0, suspended = false;
+  const changes: { node: string; reason: string; at: number }[] = [], calls: { node: string; at: number }[] = [];
+  const snapshot: AutoSnapshot = { key: 'post-switch', generation: '1', probes: structuredClone(DEFAULT_AUTO_PROBES),
+    groups: [{ name: 'group', current: 'a', policy: { preferred: ['a', 'b'], fallback: [], returnToPreferred: false,
+      bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true } } }] };
+  const engine = createAutomaticSelector({ now: () => time, snapshot: async () => suspended ? null : snapshot,
+    probe: async (_s, node) => {
+      calls.push({ node, at: time });
+      return node === 'b' && changes.length ? bad() : good(node === 'a' ? 80 : 150);
+    },
+    switch: async (_s, _group, node, reason) => {
+      if (reason === 'bandwidth-improvement') {
+        suspended = true; await new Promise<void>(resolve => setImmediate(resolve)); await engine.tick(); suspended = false;
+      }
+      changes.push({ node, reason, at: time }); snapshot.groups[0].current = node; snapshot.generation = String(Number(snapshot.generation) + 1);
+      return true;
+    },
+    bandwidth: { measure: async (_s, node, _settings, _signal, report) => { report(1000000); return { mbps: node === 'a' ? 2 : 8, delayMs: 50, bytes: 1000000 }; } },
+  });
+  for (let second = 0; second < 110; second++) {
+    time = second * 1000;
+    engine.observeUsage({ epoch: 'core', download: 0, upload: 0, connections: [] });
+    await engine.tick(); await new Promise<void>(resolve => setImmediate(resolve));
+    if (second === 1) assert.equal(engine.requestBandwidthCheck('group'), true);
+  }
+  assert.deepEqual(changes.map(c => c.reason), ['bandwidth-improvement', 'failure-recovery']);
+  assert.equal(changes[1].node, 'a'); assert.ok(changes[1].at - changes[0].at < 20000);
+  assert.ok(calls.some(c => c.node === 'b' && c.at > changes[0].at && c.at <= changes[0].at + 5000));
+  const node = engine.status().groups[0].bandwidth!.pool.find(n => n.name === 'b')!;
+  assert.equal(node.reason, 'post-switch-failure'); assert.ok(node.nextAt >= changes[0].at + 300000);
+  await engine.close();
 });
