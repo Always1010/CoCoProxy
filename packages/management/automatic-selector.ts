@@ -1,4 +1,5 @@
 import type { AutoGroupPolicy, AutoProbeSettings, ProbeTarget } from './automatic-policy.ts';
+import { createBandwidthSelector } from './bandwidth-selector.ts';
 
 export type AutoSnapshot = {
   key: string; generation: string; probes: AutoProbeSettings; scope?: string;
@@ -28,13 +29,14 @@ type Group = {
   returnCursor: number; outageRound: number; outageCursor: number;
   returnedAt: number | null; flapCount: number; returnNotBefore: number;
 };
-type Job = { group: Group; node: string; target: ProbeTarget; priority: number; run: (result: ProbeResult, at: number) => Promise<void> | void };
+type Job = { group: Group; node: string; target: ProbeTarget; priority: number; auxiliary?: boolean; run: (result: ProbeResult, at: number) => Promise<void> | void };
 type Event = { at: number; group: string; from: string; to: string; reason: string };
 type Options = {
   snapshot: () => Promise<AutoSnapshot | null>;
   probe: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult>;
   switch: (snapshot: AutoSnapshot, group: string, node: string, reason: string) => Promise<boolean>;
   now?: () => number;
+  bandwidth?: Pick<Parameters<typeof createBandwidthSelector>[0], 'measure' | 'busy' | 'load' | 'save'>;
 };
 
 /** All state advances through serialized ticks; deadlines never hold a worker or a timer open. */
@@ -47,6 +49,23 @@ export function createAutomaticSelector(options: Options) {
   let starts: number[] = [], blockedUntil = 0, fairCursor = 0;
   let targetIdentity: string | null = null, usePrimary = true, primaryRecoveryAt: number | null = null;
   const events: Event[] = [];
+  let selecting = 0;
+  const bandwidthProbes: { snapshot: AutoSnapshot; node: string; signal: AbortSignal; done: (result: ProbeResult) => void }[] = [];
+  const safetyAt = new Map<string, number>();
+  const bandwidth = createBandwidthSelector({ now, ...options.bandwidth,
+    probe: (s, node, signal) => new Promise(resolve => {
+      const entry = { snapshot: s, node, signal, done: (result: ProbeResult) => {
+        const index = bandwidthProbes.indexOf(entry); if (index >= 0) bandwidthProbes.splice(index, 1);
+        signal.removeEventListener('abort', abort); resolve(result);
+      } };
+      const abort = () => entry.done({ ok: false, delay: null });
+      bandwidthProbes.push(entry); signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
+    }),
+    select: async (s, name, node) => {
+      const g = groups.get(name);
+      return !!g && !g.search && g.secondaryAt === null && await select(s, g, node, 'bandwidth-improvement', now());
+    },
+  });
   const identity = (s: AutoSnapshot, g: AutoSnapshot['groups'][number]) => JSON.stringify([s.key, s.probes, g.policy]);
   const healthy = (r: ProbeResult) => r.ok && r.delay !== null && Number.isFinite(r.delay) && r.delay >= 0;
   const retryAt = (r: ProbeResult, at: number) => typeof r.retryAfterMs === 'number' && Number.isFinite(r.retryAfterMs) && r.retryAfterMs > 0
@@ -71,7 +90,7 @@ export function createAutomaticSelector(options: Options) {
         returnedAt: null, flapCount: 0, returnNotBefore: 0,
       });
     }
-    groups = next; snapshot = s;
+    groups = next; snapshot = s; bandwidth.update(s);
   }
 
   function scheduleReturn(g: Group, at: number) {
@@ -82,6 +101,12 @@ export function createAutomaticSelector(options: Options) {
 
   async function select(s: AutoSnapshot, g: Group, node: string, reason: string, at: number): Promise<boolean> {
     if (closed || groups.get(g.name) !== g) return false;
+    if (g.policy.bandwidth?.enabled && ['faster-candidate', 'preferred-restored'].includes(reason)) {
+      bandwidth.request(g.name, node); return false;
+    }
+    if (reason === 'bandwidth-improvement' && selecting > 0) return false;
+    selecting++;
+    try {
     // A probe can outlive a configuration edit, selection edit, disconnect, or shutdown.
     const live = await options.snapshot().catch(() => null);
     const item = live?.groups.find(item => item.name === g.name);
@@ -103,6 +128,7 @@ export function createAutomaticSelector(options: Options) {
     if (reason === 'preferred-restored') g.returnedAt = at;
     scheduleReturn(g, at);
     return true;
+    } finally { selecting--; }
   }
 
   function beginSearch(g: Group, kind: Search['kind'], at: number) {
@@ -215,6 +241,7 @@ export function createAutomaticSelector(options: Options) {
   function returnFailed(g: Group, at: number) { g.returnRound++; g.reason = 'preferred-check-failed'; scheduleReturn(g, at); }
 
   function returnJobs(s: AutoSnapshot, g: Group, at: number): Job[] {
+    if (g.policy.bandwidth?.enabled && bandwidth.isComparing(g.name)) return [];
     if (!g.policy.returnToPreferred || !isBackup(g) || g.search || g.secondaryAt !== null) return [];
     if (!g.returning && g.returnAt !== null && at >= Math.max(g.returnAt, g.residenceUntil)) {
       const nodes: string[] = [], count = Math.min(2, g.policy.preferred.length);
@@ -261,6 +288,17 @@ export function createAutomaticSelector(options: Options) {
     // One scheduling pass per tick bounds CPU work; the one-second driver advances new phases.
     const at = now(), jobs: Job[] = [];
     for (const g of groups.values()) jobs.push(...monitorJobs(s, g, at), ...searchJobs(s, g, at), ...returnJobs(s, g, at));
+    for (const g of groups.values()) if (bandwidth.isMeasuring(g.name) && at >= (safetyAt.get(g.name) ?? 0)) {
+      jobs.push({ group: g, node: g.current, target: activeTarget(s), priority: 3, auxiliary: true, run: (result, end) => {
+        safetyAt.set(g.name, end + 2000);
+        bandwidth.noteLatency(g.name, healthy(result) ? result.delay : null, g.slowDelay || result.delay || 0);
+      } });
+    }
+    for (const entry of [...bandwidthProbes]) {
+      const g = [...groups.values()].find(g => g.policy.bandwidth?.enabled && [g.current, ...g.policy.preferred, ...g.policy.fallback].includes(entry.node));
+      if (!g || entry.signal.aborted || entry.snapshot.key !== s.key || entry.snapshot.generation !== s.generation) entry.done({ ok: false, delay: null });
+      else jobs.push({ group: g, node: entry.node, target: activeTarget(s), priority: 4, auxiliary: true, run: result => entry.done(result) });
+    }
     // Target recovery shares the same scheduler/budget and uses only one already-current node.
     if (!usePrimary && primaryRecoveryAt !== null && at >= primaryRecoveryAt) {
       const eligible = [...groups.values()].filter(g => !g.search && g.secondaryAt === null);
@@ -280,7 +318,13 @@ export function createAutomaticSelector(options: Options) {
       const key = JSON.stringify([job.node, job.target, s.probes]);
       const entries = shared.get(key) ?? [];
       // Each logical group observes a shared measurement only once.
-      if (!entries.some(existing => existing.group === job.group)) entries.push(job);
+      const duplicate = entries.find(existing => existing.group === job.group);
+      if (!duplicate) entries.push(job);
+      else {
+        const previous = duplicate.run;
+        duplicate.auxiliary = duplicate.auxiliary && job.auxiliary;
+        duplicate.run = async (result, at) => { await previous(result, at); await job.run(result, at); };
+      }
       shared.set(key, entries);
     }
     const queue = [...shared.values()];
@@ -291,6 +335,8 @@ export function createAutomaticSelector(options: Options) {
       const batch = queue.slice(index, index + allowance);
       await Promise.all(batch.map(async entries => {
         const first = entries[0];
+        // Supplemental work may not consume the final six starts reserved for the original scheduler.
+        if (entries.every(job => job.auxiliary) && starts.length >= 18) return;
         starts.push(now());
         fairCursor = (names.indexOf(first.group.name) + 1) % Math.max(1, names.length);
         let result: ProbeResult;
@@ -303,6 +349,8 @@ export function createAutomaticSelector(options: Options) {
       }));
       if (allowance < 2) break;
     }
+    bandwidth.tick([...groups.values()].map(g => ({ name: g.name, ready: g.health === 'healthy' && !g.search && !g.returning && g.secondaryAt === null
+      && !selecting && starts.filter(start => start > now() - 60000).length < 18 })));
   }
 
   function tick(): Promise<void> {
@@ -313,19 +361,22 @@ export function createAutomaticSelector(options: Options) {
   }
   return {
     tick,
+    observeUsage: bandwidth.observe,
+    requestBandwidthCheck: bandwidth.requestCheck,
     start() {
       if (closed || timer) return;
       timer = setInterval(() => { void tick().catch(() => {}); }, 1000);
       timer.unref?.();
       void tick().catch(() => {});
     },
-    async close() { closed = true; if (timer) clearInterval(timer); await running; },
+    async close() { closed = true; if (timer) clearInterval(timer); const closing = bandwidth.close(); await running; await closing; },
     status() {
       return {
         scope: snapshot?.scope,
         groups: [...groups.values()].map(g => ({ name: g.name, current: g.current,
           health: g.health, phase: g.search?.kind === 'outage' ? 'outage' : g.search ? g.search.kind === 'slow' ? 'slow-search' : 'failure-search'
             : g.secondaryAt !== null ? 'failure-confirmation' : g.returning ? 'return-confirmation' : isBackup(g) ? 'backup' : 'monitoring',
+          bandwidth: bandwidth.status(g.name),
           nextAt: g.search ? g.search.confirming?.due ?? g.search.due
             : Math.min(g.secondaryAt ?? g.monitorAt, g.returning?.due ?? g.returnAt ?? Infinity), reason: g.reason })),
         events: events.map(event => ({ ...event })),

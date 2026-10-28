@@ -1,10 +1,37 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_AUTO_PROBES, parseAutoGroupPolicy, parseAutoProbeSettings } from '../packages/management/automatic-policy.ts';
+import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-policy.ts';
 import { createAutomaticSelector, type AutoSnapshot, type ProbeResult } from '../packages/management/automatic-selector.ts';
 
 const good = (delay = 100): ProbeResult => ({ ok: true, delay });
 const bad = (): ProbeResult => ({ ok: false, delay: null });
+
+test('bandwidth opt-in cannot block legacy fault recovery or apply a late download result', async () => {
+  let time = 0, total = 0, failed = false, measured = 0, aborted = false;
+  const changes: string[] = [];
+  const snapshot: AutoSnapshot = { key: 'bandwidth-synthetic', generation: '1', probes: DEFAULT_AUTO_PROBES,
+    groups: [{ name: 'media', current: 'a', policy: { preferred: ['a', 'b'], fallback: [], returnToPreferred: false,
+      bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true } } }] };
+  const engine = createAutomaticSelector({ now: () => time, snapshot: async () => snapshot,
+    probe: async (_s, node) => failed && node === 'a' ? bad() : good(80),
+    switch: async (_s, name, node, reason) => { changes.push(reason); snapshot.groups[0].current = node; snapshot.generation = '2'; return true; },
+    bandwidth: { measure: async (_s, _node, _settings, signal, report) => {
+      measured++; report(1024);
+      await new Promise<void>(resolve => signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true }));
+      return { delayMs: 50, mbps: 8, bytes: 1024 }; // Even a plausible late result cannot switch.
+    } } });
+  for (let second = 0; second <= 96; second++) {
+    time = second * 1000; total += second < 70 ? 200000 : 0;
+    if (second === 89) failed = true;
+    engine.observeUsage({ epoch: 'core', download: total, upload: 0,
+      connections: [{ id: 'one', outbound: 'a', download: total, upload: 0, host: 'media.example', sourceIP: '192.0.2.1', process: 'Unknown', inboundUser: 'Unknown' }] });
+    await engine.tick(); await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  assert.equal(measured, 1); assert.equal(aborted, true);
+  assert.deepEqual(changes, ['failure-recovery']);
+  await engine.close();
+});
 function harness(options: { current?: string; preferred?: string[]; fallback?: string[]; names?: string[];
   probe?: (node: string, secondary: boolean, at: number) => ProbeResult | Promise<ProbeResult> } = {}) {
   let time = 0;

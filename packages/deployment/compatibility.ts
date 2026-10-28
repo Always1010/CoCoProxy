@@ -7,6 +7,7 @@ import { parseTrustedDeviceDocument } from '../management/trusted-devices.ts';
 import { parseWorkspaceDocument } from '../management/workspace.ts';
 import { parseSiteProbeState } from '../management/site-probes.ts';
 import { parseAutomaticBindings } from '../management/automatic-bindings.ts';
+import { parseBandwidthLedger } from '../management/bandwidth-selector.ts';
 import { parseAutomaticHistory, AUTOMATIC_HISTORY_FILE_LIMIT } from '../management/automatic-history.ts';
 import { parseSourceRecord } from '../subscriptions/index.ts';
 export { DEPLOYMENT_STATE_COMPATIBILITY } from './state-compatibility.mjs';
@@ -20,6 +21,7 @@ export const DEPLOYMENT_STATE_FILES: readonly { store: StateStore; path: string;
   { store: 'siteProbes', path: 'site-probes.json', key: 'version', limit: 1048576 },
   { store: 'automaticSelections', path: 'automatic-selections.json', key: 'version', limit: 262144 },
   { store: 'automaticHistory', path: 'automatic-history.json', key: 'version', limit: AUTOMATIC_HISTORY_FILE_LIMIT },
+  { store: 'automaticBandwidth', path: 'automatic-bandwidth.json', key: 'version', limit: 1048576 },
   { store: 'selection', path: 'selection.json', key: 'schemaVersion', limit: 4096 },
 ];
 export function assessStateSchema(store: StateStore, observedVersion: unknown, declaration: unknown) {
@@ -56,6 +58,7 @@ export function assessStateContent(store: StateStore, input: unknown, declaratio
       case 'siteProbes': parseSiteProbeState(input); break;
       case 'automaticSelections': parseAutomaticBindings(input); break;
       case 'automaticHistory': parseAutomaticHistory(input); break;
+      case 'automaticBandwidth': parseBandwidthLedger(input); break;
       case 'selection': parseRuntimeSelection(input); break;
       case 'subscription': parseSourceRecord(input, sourceId!); break;
       // The database host supplies this evidence only after the actual SQLite reader/integrity check.

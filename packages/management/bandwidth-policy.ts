@@ -9,6 +9,7 @@ export const BANDWIDTH_FIELDS = {
   switchCostSeconds: field('基础切换成本', 3, 0, 120, '等价秒', false, false),
   recentCostSeconds: field('近期每次切换附加成本', 2, 0, 120, '等价秒', false, false),
   reverseCostSeconds: field('短期反向切换附加成本', 10, 0, 300, '等价秒', false, false),
+  reverseWindowSeconds: field('反向切换成本保护窗口', 3600, 600, 3600, '秒'),
   horizonSeconds: field('成本摊销参考任务数', 60, 10, 120, '个'),
   marginMs: field('测量安全裕量', 20, 10, 500, 'ms'),
   agingMs: field('每分钟老化裕量', 10, 1, 100, 'ms'),

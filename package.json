@@ -27,7 +27,7 @@
     "test:usage": "node --experimental-strip-types --test tests/usage.test.ts",
     "test:rule-test": "node --experimental-strip-types --test tests/rule-test.test.ts",
     "test:workspace": "node --experimental-strip-types --test tests/workspace.test.ts tests/routing.test.ts tests/tcp-delay.test.ts tests/workspace-ui.test.ts tests/site-probes.test.ts",
-    "test:automatic": "node --experimental-strip-types --test tests/automatic-selector.test.ts",
+    "test:automatic": "node --experimental-strip-types --test tests/automatic-selector.test.ts tests/bandwidth-policy.test.ts tests/bandwidth-selector.test.ts",
     "test:deployment": "node --experimental-strip-types --test tests/deployment-plan.test.ts tests/deployment-install.test.ts tests/deployment-preservation.test.ts tests/deployment-compatibility.test.ts",
     "test:release-stage": "node --experimental-strip-types --test tests/release-stage.test.ts tests/release-documentation.test.mjs tests/release-metadata.test.mjs",
     "test:protocol-live": "node --experimental-strip-types --test tests/protocol-live.test.ts",

@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import type { Duplex } from 'node:stream';
 import type { JsonObject } from '../packages/config/index.ts';
-import { BandwidthByteBudget, bandwidthBodyRequest, buildBandwidthConfig, runBandwidthTransfer } from '../packages/management/bandwidth-transport.ts';
+import { BandwidthByteBudget, bandwidthBodyRequest, buildBandwidthConfig, runBandwidthTransfer, runDownloadVerification } from '../packages/management/bandwidth-transport.ts';
 import { validateWithMihomo } from '../packages/mihomo/validator.ts';
 
 const source = (): JsonObject => ({ proxies: [
@@ -29,6 +29,20 @@ const source = (): JsonObject => ({ proxies: [
     'proxy-server-nameserver': ['192.0.2.53'],
     'nameserver-policy': { 'rule-set:dns-fixture': ['192.0.2.53#DIRECT'] },
     'proxy-server-nameserver-policy': { 'chosen.example': ['9.9.9.9'] } }, 'interface-name': 'test-egress', 'routing-mark': 123 });
+
+test('download verification paces only target demand, counts warmup and rejects undersized samples', async () => {
+  const run = async (maximum: number) => {
+    const budget = new BandwidthByteBudget(maximum);
+    const result = await runDownloadVerification({ targetMbps: 8, warmupMs: 1000, minSampleMs: 3000, durationMs: 4500,
+      signal: new AbortController().signal, budget, report: () => {},
+      request: async (size, _signal, progress) => { budget.take(size); progress(size); return { bytes: size, elapsedMs: 1 }; } });
+    assert.ok(budget.used <= maximum); assert.equal(result.bytes, budget.used); return result;
+  };
+  const full = await run(8 * 1048576);
+  assert.equal(full.status, 'success'); assert.equal(full.mbps, 8);
+  const short = await run(2 * 1048576);
+  assert.equal(short.status, 'insufficient'); assert.equal(short.mbps, null);
+});
 
 test('isolated config retains exactly the selected leaf and resolvers without live controls or privileged marks', () => {
   const original = source(), before = structuredClone(original);

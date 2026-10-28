@@ -13,6 +13,7 @@ import { memoizePolicyCompiler } from '../packages/management/shared-work.ts';
 import { compileConfig } from '../packages/config/index.ts';
 import type { Workspace, WorkspaceSettings } from '../packages/management/workspace.ts';
 import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts';
+import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-policy.ts';
 import { setRuntimeLifecycle } from '../packages/runtime/lifecycle.ts';
 import { AutomaticHistoryStore, retainAutomaticEvents, AUTOMATIC_HISTORY_AGE, AUTOMATIC_HISTORY_FILE_LIMIT } from '../packages/management/automatic-history.ts';
 import { randomUUID } from 'node:crypto';
@@ -240,13 +241,21 @@ test('automatic history imports legacy IDs once and keeps its multibyte archive 
 test('manual takeover and toggling automatic selection retain candidate pools and resume only when enabled', async t => {
   const f = await fixture(t);
   await f.source('pool', { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }] });
-  const policy = { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: false };
+  const policy = { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: false,
+    bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, observeOnly: true } };
   const saved = await f.save(settings({ sourceIds: ['pool'], local: {
     selections: { Proxy: 'synthetic-node' }, rules: [], automatic: { Proxy: policy },
   } }), 0);
   const active = await f.apply(saved, null);
   f.observe({ Proxy: 'synthetic-node' });
   const before = await f.action.automaticSnapshot(); assert.ok(before);
+  const status = await f.call<{ scope: string }>('/automatic/status');
+  const checkBody = { expectedRevision: saved.revision, expectedActive: active.active, scope: status.scope, group: 'Proxy' };
+  await assert.rejects(f.call('/automatic/bandwidth/check', 'POST', { ...checkBody, expectedRevision: -1 }), { code: 'WORKSPACE_CONFLICT' });
+  await assert.rejects(f.call('/automatic/bandwidth/check', 'POST', { ...checkBody, group: 'outside' }), { code: 'AUTO_SETTINGS_INVALID' });
+  const eventCount = f.events.length;
+  await f.call('/automatic/bandwidth/check', 'POST', checkBody);
+  assert.deepEqual(f.bandwidthChecks, ['Proxy']); assert.equal(f.events.length, eventCount);
   f.observe({ Proxy: 'outside' });
   const receipt = await f.call<{ active: string; view: View }>('/workspace/select', 'POST', {
     expectedRevision: saved.revision, expectedActive: active.active, group: 'Proxy', name: 'outside' });
@@ -363,6 +372,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
   const root = await directory(t), state = join(root, 'state');
   const payloads = new Map<string, string>();
   const events: string[] = [];
+  const bandwidthChecks: string[] = [];
   const timings: OperationTiming[] = [];
   let failActivation = false;
   let observedChoices: Record<string, string> | null = null;
@@ -377,6 +387,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
     onTiming: timing => { timings.push(timing); },
     allowedProbeOrigins: ['https://www.gstatic.com', 'https://cp.cloudflare.com'],
     automaticProbe: async () => ({ ok: true, delay: 25 }),
+    automaticBandwidthCheck: group => { bandwidthChecks.push(group); return true; },
     observeSelections: async () => {
       const generation = (await new FileTransactionStore(state).status()).active;
       if (!generation || !observedChoices) throw new Error('Synthetic core unavailable');
@@ -402,7 +413,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
   const save = async (value: WorkspaceSettings, expectedRevision: number) => (await call<{ workspace: Workspace }>('/workspace', 'PUT', { settings: value, expectedRevision })).workspace;
   const apply = (workspace: Workspace, expectedActive: string | null) => call<{ active: string; workspaceRevision: number }>('/workspace/apply', 'POST', { expectedRevision: workspace.revision, expectedActive });
   const candidate = async (id: string) => JSON.parse(await readFile(await new FileTransactionStore(state).readCandidate(id), 'utf8')) as JsonObject;
-  return { state, events, timings, call, view, save, apply, source, candidate, payloads, action, fail: () => { failActivation = true; },
+  return { state, events, bandwidthChecks, timings, call, view, save, apply, source, candidate, payloads, action, fail: () => { failActivation = true; },
     observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
 

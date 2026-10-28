@@ -14,7 +14,8 @@ export type BandwidthDirection = { status: 'pending' | 'running' | 'success' | '
 export type BandwidthReport = { phase?: BandwidthPhase; bytesUsed?: number; download?: BandwidthDirection; upload?: BandwidthDirection;
   latency?: { idle: number | null; download: number | null; upload: number | null }; reason?: string };
 type TransferInput = { config: JsonObject; node: string; binaryPath: string; stateDirectory: string; signal: AbortSignal;
-  limits: { durationMs: number; maxBytes: number; timeoutMs: number }; report: (update: BandwidthReport) => void };
+  limits: { durationMs: number; maxBytes: number; timeoutMs: number }; report: (update: BandwidthReport) => void;
+  verification?: { targetMbps: number; warmupMs: number; minSampleMs: number } };
 type TransportRuntime = { start: (binary: string, args: string[]) => ChildProcess };
 const failure = (code = 'BANDWIDTH_UNAVAILABLE') => Object.assign(new Error(code), { code });
 const object = (value: unknown): value is JsonObject => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -208,8 +209,12 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
   start: (binary, args) => spawn(binary, args, { stdio: 'ignore', windowsHide: true }),
 }): Promise<{ reason: string | null }> {
   if (!Number.isSafeInteger(input.limits.maxBytes) || input.limits.maxBytes < 8192 || input.limits.maxBytes > 200_000_000 ||
-      !Number.isSafeInteger(input.limits.durationMs) || input.limits.durationMs < 1 || input.limits.durationMs > 6000 ||
+      !Number.isSafeInteger(input.limits.durationMs) || input.limits.durationMs < 1 || input.limits.durationMs > (input.verification ? 15000 : 6000) ||
       !Number.isSafeInteger(input.limits.timeoutMs) || input.limits.timeoutMs < 1 || input.limits.timeoutMs > 30_000) throw failure();
+  if (input.verification && (!Number.isFinite(input.verification.targetMbps) || input.verification.targetMbps < 1 || input.verification.targetMbps > 100
+      || !Number.isSafeInteger(input.verification.warmupMs) || input.verification.warmupMs < 1000
+      || !Number.isSafeInteger(input.verification.minSampleMs) || input.verification.minSampleMs < 3000
+      || input.verification.warmupMs + input.verification.minSampleMs > input.limits.durationMs)) throw failure();
   const lifetime = new AbortController();
   let timedOut = false, directory: string | undefined, child: ChildProcess | undefined, proxy: ReturnType<typeof proxyAgent> | undefined;
   const cancel = () => lifetime.abort();
@@ -261,6 +266,15 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
     const baseline: number[] = [];
     for (let index = 0; index < 3; index++) baseline.push(await ping(AbortSignal.any([lifetime.signal, AbortSignal.timeout(3000)])));
     latency.idle = Math.round(baseline.sort((a, b) => a - b)[1]); emit({ latency: { ...latency } });
+    if (input.verification) {
+      const result = await runDownloadVerification({ ...input.verification, durationMs: input.limits.durationMs,
+        signal: lifetime.signal, budget, request: (size, signal, onBytes) => bandwidthBodyRequest({
+          agent: proxy!.agent, signal, budget, method: 'GET', size, onBytes }),
+        report: bytes => emit({ phase: 'download', download: { status: 'running', bytes, mbps: null, liveMbps: null } }),
+      });
+      emit({ download: result }); check();
+      return { reason: result.status === 'success' ? null : 'BANDWIDTH_SAMPLE_INSUFFICIENT' };
+    }
     for (const name of ['download', 'upload'] as const) {
       check();
       const phase = new AbortController();
@@ -324,4 +338,37 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
     await socketsClosed;
     if (directory) await rm(directory, { recursive: true, force: true });
   }
+}
+
+/** Known offered load, one bounded request at a time. A paced result proves at most targetMbps. */
+export async function runDownloadVerification(input: {
+  targetMbps: number; warmupMs: number; minSampleMs: number; durationMs: number; signal: AbortSignal;
+  budget: BandwidthByteBudget;
+  request: (size: number, signal: AbortSignal, onBytes: (bytes: number) => void) => Promise<{ bytes: number; elapsedMs: number }>;
+  report: (bytes: number) => void;
+}): Promise<BandwidthDirection> {
+  const phase = new AbortController(), signal = AbortSignal.any([input.signal, phase.signal]);
+  const timer = setTimeout(() => phase.abort(), input.durationMs);
+  const started = performance.now();
+  let bytes = 0, sampleBytes = 0, sampleAt = 0, failed = false;
+  const offeredBytesPerMs = input.targetMbps * 125 * 1.25;
+  const chunk = Math.max(16384, Math.min(1048576, Math.floor(offeredBytesPerMs * 500)));
+  try {
+    while (!signal.aborted && input.budget.remaining > 131072) {
+      const size = Math.min(chunk, input.budget.remaining - 65536), slot = performance.now();
+      await input.request(size, signal, count => {
+        bytes += count;
+        const at = performance.now();
+        if (!sampleAt && at - started >= input.warmupMs) { sampleAt = at; sampleBytes = bytes; }
+        input.report(bytes);
+      });
+      await pause(Math.max(0, size / offeredBytesPerMs - (performance.now() - slot)), signal);
+    }
+  } catch { failed = !signal.aborted; }
+  finally { clearTimeout(timer); phase.abort(); }
+  const elapsed = sampleAt ? performance.now() - sampleAt : 0;
+  const status = input.signal.aborted ? 'cancelled' : failed ? 'failed'
+    : elapsed < input.minSampleMs || bytes - sampleBytes < 1024 ? 'insufficient' : 'success';
+  return { status, bytes, liveMbps: null,
+    mbps: status === 'success' ? Math.min(input.targetMbps, (bytes - sampleBytes) * 8 / elapsed / 1000) : null };
 }
