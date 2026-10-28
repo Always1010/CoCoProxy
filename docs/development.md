@@ -2,6 +2,36 @@
 
 当前架构见[软件架构](architecture.md)，版本支持及未验收项见[发行说明](release-notes.md)。本文保留开发入口和验证选择，模块契约从架构导航进入。
 
+## 本地 UI 预览
+
+调整页面布局、操作按钮、弹窗和移动端样式时，使用独立的前端开发入口：
+
+```sh
+npm run dev:ui
+```
+
+默认访问 `http://127.0.0.1:3000/#/proxies`，只监听本机回环地址。运行真实 Nuxt 页面，模拟接口和 WebSocket 在同一个开发进程内提供合成数据，不启动管理后端、Mihomo、数据库或设备服务。预览插件将页面的 API 请求转到本机临时模拟端口，避免取消检测、刷新与 Nuxt 的请求适配及热更新连接互相干扰。未模拟的接口明确返回不可用，不转发到真实设备。正式构建不加载预览工具、模拟接口或预览工具栏。
+
+首次需要显式提供固定上游归档与已经准备好的依赖目录，之后输入保存在被忽略的 `.local/ui-preview/settings.json`，重复启动无需再传。目录及文件路径必须为绝对路径；可用 `--port 3100` 更换端口。
+
+```sh
+npm run dev:ui -- --archive /absolute/cache/metacubexd.tar.gz --dependencies /absolute/prepared/upstream
+```
+
+归档必须匹配 `integrations/metacubexd/components.json` 固定摘要，依赖目录须保留对应的 `pnpm-lock.yaml`、根目录及 `packages/ui`、`packages/config-editor` 的 `node_modules`。可以复用现有 Server/UI 构建依赖；尚未准备依赖时，取得本机环境变更许可后，按下方说明准备根与 tooling 依赖，按 [UI 构建说明](../integrations/metacubexd/README.md)准备固定上游源码；仅为预览安装上游依赖可限定为：
+
+```sh
+node tooling/node_modules/pnpm/bin/pnpm.cjs --dir /absolute/prepared/upstream --filter '@metacubexd/ui...' install --frozen-lockfile --ignore-scripts
+```
+
+启动命令不会自动下载或安装依赖。每次从归档创建临时开发目录，核验完整文件树及 blob，再应用当前 overlay，链接已有依赖。Windows 的预览核验不比较 NTFS 无法表达的 Unix 执行位；归档摘要、文件集合和内容仍核验，此目录不能用作发行输入。开发目录退出时删除，依赖目标不删除；异常终止可能留下 `.local/ui-preview/run-*` 临时目录。真实设备资料不参与装配，也不复制 `.local/` 内容。
+
+继续编辑 `integrations/metacubexd/overlay/packages/ui/` 中的源码。启动器自动同步新增、修改、删除并交给 Nuxt 热更新；删除覆盖文件会恢复固定上游原文件。修改 Nuxt 基础配置会触发开发服务重启。不要在临时开发目录中维护正式改动。预览工具栏组件本身也支持热更新；修改启动器或模拟接口实现后需停止并重新启动。
+
+页面顶部“UI 预览 · 模拟数据”可展开，选择正常、空节点、大量与长名称、读取失败、慢速加载或检测超时，点击“应用并重置”刷新当前页面。选择和设置修改只保存在当前进程内；重置场景会清除，多个标签页共享该进程的场景。节点切换、基准检测、TCP 检测、站点检测、方案及设置弹窗可预览；带宽实测、设备配置应用及未模拟的管理操作不可用。首个交付重点为节点工作台和公共导航，其余页面仅覆盖已有模拟接口，不能代替业务验收。浏览器响应式模式可检查窄屏。
+
+验证入口为 `npm run test:ui-preview`，检查模拟操作、拒绝真实接口回退以及 overlay 更新/删除恢复。修改 UI 时仍执行 [UI 类型检查](../integrations/metacubexd/README.md)，最后在真实设备验收接口、运行状态和实际探测行为。
+
 ## 环境与构建
 
 使用 Node.js ≥22.18 的原生 TypeScript 类型擦除；静态检查单独执行。根锁文件固定运行依赖和类型声明，tooling 锁文件固定 TypeScript、pnpm。经环境管理许可后准备项目依赖：
