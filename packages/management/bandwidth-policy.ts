@@ -52,6 +52,21 @@ export const DEFAULT_BANDWIDTH_SETTINGS: BandwidthSettings = Object.freeze({
   ...Object.fromEntries(Object.entries(BANDWIDTH_FIELDS).map(([key, value]) => [key, value.default])),
 } as BandwidthSettings);
 
+/** Shared by save validation and the runtime ledger; inputs are simultaneously enabled groups. */
+export function bandwidthBudgetLimits(settings: readonly BandwidthSettings[]) {
+  return {
+    hourMiB: Math.min(...settings.map(s => s.hourMiB)), dayMiB: Math.min(...settings.map(s => s.dayMiB)),
+    reserveHourMiB: Math.max(0, ...settings.map(s => s.reserveHourMiB)),
+    reserveDayMiB: Math.max(0, ...settings.map(s => s.reserveDayMiB)),
+    confirmationMiB: Math.max(0, ...settings.map(s => s.taskMiB * 2 * s.confirmRounds)),
+  };
+}
+export function bandwidthBudgetFits(settings: readonly BandwidthSettings[]) {
+  const limits = bandwidthBudgetLimits(settings);
+  return limits.hourMiB - limits.reserveHourMiB >= limits.confirmationMiB
+    && limits.dayMiB - limits.reserveDayMiB >= limits.confirmationMiB;
+}
+
 export function parseBandwidthSettings(value: unknown): BandwidthSettings {
   const fail = (): never => { throw new Error('AUTO_SETTINGS_INVALID'); };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return fail();
@@ -88,6 +103,7 @@ export function parseBandwidthSettings(value: unknown): BandwidthSettings {
       || result.latestSeconds < result.timeoutSeconds || result.latestSeconds > result.freshSeconds || result.dayMiB < result.hourMiB
       || result.hourMiB < result.taskMiB * 2 * result.confirmRounds
       || result.reserveHourMiB >= result.hourMiB || result.reserveDayMiB >= result.dayMiB
+      || (result.enabled && !bandwidthBudgetFits([result]))
       || result.searchMiB < result.taskMiB * 2 * result.confirmRounds
       || result.busyStopMbps <= result.busyStartMbps
       // Demand-paced probing must have room for warmup, a full sample and response overhead.

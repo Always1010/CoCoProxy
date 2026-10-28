@@ -1,6 +1,6 @@
 import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
 import type { UsageSnapshot } from './usage.ts';
-import { bandwidthDecision, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold,
+import { bandwidthBudgetLimits, bandwidthDecision, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold,
   type BandwidthSettings, type BandwidthSample } from './bandwidth-policy.ts';
 
 const MiB = 1048576, HOUR = 3600000, DAY = 24 * HOUR, PROBE_FRESH = 30000, UNKNOWN_WAIT = 30000;
@@ -67,12 +67,11 @@ export function createBandwidthSelector(options: {
   }
   function budget() {
     prune();
-    const settings = enabled(snapshot).map(g => g.policy.bandwidth!);
+    const limits = bandwidthBudgetLimits(enabled(snapshot).map(g => g.policy.bandwidth!));
     return { hourBytes: ledger.charges.filter(c => c.at > options.now() - HOUR).reduce((n, c) => n + c.bytes, 0),
       dayBytes: ledger.charges.reduce((n, c) => n + c.bytes, 0),
-      hourLimit: Math.min(...settings.map(s => s.hourMiB)) * MiB, dayLimit: Math.min(...settings.map(s => s.dayMiB)) * MiB,
-      hourReserve: Math.max(0, ...settings.map(s => s.reserveHourMiB)) * MiB,
-      dayReserve: Math.max(0, ...settings.map(s => s.reserveDayMiB)) * MiB };
+      hourLimit: limits.hourMiB * MiB, dayLimit: limits.dayMiB * MiB,
+      hourReserve: limits.reserveHourMiB * MiB, dayReserve: limits.reserveDayMiB * MiB };
   }
   function allowance(urgent: boolean) {
     const b = budget();

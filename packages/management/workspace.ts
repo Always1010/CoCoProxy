@@ -4,6 +4,7 @@ import { canonicalJson, type JsonObject } from '../config/index.ts';
 import { FileTransactionStore, TransactionError } from '../transaction/index.ts';
 import { atomicWrite, inspectPrivateDirectory, privateRead, PrivateFileError } from '../storage/private-files.ts';
 import { parseAutoGroupPolicy, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings } from './automatic-policy.ts';
+import { bandwidthBudgetFits } from './bandwidth-policy.ts';
 
 export type RoutingOverrides = { selections: Record<string, string>; rules: string[]; automatic?: Record<string, AutoGroupPolicy> };
 export type LocalRoutingOverrides = RoutingOverrides & { sharedGroups?: string[] };
@@ -52,6 +53,8 @@ function overrides(value: unknown, allowSharedGroups = false): LocalRoutingOverr
       if (!string(key) || ['__proto__', 'prototype', 'constructor'].includes(key)) fail();
       try { automatic[key] = parseAutoGroupPolicy(policy); } catch { fail('AUTO_SETTINGS_INVALID'); }
     }
+    const bandwidth = Object.values(automatic).filter(p => p.enabled !== false && p.bandwidth?.enabled).map(p => p.bandwidth!);
+    if (!bandwidthBudgetFits(bandwidth)) fail('AUTO_SETTINGS_INVALID');
   }
   let sharedGroups: string[] | undefined;
   if (record.sharedGroups !== undefined) {

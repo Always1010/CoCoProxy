@@ -60,3 +60,12 @@ test('maximum configured sampling interval allows bounded scheduling delay witho
   assert.equal(bandwidthSamples(pair(121000), settings, 180001).length, 1);
   assert.equal(bandwidthSamples(pair(119000), settings, 119000).length, 1);
 });
+
+test('enabled bandwidth budgets must cover ordinary confirmation after reserves in both windows', () => {
+  for (const limits of [{ hourMiB: 32 }, { dayMiB: 64, reserveDayMiB: 40 }]) {
+    assert.throws(() => parseBandwidthSettings({ ...defaults, enabled: true, ...limits }));
+  }
+  assert.equal(parseBandwidthSettings({ ...defaults, enabled: true, hourMiB: 48, dayMiB: 64 }).hourMiB, 48);
+  assert.equal(parseBandwidthSettings({ ...defaults, enabled: true, hourMiB: 32, dayMiB: 32, reserveHourMiB: 0, reserveDayMiB: 0 }).hourMiB, 32);
+  assert.equal(parseBandwidthSettings({ ...defaults, enabled: false, hourMiB: 32 }).enabled, false);
+});
