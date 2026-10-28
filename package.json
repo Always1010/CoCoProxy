@@ -8,6 +8,8 @@
   "dependencies": { "ws": "8.22.0", "yaml": "2.9.0" },
   "devDependencies": { "@types/node": "22.18.13", "@types/ws": "8.18.2" },
   "scripts": {
+    "dev:ui": "node scripts/dev-ui.mjs",
+    "test:ui-preview": "node --test tests/ui-preview.test.mjs",
     "setup": "node --experimental-strip-types apps/setup/main.ts",
     "test:setup": "node --experimental-strip-types --test tests/setup.test.ts tests/setup-https.test.ts tests/setup-lifecycle.test.ts tests/setup-management-evidence.test.ts tests/setup-first-deployment.test.ts",
     "test:gateway": "node --experimental-strip-types --test tests/gateway-profile.test.ts tests/gateway-host-plan.test.ts",
