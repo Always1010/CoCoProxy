@@ -105,6 +105,12 @@ npm run test:management
 
 `PUT /api/cocoproxy/usage/alias` 接收 `{sourceIP,label}`，给规范化 IP 添加最多 40 字备注，空白备注删除。备注可重名，历史查询使用当前备注，不改变分组或历史字节，不关联登录授权、NAT 后设备或物理身份。不会导入浏览器 IndexedDB 中可能互相重叠的历史。用量与域名属于私有数据，不写入源码、通用日志或默认可提交输出。
 
+## 单节点带宽测试
+
+`GET /api/cocoproxy/bandwidth` 返回固定 Cloudflare 服务、时间／载荷上限和最近任务；`POST` 接收 `{node, expectedActive}`，`POST /api/cocoproxy/bandwidth/cancel` 接收 `{id}`。所有操作复用管理会话与写入 Origin 检查，浏览器以会话存储中的随机 `X-CoCoProxy-Bandwidth-Client` 标识任务，服务端再绑定认证浏览器身份；只返回 `owned`，不暴露标识或凭据。任务全局单实例互斥、后台运行，关闭请求连接不取消任务；取消及服务关闭等待清理完成才释放任务。GET 可供其他授权浏览器观察，取消仅限发起者。
+
+测速使用已核验核心二进制和当前配置中的一个具体节点，在私有状态目录生成短时隔离配置；不修改主核心、策略组选择或网络设置，不复制其他节点与控制器密钥。临时代理只监听回环并使用随机认证，外部目标固定为 `speed.cloudflare.com` 的下载／上传接口，TLS 校验开启，拒绝重定向、压缩和缓存结果。传输按实际应用载荷计数，上行结果等待远端响应；时间、流量和运行代次均受限，退出等待连接及子进程结束并删除本次临时目录。该快速测试不保证跑满线路，不替代终端路径或协议验收。
+
 ## 分组自动选择
 
 工作区的 `RoutingOverrides.automatic[group]` 可选保存 `{preferred, fallback, returnToPreferred}`，顶层 `autoProbes` 可选保存 `{primary, secondary, timeoutMs, slowMs}`；地址条目是 `{url, expectedStatus}`。旧格式保持兼容。自动组仅接受原手动组内的具体代理，拒绝内建出口、组引用、重复、越界和原生自动组。部署许可在保存与运行探测前分别校验，默认 Cloudflare 复核地址须显式获准。

@@ -5,6 +5,7 @@ import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
 import AutomaticSelectionSettings from '~/components/AutomaticSelectionSettings.vue'
 import AutomaticSelectionHistory from '~/components/AutomaticSelectionHistory.vue'
 import GroupRuleSummary from '~/components/GroupRuleSummary.vue'
+import NodeBandwidthTest from '~/components/NodeBandwidthTest.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
 import { siteGroupMembers } from '~/composables/useSiteProbes'
 import {
@@ -136,6 +137,11 @@ const allMembers = computed(() => activeGroup.value ? siteGroupMembers(activeGro
 const hasTcpNodes = computed(() => allMembers.value.some(name => view.value?.tcpNodes?.some(node => node.name === name && node.applicable)))
 const detectionBusy = computed(() => props.batchTesting || props.tcpTesting || props.siteTesting || busy.value)
 const detectionMenu = ref<HTMLDetailsElement>()
+const bandwidthTest = ref<{ open: () => void }>()
+function openBandwidthTest() {
+  if (detectionMenu.value) detectionMenu.value.open = false
+  bandwidthTest.value?.open()
+}
 const groupSettings = ref<{ openSites: () => void; openRules: () => void }>()
 async function configureGroupRules(name: string) {
   activeName.value = name
@@ -352,6 +358,9 @@ function aliveCount(group: ProxyType) {
               <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !allMembers.length" @click="detect('latency')"><IconBrandSpeedtest :size="16" /><span>代理延迟</span></button>
               <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !hasTcpNodes" @click="detect('tcp')"><IconBolt :size="16" /><span>TCP 延迟</span></button>
               <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !allMembers.length" @click="detect('sites')"><IconActivity :size="16" /><span>站点连通 · {{ siteCounts?.[activeGroup.name] ? `已选 ${siteCounts[activeGroup.name]} 项` : '选择站点' }}</span></button>
+              <div class="my-1 border-t border-base-content/10" role="separator" />
+              <p class="px-2 py-1 text-xs text-base-content/60">单节点测试</p>
+              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" @click="openBandwidthTest"><IconBrandSpeedtest :size="16" aria-hidden="true" /><span>节点带宽…</span></button>
             </div>
           </details>
           <button
@@ -533,6 +542,7 @@ function aliveCount(group: ProxyType) {
       </div>
     </div>
   </div>
+  <NodeBandwidthTest ref="bandwidthTest" :group-name="activeGroup?.name ?? ''" :current-node="activeGroup ? resolvedNode(activeGroup) : ''" />
 </template>
 
 <style scoped>
