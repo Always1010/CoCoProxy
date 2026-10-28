@@ -37,20 +37,22 @@ async function fixture(t: test.TestContext) {
   for (const value of candidates.values()) await store.stage(value);
   let selected: RuntimeSelection | null = null, physical: RuntimeProcessIdentity | undefined;
   const unit = unitState(), choices = new Map<string, string>(), events: string[] = [];
-  const faults = { group: '', restartAfterWrite: false, lateWrite: false, untrustedGeneration: '' };
+  const checks = { validations: 0, inspections: 0, observations: 0 };
+  const faults = { group: '', restartAfterWrite: false, lateWrite: false, untrustedGeneration: '', unready: false };
   const inspect = async (_settings: RuntimeSettings, generation: string, _unit?: RuntimeUnitState): Promise<CoreInspection> => {
+    checks.inspections++;
     const value = candidates.get(generation)!;
     const desired = manualSelections(value.config)!;
     const receipt = selected?.hot;
-    const ready = !!physical && selected?.generation === generation &&
+    const ready = !faults.unready && !!physical && selected?.generation === generation &&
       (physical.baseGeneration === generation || !!receipt && canonicalJson(receipt as unknown as JsonObject) === canonicalJson(physical as unknown as JsonObject)) &&
       desired.every(choice => choices.get(choice.group) === choice.name);
     return { ready, generation, reason: ready ? null : 'PROCESS_UNVERIFIED', checkedAt: new Date().toISOString(), ...(ready ? { process: physical } : {}) };
   };
   const runtime = new SystemdMihomoRuntime(settings, {
     platform: 'linux', verifySystemctl: async () => settings.systemctlPath, assertUnit: async () => {},
-    binary: async () => settings.binaryPath, validate: async () => {}, inspect,
-    observe: async (...args) => { const { process: _process, ...result } = await inspect(...args); return result; },
+    binary: async () => settings.binaryPath, validate: async () => { checks.validations++; }, inspect,
+    observe: async (...args) => { checks.observations++; const { process: _process, ...result } = await inspect(...args); return result; },
     load: async (_settings, generation) => {
       if (generation === faults.untrustedGeneration) throw new Error('synthetic deployment migration');
       return { candidate: candidates.get(generation)!, path: store.candidatePath(generation),
@@ -87,7 +89,7 @@ async function fixture(t: test.TestContext) {
   });
   const manager = new TransactionManager(store, runtime);
   await manager.apply(first.id, null); events.length = 0;
-  return { store, runtime, manager, first, second, changed, candidates, choices, events, faults,
+  return { store, runtime, manager, first, second, changed, candidates, choices, events, faults, checks,
     selected: () => selected, physical: () => physical };
 }
 
@@ -98,6 +100,8 @@ test('manual selection commits immutable generations without stopping the physic
   assert.deepEqual(f.events, ['put:Manual:REJECT', 'put:Secondary:REJECT']);
   assert.deepEqual(f.physical(), original); assert.deepEqual(f.selected()?.hot, original);
   assert.equal(f.selected()?.generation, f.second.id);
+  assert.equal(f.checks.validations, 1); // Initial apply only; hot changes reuse its proven config.
+  assert.equal(f.checks.observations, 1); // Hot confirmation uses its single post-PUT inspection.
   f.events.length = 0;
   await f.manager.apply(f.first.id, f.second.id);
   assert.deepEqual(f.events, ['put:Manual:DIRECT', 'put:Secondary:DIRECT']);
@@ -108,6 +112,7 @@ test('manual selection commits immutable generations without stopping the physic
 test('non-selection changes restart normally, and a failed partial update restores the committed predecessor', async t => {
   const unrelated = await fixture(t);
   await unrelated.manager.apply(unrelated.changed.id, unrelated.first.id);
+  assert.equal(unrelated.checks.validations, 2);
   assert.deepEqual(unrelated.events, ['stop', 'start']); assert.equal(unrelated.selected()?.hot, undefined);
   const partial = await fixture(t); partial.faults.group = 'Secondary'; partial.faults.lateWrite = true;
   await assert.rejects(partial.manager.apply(partial.second.id, partial.first.id), { code: 'ACTIVATION_FAILED' });
@@ -122,6 +127,19 @@ test('an old candidate invalidated by reviewed deployment migration cannot block
   const status = await f.manager.apply(f.second.id, f.first.id);
   assert.equal(status.active, f.second.id); assert.equal(f.selected()?.generation, f.second.id);
   assert.deepEqual(f.events, ['stop', 'start']); assert.equal(f.selected()?.hot, undefined);
+  assert.equal(f.checks.validations, 2);
+});
+
+test('selection validation reuses only a healthy committed predecessor and standalone validation stays complete', async t => {
+  const f = await fixture(t);
+  f.faults.unready = true;
+  await f.runtime.validate(f.store.candidatePath(f.second.id), f.first.id);
+  assert.equal(f.checks.validations, 2);
+  f.faults.unready = false;
+  await f.runtime.validate(f.store.candidatePath(f.second.id));
+  assert.equal(f.checks.validations, 3);
+  await f.runtime.validate(f.store.candidatePath(f.second.id), f.second.id); // Receipt still names first.
+  assert.equal(f.checks.validations, 4);
 });
 
 test('a crash before commit is durably recovered and a concurrent restart cannot reuse the old process receipt', async t => {
@@ -139,7 +157,7 @@ test('a crash before commit is durably recovered and a concurrent restart cannot
   assert.equal(crashed.selected()?.generation, crashed.first.id);
   assert.deepEqual(crashed.events.slice(-2), ['stop', 'start']);
   const restarted = await fixture(t); restarted.faults.restartAfterWrite = true;
-  await assert.rejects(restarted.manager.apply(restarted.second.id, restarted.first.id), { code: 'ACTIVATION_FAILED' });
+  await assert.rejects(restarted.manager.apply(restarted.second.id, restarted.first.id), { code: 'CONFIRM_FAILED' });
   assert.equal((await restarted.store.readState()).active, restarted.first.id);
   assert.deepEqual(restarted.events.slice(-2), ['stop', 'start']);
 });

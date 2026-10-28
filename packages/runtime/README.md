@@ -33,7 +33,7 @@ ReadWritePaths 只允许状态目录；Install 段仅描述显式 enable 的目�
 
 维护前执行 `runtime-pause`，再按部署流程停止服务；暂停持久化并由启动器在候选加载前及 exec 前核验，重启主机也不能绕过。`runtime-disable` 写入 `enabled:false, paused:true`，不会立即停止现有核心或撤销路由器交付；此后再次启动须先 `runtime-enable`，或在仍已启用时 `runtime-resume`。`runtime-lifecycle-status` 只读标记。持久部署只 enable 管理与网页入口，由管理恢复核心，不需要单独 enable 核心；路由器明确关闭交付后，网关核心继续运行也不会替路由器重新开启交付。
 
-手动节点热切换仍经过不可变候选、共同锁、active CAS、`-t`、激活、观察及持久提交。只有现有 `select` 组的同一成员集合重新排序，且其他配置完全相同、`profile.store-selected=false` 时才可跳过 stop/start；第一成员表示持久选择。修改节点、规则、DNS、组属性或成员集合仍走完整重启。先核验旧进程，再以认证 loopback PUT 更新变化组，使用一次认证 `GET /proxies` 核对目标全部手动组的真实 `now`。
+手动节点热切换仍经过不可变候选、共同锁、active CAS、激活、观察及持久提交。事务提供已提交的前一代，且其 selection、可信部署及实际核心健康检查匹配时，只有现有 `select` 组的同一成员集合重新排序、其他配置完全相同、`profile.store-selected=false` 才可复用前一代校验，省略重复 `-t`；无前一代、旧核心不健康、部署迁移或其他配置变化仍执行完整校验。相同成员排序变化也可跳过 stop/start；第一成员表示持久选择。修改节点、规则、DNS、组属性或成员集合仍走完整重启。先核验旧进程，再以认证 loopback PUT 更新变化组，切后一次完整进程检查及认证 `GET /proxies` 回读直接用于本次事务确认，不重复执行相同的切后观察；进程身份改变或选择不符立即恢复前一代。
 
 热切换将目标 generation 与一个固定物理进程的 base generation、PID、Linux boot ID、启动时间原子写入私有 selection。回执不累积历史链；观察仍检查可信二进制、unit、UID、argv、controller 归属与认证及前后进程身份。只有身份严格匹配且 base/目标配置仍只差选择时，才允许 argv 保持 base 候选。核心正常重启会按 selection 启动目标候选，旧回执不能授权其他进程使用旧 argv。部分 PUT 失败、进程中途重启或目标回读不符，均通过既有恢复流程 stop/start 上一代；未提交时管理进程崩溃同样恢复上一代。已持久提交后崩溃保留目标，启动授权规则不变。
 
