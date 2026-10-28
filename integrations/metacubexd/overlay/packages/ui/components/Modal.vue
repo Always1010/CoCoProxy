@@ -4,6 +4,7 @@ import { IconX } from '@tabler/icons-vue'
 interface Props {
   compact?: boolean
   settingsLayout?: boolean
+  settingsDirectory?: boolean
   title?: string
   size?: 'md' | 'xl'
   fixedHeight?: boolean
@@ -14,6 +15,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   size: 'md',
   fixedHeight: true,
+  settingsDirectory: undefined,
   beforeClose: undefined,
   closeDisabled: false,
 })
@@ -95,7 +97,7 @@ defineExpose({ open, close })
 
         <button
           type="button"
-          class="modal-close flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-transparent p-0"
+          class="modal-close flex min-h-8 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-lg bg-transparent px-2"
           title="关闭弹窗"
           aria-label="关闭弹窗"
           :disabled="closeDisabled"
@@ -107,10 +109,11 @@ defineExpose({ open, close })
           @click="requestClose"
         >
           <IconX :size="18" aria-hidden="true" />
+          <span v-if="settingsLayout" class="text-xs">关闭</span>
         </button>
       </div>
 
-      <div class="modal-body flex min-h-0 flex-1 flex-col" :class="{ 'settings-body': settingsLayout && $slots.tabs }">
+      <div class="modal-body flex min-h-0 flex-1 flex-col" :class="{ 'settings-body': settingsLayout && $slots.tabs, 'settings-paged': settingsDirectory !== undefined, 'settings-directory': settingsDirectory }">
       <!-- Navigation stays outside the scrolling content. -->
       <div v-if="isRendered && $slots.tabs" class="modal-nav shrink-0 px-5 pt-5">
         <slot name="tabs" />
@@ -191,6 +194,12 @@ defineExpose({ open, close })
 @media (width < 640px) {
   .modal-shell-fixed { height: calc(100dvh - 1rem - env(safe-area-inset-top, 0px)); max-height: calc(100dvh - 1rem - env(safe-area-inset-top, 0px)); }
   .settings-shell .modal-nav :deep([role=tablist]) { flex-wrap: nowrap; gap: 3px; }
+  .settings-paged > .modal-nav { display: none; }
+  .settings-paged.settings-directory > .modal-nav { display: block; flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+  .settings-paged.settings-directory > .modal-content { display: none; }
+  .settings-paged .modal-nav :deep([role=tablist]) { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+  .settings-paged .modal-nav :deep([role=tab]) { justify-content: flex-start; }
+  .settings-paged .modal-nav :deep([role=tab][aria-selected=true]) { background: color-mix(in oklab, var(--color-primary) 12%, transparent); }
 }
 @media (pointer: coarse) {
   .modal-compact :deep(.btn), .modal-compact :deep(label:has(input)), .modal-compact :deep(summary:not(.help-summary)) { min-height: 40px; }
