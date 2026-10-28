@@ -2,7 +2,7 @@
 
 本文面向第一次搭建的部署者，按硬件接线、环境准备、软件安装、路由器协作、后台使用和验收的顺序，完成一套可使用的局域网代理方案。日常使用者可以直接从[首次登录与基本使用](#6-首次登录与基本使用)开始。
 
-当前版本是 **1.0.0 正式版**，交付的是 Linux 软件。自动网关支持同一接入子网中的普通 IPv4 终端，受管公网 IPv6 会被阻断。持久运行需完成第 8 节的显式启用：设备重启、依赖晚启动和同 LAN 断线后，自动恢复上次成功提交的配置。实现、隔离验证与实机验收分别记录；ARM64、x86-64、新路由器组合及持续运行的实际证据以[发行说明](release-notes.md)为准，不能仅凭启用成功认定稳定性验收通过。
+当前版本是 **1.0.1 正式版**，交付的是 Linux 软件。自动网关支持同一接入子网中的普通 IPv4 终端，受管公网 IPv6 会被阻断。持久运行需完成第 8 节的显式启用：设备重启、依赖晚启动和同 LAN 断线后，自动恢复上次成功提交的配置。实现、隔离验证与实机验收分别记录；ARM64、x86-64、新路由器组合及持续运行的实际证据以[发行说明](release-notes.md)为准，不能仅凭启用成功认定稳定性验收通过。
 
 安装器可以按显式参数核验和安装软件；系统依赖、网口地址、HTTPS 和路由器协作需要部署者准备。CoCoProxy 目前没有自动探测任意网络、一键配置所有路由器的功能。完成下面的步骤后，普通终端无需逐台安装代理客户端；新增终端是否被正确覆盖仍须验收。
 
@@ -147,7 +147,7 @@ install -d -o root -g root -m 0700 /etc/cocoproxy-install
 
 ### 4.1 获取与核验
 
-从项目可信 Release 获取与目标架构对应的安装包、同名 `.manifest.json` 和 `SHA256SUMS`，并阅读该版本发行说明。`uname -m` 的 `aarch64` 对应 `linux-arm64`，`x86_64` 对应 `linux-amd64-v1`。例如本版文件名为 `cocoproxy-1.0.0-linux-arm64.tar.gz`，x86-64 用相应平台名。
+从项目可信 Release 获取与目标架构对应的安装包、同名 `.manifest.json` 和 `SHA256SUMS`，并阅读该版本发行说明。`uname -m` 的 `aarch64` 对应 `linux-arm64`，`x86_64` 对应 `linux-amd64-v1`。例如本版文件名为 `cocoproxy-1.0.1-linux-arm64.tar.gz`，x86-64 用相应平台名。
 
 在可信下载目录核对所选附件的 SHA-256 与发布值一致；将安装包解压到目标的 root 控制专用暂存目录。解压后结构应包含 `manifest.json`、`source/`、`server/`、`bin/mihomo`。核对包内 manifest 与已核验的包外 manifest 一致，记录可信的 manifest SHA-256。只对未知来源文件自算摘要不能建立信任。
 
@@ -160,7 +160,7 @@ install -d -o root -g root -m 0700 /etc/cocoproxy-install
 以下变量均替换为实际角色值，Node 须为 root 控制的系统路径：
 
 ```sh
-PAYLOAD=/srv/cocoproxy-staging/cocoproxy-1.0.0-linux-arm64
+PAYLOAD=/srv/cocoproxy-staging/cocoproxy-1.0.1-linux-arm64
 MANIFEST_SHA='<已核验的64位manifest摘要>'
 NODE=/usr/bin/node
 ENVIRONMENT=/etc/cocoproxy-install/environment.json
