@@ -12,6 +12,7 @@ const visible = ref(false)
 const status = ref<AutomaticStatus>()
 const displayed = ref<HistoryEvent[]>([])
 const loading = ref(false)
+const refreshing = ref(false)
 const clearing = ref(false)
 const confirmClear = ref(false)
 const error = ref('')
@@ -76,11 +77,12 @@ function accept(result: AutomaticStatus) {
   updatedAt.value = Date.now()
   error.value = ''
 }
-async function readStatus() {
-  if (!visible.value || disposed || document.hidden || loading.value || clearing.value) return
+async function readStatus(background = true) {
+  if (!visible.value || disposed || document.hidden || (loading.value && background) || clearing.value) return
   const id = ++requestId
   const requestScope = scope.value
   loading.value = true
+  refreshing.value = !background
   try {
     const result = await api.request<AutomaticStatus>('/api/cocoproxy/automatic/status')
     if (visible.value && id === requestId && requestScope === scope.value) {
@@ -92,10 +94,10 @@ async function readStatus() {
     }
   } catch (cause) {
     if (visible.value && id === requestId) error.value = cocoproxyErrorMessage(cause)
-  } finally { if (id === requestId) loading.value = false }
+  } finally { if (id === requestId) { loading.value = false; refreshing.value = false } }
 }
 async function poll(currentSession: number) {
-  await readStatus()
+  await readStatus(!!status.value)
   if (visible.value && !disposed && currentSession === session) timer = setTimeout(() => { void poll(currentSession) }, 8000)
 }
 function close() {
@@ -103,6 +105,7 @@ function close() {
   requestId++
   visible.value = false
   loading.value = false
+  refreshing.value = false
   if (timer) clearTimeout(timer)
 }
 function open() {
@@ -117,12 +120,14 @@ function open() {
   void poll(++session)
 }
 async function clearHistory() {
-  if (clearing.value || loading.value || !confirmClear.value || !status.value?.scope) return
+  if (clearing.value || refreshing.value || !confirmClear.value || !status.value?.scope) return
   if (status.value.workspaceRevision !== view.value?.workspace.revision) {
     error.value = '方案或设置已变化，请关闭面板并刷新工作区。'
     return
   }
   const id = ++requestId
+  // A background read started before the clear must never restore old records.
+  loading.value = false
   const requestScope = scope.value
   clearing.value = true
   try {
@@ -149,20 +154,22 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
   </span>
   <Modal ref="dialog" :title="`${groupName} · 切换历史`" @close="close">
     <template #content>
-      <button v-if="newCount" type="button" class="btn btn-primary btn-sm mb-3 min-h-11 shrink-0" @click="showLatest()"><IconChevronUp :size="16" aria-hidden="true" /><span>有 {{ newCount }} 条新记录 · 查看最新</span></button>
+      <div class="mb-3 flex min-h-11 shrink-0 items-center gap-2">
+        <button v-if="newCount" type="button" class="btn btn-primary btn-sm min-h-11 shrink-0" @click="showLatest()"><IconChevronUp :size="16" aria-hidden="true" /><span>有 {{ newCount }} 条新记录 · 查看最新</span></button>
+        <p v-if="error" role="alert" class="min-w-0 text-sm text-warning">更新失败：{{ error }} 已显示的记录仍予保留。</p>
+      </div>
       <div ref="scroller" class="min-h-0 flex-1 space-y-3 overflow-y-auto [scrollbar-gutter:stable]" @scroll="onScroll">
       <section class="shrink-0 space-y-1 rounded-lg bg-base-200 p-3 text-sm" aria-label="当前自动选择状态" aria-live="polite">
         <p>{{ enabled ? '自动选择已开启' : '自动选择已关闭' }}</p>
         <p class="break-all">当前出口：{{ currentNode }}{{ currentPool ? ` · ${currentPool}` : '' }}</p>
         <p :class="groupStatus?.phase === 'outage' && enabled ? 'text-warning' : 'text-base-content/70'">{{ phase }}</p>
-        <p v-if="enabled && groupStatus?.reason" class="text-xs text-base-content/65">{{ reasons[groupStatus.reason] ?? '运行状态发生变化' }}</p>
-        <p v-if="enabled && !status?.suspended && !view?.pending && groupStatus?.nextAt" class="text-xs text-base-content/65">下次检测：{{ timeLabel(groupStatus.nextAt) }}</p>
+        <p class="text-xs text-base-content/65">{{ enabled && groupStatus?.reason ? reasons[groupStatus.reason] ?? '运行状态发生变化' : '暂无补充原因' }}</p>
+        <p class="text-xs text-base-content/65 tabular-nums">下次检测：{{ enabled && !status?.suspended && !view?.pending && groupStatus?.nextAt ? timeLabel(groupStatus.nextAt) : '等待调度' }}</p>
       </section>
       <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
         <span>{{ updatedAt ? `最近更新于 ${timeLabel(updatedAt)}` : '正在读取历史…' }}</span>
-        <button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="loading || clearing" @click="readStatus"><IconRefresh :size="16" :class="{ 'animate-spin': loading }" aria-hidden="true" /><span>{{ loading ? '正在刷新' : '刷新' }}</span></button>
+        <button type="button" class="btn btn-ghost btn-sm min-h-11 min-w-28 shrink-0" :disabled="refreshing || clearing" @click="readStatus(false)"><IconRefresh :size="16" :class="{ 'animate-spin': refreshing }" aria-hidden="true" /><span>{{ refreshing ? '正在刷新' : '刷新' }}</span></button>
       </div>
-      <p v-if="error" role="alert" class="shrink-0 text-sm text-warning">更新失败：{{ error }} 已显示的记录仍予保留。</p>
         <ol v-if="displayed.length" class="space-y-3" aria-label="当前组切换记录">
           <li v-for="event in displayed" :key="eventKey(event)" class="space-y-2 rounded-lg border border-base-content/10 p-3 text-sm">
             <div class="flex flex-wrap items-center justify-between gap-2"><time :datetime="new Date(event.at).toISOString()" class="text-xs text-base-content/60">{{ timeLabel(event.at) }}</time><span class="badge badge-sm">{{ eventLabel(event.reason) }}</span></div>
@@ -170,15 +177,15 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
             <p class="text-xs leading-relaxed text-base-content/70">原因：{{ reasons[event.reason] ?? '自动选择已确认新的出口节点' }}</p>
           </li>
         </ol>
-        <p v-else-if="!loading && !error" class="py-8 text-center text-sm text-base-content/60">{{ enabled ? '暂无保留的切换记录，之后确认的节点切换会显示在这里。' : '暂无保留的切换记录。' }}</p>
+        <p v-else-if="status" class="py-8 text-center text-sm text-base-content/60">{{ enabled ? '暂无保留的切换记录，之后确认的节点切换会显示在这里。' : '暂无保留的切换记录。' }}</p>
       </div>
       <footer class="mt-3 max-h-[50%] shrink-0 space-y-2 overflow-y-auto border-t border-base-content/10 pt-3">
         <p class="text-xs text-base-content/60">每组最多保留 50 条，最长 7 天，较早记录自动清理。仅记录确认生效的自动切换。</p>
         <div v-if="confirmClear" class="space-y-2 rounded-lg bg-base-200 p-3 text-sm">
           <p class="break-all">清空“{{ groupName }}”的切换历史？此操作无法撤销，{{ enabled ? '自动选择将继续运行。' : '当前节点和自动选择设置不变。' }}</p>
-          <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="clearing" @click="confirmClear = false"><IconX :size="16" aria-hidden="true" /><span>取消</span></button><button type="button" class="btn btn-error btn-sm min-h-11" :disabled="clearing || loading" @click="clearHistory"><IconCheck :size="16" aria-hidden="true" /><span>{{ clearing ? '正在清空' : '确认清空' }}</span></button></div>
+          <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="clearing" @click="confirmClear = false"><IconX :size="16" aria-hidden="true" /><span>取消</span></button><button type="button" class="btn btn-error btn-sm min-h-11" :disabled="clearing || refreshing" @click="clearHistory"><IconCheck :size="16" aria-hidden="true" /><span>{{ clearing ? '正在清空' : '确认清空' }}</span></button></div>
         </div>
-        <div v-else class="flex justify-end"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="!events.length || loading || clearing || !updatedAt" @click="confirmClear = true"><IconTrash :size="16" aria-hidden="true" /><span>清空历史</span></button></div>
+        <div v-else class="flex justify-end"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="!events.length || refreshing || clearing || !updatedAt" @click="confirmClear = true"><IconTrash :size="16" aria-hidden="true" /><span>清空历史</span></button></div>
       </footer>
     </template>
   </Modal>

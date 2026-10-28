@@ -142,7 +142,7 @@ test('group status checks only saved active policies and binds requests to the d
 test('automatic history keeps reading position, preserves failed refreshes and clears only the displayed group', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionHistory.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { open, close, readStatus, clearHistory, onScroll, showLatest, scroller, displayed, newCount, error, confirmClear, available };';
+    '\nexport { open, close, readStatus, clearHistory, onScroll, showLatest, scroller, displayed, newCount, error, confirmClear, available, loading, refreshing, status };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const scope = JSON.stringify(['local', ['sample']]);
   const event = (id: string, group = 'Stream') => ({ id, group, at: 1000, from: 'node-a', to: 'node-b', reason: 'failure-recovery' });
@@ -161,7 +161,7 @@ test('automatic history keeps reading position, preserves failed refreshes and c
     useWorkspace: () => ({ view, overrides, api: { request: async (path: string, options?: any) => {
       calls.push({ path, options });
       if (fail) throw new Error('synthetic failure');
-      if (deferred) return deferred;
+      if (deferred && !options) return deferred;
       if (options) {
         assert.equal(options.body.group, 'Stream');
         assert.equal(options.body.scope, scope);
@@ -174,6 +174,17 @@ test('automatic history keeps reading position, preserves failed refreshes and c
   exports.open();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(Array.from(exports.displayed.value, (e: any) => e.id), ['one']);
+  let completeRead!: (value: typeof result) => void;
+  deferred = new Promise(resolve => { completeRead = resolve; });
+  const background = exports.readStatus();
+  assert.equal(exports.loading.value, true);
+  assert.equal(exports.refreshing.value, false);
+  const manual = exports.readStatus(false);
+  assert.equal(exports.refreshing.value, true);
+  completeRead(structuredClone(result));
+  await Promise.all([background, manual]);
+  assert.equal(exports.refreshing.value, false);
+  deferred = undefined;
   overrides.value.automatic.Stream.enabled = false;
   assert.equal(exports.available.value, true); // Historical entry remains available after manual takeover.
   let jumps = 0;
@@ -192,9 +203,16 @@ test('automatic history keeps reading position, preserves failed refreshes and c
   assert.equal(exports.error.value, '读取失败');
   assert.equal(exports.displayed.value.length, 2);
   fail = false;
+  const stale = structuredClone(result);
+  deferred = new Promise(resolve => { completeRead = resolve; });
+  const beforeClear = exports.readStatus();
   exports.confirmClear.value = true;
   await exports.clearHistory();
+  completeRead(stale);
+  await beforeClear;
+  deferred = undefined;
   assert.equal(exports.displayed.value.length, 0);
+  assert.equal(exports.status.value.events.some((e: any) => e.group === 'Stream'), false);
   assert.deepEqual(view.value.automatic.events.map(e => e.group), ['Work']);
   exports.close();
   assert.equal(exports.available.value, false);
