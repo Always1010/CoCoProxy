@@ -27,6 +27,7 @@ CoCoProxy 分别固定 Mihomo 核心、MetaCubeXD 源树与 overlay、离线规�
 | UI auth.global、login/cocoproxy 页面、同源插件 | 管理员/可信设备会话、退出与撤销、事务恢复；旧 profiles/config/control 路径转入自有流程 | 新页面守卫、hash 路由、错误/等待与触屏操作文字，不能恢复任意远程 endpoint 或核心 secret 登录 |
 | UI nuxt.config、Desktop 空插件 | 独立 CSR/hash 页面，关闭上游 PWA、Workbox 离线缓存及 Desktop 同步 | 新插件/桥接/缓存是否重启旁路，不能恢复离线页面缓存 |
 | subscriptions、proxies/rules 页面、工作区 store/composable | 来源私密 URL、保存与更新分开、方案隔离；规则/选择自动经事务生效，保留旧草稿兼容 | revision、过时响应和页面切换、当前来源删除限制、保存与生效的反馈，不能直接写活跃配置 |
+| traffic 页面、connections store | 用量由后端持续采集并存入 SQLite，浏览器只保留实时连接展示；来源始终按 IP 分组，括号备注独立于登录授权 | 不恢复浏览器 IndexedDB 采集、核心重启清空历史或按登录名称推测设备；检查分页、过期明细提示、请求取消与窄屏 IP 优先展示 |
 | NativeProxies/组节点组件、自动选择、TCP/代理/站点检测 composable | 统一检测范围、进度、取消、站点设置和结果；自动策略/节点元数据由后端约束 | 请求去重、代次/取消、组和方案隔离、真实0值、节点不适用情况；前端显示不能扩张检测结论 |
 | 导航、Modal、toolbar、规则测试等基础组件 | 移动端可见操作文字、更多导航、受控关闭/焦点及规则解释 | 新路由、虚拟列表/滚动、弹层卸载清理、窄屏溢出与焦点；构建不代替实际触屏验证 |
 
