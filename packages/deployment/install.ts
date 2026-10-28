@@ -275,7 +275,9 @@ export async function verifyRelease(payload: string, expected: string): Promise<
   let componentUpdate;
   if (value.componentUpdate !== undefined) {
     try { componentUpdate = validateComponentUpdate(value.componentUpdate); } catch { throw new InstallError('INSTALL_COMPONENT_DECLARATION_INVALID'); }
-    require(!frontendUpdate && componentUpdate.reusedInputSha256 === value.buildInputs?.[componentUpdate.components === 'core' ? 'serverInputSha256' : 'frontendInputSha256'], 'INSTALL_COMPONENT_DECLARATION_INVALID');
+    const reusedSHA = componentUpdate.components === 'management' ? core.sha256
+      : value.buildInputs?.[componentUpdate.components === 'core' ? 'serverInputSha256' : 'frontendInputSha256'];
+    require(!frontendUpdate && componentUpdate.reusedInputSha256 === reusedSHA, 'INSTALL_COMPONENT_DECLARATION_INVALID');
   }
   return { files: value.files as Entry[], coreSHA: core.sha256 as string, frontendUpdate, componentUpdate,
     backendInputSha256: value.buildInputs?.backendInputSha256 as string | undefined,
@@ -287,12 +289,15 @@ export async function verifyRelease(payload: string, expected: string): Promise<
 export function assertComponentReuse(previous: Awaited<ReturnType<typeof verifyRelease>>, next: Awaited<ReturnType<typeof verifyRelease>>, previousSHA: string) {
   const update = next.componentUpdate;
   const core = update?.components === 'core';
-  require(update && update.baseManifestSha256 === previousSHA && update.reusedInputSha256 === (core ? previous.serverInputSha256 : previous.frontendInputSha256),
+  const management = update?.components === 'management';
+  require(update && update.baseManifestSha256 === previousSHA
+    && update.reusedInputSha256 === (management ? previous.coreSHA : core ? previous.serverInputSha256 : previous.frontendInputSha256),
     'INSTALL_COMPONENT_BASE_CHANGED');
   const prefix = core ? 'server/.output/' : 'server/.output/public/';
-  const reusedFiles = (release: typeof previous) => JSON.stringify(release.files.filter(file => file.path.startsWith(prefix))
+  const reusedFiles = (release: typeof previous) => JSON.stringify(release.files.filter(file => management ? file.path === 'bin/mihomo' : file.path.startsWith(prefix))
     .map(file => [file.path, file.sha256, file.size, file.mode]).sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'en')));
-  require((core || next.coreSHA === previous.coreSHA) && next.files.some(file => file.path.startsWith('server/.output/public/')) && reusedFiles(previous) === reusedFiles(next),
+  require((core || next.coreSHA === previous.coreSHA) && (!management || previous.files.some(file => file.path === 'bin/mihomo'))
+    && next.files.some(file => file.path.startsWith('server/.output/public/')) && reusedFiles(previous) === reusedFiles(next),
     'INSTALL_REUSED_PAYLOAD_CHANGED');
 }
 const pathHost: PathEvidenceHost = { resolve: realpath, info: async path => {

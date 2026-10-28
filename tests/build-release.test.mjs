@@ -140,6 +140,35 @@ test('core build reuses the complete server without UI/server compilation and re
   await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'core', baseRelease: base }), { code: 'BUILD_REUSED_INPUT_CHANGED' });
 });
 
+test('management builds both frontend and backend, pins the installed core and refuses core drift before building', async t => {
+  assert.equal(readBuildSelection(['--components', 'management']).components, 'management');
+  const state = await fixture(t); const base = join(state.config.workspace, 'base');
+  const path = 'bin/mihomo'; const bytes = 'synthetic core';
+  await write(join(base, path), bytes, 0o755);
+  await write(join(base, 'manifest.json'), JSON.stringify({ schemaVersion: 1, commit: state.config.expected.commit,
+    components: { mihomo: { binarySha256: sha256(bytes) } },
+    files: [{ path, size: Buffer.byteLength(bytes), sha256: sha256(bytes), mode: '0755' }] }));
+  const options = { execute: state.execute, components: 'management', baseRelease: base };
+  const plan = await runBuildRelease(state.config, { ...options, preview: true });
+  assert.deepEqual(plan.build, ['frontend', 'backend', 'release']);
+  assert.equal(plan.deployment, 'full-maintenance');
+  assert.equal(plan.componentUpdate.reusedInputSha256, sha256(bytes));
+  assert.equal(state.commands.some(item => item.command === 'tar'), false);
+  const result = await runBuildRelease(state.config, { ...options, deploy: true });
+  assert.equal(result.components, 'management'); assert.equal(result.deployed, true);
+  assert.ok(state.commands.some(item => item.command === 'npm' && item.args.includes('typecheck')));
+  assert.ok(state.commands.some(item => item.args.includes('@metacubexd/ui') && item.args.includes('generate')));
+  assert.ok(state.commands.some(item => item.args[0] === 'scripts/typecheck-metacubexd-ui.mjs'));
+  assert.ok(state.commands.some(item => item.args.includes('@metacubexd/server') && item.args.includes('build')));
+  const stage = state.commands.find(item => item.args[0]?.endsWith('stage-explicit-release.mjs'));
+  assert.equal(stage.args[stage.args.indexOf('--core') + 1], join(base, 'bin/mihomo'));
+  assert.equal(JSON.parse(stage.args[stage.args.indexOf('--component-update') + 1]).reusedInputSha256, sha256(bytes));
+  state.commands.length = 0;
+  await write(state.config.core, 'changed core');
+  await assert.rejects(runBuildRelease(state.config, { ...options, deploy: true }), { code: 'BUILD_MANAGEMENT_CORE_CHANGED' });
+  assert.equal(state.commands.some(item => item.command === 'tar' || item.command === 'sudo'), false);
+});
+
 test('changed payload cannot deploy even when a previous release exists', async t => {
   const state = await fixture(t, 'payload-drift');
   await mkdir(join(state.config.releases, 'old-release'));

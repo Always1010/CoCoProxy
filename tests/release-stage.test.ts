@@ -9,7 +9,7 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 import { ReleaseStageError, stageExplicitRelease, type StageExplicitReleaseOptions } from '../scripts/stage-explicit-release.mjs';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/state-compatibility.mjs';
-import { verifyRelease } from '../packages/deployment/install.ts';
+import { verifyRelease, assertComponentReuse } from '../packages/deployment/install.ts';
 
 const execute = promisify(execFile);
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
@@ -150,6 +150,21 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   const coreOutput = options.output + '-core';
   const coreReceipt = await stageExplicitRelease({ ...options, output: coreOutput, componentUpdate: coreUpdate });
   assert.deepEqual((await verifyRelease(coreOutput, coreReceipt.manifestSha256)).componentUpdate, coreUpdate);
+  const managementUpdate = { ...componentUpdate, components: 'management' as const, reusedInputSha256: verified.coreSHA };
+  const managementOutput = options.output + '-management';
+  await writeFile(join(options.serverDir, 'public/index.html'), '<h1>Updated UI</h1>');
+  await writeFile(join(options.serverDir, 'server/index.mjs'), 'console.log("updated backend");\n');
+  const managementReceipt = await stageExplicitRelease({ ...options, output: managementOutput, componentUpdate: managementUpdate });
+  const managementRelease = await verifyRelease(managementOutput, managementReceipt.manifestSha256);
+  assert.deepEqual(managementRelease.componentUpdate, managementUpdate);
+  assert.doesNotThrow(() => assertComponentReuse(verified, managementRelease, receipt.manifestSha256));
+  await rejects(stageExplicitRelease({ ...options, output: options.output + '-changed-core',
+    componentUpdate: { ...managementUpdate, reusedInputSha256: '0'.repeat(64) } }), 'BUILD_REUSED_INPUT_CHANGED');
+  const managementManifest = JSON.parse(await readFile(join(managementOutput, 'manifest.json'), 'utf8'));
+  managementManifest.componentUpdate.reusedInputSha256 = '0'.repeat(64);
+  const invalidManagement = JSON.stringify(managementManifest);
+  await writeFile(join(managementOutput, 'manifest.json'), invalidManagement);
+  await assert.rejects(verifyRelease(managementOutput, digest(invalidManagement)), { code: 'INSTALL_COMPONENT_DECLARATION_INVALID' });
   await rejects(stageExplicitRelease({ ...options, output: options.output + '-invalid', frontendUpdate: { ...frontendUpdate, backendInputSha256: '0'.repeat(64) } }), 'BUILD_FRONTEND_BACKEND_CHANGED');
   for (const [path, changedPath, mode, code] of [
     ['README.md', 'README.md', '0755', 'INSTALL_MANIFEST_INVALID'],

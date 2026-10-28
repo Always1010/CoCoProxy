@@ -33,7 +33,8 @@ export function buildFailureMessage(error) {
     BUILD_FRONTEND_BASE_UPGRADE_REQUIRED: '旧安装缺少局部更新基线。请先不带 --components frontend 完成一次全量构建部署。',
     BUILD_FRONTEND_BACKEND_CHANGED: '前端以外的构建输入已变化，不能局部更新；请使用默认全量构建部署。',
     BUILD_FRONTEND_BASE_REQUIRED: '未找到可核验的管理服务基线；核对安装，或使用 --base-release 指定已有发行目录。',
-    BUILD_COMPONENTS_UNSUPPORTED: '当前支持 --components all、frontend、backend 或 core。',
+    BUILD_COMPONENTS_UNSUPPORTED: '当前支持 --components all、frontend、backend、management（前后端）或 core。',
+    BUILD_MANAGEMENT_CORE_CHANGED: '基线核心与当前审核核心不一致，不能仅更新前后端；请核对核心输入或使用全量构建部署。',
     BUILD_COMPONENT_BASE_UPGRADE_REQUIRED: '基线缺少组件复用摘要，请先完成一次全量构建部署。',
     BUILD_REUSED_INPUT_CHANGED: '本次未选择的组件输入已变化，请使用全量构建部署。',
   };
@@ -202,6 +203,12 @@ export async function componentBaseline(config, baseRelease, execute, components
   const bytes = await regular(join(baseRelease, 'manifest.json')); const manifest = JSON.parse(bytes.toString('utf8'));
   const baseManifestSha256 = hash(bytes);
   await verifyBuiltRelease(baseRelease, { staged: true, commit: manifest.commit, manifestSha256: baseManifestSha256, fileCount: manifest.files?.length }, manifest.commit);
+  if (components === 'management') {
+    const core = manifest.files.find(entry => entry.path === 'bin/mihomo');
+    if (!core || core.sha256 !== manifest.components?.mihomo?.binarySha256
+      || core.sha256 !== hash(await regular(config.core))) fail('BUILD_MANAGEMENT_CORE_CHANGED');
+    return { baseRelease, componentUpdate: { schemaVersion: 1, components, baseManifestSha256, reusedInputSha256: core.sha256 } };
+  }
   const raw = await execute('git', ['-C', config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
   const entries = raw.split('\0').filter(Boolean).map(line => {
     const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line);
@@ -281,7 +288,8 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
     }
     await verifyBuildInputs(config, execute, workName);
     const receipt = JSON.parse(await node([join(config.snapshot, 'scripts/stage-explicit-release.mjs'), '--source-dir', config.snapshot,
-      '--server-dir', serverDir, '--runtime-dependencies', config.runtimeDependencies, '--core', config.core, '--output', output,
+      '--server-dir', serverDir, '--runtime-dependencies', config.runtimeDependencies,
+      '--core', components === 'management' ? join(baseline.baseRelease, 'bin/mihomo') : config.core, '--output', output,
       ...(frontendUpdate ? ['--frontend-update', JSON.stringify(frontendUpdate)] : []),
       ...(componentUpdate ? ['--component-update', JSON.stringify(componentUpdate)] : [])], { capture: true }));
     const result = await verifyBuiltRelease(output, receipt, config.expected.commit);
@@ -298,7 +306,7 @@ export async function buildReleaseMain(deploy = false) {
   let lock;
   try {
     if (process.argv.slice(2).includes('--help')) {
-      console.log('已准备工作区：node scripts/build-release.mjs --config ABSOLUTE_JSON [--components all|frontend|backend|core] [--base-release ABSOLUTE_RELEASE] [--preview]\n一步构建部署：node scripts/build-deploy.mjs，参数相同。普通克隆仓库使用 bash scripts/build-release.sh。'); return;
+      console.log('已准备工作区：node scripts/build-release.mjs --config ABSOLUTE_JSON [--components all|frontend|backend|management|core] [--base-release ABSOLUTE_RELEASE] [--preview]\nmanagement 构建前后端并复用核心。一步构建部署：node scripts/build-deploy.mjs，参数相同。普通克隆仓库使用 bash scripts/build-release.sh。'); return;
     }
     const { rest: args, ...selection } = readBuildSelection(process.argv.slice(2));
     const internal = args.length === 4 && args[2] === '--internal-lock' && args[3] === process.env.COCOPROXY_BUILD_LOCK_TOKEN;

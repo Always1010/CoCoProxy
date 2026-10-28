@@ -47,7 +47,7 @@ node scripts/build-deploy.mjs --config /absolute/private/build-config.json
 
 ### 按组件构建
 
-默认 `--components all` 保留完整构建和维护部署。支持 `frontend`、`backend`、`core` 单项范围，暂不支持组合值；无效范围直接拒绝，不自动扩大为全量。
+默认 `--components all` 保留完整构建和维护部署。支持 `frontend`、`backend`、`core` 单项范围，以及同时更新前后端、排除核心的 `management`；不接受逗号组合值。无效范围直接拒绝，不自动扩大为全量。
 
 ```sh
 # 普通克隆仓库：构建前端更新，再部署成功记录中的同一范围。
@@ -58,6 +58,10 @@ sudo bash scripts/deploy-local.sh
 bash scripts/build-release.sh --components backend
 sudo bash scripts/deploy-local.sh
 
+# 同时构建前后端，复用已安装核心；部署仍进入完整维护窗口。
+bash scripts/build-release.sh --components management
+sudo bash scripts/deploy-local.sh
+
 # 只装配审核核心，复用前后端；部署仍进入完整维护窗口。
 bash scripts/build-release.sh --components core
 sudo bash scripts/deploy-local.sh
@@ -66,11 +70,13 @@ sudo bash scripts/deploy-local.sh
 node scripts/build-deploy.mjs --config /absolute/private/build-config.json --components frontend
 ```
 
-基线默认从当前管理服务的 ExecStart 获取，也可用 `--base-release /absolute/installed-release` 显式指定。基线必须有对应模式所需的输入摘要且完整载荷校验通过；旧发行包缺少该信息时，先全量构建部署一次。前端模式要求前端以外的源码、依赖、构建输入不变，文档和测试变化不计入输入摘要。
+基线默认从当前管理服务的 ExecStart 获取，也可用 `--base-release /absolute/installed-release` 显式指定。基线必须有对应模式所需的输入摘要且完整载荷校验通过；旧发行包缺少该信息时，先全量构建部署一次。`management` 使用已有核心二进制摘要，不要求新增构建输入摘要。前端模式要求前端以外的源码、依赖、构建输入不变，文档和测试变化不计入输入摘要。
 
 前端模式重新生成 UI 并完成承载新资源所需的 Server 打包，省略根项目类型检查；它不是完全跳过 Server 打包。构建清单绑定基线 manifest 摘要，部署时重新核验；不得选择另一个基线强行安装。默认全量构建和 GitHub 正式发行始终从当前提交构建，不依赖已安装版本。
 
 后端模式要求基线具有 `frontendInputSha256`，复用已核验的 `server/.output/public`，跳过 UI generate 和 UI 类型检查，执行项目类型检查及 Server build。UI、上游或共享构建输入变化时拒绝。装配清单携带 `componentUpdate`，安装预检再次核对基线、全部静态资源和核心摘要；部署使用完整维护及恢复流程，会中断代理。它仅减少构建范围，不保证仅重启后端。所有局部模式均要求已有安装，旧基线缺少所需摘要时先全量构建部署。
+
+`management` 同时执行项目类型检查、UI generate、UI 类型检查和 Server build，使用基线中的 `bin/mihomo` 装配完整发行包。基线核心必须与当前配置的审核核心及当前提交审核清单一致；不一致时拒绝，不自动扩大为全量。`componentUpdate` 绑定基线 manifest 摘要和核心 SHA256，安装预检允许前后端产物变化，但要求核心内容、大小和权限与已安装版本一致。发行包仍携带同一核心，以保持现有完整载荷布局；此模式排除核心升级，不是无核心包。部署仍进入完整维护窗口，可能停止并重新启动 MiHomo、短暂中断代理。
 
 核心模式要求基线具有 `serverInputSha256`，复用整个 `server/.output`，跳过 UI/Server 编译与相应类型检查。保守复用摘要覆盖其余源码及构建输入；允许核心清单/审核记录变化，但单独绑定其中的管理组件元数据，修改管理版本、UI 或运行适配代码仍须全量构建。装配器继续按当前提交审核清单核对核心摘要、架构及依赖，安装预检比对全部 Server/UI 文件。核心来自既有固定二进制，不在此入口编译核心源码；未准备好输入时停止，不自动下载或安装。部署仍是完整维护，会中断代理。
 

@@ -5,7 +5,7 @@ const sourceInput = entry => !/^(docs|tests|\.github)\//u.test(entry.path) && !/
 const identity = entries => createHash('sha256').update(JSON.stringify(entries.map(entry => [entry.path, entry.mode, entry.oid])
   .sort((a, b) => a[0].localeCompare(b[0], 'en')))).digest('hex');
 export function parseComponents(value = 'all') {
-  if (!['all', 'frontend', 'backend', 'core'].includes(value)) fail('BUILD_COMPONENTS_UNSUPPORTED');
+  if (!['all', 'frontend', 'backend', 'management', 'core'].includes(value)) fail('BUILD_COMPONENTS_UNSUPPORTED');
   return value;
 }
 
@@ -35,7 +35,7 @@ export function reusedInputSha256(entries, components, management) {
 
 export function validateComponentUpdate(value) {
   if (!value || Object.keys(value).sort().join(',') !== 'baseManifestSha256,components,reusedInputSha256,schemaVersion'
-    || value.schemaVersion !== 1 || !['backend', 'core'].includes(value.components)
+    || value.schemaVersion !== 1 || !['backend', 'management', 'core'].includes(value.components)
     || ![value.reusedInputSha256, value.baseManifestSha256].every(item => typeof item === 'string' && /^[a-f0-9]{64}$/u.test(item))) fail('BUILD_COMPONENT_BASE_INVALID');
   return value;
 }
