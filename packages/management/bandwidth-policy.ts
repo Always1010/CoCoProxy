@@ -35,10 +35,10 @@ export const BANDWIDTH_FIELDS = {
   busyStopMbps: field('检测中业务流量中止阈值', 2, 0.2, 20, 'Mbps', false, false),
   quietSeconds: field('启动前低负载保持时间', 10, 5, 60, '秒'),
 } as const;
-export type BandwidthSettings = { enabled: boolean; activeProbes: boolean; observeOnly: boolean }
+export type BandwidthSettings = { enabled: boolean; observeOnly: boolean }
   & { -readonly [K in keyof typeof BANDWIDTH_FIELDS]: number };
 export const DEFAULT_BANDWIDTH_SETTINGS: BandwidthSettings = Object.freeze({
-  enabled: false, activeProbes: true, observeOnly: false,
+  enabled: false, observeOnly: false,
   ...Object.fromEntries(Object.entries(BANDWIDTH_FIELDS).map(([key, value]) => [key, value.default])),
 } as BandwidthSettings);
 
@@ -48,7 +48,10 @@ export function parseBandwidthSettings(value: unknown): BandwidthSettings {
   const input = value as Record<string, unknown>;
   const result = { ...DEFAULT_BANDWIDTH_SETTINGS };
   for (const [key, value] of Object.entries(input)) {
-    if (key === 'enabled' || key === 'activeProbes' || key === 'observeOnly') {
+    if (key === 'activeProbes') {
+      // Accept old settings without retaining a separate download permission.
+      if (typeof value !== 'boolean') return fail();
+    } else if (key === 'enabled' || key === 'observeOnly') {
       if (typeof value !== 'boolean') return fail();
       result[key] = value;
     } else {
@@ -58,6 +61,8 @@ export function parseBandwidthSettings(value: unknown): BandwidthSettings {
       result[key as keyof typeof BANDWIDTH_FIELDS] = value;
     }
   }
+  // Preserve an explicit legacy opt-out: enabling the feature now includes downloads.
+  if (input.activeProbes === false) result.enabled = false;
   if (result.durationSeconds < result.warmupSeconds + result.minSampleSeconds
       || result.timeoutSeconds < result.durationSeconds + 5
       || result.roundIntervalSeconds < result.timeoutSeconds * 2

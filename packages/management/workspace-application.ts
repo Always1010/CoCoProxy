@@ -448,7 +448,7 @@ export function createWorkspaceApplication(options: {
         if (workspace.revision !== body.expectedRevision || scopeOf(workspace) !== body.scope || !state.active || state.active !== body.expectedActive
             || state.transaction || state.fault || (await readRuntimeLifecycle(options.stateDirectory)).paused) invalid('WORKSPACE_CONFLICT');
         const policy = typeof body.group === 'string' && Object.hasOwn(activePolicies(workspace), body.group) ? activePolicies(workspace)[body.group] : null;
-        if (!policy?.bandwidth?.enabled || !policy.bandwidth.activeProbes) invalid('AUTO_SETTINGS_INVALID');
+        if (!policy?.bandwidth?.enabled) invalid('AUTO_SETTINGS_INVALID');
         if (!options.automaticBandwidthCheck?.(body.group as string)) invalid('AUTO_PROBE_BUSY');
         return automaticStatus(workspace);
       });

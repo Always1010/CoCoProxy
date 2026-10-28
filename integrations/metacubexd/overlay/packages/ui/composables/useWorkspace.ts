@@ -11,7 +11,6 @@ export interface AutoGroupPolicy {
 
 export interface BandwidthSettings {
   enabled: boolean
-  activeProbes: boolean
   observeOnly: boolean
   [key: string]: number | boolean
 }
