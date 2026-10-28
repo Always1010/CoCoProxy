@@ -192,7 +192,6 @@ function resetDetection() {
       </template>
       <div class="flex flex-col gap-4">
         <template v-if="settingsTab === 'general'">
-          <HelpTip>这些页面偏好只保存在当前浏览器。</HelpTip>
           <label class="flex items-center gap-2"><input v-model="configStore.autoCloseConns" type="checkbox" class="checkbox checkbox-primary checkbox-xs" />切换节点时断开连接</label>
           <label class="flex items-center gap-2"><input v-model="configStore.hideUnAvailableProxies" type="checkbox" class="checkbox checkbox-primary checkbox-xs" />隐藏不可用节点</label>
           <button type="button" class="btn btn-outline btn-sm self-end" @click="resetGeneral"><IconReload :size="16" /><span>恢复通用默认值</span></button>
