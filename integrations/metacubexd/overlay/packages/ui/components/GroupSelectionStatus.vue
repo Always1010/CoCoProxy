@@ -4,7 +4,7 @@ import type { AutomaticStatus, BandwidthSettings } from '~/composables/useWorksp
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
 const props = defineProps<{ groupName: string; status?: AutomaticStatus; policyEnabled: boolean; bandwidth?: BandwidthSettings; dirty: boolean; disabled: boolean; reading: boolean; error: string }>()
-const emit = defineEmits<{ refresh: [] }>()
+const emit = defineEmits<{ refresh: []; checking: [value: boolean] }>()
 const { api, view } = useWorkspace()
 const detail = ref<'summary' | 'pool' | 'history'>('summary')
 const checking = ref(false)
@@ -14,7 +14,7 @@ const bandwidthStatus = computed(() => group.value?.bandwidth)
 const events = computed(() => props.status?.events.filter(event => event.group === props.groupName).slice().reverse() ?? [])
 const canCheck = computed(() => props.policyEnabled && !!props.bandwidth?.enabled && !props.dirty && !props.disabled && !props.reading && !props.error && !!group.value && !!view.value?.active && !view.value?.pending && !props.status?.paused && !props.status?.suspended && !props.status?.error && !bandwidthStatus.value?.testingNode && !checking.value)
 let disposed = false
-onUnmounted(() => { disposed = true })
+onUnmounted(() => { disposed = true; emit('checking', false) })
 const phases: Record<string, string> = {
   outage: '暂无已确认出口，退避重试', 'slow-search': '正在寻找更快的候选节点', 'failure-search': '正在寻找可用候选节点',
   'failure-confirmation': '正在复核当前节点', 'return-confirmation': '正在确认优选恢复', backup: '使用备选', monitoring: '监测当前节点',
@@ -44,14 +44,16 @@ const reason = (value: string) => reasons[value] ?? '等待下一轮评估'
 async function check() {
   if (!canCheck.value || !view.value) return
   checking.value = true; feedback.value = ''
+  emit('checking', true)
+  let refresh = false
   try {
     await api.request('/api/cocoproxy/automatic/bandwidth/check', { method: 'POST', body: {
       expectedRevision: view.value.workspace.revision, expectedActive: view.value.active,
       scope: props.status?.scope, group: props.groupName,
     } })
-    if (!disposed) { feedback.value = '本组候选检查已排队，仍遵守退避、空闲、流量预算和切换保持限制。'; emit('refresh') }
+    if (!disposed) { feedback.value = '本组候选检查已排队，仍遵守退避、空闲、流量预算和切换保持限制。'; refresh = true }
   } catch (cause) { if (!disposed) feedback.value = cocoproxyErrorMessage(cause) }
-  finally { if (!disposed) checking.value = false }
+  finally { if (!disposed) { checking.value = false; emit('checking', false); if (refresh) emit('refresh') } }
 }
 </script>
 
@@ -60,7 +62,7 @@ async function check() {
     <div class="flex flex-wrap items-center justify-between gap-2">
       <button v-if="detail !== 'summary'" type="button" class="btn btn-ghost min-h-11" @click="detail = 'summary'"><IconArrowLeft :size="16" /><span>返回运行概况</span></button>
       <SettingsNotice v-else>对应已保存并生效的配置</SettingsNotice>
-      <button type="button" class="btn btn-ghost min-h-11" :disabled="reading || disabled" @click="emit('refresh')"><IconRefresh :size="16" :class="{ 'animate-spin': reading }" /><span>{{ reading ? '正在刷新' : '刷新状态' }}</span></button>
+      <button type="button" class="btn btn-ghost min-h-11 min-w-28 shrink-0" :disabled="reading || disabled || checking" @click="emit('refresh')"><IconRefresh :size="16" :class="{ 'animate-spin': reading }" /><span>{{ reading ? '正在刷新' : '刷新状态' }}</span></button>
     </div>
     <p v-if="error" role="alert" class="text-sm text-warning">状态读取失败：{{ error }}。保留上次结果，请刷新后再检查候选。</p>
     <p v-if="status?.error || status?.paused || status?.suspended" role="status" class="text-sm text-warning">{{ status?.error || (status?.suspended ? '自动选择已挂起' : '自动选择已暂停') }}</p>
@@ -68,11 +70,11 @@ async function check() {
       <dl class="status-facts text-sm">
         <dt>当前出口</dt><dd class="break-all">{{ group?.current ?? view?.groups.find(item => item.name === groupName)?.activeSelected ?? '尚未选择' }}</dd>
         <dt>自动选择</dt><dd>{{ !policyEnabled ? '已关闭' : group ? (phases[group.phase] ?? '自动选择运行中') : '等待运行状态' }}</dd>
-        <template v-if="group?.reason"><dt>当前原因</dt><dd>{{ reason(group.reason) }}</dd></template>
-        <template v-if="group?.nextAt"><dt>下次检测</dt><dd>{{ time(group.nextAt) }}</dd></template>
+        <dt>当前原因</dt><dd>{{ group?.reason ? reason(group.reason) : '暂无补充原因' }}</dd>
+        <dt>下次检测</dt><dd class="tabular-nums">{{ group?.nextAt ? time(group.nextAt) : '等待调度' }}</dd>
         <dt>带宽辅助决策</dt><dd>{{ !bandwidth?.enabled ? '已关闭' : !policyEnabled ? '自动选择关闭，未运行' : bandwidthStatus ? reason(bandwidthStatus.reason) : '等待运行状态' }}{{ bandwidth?.enabled && bandwidth.observeOnly ? ' · 仅观察' : '' }}</dd>
       </dl>
-      <div v-if="bandwidthStatus?.testingNode" class="flex items-start gap-2 text-sm" role="status"><span class="loading loading-spinner loading-sm shrink-0" /><span class="break-all">正在验证：{{ bandwidthStatus.testingNode }} · 有效样本 {{ bandwidthStatus.round }} / {{ bandwidth?.confirmRounds }}</span></div>
+      <div v-if="bandwidth?.enabled" class="flex min-h-10 items-start gap-2 text-sm" role="status"><span v-if="bandwidthStatus?.testingNode" class="loading loading-spinner loading-sm shrink-0" /><span class="break-all">{{ bandwidthStatus?.testingNode ? `正在验证：${bandwidthStatus.testingNode} · 有效样本 ${bandwidthStatus.round} / ${bandwidth?.confirmRounds}` : '当前没有正在验证的节点' }}</span></div>
       <div v-if="bandwidthStatus" class="space-y-2 border-t border-base-content/10 pt-4 text-sm">
         <h4 class="font-medium">自动检测用量</h4>
         <p>滚动每小时 {{ amount(bandwidthStatus.hourBytes) }} / {{ amount(bandwidthStatus.hourLimit) }} MiB</p>
