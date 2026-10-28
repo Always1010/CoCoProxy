@@ -84,6 +84,7 @@ defineExpose({ open })
         <p>测速服务：{{ status?.server.name ?? 'Cloudflare' }} · {{ status?.server.url ?? 'https://speed.cloudflare.com' }}</p>
         <p>快速测试：下载、上传各最多 {{ (status?.limits.durationMs ?? 6000) / 1000 }} 秒；总载荷最多 {{ (status?.limits.maxBytes ?? 200000000) / 1000000 }} MB；含准备最多 {{ (status?.limits.timeoutMs ?? 30000) / 1000 }} 秒。</p>
         <p>测试期间代理继续工作，带宽占用可能影响其他设备。</p>
+        <p v-if="status?.automaticRunning" class="text-warning" role="status">带宽辅助决策正在验证节点，等待本次任务结束后可开始手动测试。</p>
       </div>
 
       <section v-if="task || sending || uncertain" class="space-y-3 rounded-xl bg-base-200 p-3" aria-label="节点带宽测试状态" aria-live="polite">

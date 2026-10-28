@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { IconArrowLeft, IconCheck, IconChevronDown, IconChevronUp, IconEdit, IconInfoCircle, IconList, IconReload, IconSettings, IconWorld, IconX } from '@tabler/icons-vue'
-import type { AutomaticStatus, AutoGroupPolicy } from '~/composables/useWorkspace'
+import type { AutomaticStatus, AutoGroupPolicy, BandwidthSettings } from '~/composables/useWorkspace'
 import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import GroupMatchingRules from '~/components/GroupMatchingRules.vue'
+import BandwidthSelectionSettings from '~/components/BandwidthSelectionSettings.vue'
 
 const props = defineProps<{ groupName: string; selectable: boolean }>()
 const { api, view, workspace, overrides, busy, run, save, load, editOverrides } = useWorkspace()
@@ -24,6 +25,8 @@ const enabled = ref(false)
 const preferred = ref<string[]>([])
 const fallback = ref<string[]>([])
 const returnToPreferred = ref(true)
+const bandwidth = ref<BandwidthSettings>()
+const bandwidthEditor = ref<{ valid: boolean }>()
 const search = ref('')
 type PoolKind = 'preferred' | 'fallback'
 const editorKind = ref<PoolKind | null>(null)
@@ -46,7 +49,7 @@ const nodes = computed(() => {
     .filter(name => realNodes.has(name) && !/^(DIRECT|REJECT|REJECT-DROP|PASS|COMPATIBLE)$/i.test(name))
 })
 const totalSelected = computed(() => preferred.value.length + fallback.value.length)
-function draftSignature() { return JSON.stringify([enabled.value, preferred.value, fallback.value, returnToPreferred.value]) }
+function draftSignature() { return JSON.stringify([enabled.value, preferred.value, fallback.value, returnToPreferred.value, bandwidth.value ?? null]) }
 const changed = computed(() => draftSignature() !== initialDraft.value)
 const dirtyTabs = computed(() => [
   changed.value && props.selectable ? '节点选择' : '',
@@ -113,6 +116,7 @@ const invalid = computed(() => {
   if (preferred.value.length + fallback.value.length > 32) return '优选和备选合计最多 32 个节点。'
   if ([...preferred.value, ...fallback.value].some(name => !nodes.value.includes(name))) return '部分节点已不在此组，请重新选择。'
   if (preferred.value.some(name => fallback.value.includes(name))) return '优选和备选不能包含同一个节点。'
+  if (bandwidthEditor.value?.valid === false) return '请检查带宽辅助决策参数。'
   return ''
 })
 const groupStatus = computed(() => status.value?.groups.find(group => group.name === props.groupName))
@@ -122,6 +126,7 @@ const phases: Record<string, string> = {
   'failure-confirmation': '正在复核当前节点', 'return-confirmation': '正在确认优选恢复', backup: '使用备选', monitoring: '监测当前节点',
 }
 const reasons: Record<string, string> = {
+  'bandwidth-improvement': '已确认吞吐净收益，完成切换',
   'preferred-restored': '优选已恢复，完成回切', 'faster-candidate': '候选节点更快，完成切换', 'failure-recovery': '原节点故障，已切换至可用节点',
   'current-slow': '当前节点连续变慢', 'current-unavailable': '当前节点不可用', 'all-unavailable': '本轮未能确认可用出口',
   'no-better-candidate': '暂未找到明显更快的候选节点', 'preferred-check-failed': '优选尚未稳定恢复',
@@ -166,6 +171,7 @@ function open() {
   preferred.value = [...(policy?.preferred ?? [])]
   fallback.value = [...(policy?.fallback ?? [])]
   returnToPreferred.value = policy?.returnToPreferred ?? true
+  bandwidth.value = policy?.bandwidth ? JSON.parse(JSON.stringify(policy.bandwidth)) as BandwidthSettings : undefined
   initialDraft.value = draftSignature()
   search.value = ''
   statusError.value = ''
@@ -185,6 +191,7 @@ async function persist() {
     await run(async () => {
       try {
         const policy: AutoGroupPolicy = { enabled: enabled.value, preferred: [...preferred.value], fallback: [...fallback.value], returnToPreferred: returnToPreferred.value }
+        if (bandwidth.value) policy.bandwidth = JSON.parse(JSON.stringify(bandwidth.value)) as BandwidthSettings
         await save(settings => {
           const target = editOverrides(settings)
           if (enabled.value || target.automatic?.[props.groupName] || preferred.value.length || fallback.value.length) {
@@ -215,7 +222,7 @@ async function reread() {
   try {
     await load()
     const policy = overrides.value.automatic?.[props.groupName]
-    const current = JSON.stringify([!!policy && policy.enabled !== false, policy?.preferred ?? [], policy?.fallback ?? [], policy?.returnToPreferred ?? true])
+    const current = JSON.stringify([!!policy && policy.enabled !== false, policy?.preferred ?? [], policy?.fallback ?? [], policy?.returnToPreferred ?? true, policy?.bandwidth ?? null])
     if (current === draftSignature() && !view.value?.pending) {
       initialDraft.value = current; saved.value = true; saveError.value = ''
     } else saveError.value = '状态已重新读取，修改尚未确认生效，请核对后重试。'
@@ -256,6 +263,7 @@ onUnmounted(() => { disposed = true; close() })
             <label class="flex min-h-11 items-center justify-between gap-3">自动选点<input v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
             <template v-if="enabled">
               <label class="flex min-h-11 items-center justify-between gap-3 text-sm">优选恢复后自动回切<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
+              <BandwidthSelectionSettings ref="bandwidthEditor" v-model="bandwidth" :disabled="locked" :status="groupStatus?.bandwidth" :group-name="groupName" :can-check="!changed" />
               <section v-for="kind in (['preferred', 'fallback'] as const)" :key="kind" class="rounded-lg border border-base-content/10 p-3" :aria-label="kind === 'preferred' ? '优选节点' : '备选节点'">
                 <div class="flex items-center justify-between gap-2">
                   <h3 class="text-sm font-medium">{{ kind === 'preferred' ? '优选' : '备选' }} · {{ pool(kind).length }} 个</h3>

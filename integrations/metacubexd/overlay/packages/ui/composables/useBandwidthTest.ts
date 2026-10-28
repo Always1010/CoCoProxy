@@ -26,6 +26,7 @@ export interface BandwidthTask {
 }
 export interface BandwidthStatus {
   available?: boolean
+  automaticRunning?: boolean
   limits: { durationMs: number; maxBytes: number; timeoutMs: number }
   server: { name: string; url: string }
   task: BandwidthTask | null
@@ -66,7 +67,7 @@ export function useBandwidthTest() {
   let timer: ReturnType<typeof setTimeout> | undefined
   const task = computed(() => status.value?.task ?? null)
   const locked = computed(() => sending.value || uncertain.value || !!(task.value?.running && task.value.owned))
-  const canStart = computed(() => persistent.value && !!status.value && status.value.available !== false && !loading.value && !sending.value && !uncertain.value && !task.value?.running && !!view.value?.active && !view.value.pending)
+  const canStart = computed(() => persistent.value && !!status.value && status.value.available !== false && !status.value.automaticRunning && !loading.value && !sending.value && !uncertain.value && !task.value?.running && !!view.value?.active && !view.value.pending)
 
   function rememberPending(value: boolean) {
     try {
@@ -88,7 +89,7 @@ export function useBandwidthTest() {
   }
   function schedule() {
     stopPolling()
-    if (!disposed && visible.value && (task.value?.running || uncertain.value))
+    if (!disposed && visible.value && (task.value?.running || uncertain.value || status.value?.automaticRunning))
       timer = setTimeout(() => { void refresh() }, 900)
   }
   async function refresh(force = false): Promise<boolean> {
