@@ -6,7 +6,6 @@ const props = defineProps<{ activeGroup: string | null; configure?: (name: strin
 const { view, workspace, overrides, busy, run, save } = useWorkspace()
 const proxyRefresh = useProxyRefresh()
 const menu = ref<{ open: () => void; close: () => void }>()
-const createKind = ref<'preset' | 'custom' | 'shared'>('preset')
 const customName = ref('')
 const sharedName = ref('')
 const available = computed(() => view.value?.catalog?.filter(service => !service.default && !view.value?.groups.some(group => group.name === service.id)) ?? [])
@@ -78,29 +77,25 @@ async function remove() {
   <div v-if="workspace?.mode === 'local'" class="shrink-0 sm:w-full">
     <button class="btn btn-ghost btn-sm" title="管理策略组" aria-label="管理策略组" @click="menu?.open()"><IconAdjustments :size="18" /><span>管理策略组</span></button>
     <Modal ref="menu" title="管理策略组">
-      <div class="mb-4 grid grid-cols-3 gap-1 rounded-xl bg-base-content/5 p-1" role="tablist" aria-label="策略组类型">
-        <button v-for="item in [{ key: 'preset', label: '预置服务', icon: IconPlus }, { key: 'custom', label: '自定义', icon: IconAdjustments }, { key: 'shared', label: '共享出口', icon: IconLink }]" :key="item.key" type="button" role="tab" class="btn btn-ghost min-h-11 px-2" :class="createKind === item.key ? 'bg-base-100 shadow-sm' : 'text-base-content/60'" :aria-selected="createKind === item.key" @click="createKind = item.key as typeof createKind"><component :is="item.icon" :size="16" /><span>{{ item.label }}</span></button>
-      </div>
-      <section v-if="createKind === 'preset'">
-        <div class="flex items-center justify-between gap-2"><h3 class="text-sm font-semibold">启用服务组</h3><HelpTip>自带域名规则，启用后可单独选择这些服务的出口。</HelpTip></div>
-        <ul v-if="available.length" class="grid grid-cols-1 gap-2 sm:grid-cols-2"><li v-for="service in available" :key="service.id"><button class="btn btn-outline min-h-11 w-full justify-start border-base-content/10" :disabled="busy" @click="add(service.id, true)"><IconPlus :size="16" /><span>{{ service.name }}</span></button></li></ul>
-        <p v-else class="py-6 text-center text-sm text-base-content/50">预置服务组均已启用</p>
-      </section>
-      <section v-else-if="createKind === 'custom'">
-        <div class="flex items-center justify-between gap-2"><h3 class="text-sm font-semibold">自定义策略组</h3><HelpTip>创建后添加域名规则，指定哪些网站使用本组。初始出口跟随 Proxy。</HelpTip></div>
-        <form class="flex flex-wrap gap-2" @submit.prevent="add(customName)">
-          <input v-model="customName" class="input min-h-11 min-w-0 flex-1 basis-40" aria-label="自定义策略组名称" placeholder="组名" maxlength="80" :disabled="busy" required />
-          <button class="btn btn-primary min-h-11" type="submit" :disabled="busy || !customName.trim() || !!customError"><IconPlus :size="16" /><span>创建并配置</span></button>
+      <div class="px-2 py-1 text-sm font-medium">启用预置服务组</div>
+      <p class="px-2 text-xs text-base-content/60">自带域名规则，启用后可单独选择这些服务的出口。</p>
+      <ul v-if="available.length" class="menu w-full p-0"><li v-for="service in available" :key="service.id"><button class="min-h-11" :disabled="busy" @click="add(service.id, true)"><IconPlus :size="16" /><span>启用 {{ service.name }}</span><span class="text-xs text-base-content/50">自带规则</span></button></li></ul>
+      <p v-else class="px-2 py-2 text-xs text-base-content/50">预置服务组均已启用</p>
+      <div class="mt-3 border-t border-base-content/10 px-2 pt-3 text-sm font-medium">创建自定义策略组</div>
+      <p class="px-2 pt-1 text-xs text-base-content/60">创建后添加域名规则，指定哪些网站使用本组。初始出口跟随 Proxy。</p>
+      <form class="mt-2 flex flex-wrap gap-2" @submit.prevent="add(customName)">
+        <input v-model="customName" class="input min-h-11 min-w-0 flex-1 basis-40" aria-label="自定义策略组名称" placeholder="自定义组名" maxlength="80" :disabled="busy" required />
+        <button class="btn btn-primary min-h-11" type="submit" title="添加自定义策略组" aria-label="添加自定义策略组" :disabled="busy || !customName.trim() || !!customError"><IconPlus :size="16" /><span>创建并配置规则</span></button>
+      </form>
+      <p v-if="customError" role="alert" class="px-2 pt-1 text-xs text-error">{{ customError }}</p>
+      <section class="mt-4 border-t border-base-content/10 pt-3">
+        <div class="px-2 text-sm font-medium">创建共享出口组</div>
+        <p class="px-2 pt-1 text-xs text-base-content/45">供多个普通策略组共同引用；只能选择具体节点、直连或拒绝。</p>
+        <form class="mt-2 flex flex-wrap gap-2" @submit.prevent="addShared">
+          <input v-model="sharedName" class="input min-h-11 min-w-0 flex-1 basis-40" aria-label="共享出口组名称" placeholder="共享出口组名称" maxlength="80" :disabled="busy" required />
+          <button class="btn btn-primary min-h-11" type="submit" title="添加共享出口组" aria-label="添加共享出口组" :disabled="busy || !sharedName.trim() || !!sharedError"><IconLink :size="16" /><span>创建共享出口</span></button>
         </form>
-        <p v-if="customError" role="alert" class="pt-2 text-xs text-error">{{ customError }}</p>
-      </section>
-      <section v-else>
-        <div class="flex items-center justify-between gap-2"><h3 class="text-sm font-semibold">共享出口组</h3><HelpTip>供多个策略组共同引用；可选择具体节点、直连或拒绝。网站匹配规则在引用它的策略组中配置。</HelpTip></div>
-        <form class="flex flex-wrap gap-2" @submit.prevent="addShared">
-          <input v-model="sharedName" class="input min-h-11 min-w-0 flex-1 basis-40" aria-label="共享出口组名称" placeholder="组名" maxlength="80" :disabled="busy" required />
-          <button class="btn btn-primary min-h-11" type="submit" :disabled="busy || !sharedName.trim() || !!sharedError"><IconLink :size="16" /><span>创建共享出口</span></button>
-        </form>
-        <p v-if="sharedError" role="alert" class="pt-2 text-xs text-error">{{ sharedError }}</p>
+        <p v-if="sharedError" role="alert" class="px-2 pt-1 text-xs text-error">{{ sharedError }}</p>
       </section>
       <div v-if="removable" class="mt-4 border-t border-base-content/10 pt-2">
         <p v-if="referenced" class="px-2 pb-1 text-xs text-error" role="alert">{{ referenceMessage }}</p>
