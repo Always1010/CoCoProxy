@@ -400,18 +400,22 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   assert.equal(exports.bandwidth.value.targetMbps, 10);
 
   exports.dialog.value = { close: (force: boolean) => closes.push(force) };
-  exports.rulesEditor.value = { dirty: true, saving: false };
+  exports.rulesEditor.value = { saving: false };
   exports.sitesEditor.value = { dirty: true, saving: false };
   assert.equal(exports.beforeClose(), false);
   assert.equal(exports.confirmClose.value, true);
   exports.continueEditing();
-  assert.equal(exports.rulesEditor.value.dirty, true);
+  assert.equal(exports.sitesEditor.value.dirty, true);
   const target = { path: '/rules', query: { group: 'Stream' } };
   exports.requestNavigation(target);
   assert.equal(navigations.length, 0);
   exports.discardAndClose();
   assert.deepEqual(navigations, [target]);
   assert.deepEqual(closes, [true]);
+
+  exports.sitesEditor.value = { dirty: false, saving: false };
+  exports.rulesEditor.value = { saving: true };
+  assert.equal(exports.beforeClose(), true); // Confirmed rule operations continue after the settings modal closes.
 });
 
 test('site settings retain failed drafts and reconcile an interrupted save before allowing another write', async () => {

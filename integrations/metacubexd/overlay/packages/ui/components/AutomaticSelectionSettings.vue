@@ -9,7 +9,7 @@ const props = defineProps<{ groupName: string; selectable: boolean }>()
 const { api, view, workspace, overrides, busy, run, save, load, editOverrides } = useWorkspace()
 const proxyRefresh = useProxyRefresh()
 const dialog = ref<{ open: () => void; close: (force?: boolean) => void }>()
-const rulesEditor = ref<{ dirty: boolean; saving: boolean }>()
+const rulesEditor = ref<{ saving: boolean }>()
 const sitesEditor = ref<{ dirty: boolean; saving: boolean }>()
 const sitesVisited = ref(false)
 const confirmClose = ref(false)
@@ -21,6 +21,7 @@ const saveError = ref('')
 const refreshWarning = ref('')
 const needsRead = ref(false)
 const locked = computed(() => busy.value || saving.value || !!rulesEditor.value?.saving || !!sitesEditor.value?.saving)
+const closeLocked = computed(() => saving.value || !!sitesEditor.value?.saving)
 const enabled = ref(false)
 const preferred = ref<string[]>([])
 const fallback = ref<string[]>([])
@@ -53,11 +54,10 @@ function draftSignature() { return JSON.stringify([enabled.value, preferred.valu
 const changed = computed(() => draftSignature() !== initialDraft.value)
 const dirtyTabs = computed(() => [
   changed.value && props.selectable ? '节点选择' : '',
-  rulesEditor.value?.dirty ? '匹配规则' : '',
   sitesEditor.value?.dirty ? '站点连通' : '',
 ].filter(Boolean))
 function beforeClose() {
-  if (locked.value) return false
+  if (closeLocked.value) return false
   if (!dirtyTabs.value.length) return true
   confirmClose.value = true
   return false
@@ -240,7 +240,7 @@ onUnmounted(() => { disposed = true; close() })
   <span class="shrink-0">
     <button type="button" class="btn btn-ghost btn-sm" :aria-label="`${groupName} 组设置`" @click="open"><IconSettings :size="18" /><span>组设置</span></button>
   </span>
-  <Modal ref="dialog" :title="editorKind ? `编辑${editorLabel}` : `${groupName} · 组设置`" :before-close="beforeClose" :close-disabled="locked" @close="close">
+  <Modal ref="dialog" :title="editorKind ? `编辑${editorLabel}` : `${groupName} · 组设置`" :before-close="beforeClose" :close-disabled="closeLocked" @close="close">
     <template #tabs>
       <button v-if="editorKind" type="button" class="btn btn-ghost min-h-11" :disabled="locked || confirmClose" @click="editorKind = null"><IconArrowLeft :size="16" /><span>返回组设置</span></button>
       <div v-else class="flex flex-wrap gap-2" role="tablist" aria-label="组设置类别">
