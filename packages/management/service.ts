@@ -165,6 +165,6 @@ export async function loadManagementGateway(path: string) {
       () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'), undefined, onTiming);
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
       startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); usage.start(); return recovered; },
-      closeLifecycle: async () => { await usage.close(); await automatic!.close(); await lifecycle.close(); } };
+      closeLifecycle: async () => { try { await usage.close(); } finally { await automatic!.close(); await lifecycle.close(); } } };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }

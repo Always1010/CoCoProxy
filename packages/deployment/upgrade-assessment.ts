@@ -18,6 +18,7 @@ export interface UpgradeStateHost {
   /** Caller enforces trusted ancestors, private ownership and bounded regular-file reads. */
   read(relative: string, maximum: number): Promise<string | null>;
   list(relative: string): Promise<string[] | null>;
+  usage?(): Promise<{ schemaVersion: number; integrity: 'ok' } | null>;
 }
 export interface StateObservation {
   store: StateStore; sourceId?: string; presence: 'present' | 'absent' | 'unavailable'; value?: unknown;
@@ -64,6 +65,16 @@ export async function inspectStateCompatibility(host: UpgradeStateHost, declarat
     } catch { observations.push({ store, sourceId, presence: 'unavailable', assessment: unavailableState() }); }
   };
   for (const file of DEPLOYMENT_STATE_FILES) await inspect(file.store, file.path, file.limit);
+  try {
+    const value = host.usage ? await host.usage() : await host.read('usage.sqlite', 100);
+    observations.push(value === null ? { store: 'usage', presence: 'absent', assessment: { ...unavailableState(), status: 'supported', code: 'DEPLOYMENT_STATE_ABSENT' } }
+      : typeof value === 'string' ? { store: 'usage', presence: 'unavailable', assessment: unavailableState() }
+      : { store: 'usage', presence: 'present', value, assessment: assessStateContent('usage', value, declaration) });
+  } catch (error) {
+    observations.push((error as { code?: string }).code === 'USAGE_SCHEMA_UNSUPPORTED'
+      ? { store: 'usage', presence: 'present', assessment: { ...unavailableState(), status: 'unsupported', code: 'DEPLOYMENT_STATE_VERSION_UNSUPPORTED', version: 'unsupported-version' } }
+      : { store: 'usage', presence: 'unavailable', assessment: unavailableState() });
+  }
   try {
     const names = await host.list('subscriptions') ?? [];
     if (names.length > SUBSCRIPTION_INVENTORY_LIMIT || names.filter(name => !isSubscriptionTemporaryName(name)).length > SUBSCRIPTION_SOURCE_LIMIT) {

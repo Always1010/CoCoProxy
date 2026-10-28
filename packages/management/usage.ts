@@ -1,7 +1,9 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { inspectPrivateDirectory, privateDirectory, syncDirectory } from '../storage/private-files.ts';
+import { pathToFileURL } from 'node:url';
+import { createHash, randomUUID } from 'node:crypto';
+import { privateDirectory, syncDirectory } from '../storage/private-files.ts';
 import { ManagementError, exactRecord, readJsonBody } from './http.ts';
 import { normalizeIP } from './request-address.ts';
 
@@ -46,13 +48,14 @@ function parseCheckpoint(input: string): Checkpoint {
   return value;
 }
 
-export async function inspectUsageFiles(directory: string): Promise<boolean> {
-  await inspectPrivateDirectory(directory);
+export async function inspectUsageFiles(directory: string, owner = process.geteuid?.()): Promise<boolean> {
+  const parent = await lstat(directory);
+  if (!parent.isDirectory() || parent.isSymbolicLink() || (process.platform !== 'win32' && ((parent.mode & 0o077) !== 0 || parent.uid !== owner))) fail();
   let present = false;
   for (const suffix of ['', '-wal', '-shm', '-journal']) {
     try {
       const info = await lstat(join(directory, USAGE_DATABASE + suffix));
-      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || (process.platform !== 'win32' && ((info.mode & 0o077) !== 0 || info.uid !== process.geteuid!()))) fail();
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || (process.platform !== 'win32' && ((info.mode & 0o077) !== 0 || info.uid !== owner))) fail();
       if (!suffix) { if (info.size === 0) fail(); present = true; }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
@@ -66,8 +69,8 @@ export async function inspectUsageFiles(directory: string): Promise<boolean> {
 }
 
 function validateDatabase(db: DatabaseSync): void {
-  if (db.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID || db.prepare('PRAGMA user_version').get()?.user_version !== USAGE_SCHEMA ||
-      db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') fail();
+  if (db.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID || db.prepare('PRAGMA user_version').get()?.user_version !== USAGE_SCHEMA) fail('USAGE_SCHEMA_UNSUPPORTED');
+  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') fail();
   for (const table of ['metadata', 'minute_usage', 'daily_usage', 'source_aliases', 'gaps']) db.prepare(`SELECT * FROM ${table} LIMIT 0`).all();
 }
 
@@ -109,7 +112,9 @@ export class UsageStore {
           CREATE TABLE daily_usage(at INTEGER NOT NULL, sourceIP TEXT NOT NULL, upload INTEGER NOT NULL, download INTEGER NOT NULL, PRIMARY KEY(at,sourceIP));
           CREATE TABLE source_aliases(sourceIP TEXT PRIMARY KEY, label TEXT NOT NULL);
           CREATE TABLE gaps(start INTEGER NOT NULL, end INTEGER NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(start,end,reason));
-          COMMIT;`);
+          `);
+        db.prepare('INSERT INTO metadata VALUES(?,?)').run('identity', randomUUID());
+        db.exec('COMMIT');
       }
       validateDatabase(db);
       // FULL commits preserve the last completed batch across power loss; no unsafe speed pragmas.
@@ -284,19 +289,35 @@ export function createUsageService(options: { directory: string; sample: () => P
 }
 
 /** Read-only, complete integrity check for stopped deployment and preservation checks. */
-export async function inspectUsageDatabase(directory: string) {
+export async function inspectUsageDatabase(directory: string, owner = process.geteuid?.()) {
   let present: boolean;
-  try { present = await inspectUsageFiles(directory); }
+  try { present = await inspectUsageFiles(directory, owner); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
   if (!present) return null;
-  const db = new DatabaseSync(join(directory, USAGE_DATABASE), { readOnly: true });
+  const path = join(directory, USAGE_DATABASE);
+  let wal = false;
+  for (const suffix of ['-wal', '-journal']) {
+    try {
+      const info = await lstat(path + suffix);
+      if (suffix === '-journal' && info.size > 0) fail();
+      if (suffix === '-wal') wal = info.size > 0;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  }
+  // Immutable reads avoid creating sidecars in a stopped store. A live WAL must
+  // already have its shared-memory index; an inspection never creates one as root.
+  if (wal) { try { await lstat(path + '-shm'); } catch { fail(); } }
+  const db = new DatabaseSync(wal ? path : pathToFileURL(path).href + '?immutable=1', { readOnly: true });
   try {
     validateDatabase(db);
     const metadata = db.prepare("SELECT value FROM metadata WHERE key='checkpoint'").get()?.value;
     if (typeof metadata === 'string') parseCheckpoint(metadata);
     const detail = db.prepare('SELECT count(*) AS detailRows, coalesce(sum(upload),0) AS upload, coalesce(sum(download),0) AS download FROM minute_usage').get()!;
     const daily = db.prepare('SELECT count(*) AS dailyRows, coalesce(sum(upload),0) AS dailyUpload, coalesce(sum(download),0) AS dailyDownload FROM daily_usage').get()!;
-    return { schemaVersion: USAGE_SCHEMA, detailRows: Number(detail.detailRows), upload: Number(detail.upload), download: Number(detail.download),
+    const identity = db.prepare("SELECT value FROM metadata WHERE key='identity'").get()?.value;
+    if (typeof identity !== 'string' || !/^[a-f0-9-]{36}$/.test(identity)) fail();
+    const aliasDigest = createHash('sha256').update(JSON.stringify(db.prepare('SELECT sourceIP,label FROM source_aliases ORDER BY sourceIP').all())).digest('hex');
+    return { schemaVersion: USAGE_SCHEMA, integrity: 'ok' as const, identity: createHash('sha256').update(identity).digest('hex'), aliasDigest,
+      detailRows: Number(detail.detailRows), upload: Number(detail.upload), download: Number(detail.download),
       dailyRows: Number(daily.dailyRows), dailyUpload: Number(daily.dailyUpload), dailyDownload: Number(daily.dailyDownload),
       aliases: Number(db.prepare('SELECT count(*) AS n FROM source_aliases').get()?.n) };
   } finally { db.close(); }

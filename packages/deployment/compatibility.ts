@@ -26,6 +26,8 @@ export function assessStateSchema(store: StateStore, observedVersion: unknown, d
   const contract = declaration as typeof DEPLOYMENT_STATE_COMPATIBILITY | undefined;
   if (!Number.isSafeInteger(observedVersion) || (observedVersion as number) < 1) return 'invalid' as const;
   if (!contract || contract.schemaVersion !== 1 || !contract.stateSchemas || !Object.hasOwn(contract.stateSchemas, store)) return 'not-declared' as const;
+  // v2 deliberately reads and migrates the legacy grant document without revoking tokens.
+  if (store === 'trustedDevices' && observedVersion === 1 && contract.stateSchemas.trustedDevices === 2) return 'supported-version' as const;
   return contract.stateSchemas[store] === observedVersion ? 'supported-version' as const : 'unsupported-version' as const;
 }
 export type CompatibilityStatus = 'supported' | 'unsupported' | 'unknown';
@@ -39,7 +41,7 @@ export interface StateContentAssessment {
 export function assessStateContent(store: StateStore, input: unknown, declaration: unknown, sourceId?: string): StateContentAssessment {
   const file = DEPLOYMENT_STATE_FILES.find(file => file.store === store);
   const record = input as Record<string, unknown> | null;
-  const version = assessStateSchema(store, record?.[file?.key ?? 'version'], declaration);
+  const version = assessStateSchema(store, record?.[store === 'usage' ? 'schemaVersion' : file?.key ?? 'version'], declaration);
   const result = (status: CompatibilityStatus, code: string, content: StateContentAssessment['content']): StateContentAssessment =>
     ({ status, code, content, version, scope: 'current-reader-content-and-declared-format' });
   if (version === 'invalid' || version === 'unsupported-version') return result('unsupported', 'DEPLOYMENT_STATE_VERSION_UNSUPPORTED', 'not-assessed');
@@ -56,6 +58,8 @@ export function assessStateContent(store: StateStore, input: unknown, declaratio
       case 'automaticHistory': parseAutomaticHistory(input); break;
       case 'selection': parseRuntimeSelection(input); break;
       case 'subscription': parseSourceRecord(input, sourceId!); break;
+      // The database host supplies this evidence only after the actual SQLite reader/integrity check.
+      case 'usage': if (record?.integrity !== 'ok') throw new Error(); break;
     }
   } catch { return result('unsupported', 'DEPLOYMENT_STATE_CONTENT_INVALID', 'invalid'); }
   const contract = declaration as { schemaVersion?: unknown; contentReaders?: Record<string, unknown> } | undefined;

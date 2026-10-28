@@ -13,7 +13,8 @@ import { TrustedDeviceStore } from '../packages/management/trusted-devices.ts';
 import { createManagementGateway } from '../packages/management/http.ts';
 import { WorkspaceStore, initialWorkspace } from '../packages/management/workspace.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
-import { capturePreservation, summarizePreservation } from '../packages/deployment/preservation.ts';
+import { capturePreservation, captureUsagePreservation, summarizePreservation } from '../packages/deployment/preservation.ts';
+import { UsageStore, parseUsageSnapshot } from '../packages/management/usage.ts';
 import type { RuntimeSettings } from '../packages/runtime/types.ts';
 
 const origin = 'https://management.example';
@@ -79,6 +80,40 @@ test('real stores project to secret-free preservation capsules and the coordinat
   const added: Snapshot = structuredClone(after); added.directories.auth = { present: true, entries: 'new' };
   assert.equal(find(compare(before, added, true), 'state-directories').status, 'fail');
   assert.equal(compare(before, after).authentication.status, 'not-run');
+});
+
+test('SQLite preservation covers stopped bytes, live identity and aliases without copying source addresses or domains', async t => {
+  const f = await fixture(t);
+  let now = 2_000_000_000_000;
+  let usage = await UsageStore.open(f.root, () => now);
+  const frame = (download: number) => parseUsageSnapshot({ uploadTotal: 0, downloadTotal: download, connections: [] }, 'synthetic-core');
+  usage.ingest(frame(0)); now += 5000; usage.ingest(frame(100)); usage.setAlias('192.0.2.20', '合成备注'); usage.close();
+  const project = async (frozen = true) => {
+    const snapshot = await f.project(), accounting = await captureUsagePreservation(f.root, frozen);
+    snapshot.files.usage = accounting.files;
+    return { ...snapshot, usage: accounting.usage };
+  };
+  const names = (await readdir(f.root)).sort();
+  const before = await project();
+  assert.deepEqual((await readdir(f.root)).sort(), names, 'stopped inspection never creates WAL/SHM files');
+  assert.equal(compare(before, await project(), true).status, 'pass');
+  assert.doesNotMatch(JSON.stringify(before), /192\.0\.2\.20|合成备注/);
+  usage = await UsageStore.open(f.root, () => now); now += 5000; usage.ingest(frame(200)); usage.close();
+  assert.equal(find(compare(before, await project(false)), 'usage-history').status, 'pass');
+  assert.equal(find(compare(before, await project(), true), 'known-state-files').status, 'fail');
+  usage = await UsageStore.open(f.root, () => now); usage.setAlias('192.0.2.20', ''); usage.close();
+  assert.equal(find(compare(before, await project(false)), 'usage-history').status, 'unknown');
+});
+
+test('legacy duplicate-label migration preserves the same browser grants in the restored-state comparison', async t => {
+  const f = await fixture(t);
+  const devices = await f.restart(); await devices.issue('until-revoked', '另一合成浏览器');
+  const path = join(f.root, 'auth/trusted-devices.json');
+  const legacy = JSON.parse(await readFile(path, 'utf8')); legacy.schemaVersion = 1;
+  for (const device of legacy.devices) { device.label = '浏览器设备'; delete device.lastIP; delete device.lastSeenAt; }
+  await writeFile(path, JSON.stringify(legacy));
+  const before = await f.project(); await f.restart();
+  assert.equal(find(compare(before, await f.project()), 'trusted-devices').status, 'pass');
 });
 
 test('preservation accepts the same abandoned atomic files as the business readers', {

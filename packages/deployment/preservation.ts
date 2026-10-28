@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { open, readdir } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { canonicalJson, type JsonObject } from '../config/index.ts';
 import { privateRead, inspectPrivateDirectory } from '../storage/private-files.ts';
 import { parseAdminCredential, type AdminCredential } from '../management/auth.ts';
-import { parseTrustedDeviceDocument } from '../management/trusted-devices.ts';
+import { migrateTrustedDeviceDocument, parseTrustedDeviceDocument } from '../management/trusted-devices.ts';
+import { inspectUsageDatabase, inspectUsageFiles, USAGE_DATABASE } from '../management/usage.ts';
 import { parseAutomaticBindings } from '../management/automatic-bindings.ts';
 import { parseAutomaticHistory, AUTOMATIC_HISTORY_FILE_LIMIT } from '../management/automatic-history.ts';
 import { parseWorkspaceDocument } from '../management/workspace.ts';
@@ -68,7 +70,7 @@ export function summarizePreservation(documents: Documents, sources: Record<stri
   });
   else if (candidate !== null) throw new PreservationError();
   const epoch = digest(JSON.stringify({ origin: context.origin, credential: parseAdminCredential(context.credential) }));
-  const currentDevices = devices?.credentialFingerprint === epoch ? devices.devices : [];
+  const currentDevices = devices?.credentialFingerprint === epoch ? migrateTrustedDeviceDocument(devices, context.now).devices : [];
   const identity = { origin: digest(context.origin), credential: hash(parseAdminCredential(context.credential)), epoch };
   const trusted = currentDevices.map(device => ({ id: digest(device.id), stable: hash({ id: device.id, tokenDigest: device.tokenDigest,
     label: device.label, trust: device.trust, createdAt: device.createdAt }), renewedAt: device.renewedAt, expiresAt: device.expiresAt }));
@@ -89,8 +91,34 @@ export function summarizePreservation(documents: Documents, sources: Record<stri
     ready: checks.every(check => check.status !== 'fail') && coherent };
 }
 
+/** Hash database files in bounded chunks; never copy private usage or include raw rows in receipts. */
+export async function captureUsagePreservation(directory: string, frozen = true) {
+  const usage = await inspectUsageDatabase(directory);
+  if (usage === null) return { usage: null, files: null };
+  const projection = { identity: usage.identity, aliasDigest: usage.aliasDigest, schemaVersion: usage.schemaVersion };
+  if (!frozen) return { usage: projection, files: hash(projection) };
+  const checksums: Record<string, string | null> = {};
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
+    const path = join(directory, USAGE_DATABASE + suffix);
+    let file;
+    try { file = await open(path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') { checksums[suffix || 'main'] = null; continue; } throw error; }
+    try {
+      const before = await file.stat();
+      need(before.isFile() && before.nlink === 1 && (process.platform === 'win32' || before.uid === process.geteuid?.() && (before.mode & 0o077) === 0));
+      const hash = createHash('sha256'), chunk = Buffer.alloc(1024 * 1024);
+      for (;;) { const { bytesRead } = await file.read(chunk); if (!bytesRead) break; hash.update(chunk.subarray(0, bytesRead)); }
+      const after = await file.stat();
+      need(before.size === after.size && before.mtimeMs === after.mtimeMs);
+      checksums[suffix || 'main'] = hash.digest('hex');
+    } finally { await file.close(); }
+  }
+  await inspectUsageFiles(directory);
+  return { usage: projection, files: hash(checksums) };
+}
+
 /** Service-UID-only file reads; no store initialization, locks, service objects or network. */
-export async function capturePreservation(managementSettingsPath: string) {
+export async function capturePreservation(managementSettingsPath: string, frozen = false) {
   need(isAbsolute(managementSettingsPath));
   const managementBytes = await privateRead(managementSettingsPath, 65536);
   const management = JSON.parse(managementBytes);
@@ -141,6 +169,9 @@ export async function capturePreservation(managementSettingsPath: string) {
   }
   if (active !== null && candidate === null) throw new PreservationError('REMOTE_PRESERVATION_CANDIDATE_MISSING');
   const snapshot = summarizePreservation(documents, sources, candidate, { origin: management.origin, credential, settings, now: Date.now() });
+  const usage = await captureUsagePreservation(settings.stateDirectory, frozen);
+  snapshot.files.usage = usage.files;
+  snapshot.contentChecks.push({ id: 'usage', status: usage.usage === null ? 'not-applicable' : 'pass', code: usage.usage === null ? 'REMOTE_PRESERVATION_ABSENT' : 'REMOTE_PRESERVATION_CONTENT_READABLE', evidenceScope: 'current-reader-content-validation' });
   snapshot.files.candidates = hash(candidates);
   snapshot.files.administrator = digest(credentialBytes);
   // A snapshot spans several atomic readers. Reject concurrent changes instead of mixing generations.
@@ -155,5 +186,5 @@ export async function capturePreservation(managementSettingsPath: string) {
   // Credential replacement during the reads revokes the captured binding.
   need(await privateRead(managementSettingsPath, 65536) === managementBytes && await privateRead(management.runtimeSettingsPath, 65536) === runtimeBytes &&
     await privateRead(management.credentialPath, 16384) === credentialBytes);
-  return { ...snapshot, directories };
+  return { ...snapshot, directories, usage: usage.usage };
 }

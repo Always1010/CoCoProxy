@@ -13,6 +13,7 @@ import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncesto
   PathEvidenceError, type PathEvidenceHost } from './path-evidence.ts';
 import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, networkReceiptRemoved, NetworkObservationError } from './network-evidence.ts';
 import { validateComponentUpdate, validateFrontendUpdate } from './update-scope.mjs';
+import { inspectUsageDatabase } from '../management/usage.ts';
 
 // This is deliberately an offline file installer. Service lifecycle, router
 // activation and the existing root network helper remain separate operations.
@@ -185,6 +186,11 @@ function deploymentStateHost(stateDirectory: string, serviceUid: number): Upgrad
     }
   }
   return {
+    usage: async () => {
+      if (!await stateDirectoryExists(stateDirectory, { info, rootPath: trusted })) return null;
+      await statePath(posix.join(stateDirectory, 'usage.sqlite'));
+      return inspectUsageDatabase(stateDirectory, serviceUid);
+    },
     read: async (relative, limit) => {
       if (!await stateDirectoryExists(stateDirectory, { info, rootPath: trusted })) return null;
       const path = posix.join(stateDirectory, relative);
