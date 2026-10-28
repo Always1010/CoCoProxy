@@ -66,10 +66,10 @@ test('bandwidth validation remains available across pages and checks shared budg
   assert.equal(bandwidthIssue(current, definitions, {}, 'Stream'), undefined); // Disabled bandwidth exits the reserved-capacity check.
 });
 
-test('bandwidth mode changes preserve settings and restore affects only the displayed page', async () => {
+test('bandwidth switches retain subordinate settings and restore affects only the displayed page', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/BandwidthSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
-    + '\nexport { setMode, restore };';
+    + '\nexport { toggle, restore };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const props = { modelValue: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, targetMbps: 7, hourMiB: 80 },
     definitions: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS }, page: 'budget', disabled: false };
@@ -78,19 +78,26 @@ test('bandwidth mode changes preserve settings and restore affects only the disp
     exports, bandwidthPages, defineProps: () => props, defineEmits: () => (_event: string, value: typeof props.modelValue) => { props.modelValue = value; },
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }), watch() {},
   });
-  exports.setMode('observe');
+  exports.toggle('observeOnly', { target: { checked: true } });
   assert.equal(props.modelValue.enabled, true);
   assert.equal(props.modelValue.observeOnly, true);
-  exports.setMode('off');
-  assert.equal(props.modelValue.enabled, false);
-  assert.equal(props.modelValue.targetMbps, 7);
   exports.restore();
   assert.equal(props.modelValue.hourMiB, DEFAULT_BANDWIDTH_SETTINGS.hourMiB);
   assert.equal(props.modelValue.targetMbps, 7);
+  assert.equal(props.modelValue.enabled, true);
+  assert.equal(props.modelValue.observeOnly, true);
+  exports.toggle('enabled', { target: { checked: false } });
   assert.equal(props.modelValue.enabled, false);
+  assert.equal(props.modelValue.targetMbps, 7);
+  assert.equal(props.modelValue.observeOnly, true);
+  exports.toggle('observeOnly', { target: { checked: false } });
+  assert.equal(props.modelValue.observeOnly, true); // A hidden subordinate switch cannot be changed while its parent is off.
   props.disabled = true;
-  exports.setMode('switch');
+  exports.toggle('enabled', { target: { checked: true } });
   assert.equal(props.modelValue.enabled, false);
+  props.disabled = false;
+  exports.toggle('enabled', { target: { checked: true } });
+  assert.equal(props.modelValue.observeOnly, true);
 });
 test('group status checks only saved active policies and binds requests to the displayed scope and revision', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupSelectionStatus.vue', import.meta.url), 'utf8');
@@ -369,7 +376,7 @@ test('selection never replays an ambiguous write or reports an unconfirmed respo
 test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
-    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving, pageDirty, invalidPage, invalid };';
+    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving, pageDirty, invalidPage, invalid, activeNavigation };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const original = { preferred: ['second', 'first'], fallback: ['backup'], returnToPreferred: false };
   const settings = { local: { selections: {}, automatic: { Stream: structuredClone(original) } } };
@@ -524,10 +531,21 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   assert.equal(exports.bandwidth.value.enabled, false);
   assert.equal(exports.bandwidth.value.targetMbps, 10);
 
+  exports.selectTab('bandwidth');
+  exports.selectTab('budget');
+  assert.equal(exports.tab.value, 'bandwidth'); // Bandwidth descendants require their own parent switch as well.
+  exports.selectTab('advanced');
+  assert.equal(exports.tab.value, 'bandwidth');
+
   exports.bandwidth.value.enabled = true;
   exports.selectTab('budget');
+  assert.equal(exports.tab.value, 'budget');
+  assert.equal(exports.activeNavigation.value, 'bandwidth');
   exports.bandwidth.value.hourMiB = 80;
   assert.equal(exports.pageDirty('budget'), true);
+  assert.equal(exports.pageDirty('bandwidth', true), true);
+  exports.selectTab('advanced');
+  assert.equal(exports.activeNavigation.value, 'bandwidth');
   exports.selectTab('sampling');
   assert.equal(exports.bandwidth.value.hourMiB, 80);
   exports.bandwidth.value.durationSeconds = 5;

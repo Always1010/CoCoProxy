@@ -42,23 +42,27 @@ const expanded = ref({ preferred: false, fallback: false })
 const initialDraft = ref('')
 const visible = ref(false)
 const fromManager = ref(false)
-type SettingsPage = 'selection' | 'pool' | 'status' | 'rules' | 'sites' | BandwidthPage
+type SettingsPage = 'selection' | 'pool' | 'advanced' | 'status' | 'rules' | 'sites' | BandwidthPage
 const tab = ref<SettingsPage>('selection')
 const directoryOpen = ref(true)
-const tuningOpen = ref(false)
 const tunePages = bandwidthPages.filter(page => page.id !== 'bandwidth' && page.id !== 'budget')
 const autoPages = [
   { id: 'selection', label: '自动选择', description: '在本组候选节点中自动管理出口。' },
   { id: 'pool', label: '候选节点', description: '自动选择只使用这里选中的节点。' },
-  ...bandwidthPages.filter(page => page.id === 'bandwidth' || page.id === 'budget'),
+  ...bandwidthPages.filter(page => page.id === 'bandwidth'),
 ] as const
 const otherPages = computed(() => [
   ...(props.selectable ? [{ id: 'status' as const, label: '运行状态', description: '查看已生效配置的检测、用量与切换记录。' }] : []),
   ...(workspace.value?.mode === 'local' ? [{ id: 'rules' as const, label: '匹配规则', description: '管理进入本组的匹配规则。' }] : []),
   { id: 'sites' as const, label: '站点连通', description: '选择本组手动站点检测的目标。' },
 ])
-const currentPage = computed(() => [...autoPages, ...otherPages.value, ...tunePages].find(page => page.id === tab.value))
+const allPages = computed(() => [...autoPages, ...otherPages.value, ...bandwidthPages,
+  { id: 'advanced', label: '高级参数', description: '以下参数仅用于带宽辅助决策，通常保留推荐值。' }])
+const currentPage = computed(() => allPages.value.find(page => page.id === tab.value))
 const bandwidthPage = computed(() => bandwidthPages.find(page => page.id === tab.value))
+const auxiliaryPage = computed(() => !!bandwidthPage.value || tab.value === 'advanced')
+const activeNavigation = computed(() => auxiliaryPage.value ? 'bandwidth' : tab.value)
+const effectiveBandwidth = computed(() => bandwidth.value ?? definitions.value?.defaults)
 const configurationPage = computed(() => tab.value !== 'status' && tab.value !== 'rules' && tab.value !== 'sites')
 const statusError = ref('')
 const status = ref<AutomaticStatus>()
@@ -102,15 +106,17 @@ function requestNavigation(target: Destination) {
 function selectTab(value: SettingsPage) {
   if (locked.value) return
   if (!enabled.value && !['selection', 'status', 'rules', 'sites'].includes(value)) return
+  if ((value === 'advanced' || bandwidthPages.some(page => page.id === value && page.id !== 'bandwidth')) && !effectiveBandwidth.value?.enabled) return
   tab.value = value
   editorKind.value = null
   directoryOpen.value = false
-  if (tunePages.some(page => page.id === value)) tuningOpen.value = true
   if (value === 'sites') sitesVisited.value = true
   if (value === 'status') void readStatus()
 }
-function pageDirty(page: string) {
+function pageDirty(page: string, descendants = false): boolean {
   if (page === 'sites') return !!sitesEditor.value?.dirty
+  if (page === 'advanced') return tunePages.some(item => pageDirty(item.id))
+  if (page === 'bandwidth' && descendants) return bandwidthPages.some(item => pageDirty(item.id))
   if (!initialDraft.value) return false
   const initial = JSON.parse(initialDraft.value) as [boolean, string[], string[], boolean, BandwidthSettings | null]
   if (page === 'selection') return enabled.value !== initial[0] || returnToPreferred.value !== initial[3]
@@ -122,10 +128,15 @@ function pageDirty(page: string) {
   const keys: readonly string[] = page === 'bandwidth' ? [...section.keys, 'enabled', 'observeOnly'] : section.keys
   return keys.some(key => current?.[key] !== previous?.[key])
 }
-function pageInvalid(page: string) { return invalidPage.value === page }
+function pageInvalid(page: string) { return invalidPage.value === page || (page === 'bandwidth' && !!bandwidthError.value) }
+function customCount(page: BandwidthPage) {
+  const keys = bandwidthPages.find(item => item.id === page)?.keys ?? []
+  return keys.filter(key => effectiveBandwidth.value?.[key] !== definitions.value?.defaults[key]).length
+}
 function locateInvalid() {
   if (!invalidPage.value) return
   if (!enabled.value) { selectTab('selection'); void nextTick(() => document.getElementById('group-automatic-enabled')?.focus()); return }
+  if (invalidPage.value !== 'pool' && !effectiveBandwidth.value?.enabled) { selectTab('bandwidth'); void nextTick(() => document.getElementById('group-bandwidth-enabled')?.focus()); return }
   selectTab(invalidPage.value)
   const key = invalidPage.value === bandwidthError.value?.page ? bandwidthError.value?.key : undefined
   void nextTick(() => document.getElementById(key ? `group-bandwidth-${key}` : 'group-settings-page')?.focus())
@@ -229,7 +240,6 @@ function open() {
   tab.value = props.selectable ? 'selection' : 'sites'
   sitesVisited.value = !props.selectable
   directoryOpen.value = true
-  tuningOpen.value = false
   editorKind.value = null
   expanded.value = { preferred: false, fallback: false }
   const policy = overrides.value.automatic?.[props.groupName]
@@ -299,6 +309,7 @@ async function reread() {
 }
 watch(draftSignature, () => { saveError.value = ''; refreshWarning.value = '' })
 watch(enabled, value => { if (!value && configurationPage.value && tab.value !== 'selection') selectTab('selection') })
+watch(() => effectiveBandwidth.value?.enabled, value => { if (!value && auxiliaryPage.value && tab.value !== 'bandwidth') selectTab('bandwidth') })
 watch(() => props.groupName, () => { dialog.value?.close(true); close() })
 watch(() => JSON.stringify([view.value?.workspace.mode, view.value?.workspace.subscriptionId, view.value?.workspace.sourceIds]), () => { dialog.value?.close(true); close() })
 onUnmounted(() => { disposed = true; close() })
@@ -313,10 +324,9 @@ onUnmounted(() => { disposed = true; close() })
       <nav class="group-settings-nav space-y-5" aria-label="组设置目录">
         <button v-if="fromManager" type="button" class="btn btn-ghost min-h-11 w-full justify-start" :disabled="locked || confirmClose" @click="dialog?.close()"><IconArrowLeft :size="16" /><span>返回组列表</span></button>
         <section v-if="selectable">
-          <h3 class="nav-heading">自动选择</h3>
           <div role="tablist" aria-label="自动选择设置">
-            <button v-for="page in autoPages.filter(page => enabled || page.id === 'selection')" :key="page.id" type="button" role="tab" class="btn btn-ghost min-h-11" :class="{ 'automatic-child': page.id !== 'selection' }" :disabled="locked || confirmClose" :aria-selected="tab === page.id" :aria-controls="'group-settings-page'" @click="selectTab(page.id)">
-              <IconSettings :size="16" /><span>{{ page.label }}</span><span v-if="pageInvalid(page.id)" class="ml-auto text-error" aria-label="有配置错误">!</span><span v-else-if="pageDirty(page.id)" class="ml-auto text-warning" aria-label="有未保存修改">●</span>
+            <button v-for="page in autoPages.filter(page => enabled || page.id === 'selection')" :key="page.id" type="button" role="tab" class="btn btn-ghost min-h-11" :class="{ 'automatic-child': page.id !== 'selection' }" :disabled="locked || confirmClose" :aria-selected="activeNavigation === page.id" :aria-controls="'group-settings-page'" @click="selectTab(page.id)">
+              <IconSettings :size="16" /><span>{{ page.label }}</span><span v-if="pageInvalid(page.id)" class="ml-auto text-error" aria-label="有配置错误">!</span><span v-else-if="pageDirty(page.id, true)" class="ml-auto text-warning" aria-label="有未保存修改">●</span>
             </button>
           </div>
         </section>
@@ -325,16 +335,6 @@ onUnmounted(() => { disposed = true; close() })
           <div role="tablist" aria-label="检测与规则">
             <button v-for="page in otherPages" :key="page.id" type="button" role="tab" class="btn btn-ghost min-h-11" :disabled="locked || confirmClose" :aria-selected="tab === page.id" aria-controls="group-settings-page" @click="selectTab(page.id)">
               <IconWorld v-if="page.id === 'sites'" :size="16" /><IconList v-else :size="16" /><span>{{ page.label }}</span><span v-if="pageDirty(page.id)" class="ml-auto text-warning" aria-label="有未保存修改">●</span>
-            </button>
-          </div>
-        </section>
-        <section v-if="selectable && enabled">
-          <button type="button" class="btn btn-ghost min-h-11 w-full justify-start" :disabled="locked || confirmClose" :aria-expanded="tuningOpen" aria-controls="group-tuning-pages" @click="tuningOpen = !tuningOpen">
-            <IconAdjustments :size="16" /><span>参数调校</span><span v-if="tunePages.some(page => pageInvalid(page.id))" class="text-error" aria-label="有配置错误">!</span><span v-else-if="tunePages.some(page => pageDirty(page.id))" class="text-warning" aria-label="有未保存修改">●</span><IconChevronDown v-if="tuningOpen" :size="14" class="ml-auto" /><IconChevronRight v-else :size="14" class="ml-auto" />
-          </button>
-          <div v-if="tuningOpen" id="group-tuning-pages" role="tablist" aria-label="参数调校" class="tuning-pages mt-1">
-            <button v-for="page in tunePages" :key="page.id" type="button" role="tab" class="btn btn-ghost min-h-11" :disabled="locked || confirmClose" :aria-selected="tab === page.id" aria-controls="group-settings-page" @click="selectTab(page.id)">
-              <IconAdjustments :size="14" /><span>{{ page.label }}</span><span v-if="pageInvalid(page.id)" class="ml-auto text-error" aria-label="有配置错误">!</span><span v-else-if="pageDirty(page.id)" class="ml-auto text-warning" aria-label="有未保存修改">●</span>
             </button>
           </div>
         </section>
@@ -348,7 +348,10 @@ onUnmounted(() => { disposed = true; close() })
       <div v-show="!confirmClose" id="group-settings-page" class="flex min-h-0 flex-1 flex-col gap-3" role="tabpanel" :aria-label="currentPage?.label" tabindex="-1">
         <button type="button" class="mobile-directory-back btn btn-ghost min-h-11 self-start" :disabled="locked" @click="directoryOpen = true"><IconArrowLeft :size="16" /><span>设置目录</span></button>
         <header class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-base-content/10 pb-3">
-          <h2 class="text-base font-semibold">{{ editorKind ? '候选节点 / 编辑' + editorLabel : currentPage?.label }}</h2>
+          <div class="min-w-0 space-y-1">
+            <p v-if="auxiliaryPage && tab !== 'bandwidth'" class="break-words text-xs text-base-content/55">自动选择 / 辅助决策{{ tunePages.some(page => page.id === tab) ? ' / 高级参数' : '' }}</p>
+            <h2 class="text-base font-semibold">{{ editorKind ? '候选节点 / 编辑' + editorLabel : currentPage?.label }}</h2>
+          </div>
           <HelpTip v-if="currentPage?.description" label="页面说明">{{ currentPage.description }}</HelpTip>
         </header>
         <SettingsNotice v-if="!configurationPage && changed" warning class="shrink-0">自动选择设置有未保存修改。<button type="button" class="btn btn-ghost btn-xs" :disabled="locked" @click="selectTab('selection')"><IconEdit :size="14" /><span>返回配置并保存</span></button></SettingsNotice>
@@ -359,6 +362,7 @@ onUnmounted(() => { disposed = true; close() })
         </div>
         <template v-if="configurationPage && selectable">
           <div class="settings-page-scroll min-h-0 flex-1 space-y-5 overflow-y-auto [scrollbar-gutter:stable]">
+            <button v-if="auxiliaryPage && tab !== 'bandwidth'" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="selectTab(tunePages.some(page => page.id === tab) ? 'advanced' : 'bandwidth')"><IconArrowLeft :size="16" /><span>{{ tunePages.some(page => page.id === tab) ? '返回高级参数' : '返回辅助决策' }}</span></button>
             <template v-if="tab === 'selection'">
               <label class="flex min-h-11 items-center justify-between gap-4 text-sm font-medium">启用自动选择<input id="group-automatic-enabled" v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
               <HelpTip label="自动选择说明">在已选候选中自动选择出口，故障时寻找可用节点。正常时每 30 秒检测当前节点。自动选择独立于手动站点检测。</HelpTip>
@@ -370,7 +374,7 @@ onUnmounted(() => { disposed = true; close() })
                 </div>
                 <div class="space-y-2 border-t border-base-content/10 pt-4">
                 <button type="button" class="summary-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab('pool')"><span>优选 {{ preferred.length }} 个 · 备选 {{ fallback.length }} 个</span><span class="flex items-center gap-1"><IconEdit :size="16" />配置候选</span></button>
-                <button type="button" class="summary-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab('bandwidth')"><span>判断方式：{{ !bandwidth?.enabled ? '仅延迟' : bandwidth.observeOnly ? '带宽仅观察' : '延迟与吞吐' }}</span><span class="flex items-center gap-1"><IconEdit :size="16" />带宽判断</span></button>
+                <button type="button" class="summary-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab('bandwidth')"><span>带宽辅助决策{{ !bandwidth?.enabled ? '已关闭' : bandwidth.observeOnly ? ' · 仅观察' : '已开启' }}</span><span class="flex items-center gap-1"><IconEdit :size="16" />辅助决策</span></button>
               </div>
               </div>
             </template>
@@ -406,10 +410,19 @@ onUnmounted(() => { disposed = true; close() })
                 <p v-if="!visibleNodes.length" class="py-3 text-sm text-base-content/50">{{ search ? '没有匹配的节点' : onlySelected ? '尚未选择节点' : '没有可选的具体节点' }}</p>
               </div>
             </template>
+            <template v-else-if="tab === 'advanced'">
+              <SettingsNotice>以下参数仅用于带宽辅助决策，通常保留推荐值。</SettingsNotice>
+              <div class="divide-y divide-base-content/10">
+                <button v-for="page in tunePages" :key="page.id" type="button" class="parameter-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab(page.id)">
+                  <span class="flex min-w-0 items-start gap-2 text-left"><IconAdjustments :size="16" class="mt-0.5 shrink-0" /><span><span class="block">{{ page.label }}<span v-if="pageInvalid(page.id)" class="ml-2 text-error">有配置错误</span><span v-else-if="pageDirty(page.id)" class="ml-2 text-warning">未保存</span></span><span class="mt-1 block text-xs font-normal text-base-content/60">{{ page.summary }}{{ customCount(page.id) ? ' · 已自定义 ' + customCount(page.id) + ' 项' : '' }}</span></span></span>
+                  <span class="flex shrink-0 items-center gap-1 text-xs">进入<IconChevronRight :size="14" /></span>
+                </button>
+              </div>
+            </template>
             <template v-else-if="bandwidthPage">
               <p v-if="definitionsLoading" role="status" class="text-sm">正在读取参数…</p>
               <div v-if="definitionsError" class="space-y-2 text-sm text-warning"><p role="alert">{{ definitionsError }}</p><button type="button" class="btn btn-ghost min-h-11" :disabled="locked || definitionsLoading" @click="readDefinitions"><IconReload :size="16" /><span>重读参数</span></button></div>
-              <BandwidthSelectionSettings v-if="definitions" :key="tab" v-model="bandwidth" :definitions="definitions" :page="bandwidthPage.id" :disabled="locked" :issue="bandwidthError" />
+              <BandwidthSelectionSettings v-if="definitions" :key="tab" v-model="bandwidth" :definitions="definitions" :page="bandwidthPage.id" :disabled="locked || !enabled" :issue="bandwidthError" @navigate="selectTab" />
               <button v-if="tab === 'budget'" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="selectTab('status')"><IconList :size="16" /><span>查看运行用量</span></button>
             </template>
           </div>
@@ -425,7 +438,7 @@ onUnmounted(() => { disposed = true; close() })
                 <p v-else-if="saved" role="status" :class="refreshWarning ? 'text-warning' : 'text-success'">{{ refreshWarning || '自动选择设置已保存并生效' }}</p>
               </div>
               <div class="flex flex-wrap justify-end gap-2">
-                <button v-if="invalidPage" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="locateInvalid"><IconEdit :size="16" /><span>{{ !enabled ? '前往自动选择开启后修正' : '前往' + [...autoPages, ...tunePages].find(page => page.id === invalidPage)?.label + '修正' }}</span></button>
+                <button v-if="invalidPage" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="locateInvalid"><IconEdit :size="16" /><span>{{ !enabled ? '前往自动选择开启后修正' : !effectiveBandwidth?.enabled && invalidPage !== 'pool' ? '前往辅助决策开启后修正' : '前往' + allPages.find(page => page.id === invalidPage)?.label + '修正' }}</span></button>
                 <button v-if="needsRead" type="button" class="btn btn-outline min-h-11" :disabled="locked" @click="reread"><IconReload :size="16" /><span>重新读取状态</span></button>
                 <button type="button" class="btn btn-primary min-h-11" :disabled="locked || !!invalid || !changed || needsRead" @click="persist"><span v-if="saving" class="loading loading-spinner loading-xs" /><IconCheck v-else :size="16" /><span>{{ saving ? '正在保存…' : saved && !changed ? '已保存' : '保存自动选择设置' }}</span></button>
               </div>
@@ -439,10 +452,10 @@ onUnmounted(() => { disposed = true; close() })
 
 <style scoped>
 .nav-heading { padding: 0 8px; margin-bottom: 6px; font-size: 11px; opacity: .55; }
-.tuning-pages { border-left: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent); padding-left: 5px; margin-left: 7px; }
 .mobile-directory-back { display: none; }
 .summary-link { white-space: normal; height: auto; text-align: left; gap: 12px; }
 .group-settings-nav :deep(.automatic-child) { padding-left: 20px; }
+.parameter-link { height: auto; padding-block: 12px; white-space: normal; }
 @media (width < 640px) {
   .mobile-directory-back { display: inline-flex; }
 }
