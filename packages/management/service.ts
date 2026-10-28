@@ -18,6 +18,7 @@ import { createAutomaticSelector } from './automatic-selector.ts';
 import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
 import { SiteProbeStore } from './site-probes.ts';
 import type { TimingObserver } from '../diagnostics/operation-timing.ts';
+import { createUsageService, parseUsageSnapshot } from './usage.ts';
 
 export function stripControllerMount(request: Request): Request {
   const url = new URL(request.url);
@@ -146,12 +147,24 @@ export async function loadManagementGateway(path: string) {
       switch: (snapshot, group, node, reason) => action.automaticSwitch(snapshot, group, node, reason),
     });
     const trustedDevices = await TrustedDeviceStore.load(runtimeSettings.stateDirectory, credential, settings.origin);
+    const usage = createUsageService({ directory: runtimeSettings.stateDirectory, sample: async () => {
+      const status = await store.status();
+      if (!status.active || !await isCurrent(status.active)) throw new ManagementError('CONTROLLER_UNAVAILABLE', 503);
+      const before = await runtime.accountingIdentity(status.active);
+      const response = await controller.fetch(new Request(settings.origin + '/connections'));
+      if (!response.ok || response.headers.get('x-cocoproxy-generation') !== status.active) throw new ManagementError('CONTROLLER_UNAVAILABLE', 503);
+      const body: unknown = await response.json();
+      const after = await runtime.accountingIdentity(status.active);
+      if (before.bootId !== after.bootId || before.pid !== after.pid || before.startTime !== after.startTime || !await isCurrent(status.active)) throw new ManagementError('ACTIVE_CONFLICT', 409);
+      return parseUsageSnapshot(body, `${before.bootId}:${before.pid}:${before.startTime}`);
+    } });
     const gateway = createManagementGateway({ origin: settings.origin, credential, trustedDevices }, (request, principal) =>
-      new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) : action(request, principal));
+      new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) :
+        new URL(request.url).pathname.startsWith('/api/cocoproxy/usage/') ? usage.fetch(request) : action(request, principal));
     const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,
       () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'), undefined, onTiming);
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
-      startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); return recovered; },
-      closeLifecycle: async () => { await automatic!.close(); await lifecycle.close(); } };
+      startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); usage.start(); return recovered; },
+      closeLifecycle: async () => { await usage.close(); await automatic!.close(); await lifecycle.close(); } };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }

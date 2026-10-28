@@ -95,6 +95,16 @@ npm run test:management
 
 测试使用真实 scrypt、私有文件和 Fetch 请求；运行事务使用显式测试替身。它们验证认证、Origin、限额、服务端部署边界、CAS、失败恢复和脱敏，不证明真实 systemd 部署、网页、协议节点或网关就绪。
 
+## 用量存储与采集
+
+单实例管理生命周期运行后台用量采集，不依赖浏览器会话。约每秒读取受运行核验的核心连接快照，以 boot ID、PID 和进程启动时间区分物理核心；配置热切换不改变该身份。首次采集建立基线，不回填此前历史。按连接累计计数计算增量，并以核心总计数校对：快照间已结束的连接、无法归属的差额及非原子计数差异记为未归属，不按浏览器授权名称推测来源。核心重置或采集中断保留缺口信息，不清空历史。
+
+私有状态目录的 `usage.sqlite` 使用 Node 内置 SQLite，WAL 与 FULL 同步模式；约每五秒把分钟汇总、每日源 IP 汇总、缺口和采集检查点在同一事务提交，正常关闭等待采集并排空。异常退出最多损失未提交窗口中已无法从核心恢复的明细。已提交检查点支持管理进程重启后按差值继续；数据库损坏、版本不支持或权限不安全时拒绝统计访问并保留文件，不自动重建。分钟明细保留 30 天，每日源 IP 汇总保留 365 天，按小时清理，备注不随用量过期。
+
+`GET /api/cocoproxy/usage/status` 返回采集与保留范围；`POST /api/cocoproxy/usage/query` 接收 `{startTime,endTime,dimension,filters?,sort?,order?,search?,page?,pageSize?,overview?}`。所有接口仍要求管理认证，写入与 POST 查询要求同源 Origin。维度只允许 sourceIP/host/outbound/process/inboundUser，时间跨度最多 365 天，分页最多 200 项；SQL 标识符固定许可、值使用绑定参数。超过明细期限仅支持按 IP 的每日汇总，其他维度返回 `USAGE_DETAIL_EXPIRED`，不能把过期明细解释为零用量。
+
+`PUT /api/cocoproxy/usage/alias` 接收 `{sourceIP,label}`，给规范化 IP 添加最多 40 字备注，空白备注删除。备注可重名，历史查询使用当前备注，不改变分组或历史字节，不关联登录授权、NAT 后设备或物理身份。不会导入浏览器 IndexedDB 中可能互相重叠的历史。用量与域名属于私有数据，不写入源码、通用日志或默认可提交输出。
+
 ## 分组自动选择
 
 工作区的 `RoutingOverrides.automatic[group]` 可选保存 `{preferred, fallback, returnToPreferred}`，顶层 `autoProbes` 可选保存 `{primary, secondary, timeoutMs, slowMs}`；地址条目是 `{url, expectedStatus}`。旧格式保持兼容。自动组仅接受原手动组内的具体代理，拒绝内建出口、组引用、重复、越界和原生自动组。部署许可在保存与运行探测前分别校验，默认 Cloudflare 复核地址须显式获准。
