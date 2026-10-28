@@ -1,5 +1,5 @@
 import { useWorkspace } from './useWorkspace'
-import { cocoproxyErrorMessage } from './useCoCoProxy'
+import { CoCoProxyError, cocoproxyErrorMessage } from './useCoCoProxy'
 
 type TcpResult = {
   name: string
@@ -8,10 +8,11 @@ type TcpResult = {
   delay: number | null
   checkedAt: string
 }
-type Entry = TcpResult | { status: 'testing' | 'error'; message?: string }
+type Entry = TcpResult | { status: 'testing' } | { status: 'error'; code?: string }
 const pending = new Map<string, Promise<void>>()
 
 export function useTcpDelay() {
+  const { t } = useNuxtApp().$i18n
   const { api, view } = useWorkspace()
   const results = useState<Record<string, Entry>>('cocoproxy-tcp-delay-results', () => ({}))
   const isRunning = ref(false)
@@ -21,7 +22,10 @@ export function useTcpDelay() {
   const metadata = (name: string) => view.value?.tcpNodes?.find(node => node.name === name)
   const resultFor = (name: string) => {
     const node = metadata(name)
-    return node ? results.value[node.fingerprint] : undefined
+    const result = node ? results.value[node.fingerprint] : undefined
+    return result?.status === 'error'
+      ? { ...result, message: cocoproxyErrorMessage(new CoCoProxyError(result.code ?? 'UNKNOWN'), t) }
+      : result
   }
 
   async function testNode(name: string, signal?: AbortSignal): Promise<void> {
@@ -42,7 +46,7 @@ export function useTcpDelay() {
           results.value[node.fingerprint] = result
       } catch (error) {
         if (api.session.value === session && !signal?.aborted)
-          results.value[node.fingerprint] = { status: 'error', message: cocoproxyErrorMessage(error) }
+          results.value[node.fingerprint] = { status: 'error', code: error instanceof CoCoProxyError ? error.code : 'UNKNOWN' }
       } finally {
         if (results.value[node.fingerprint]?.status === 'testing') delete results.value[node.fingerprint]
         pending.delete(node.fingerprint)

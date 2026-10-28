@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
 import { IconInfoCircle } from '@tabler/icons-vue'
-withDefaults(defineProps<{ label?: string }>(), { label: '说明' })
+const { t } = useI18n()
+defineProps<{ label?: string }>()
 const id = useId()
 const trigger = ref<HTMLElement | null>(null)
 const popup = ref<HTMLElement | null>(null)
@@ -20,7 +21,7 @@ function onToggle() {
 <template>
   <span class="inline-flex text-xs text-base-content/60">
     <button ref="trigger" type="button" class="help-trigger inline-flex min-h-7 cursor-pointer items-center gap-1.5 rounded px-1 text-xs focus-visible:outline focus-visible:outline-primary" :popovertarget="id" :aria-expanded="opened" :aria-describedby="opened ? id : undefined">
-      <IconInfoCircle :size="16" aria-hidden="true" /><span>{{ label }}</span>
+      <IconInfoCircle :size="16" aria-hidden="true" /><span>{{ label || t('coco.anHelp') }}</span>
     </button>
     <div :id="id" ref="popup" popover="auto" role="tooltip" :style="floatingStyles" class="help-popup rounded border border-base-content/15 bg-base-200 px-3 py-2 text-xs text-base-content shadow-lg" @toggle="onToggle"><slot /></div>
   </span>

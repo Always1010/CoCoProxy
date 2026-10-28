@@ -22,7 +22,7 @@ const siteProbes = useSiteProbes(true)
 const detailsModal = ref<{ open: () => void; close: () => void }>()
 const detailsGroup = ref('')
 const detailsNode = ref('')
-const siteError = ref('')
+const siteError = useLocalizedMessage()
 const settingsTab = ref<'general' | 'detection' | 'sites'>('general')
 const siteCounts = computed(() => Object.fromEntries(proxiesStore.proxies.map(group => [group.name, sites.targetsFor(group.name).length])))
 const activeSiteRun = computed(() => siteProbes.running.value ? siteProbes.runs.value[siteProbes.running.value] : undefined)
@@ -43,7 +43,7 @@ const proxyRefresh = useProxyRefresh()
 const { isRunning: isBatchTesting, activeProbes, groupProgress, testMultipleGroups, healthCheckAllProviders, abortTest } = useBatchLatencyTest()
 const testingNames = computed(() => activeProbes.value.map(probe => probe.name))
 const testingDomains = computed(() => [...new Set(activeProbes.value.map(probe => {
-  try { return new URL(probe.url).hostname } catch { return '测速网址' }
+  try { return new URL(probe.url).hostname } catch { return t('coco.anTestUrl') }
 }))])
 const activeTab = ref<'proxies' | 'proxyProviders'>('proxies')
 const settingsModal = ref<{ open: () => void }>()
@@ -99,7 +99,7 @@ function onReselect(event: Event) {
 async function readSites() {
   siteError.value = ''
   try { await proxyRefresh.refresh(); await sites.load() }
-  catch { siteError.value = '站点设置读取失败，请刷新页面重试。' }
+  catch { siteError.value = () => t('coco.anFailedToLoadSiteSettingsRefresh') }
 }
 onMounted(() => {
   // Do not reconcile a scheme's remembered group against the previous
@@ -124,59 +124,59 @@ function resetDetection() {
 <template>
   <div class="relative flex min-h-0 flex-1 flex-col gap-3">
     <div class="flex shrink-0 flex-wrap items-center gap-2">
-      <div class="flex w-fit gap-1 rounded-xl border border-base-content/8 bg-base-200/60 p-1" role="tablist" aria-label="代理来源">
+      <div class="flex w-fit gap-1 rounded-xl border border-base-content/8 bg-base-200/60 p-1" role="tablist" :aria-label="t('coco.anProxySources')">
         <button v-for="tab in tabs" :key="tab.type" role="tab" class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm" :class="activeTab === tab.type ? 'bg-primary text-primary-content' : 'text-base-content/70'" :aria-selected="activeTab === tab.type" @click="activeTab = tab.type">
           {{ tab.name }}<span class="rounded-md bg-base-content/10 px-1.5 text-xs">{{ tab.count }}</span>
         </button>
       </div>
       <ProxiesSortSelect />
       <template v-if="activeTab === 'proxyProviders'">
-        <button class="btn btn-ghost btn-sm" title="检测全部代理提供者" aria-label="检测全部代理提供者" :disabled="anyTesting" @click="healthCheckAllProviders"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-success': isBatchTesting }" /><span>检测提供者</span></button>
-        <button class="btn btn-ghost btn-sm" title="更新全部代理提供者" aria-label="更新全部代理提供者" :disabled="proxiesStore.isAllProviderUpdating" @click="proxiesStore.updateAllProvider"><IconReload :size="18" :class="{ 'animate-spin motion-reduce:animate-none': proxiesStore.isAllProviderUpdating }" /><span>更新提供者</span></button>
+        <button class="btn btn-ghost btn-sm" :title="t('coco.anCheckAllProxyProviders')" :aria-label="t('coco.anCheckAllProxyProviders')" :disabled="anyTesting" @click="healthCheckAllProviders"><IconBrandSpeedtest :size="18" :class="{ 'animate-pulse motion-reduce:animate-none text-success': isBatchTesting }" /><span>{{ t('coco.anCheckProviders') }}</span></button>
+        <button class="btn btn-ghost btn-sm" :title="t('coco.anUpdateAllProxyProviders')" :aria-label="t('coco.anUpdateAllProxyProviders')" :disabled="proxiesStore.isAllProviderUpdating" @click="proxiesStore.updateAllProvider"><IconReload :size="18" :class="{ 'animate-spin motion-reduce:animate-none': proxiesStore.isAllProviderUpdating }" /><span>{{ t('coco.anUpdateProviders') }}</span></button>
       </template>
       <label class="input input-sm ml-auto flex min-w-36 flex-1 items-center gap-2 sm:max-w-64">
         <IconSearch :size="16" class="shrink-0 opacity-50" />
-        <input v-model="configStore.proxiesGroupNameFilter" type="search" class="min-w-0 grow" :placeholder="t('filterNodesByName')" aria-label="按名称筛选节点" />
-        <button v-if="configStore.proxiesGroupNameFilter" class="flex shrink-0 items-center gap-1" title="清空搜索" aria-label="清空搜索" @click="configStore.proxiesGroupNameFilter = ''"><IconX :size="14" /><span class="text-xs">清空</span></button>
+        <input v-model="configStore.proxiesGroupNameFilter" type="search" class="min-w-0 grow" :placeholder="t('filterNodesByName')" :aria-label="t('coco.anFilterNodesByName')" />
+        <button v-if="configStore.proxiesGroupNameFilter" class="flex shrink-0 items-center gap-1" :title="t('coco.anClearSearch')" :aria-label="t('coco.anClearSearch')" @click="configStore.proxiesGroupNameFilter = ''"><IconX :size="14" /><span class="text-xs">{{ t('coco.anClear') }}</span></button>
       </label>
-      <button class="btn btn-ghost btn-sm" aria-label="代理设置" @click="settingsModal?.open()"><IconSettings :size="18" /><span>代理设置</span></button>
+      <button class="btn btn-ghost btn-sm" :aria-label="t('coco.anProxySettings')" @click="settingsModal?.open()"><IconSettings :size="18" /><span>{{ t('coco.anProxySettings') }}</span></button>
     </div>
 
     <p v-if="siteError" role="alert" class="text-xs text-error">{{ siteError }}</p>
     <div v-if="activeSiteRun" role="status" aria-live="polite" class="flex shrink-0 flex-wrap items-center gap-2 rounded-lg bg-success/10 px-3 py-2 text-xs text-success">
-      <span class="loading loading-spinner loading-xs shrink-0 motion-reduce:animate-none" /><span>站点连通 · {{ activeSiteRun.group }} · {{ activeSiteRun.completed }}/{{ activeSiteRun.total }} 项</span>
+      <span class="loading loading-spinner loading-xs shrink-0 motion-reduce:animate-none" /><span>{{ t('coco.anSiteConnectivityItems', { value: activeSiteRun.group, value2: activeSiteRun.completed, value3: activeSiteRun.total }) }}</span>
       <span class="min-w-0 flex-1 truncate">{{ Object.values(activeSiteRun.inFlight).slice(0, 2).join('；') }}</span>
-      <button type="button" class="btn btn-ghost btn-sm" @click="siteProbes.cancel()"><IconX :size="16" /><span>取消检测</span></button>
+      <button type="button" class="btn btn-ghost btn-sm" @click="siteProbes.cancel()"><IconX :size="16" /><span>{{ t('coco.anCancelChecks') }}</span></button>
     </div>
 
     <div v-if="tcpRunning" role="status" aria-live="polite" class="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-primary/15 bg-primary/10 px-3 py-2 text-xs text-primary">
       <span class="loading loading-xs loading-spinner shrink-0 motion-reduce:animate-none" />
-      <span class="shrink-0">TCP 测试 · {{ tcpScope }} · {{ tcpCompleted }}/{{ tcpTotal }}</span>
-      <span v-if="testingTcpNames.length" class="min-w-0 flex-1 basis-40 truncate" :title="testingTcpNames.join('、')">正在建连：{{ testingTcpNames.join('、') }}</span>
-      <button type="button" class="btn btn-ghost btn-sm shrink-0" title="取消本次 TCP 延迟测试" aria-label="取消 TCP 测试" @click="cancelTcp"><IconX :size="16" /><span>取消 TCP 测试</span></button>
+      <span class="shrink-0">{{ t('coco.anTcpTest', { value: tcpScope, value2: tcpCompleted, value3: tcpTotal }) }}</span>
+      <span v-if="testingTcpNames.length" class="min-w-0 flex-1 basis-40 truncate" :title="testingTcpNames.join('、')">{{ t('coco.anConnecting', { value: testingTcpNames.join('、') }) }}</span>
+      <button type="button" class="btn btn-ghost btn-sm shrink-0" :title="t('coco.anCancelThisTcpLatencyTest')" :aria-label="t('coco.anCancelTcpTest')" @click="cancelTcp"><IconX :size="16" /><span>{{ t('coco.anCancelTcpTest') }}</span></button>
     </div>
 
     <div v-if="isBatchTesting" role="status" aria-live="polite" class="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-success/15 bg-success/10 px-3 py-2 text-xs text-success">
       <span class="loading loading-xs loading-spinner shrink-0 motion-reduce:animate-none" />
-      <span class="shrink-0"><template v-if="groupProgress.total">策略组 {{ groupProgress.completed }}/{{ groupProgress.total }} · 节点任务 </template><template v-else>测速中 </template>{{ recommendationStore.batchTestProgress.completed }}/{{ recommendationStore.batchTestProgress.total }}</span>
+      <span class="shrink-0"><template v-if="groupProgress.total">{{ t('coco.anProxyGroupsNodeTasks', { value: groupProgress.completed, value2: groupProgress.total }) }} </template><template v-else>{{ t('coco.anTestingSpeed') }} </template>{{ recommendationStore.batchTestProgress.completed }}/{{ recommendationStore.batchTestProgress.total }}</span>
       <div class="min-w-0 flex-1 basis-40">
-        <div v-if="groupProgress.active.length" class="break-all">当前策略组：{{ groupProgress.active.join('、') }}</div>
-        <div v-if="testingNames.length" class="truncate" :title="testingNames.join('、')">正在测试：{{ testingNames.slice(0, 3).join('、') }}{{ testingNames.length > 3 ? ` 等 ${testingNames.length} 个节点` : '' }}</div>
-        <div v-else>{{ recommendationStore.batchTestProgress.completed === recommendationStore.batchTestProgress.total ? '正在刷新测量结果…' : recommendationStore.batchTestProgress.current || '正在准备检测…' }}</div>
-        <div v-if="testingDomains.length" class="break-all opacity-75">目标：{{ testingDomains.join('、') }}</div>
+        <div v-if="groupProgress.active.length" class="break-all">{{ t('coco.anCurrentProxyGroups', { value: groupProgress.active.join('、') }) }}</div>
+        <div v-if="testingNames.length" class="truncate" :title="testingNames.join('、')">{{ t('coco.anTesting2', { value: testingNames.slice(0, 3).join('、'), value2: testingNames.length > 3 ? t('coco.anAndOthersNodesTotal', { value: testingNames.length }) : '' }) }}</div>
+        <div v-else>{{ recommendationStore.batchTestProgress.completed === recommendationStore.batchTestProgress.total ? t('coco.anRefreshingMeasurements') : recommendationStore.batchTestProgress.current || t('coco.anPreparingChecks') }}</div>
+        <div v-if="testingDomains.length" class="break-all opacity-75">{{ t('coco.anTargets', { value: testingDomains.join('、') }) }}</div>
       </div>
-      <button v-if="activeProbes.length" class="btn btn-ghost btn-sm shrink-0" title="取消本次代理延迟测试" aria-label="取消本次代理延迟测试" @click="abortTest"><IconX :size="16" /><span>取消测速</span></button>
+      <button v-if="activeProbes.length" class="btn btn-ghost btn-sm shrink-0" :title="t('coco.anCancelThisProxyLatencyTest')" :aria-label="t('coco.anCancelThisProxyLatencyTest')" @click="abortTest"><IconX :size="16" /><span>{{ t('coco.anCancelSpeedTest') }}</span></button>
     </div>
 
     <div ref="scrollEl" data-testid="proxies-scroll-container" class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto" @scroll.passive="onScroll">
       <template v-if="activeTab === 'proxies'">
         <div v-if="initialRead || (!proxiesStore.proxiesLoaded && !renderProxies.length)" class="flex flex-col gap-3 p-1"><div v-for="i in 4" :key="i" class="h-20 animate-pulse rounded-xl bg-base-content/5" /></div>
         <NativeProxyMasterDetail v-else-if="renderProxies.length" ref="proxyMasterDetail" :groups="renderProxies" :sorted-names-by-group="sortedNamesByGroup" :scroll-container="scrollEl" :batch-testing="isBatchTesting" :tcp-testing="tcpRunning" :site-testing="!!siteProbes.running.value" :site-counts="siteCounts" @test-tcp="(names, group) => testTcp(names, group)" @test-group="name => { if (!anyTesting) testMultipleGroups([name]) }" @test-sites="name => { if (!anyTesting) siteProbes.run(name) }" @scroll="onScroll" />
-        <div v-else class="py-12 text-center text-sm text-base-content/50">暂无策略组 <NuxtLink to="/subscriptions" class="link link-primary">选择订阅</NuxtLink></div>
+        <div v-else class="py-12 text-center text-sm text-base-content/50">{{ t('coco.anNoProxyGroups') }} <NuxtLink to="/subscriptions" class="link link-primary">{{ t('coco.anChooseSubscription') }}</NuxtLink></div>
       </template>
       <div v-else class="flex flex-col gap-3">
         <section v-for="provider in proxiesStore.proxyProviders" :key="provider.name" class="rounded-xl border border-base-content/10 p-3">
-          <div class="mb-2 flex flex-wrap items-center gap-2"><h2 class="min-w-0 flex-1 truncate font-semibold">{{ provider.name }}</h2><span class="text-xs text-base-content/60">{{ provider.proxies.length }} · {{ provider.vehicleType }}</span><button class="btn btn-ghost btn-sm" :aria-label="`更新 ${provider.name}`" title="更新代理提供者" :disabled="proxiesStore.updatingMap[provider.name]" @click="proxiesStore.updateProviderByProviderName(provider.name)"><IconReload :size="16" :class="{ 'animate-spin motion-reduce:animate-none': proxiesStore.updatingMap[provider.name] }" /><span>更新</span></button><button class="btn btn-ghost btn-sm" title="测试此代理提供者的代理延迟" :aria-label="`测试 ${provider.name} 代理延迟`" :disabled="proxiesStore.proxyProviderLatencyTestingMap[provider.name]" @click="proxiesStore.proxyProviderLatencyTest(provider.name)"><IconBrandSpeedtest :size="16" :class="{ 'animate-pulse motion-reduce:animate-none': proxiesStore.proxyProviderLatencyTestingMap[provider.name] }" /><span>测延迟</span></button></div>
+          <div class="mb-2 flex flex-wrap items-center gap-2"><h2 class="min-w-0 flex-1 truncate font-semibold">{{ provider.name }}</h2><span class="text-xs text-base-content/60">{{ provider.proxies.length }} · {{ provider.vehicleType }}</span><button class="btn btn-ghost btn-sm" :aria-label="t('coco.anUpdate', { value: provider.name })" :title="t('coco.anUpdateProxyProvider')" :disabled="proxiesStore.updatingMap[provider.name]" @click="proxiesStore.updateProviderByProviderName(provider.name)"><IconReload :size="16" :class="{ 'animate-spin motion-reduce:animate-none': proxiesStore.updatingMap[provider.name] }" /><span>{{ t('coco.anUpdate2') }}</span></button><button class="btn btn-ghost btn-sm" :title="t('coco.anTestProxyLatencyForThisProvider')" :aria-label="t('coco.anTestProxyLatencyFor', { value: provider.name })" :disabled="proxiesStore.proxyProviderLatencyTestingMap[provider.name]" @click="proxiesStore.proxyProviderLatencyTest(provider.name)"><IconBrandSpeedtest :size="16" :class="{ 'animate-pulse motion-reduce:animate-none': proxiesStore.proxyProviderLatencyTestingMap[provider.name] }" /><span>{{ t('coco.anTestLatency') }}</span></button></div>
           <SubscriptionInfo :subscription-info="provider.subscriptionInfo" />
           <div class="my-2 text-xs text-base-content/50">{{ t('updated') }} {{ formatTimeFromNow(provider.updatedAt, locale) }}</div>
           <div class="flex flex-col gap-2"><ProxyNodeListItem v-for="name in providerNames(provider)" :key="name" :proxy-name="name" :test-url="provider.testUrl || null" :timeout="provider.timeout ?? null" :provider-name="provider.name" /></div>
@@ -184,30 +184,30 @@ function resetDetection() {
         <div v-if="!proxiesStore.proxyProviders.length" class="py-12 text-center text-sm text-base-content/50">{{ t('noData') }}</div>
       </div>
     </div>
-    <button v-if="showScrollToTop" data-testid="scroll-to-top" class="btn btn-primary btn-sm btn-circle absolute right-3 bottom-3 z-30 size-9 min-h-9 shadow-sm" :title="t('backToTop')" :aria-label="t('backToTop')" @click="scrollToTop"><IconArrowUp :size="17" aria-hidden="true" /></button>
+    <button v-if="showScrollToTop" data-testid="scroll-to-top" class="btn btn-primary btn-sm absolute right-3 bottom-3 z-30 min-h-11 shadow-sm" :title="t('backToTop')" :aria-label="t('backToTop')" @click="scrollToTop"><IconArrowUp :size="17" aria-hidden="true" /><span>{{ t('backToTop') }}</span></button>
 
-    <Modal ref="settingsModal" title="代理设置" compact settings-layout fixed-height>
+    <Modal ref="settingsModal" :title="t('coco.anProxySettings')" compact settings-layout fixed-height>
       <template #tabs>
-        <div class="flex gap-2" role="tablist" aria-label="代理设置类别"><button v-for="tab in [{ key: 'general', name: '通用', icon: IconSettings }, { key: 'detection', name: '检测', icon: IconBrandSpeedtest }, { key: 'sites', name: '站点目录', icon: IconWorld }]" :key="tab.key" type="button" role="tab" class="btn btn-sm" :class="settingsTab === tab.key ? 'btn-primary' : 'btn-ghost'" :aria-selected="settingsTab === tab.key" @click="settingsTab = tab.key as typeof settingsTab"><component :is="tab.icon" :size="16" aria-hidden="true" /><span>{{ tab.name }}</span></button></div>
+        <div class="flex gap-2" role="tablist" :aria-label="t('coco.anProxySettingsCategories')"><button v-for="tab in [{ key: 'general', name: t('coco.anGeneral'), icon: IconSettings }, { key: 'detection', name: t('coco.anChecks'), icon: IconBrandSpeedtest }, { key: 'sites', name: t('coco.anSiteDirectory'), icon: IconWorld }]" :key="tab.key" type="button" role="tab" class="btn btn-sm" :class="settingsTab === tab.key ? 'btn-primary' : 'btn-ghost'" :aria-selected="settingsTab === tab.key" @click="settingsTab = tab.key as typeof settingsTab"><component :is="tab.icon" :size="16" aria-hidden="true" /><span>{{ tab.name }}</span></button></div>
       </template>
       <div class="flex flex-col gap-4">
         <template v-if="settingsTab === 'general'">
-          <label class="flex items-center gap-2"><input v-model="configStore.autoCloseConns" type="checkbox" class="checkbox checkbox-primary checkbox-xs" />切换节点时断开连接</label>
-          <label class="flex items-center gap-2"><input v-model="configStore.hideUnAvailableProxies" type="checkbox" class="checkbox checkbox-primary checkbox-xs" />隐藏不可用节点</label>
-          <button type="button" class="btn btn-outline btn-sm self-end" @click="resetGeneral"><IconReload :size="16" /><span>恢复通用默认值</span></button>
+          <label class="flex items-center gap-2"><input v-model="configStore.autoCloseConns" type="checkbox" class="checkbox checkbox-primary checkbox-xs" />{{ t('coco.anDisconnectConnectionsWhenSwitchingNodes') }}</label>
+          <label class="flex items-center gap-2"><input v-model="configStore.hideUnAvailableProxies" type="checkbox" class="checkbox checkbox-primary checkbox-xs" />{{ t('coco.anHideUnavailableNodes') }}</label>
+          <button type="button" class="btn btn-outline btn-sm self-end" @click="resetGeneral"><IconReload :size="16" /><span>{{ t('coco.anRestoreGeneralDefaults') }}</span></button>
         </template>
         <template v-else-if="settingsTab === 'detection'">
-          <HelpTip>基准检测偏好保存在当前浏览器。站点结果独立展示，不覆盖基准延迟，也不参与自动选择。</HelpTip>
-          <label class="flex flex-col gap-2">基准检测网址<input v-model="configStore.urlForLatencyTest" class="input w-full" type="url" /></label>
-          <label class="flex flex-col gap-2">检测网址来源<select v-model="configStore.latencyTestUrlSource" class="select w-full"><option value="core">优先使用策略组配置</option><option value="dashboard">统一使用基准网址</option></select></label>
-          <label class="flex flex-col gap-2">检测超时（ms）<input v-model.number="configStore.latencyTestTimeoutDuration" class="input w-full" type="number" min="1" max="10000" /></label>
-          <fieldset class="space-y-2"><legend class="text-sm">延迟颜色阈值（ms）</legend><label class="flex items-center justify-between gap-3">黄色<input v-model.number="configStore.latencyMediumThreshold" class="input w-32" type="number" min="0" /></label><label class="flex items-center justify-between gap-3">红色<input v-model.number="configStore.latencyHighThreshold" class="input w-32" type="number" min="0" /></label><p class="text-xs text-base-content/55">0 表示使用默认值。站点色条中黄色仍表示探测成功，红色表示失败。</p></fieldset>
-          <button type="button" class="btn btn-outline btn-sm self-end" @click="resetDetection"><IconReload :size="16" /><span>恢复基准检测默认值</span></button>
+          <HelpTip>{{ t('coco.anBaselineCheckPreferencesAreStoredIn') }}</HelpTip>
+          <label class="flex flex-col gap-2">{{ t('coco.anBaselineCheckUrl') }}<input v-model="configStore.urlForLatencyTest" class="input w-full" type="url" /></label>
+          <label class="flex flex-col gap-2">{{ t('coco.anCheckUrlSource') }}<select v-model="configStore.latencyTestUrlSource" class="select w-full"><option value="core">{{ t('coco.anPreferProxyGroupConfiguration') }}</option><option value="dashboard">{{ t('coco.anUseTheBaselineUrlForAll') }}</option></select></label>
+          <label class="flex flex-col gap-2">{{ t('coco.anCheckTimeoutMs') }}<input v-model.number="configStore.latencyTestTimeoutDuration" class="input w-full" type="number" min="1" max="10000" /></label>
+          <fieldset class="space-y-2"><legend class="text-sm">{{ t('coco.anLatencyColorThresholdsMs') }}</legend><label class="flex items-center justify-between gap-3">{{ t('coco.anYellow') }}<input v-model.number="configStore.latencyMediumThreshold" class="input w-32" type="number" min="0" /></label><label class="flex items-center justify-between gap-3">{{ t('coco.anRed') }}<input v-model.number="configStore.latencyHighThreshold" class="input w-32" type="number" min="0" /></label><p class="text-xs text-base-content/55">{{ t('coco.anUsesTheDefaultValueYellowIn') }}</p></fieldset>
+          <button type="button" class="btn btn-outline btn-sm self-end" @click="resetDetection"><IconReload :size="16" /><span>{{ t('coco.anRestoreBaselineCheckDefaults') }}</span></button>
           <AutoProbeSettings />
         </template>
         <SiteTargetSettings v-else :scroll-list="false" />
       </div>
     </Modal>
-    <Modal ref="detailsModal" title="站点连通"><SiteProbeDetails :group="detailsGroup" :node="detailsNode" :busy="anyTesting" /></Modal>
+    <Modal ref="detailsModal" :title="t('coco.anSiteConnectivity')"><SiteProbeDetails :group="detailsGroup" :node="detailsNode" :busy="anyTesting" /></Modal>
   </div>
 </template>

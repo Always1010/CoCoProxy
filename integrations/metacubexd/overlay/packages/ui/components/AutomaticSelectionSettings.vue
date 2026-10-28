@@ -7,6 +7,7 @@ import BandwidthSelectionSettings from '~/components/BandwidthSelectionSettings.
 import GroupSelectionStatus from '~/components/GroupSelectionStatus.vue'
 import { bandwidthIssue, bandwidthPages } from '~/utils/group-bandwidth'
 import type { BandwidthDefinitions, BandwidthPage } from '~/utils/group-bandwidth'
+const { t } = useI18n()
 
 const props = defineProps<{ groupName: string; selectable: boolean }>()
 const { api, view, workspace, overrides, busy, run, save, load, editOverrides } = useWorkspace()
@@ -20,8 +21,8 @@ type Destination = { path: string; query: Record<string, string> }
 const destination = ref<Destination>()
 const saving = ref(false)
 const saved = ref(false)
-const saveError = ref('')
-const refreshWarning = ref('')
+const saveError = useLocalizedMessage()
+const refreshWarning = useLocalizedMessage()
 const needsRead = ref(false)
 const locked = computed(() => busy.value || saving.value || !!rulesEditor.value?.saving || !!sitesEditor.value?.saving)
 const closeLocked = computed(() => saving.value || !!sitesEditor.value?.saving)
@@ -32,7 +33,7 @@ const returnToPreferred = ref(true)
 const bandwidth = ref<BandwidthSettings>()
 const definitions = ref<BandwidthDefinitions>()
 const definitionsLoading = ref(false)
-const definitionsError = ref('')
+const definitionsError = useLocalizedMessage()
 const search = ref('')
 type PoolKind = 'preferred' | 'fallback'
 const editorKind = ref<PoolKind | null>(null)
@@ -47,24 +48,24 @@ const tab = ref<SettingsPage>('selection')
 const directoryOpen = ref(true)
 const tunePages = bandwidthPages.filter(page => page.id !== 'bandwidth' && page.id !== 'budget')
 const autoPages = [
-  { id: 'selection', label: '自动选择', description: '在本组候选节点中自动管理出口。' },
-  { id: 'pool', label: '候选节点', description: '自动选择只使用这里选中的节点。' },
+  { id: 'selection', label: 'coco.anAutomaticSelection', description: 'coco.anAutomaticallyManageTheExitUsingThis' },
+  { id: 'pool', label: 'coco.anCandidateNodes', description: 'coco.anAutomaticSelectionUsesOnlyTheNodes' },
   ...bandwidthPages.filter(page => page.id === 'bandwidth'),
 ] as const
 const otherPages = computed(() => [
-  ...(props.selectable ? [{ id: 'status' as const, label: '运行状态', description: '查看已生效配置的检测、用量与切换记录。' }] : []),
-  ...(workspace.value?.mode === 'local' ? [{ id: 'rules' as const, label: '匹配规则', description: '管理进入本组的匹配规则。' }] : []),
-  { id: 'sites' as const, label: '站点连通', description: '选择本组手动站点检测的目标。' },
+  ...(props.selectable ? [{ id: 'status' as const, label: 'coco.anOperationStatus', description: 'coco.anViewChecksUsageAndSwitchRecords' }] : []),
+  ...(workspace.value?.mode === 'local' ? [{ id: 'rules' as const, label: 'coco.anMatchingRules', description: 'coco.anManageTheRulesThatRouteTraffic' }] : []),
+  { id: 'sites' as const, label: 'coco.anSiteConnectivity', description: 'coco.anChooseTargetsForThisGroupS' },
 ])
 const allPages = computed(() => [...autoPages, ...otherPages.value, ...bandwidthPages,
-  { id: 'advanced', label: '高级参数', description: '以下参数仅用于带宽辅助决策，通常保留推荐值。' }])
+  { id: 'advanced', label: 'coco.anAdvancedParameters', description: 'coco.anTheseParametersApplyOnlyToBandwidth' }])
 const currentPage = computed(() => allPages.value.find(page => page.id === tab.value))
 const bandwidthPage = computed(() => bandwidthPages.find(page => page.id === tab.value))
 const auxiliaryPage = computed(() => !!bandwidthPage.value || tab.value === 'advanced')
 const activeNavigation = computed(() => auxiliaryPage.value ? 'bandwidth' : tab.value)
 const effectiveBandwidth = computed(() => bandwidth.value ?? definitions.value?.defaults)
 const configurationPage = computed(() => tab.value !== 'status' && tab.value !== 'rules' && tab.value !== 'sites')
-const statusError = ref('')
+const statusError = useLocalizedMessage()
 const status = ref<AutomaticStatus>()
 const statusReading = ref(false)
 const statusChecking = ref(false)
@@ -83,8 +84,8 @@ const totalSelected = computed(() => preferred.value.length + fallback.value.len
 function draftSignature() { return JSON.stringify([enabled.value, preferred.value, fallback.value, returnToPreferred.value, bandwidth.value ?? null]) }
 const changed = computed(() => draftSignature() !== initialDraft.value)
 const dirtyTabs = computed(() => [
-  changed.value && props.selectable ? '自动选择设置' : '',
-  sitesEditor.value?.dirty ? '站点连通' : '',
+  changed.value && props.selectable ? t('coco.anAutomaticSelectionSettings') : '',
+  sitesEditor.value?.dirty ? t('coco.anSiteConnectivity') : '',
 ].filter(Boolean))
 function beforeClose() {
   if (closeLocked.value) return false
@@ -145,8 +146,8 @@ function locateInvalid() {
 }
 const editingPool = computed(() => editorKind.value === 'fallback' ? fallback.value : preferred.value)
 const otherPool = computed(() => editorKind.value === 'fallback' ? preferred.value : fallback.value)
-const editorLabel = computed(() => editorKind.value === 'fallback' ? '备选' : '优选')
-const otherLabel = computed(() => editorKind.value === 'fallback' ? '优选' : '备选')
+const editorLabel = computed(() => editorKind.value === 'fallback' ? t('coco.anFallback') : t('coco.anPreferred'))
+const otherLabel = computed(() => editorKind.value === 'fallback' ? t('coco.anPreferred') : t('coco.anFallback'))
 const visibleNodes = computed(() => {
   const candidates = [...new Set([...nodes.value, ...editingPool.value, ...otherPool.value])]
     .filter(name => name.toLocaleLowerCase().includes(search.value.toLocaleLowerCase()))
@@ -175,7 +176,7 @@ function toggleNode(name: string) {
   else fallback.value = next
   if (!editorSelected.value.includes(name)) editorSelected.value.push(name)
 }
-const bandwidthError = computed(() => bandwidthIssue(bandwidth.value, definitions.value, overrides.value.automatic ?? {}, props.groupName, enabled.value))
+const bandwidthError = computed(() => bandwidthIssue(bandwidth.value, definitions.value, overrides.value.automatic ?? {}, props.groupName, enabled.value, t))
 const invalidPage = computed<SettingsPage | undefined>(() => {
   if (!enabled.value) return bandwidthError.value?.page
   if (!preferred.value.length || totalSelected.value > 32 || [...preferred.value, ...fallback.value].some(name => !nodes.value.includes(name)) || preferred.value.some(name => fallback.value.includes(name))) return 'pool'
@@ -183,10 +184,10 @@ const invalidPage = computed<SettingsPage | undefined>(() => {
 })
 const invalid = computed(() => {
   if (!enabled.value) return bandwidthError.value?.message ?? ''
-  if (!preferred.value.length) return '请至少选择一个优选节点。'
-  if (preferred.value.length + fallback.value.length > 32) return '优选和备选合计最多 32 个节点。'
-  if ([...preferred.value, ...fallback.value].some(name => !nodes.value.includes(name))) return '部分节点已不在此组，请重新选择。'
-  if (preferred.value.some(name => fallback.value.includes(name))) return '优选和备选不能包含同一个节点。'
+  if (!preferred.value.length) return t('coco.anSelectAtLeastOnePreferredNode')
+  if (preferred.value.length + fallback.value.length > 32) return t('coco.anPreferredAndFallbackPoolsMayContain')
+  if ([...preferred.value, ...fallback.value].some(name => !nodes.value.includes(name))) return t('coco.anSomeNodesAreNoLongerIn')
+  if (preferred.value.some(name => fallback.value.includes(name))) return t('coco.anPreferredAndFallbackPoolsCannotContain')
   if (bandwidthError.value) return bandwidthError.value.message
   return ''
 })
@@ -199,7 +200,7 @@ async function readDefinitions() {
   try {
     const result = await api.request<{ bandwidth: BandwidthDefinitions }>('/api/cocoproxy/automatic/probes')
     if (visible.value && !disposed && requestSession === session) definitions.value = result.bandwidth
-  } catch (cause) { if (visible.value && !disposed && requestSession === session) definitionsError.value = cocoproxyErrorMessage(cause) }
+  } catch (cause) { if (visible.value && !disposed && requestSession === session) definitionsError.value = () => cocoproxyErrorMessage(cause, t) }
   finally { if (requestSession === session) definitionsLoading.value = false }
 }
 
@@ -212,7 +213,7 @@ async function readStatus(background = false) {
     const result = await api.request<AutomaticStatus>('/api/cocoproxy/automatic/status')
     if (visible.value && !disposed && requestSession === session && id === statusRequest) { status.value = result; statusError.value = '' }
   } catch (cause) {
-    if (visible.value && !disposed && requestSession === session && id === statusRequest) statusError.value = cocoproxyErrorMessage(cause)
+    if (visible.value && !disposed && requestSession === session && id === statusRequest) statusError.value = () => cocoproxyErrorMessage(cause, t)
   } finally { if (requestSession === session && id === statusRequest) { reading = false; statusReading.value = false } }
 }
 function checkingStatus(value: boolean) {
@@ -287,18 +288,18 @@ async function persist() {
             const current = view.value?.groups.find(group => group.name === props.groupName)?.activeSelected
             if (current && nodes.value.includes(current)) target.selections[props.groupName] = current
           }
-        }, '自动选择设置已保存并生效')
+        }, 'coco.anAutomaticSelectionSettingsSavedAndApplied')
         initialDraft.value = draftSignature()
         saved.value = true
       } catch (cause) {
-        saveError.value = cocoproxyErrorMessage(cause)
+        saveError.value = () => cocoproxyErrorMessage(cause, t)
         needsRead.value = cause instanceof CoCoProxyError && ['NETWORK_UNKNOWN', 'MANAGEMENT_UNAVAILABLE', 'CONFIRM_FAILED', 'WORKSPACE_CONFLICT'].includes(cause.code)
         return
       }
       try {
         await proxyRefresh.refresh()
-        if (proxyRefresh.error.value) refreshWarning.value = '自动选择设置已生效，列表刷新失败。'
-      } catch { refreshWarning.value = '自动选择设置已生效，列表刷新失败。' }
+        if (proxyRefresh.error.value) refreshWarning.value = () => t('coco.anAutomaticSelectionSettingsAreActiveBut')
+      } catch { refreshWarning.value = () => t('coco.anAutomaticSelectionSettingsAreActiveBut') }
     })
   } finally { saving.value = false }
 }
@@ -311,9 +312,9 @@ async function reread() {
     const current = JSON.stringify([!!policy && policy.enabled !== false, policy?.preferred ?? [], policy?.fallback ?? [], policy?.returnToPreferred ?? true, policy?.bandwidth ?? null])
     if (current === draftSignature() && !view.value?.pending) {
       initialDraft.value = current; saved.value = true; saveError.value = ''
-    } else saveError.value = '状态已重新读取，修改尚未确认生效，请核对后重试。'
+    } else saveError.value = () => t('coco.anStatusReloadedTheChangesHaveNot')
     needsRead.value = false
-  } catch (cause) { saveError.value = cocoproxyErrorMessage(cause) }
+  } catch (cause) { saveError.value = () => cocoproxyErrorMessage(cause, t) }
   finally { saving.value = false }
 }
 watch(draftSignature, () => { saveError.value = ''; refreshWarning.value = '' })
@@ -326,44 +327,44 @@ onUnmounted(() => { disposed = true; close() })
 
 <template>
   <span class="shrink-0">
-    <button type="button" class="btn btn-ghost btn-sm" :aria-label="`${groupName} 组设置`" @click="open"><IconSettings :size="18" /><span>组设置</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" :aria-label="t('coco.anSettingsForGroup', { value: groupName })" @click="open"><IconSettings :size="18" /><span>{{ t('coco.anGroupSettings') }}</span></button>
   </span>
-  <Modal ref="dialog" compact settings-layout :settings-directory="directoryOpen && !confirmClose" :title="`${groupName} · 组设置`" :before-close="beforeClose" :close-disabled="closeLocked" @close="close">
+  <Modal ref="dialog" compact settings-layout :settings-directory="directoryOpen && !confirmClose" :title="t('coco.anGroupSettings2', { value: groupName })" :before-close="beforeClose" :close-disabled="closeLocked" @close="close">
     <template #tabs>
-      <nav class="group-settings-nav space-y-5" aria-label="组设置目录">
-        <button v-if="fromManager" type="button" class="btn btn-ghost min-h-11 w-full justify-start" :disabled="locked || confirmClose" @click="dialog?.close()"><IconArrowLeft :size="16" /><span>返回组列表</span></button>
+      <nav class="group-settings-nav space-y-5" :aria-label="t('coco.anGroupSettingsDirectory')">
+        <button v-if="fromManager" type="button" class="btn btn-ghost min-h-11 w-full justify-start" :disabled="locked || confirmClose" @click="dialog?.close()"><IconArrowLeft :size="16" /><span>{{ t('coco.anBackToGroupList') }}</span></button>
         <section v-if="selectable">
-          <div role="tablist" aria-label="自动选择设置">
+          <div role="tablist" :aria-label="t('coco.anAutomaticSelectionSettings')">
             <button v-for="page in autoPages.filter(page => enabled || page.id === 'selection')" :key="page.id" type="button" role="tab" class="btn btn-ghost min-h-11" :class="{ 'automatic-child': page.id !== 'selection' }" :disabled="locked || confirmClose" :aria-selected="activeNavigation === page.id" :aria-controls="'group-settings-page'" @click="selectTab(page.id)">
-              <IconSettings :size="16" /><span>{{ page.label }}</span><span v-if="pageInvalid(page.id)" class="ml-auto text-error" aria-label="有配置错误">!</span><span v-else-if="pageDirty(page.id, true)" class="ml-auto text-warning" aria-label="有未保存修改">●</span>
+              <IconSettings :size="16" /><span>{{ t(page.label) }}</span><span v-if="pageInvalid(page.id)" class="ml-auto text-error" :aria-label="t('coco.anConfigurationError')">!</span><span v-else-if="pageDirty(page.id, true)" class="ml-auto text-warning" :aria-label="t('coco.anUnsavedChanges')">●</span>
             </button>
           </div>
         </section>
         <section>
-          <h3 class="nav-heading">检测与规则</h3>
-          <div role="tablist" aria-label="检测与规则">
+          <h3 class="nav-heading">{{ t('coco.anChecksAndRules') }}</h3>
+          <div role="tablist" :aria-label="t('coco.anChecksAndRules')">
             <button v-for="page in otherPages" :key="page.id" type="button" role="tab" class="btn btn-ghost min-h-11" :disabled="locked || confirmClose" :aria-selected="tab === page.id" aria-controls="group-settings-page" @click="selectTab(page.id)">
-              <IconWorld v-if="page.id === 'sites'" :size="16" /><IconList v-else :size="16" /><span>{{ page.label }}</span><span v-if="pageDirty(page.id)" class="ml-auto text-warning" aria-label="有未保存修改">●</span>
+              <IconWorld v-if="page.id === 'sites'" :size="16" /><IconList v-else :size="16" /><span>{{ t(page.label) }}</span><span v-if="pageDirty(page.id)" class="ml-auto text-warning" :aria-label="t('coco.anUnsavedChanges')">●</span>
             </button>
           </div>
         </section>
       </nav>
     </template>
     <template #content>
-      <div v-if="confirmClose" role="alertdialog" aria-label="放弃未保存修改" class="flex min-h-0 flex-1 flex-col justify-center gap-4 overflow-y-auto">
-        <p class="text-sm">{{ dirtyTabs.join('、') }}有未保存修改，{{ destination ? '离开' : '关闭' }}将丢弃这些修改。已成功保存的设置不受影响。</p>
-        <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn btn-ghost min-h-11" @click="continueEditing"><IconArrowLeft :size="16" /><span>继续编辑</span></button><button type="button" class="btn btn-error min-h-11" :disabled="locked" @click="discardAndClose"><IconX :size="16" /><span>{{ destination ? '放弃并离开' : '放弃并关闭' }}</span></button></div>
+      <div v-if="confirmClose" role="alertdialog" :aria-label="t('coco.anDiscardUnsavedChanges')" class="flex min-h-0 flex-1 flex-col justify-center gap-4 overflow-y-auto">
+        <p class="text-sm">{{ t('coco.anHasUnsavedChangesChoosingWillDiscard', { value: dirtyTabs.join('、'), value2: destination ? t('coco.anLeave') : t('coco.anClose') }) }}</p>
+        <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn btn-ghost min-h-11" @click="continueEditing"><IconArrowLeft :size="16" /><span>{{ t('coco.anContinueEditing') }}</span></button><button type="button" class="btn btn-error min-h-11" :disabled="locked" @click="discardAndClose"><IconX :size="16" /><span>{{ destination ? t('coco.anDiscardAndLeave') : t('coco.anDiscardAndClose') }}</span></button></div>
       </div>
-      <div v-show="!confirmClose" id="group-settings-page" class="flex min-h-0 flex-1 flex-col gap-3" role="tabpanel" :aria-label="currentPage?.label" tabindex="-1">
-        <button type="button" class="mobile-directory-back btn btn-ghost min-h-11 self-start" :disabled="locked" @click="directoryOpen = true"><IconArrowLeft :size="16" /><span>设置目录</span></button>
+      <div v-show="!confirmClose" id="group-settings-page" class="flex min-h-0 flex-1 flex-col gap-3" role="tabpanel" :aria-label="currentPage ? t(currentPage.label) : undefined" tabindex="-1">
+        <button type="button" class="mobile-directory-back btn btn-ghost min-h-11 self-start" :disabled="locked" @click="directoryOpen = true"><IconArrowLeft :size="16" /><span>{{ t('coco.anSettingsDirectory') }}</span></button>
         <header class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-base-content/10 pb-3">
           <div class="min-w-0 space-y-1">
-            <p v-if="auxiliaryPage && tab !== 'bandwidth'" class="break-words text-xs text-base-content/55">自动选择 / 辅助决策{{ tunePages.some(page => page.id === tab) ? ' / 高级参数' : '' }}</p>
-            <h2 class="text-base font-semibold">{{ editorKind ? '候选节点 / 编辑' + editorLabel : currentPage?.label }}</h2>
+            <p v-if="auxiliaryPage && tab !== 'bandwidth'" class="break-words text-xs text-base-content/55">{{ t('coco.anAutomaticSelectionAssistedDecisions', { value: tunePages.some(page => page.id === tab) ? t('coco.anAdvancedParameters2') : '' }) }}</p>
+            <h2 class="text-base font-semibold">{{ editorKind ? t('coco.anEditCandidatePool', { pool: editorLabel }) : currentPage ? t(currentPage.label) : '' }}</h2>
           </div>
-          <HelpTip v-if="currentPage?.description" label="页面说明">{{ currentPage.description }}</HelpTip>
+          <HelpTip v-if="currentPage?.description" :label="t('coco.anPageHelp')">{{ t(currentPage.description) }}</HelpTip>
         </header>
-        <SettingsNotice v-if="!configurationPage && changed" warning class="shrink-0">自动选择设置有未保存修改。<button type="button" class="btn btn-ghost btn-xs" :disabled="locked" @click="selectTab('selection')"><IconEdit :size="14" /><span>返回配置并保存</span></button></SettingsNotice>
+        <SettingsNotice v-if="!configurationPage && changed" warning class="shrink-0">{{ t('coco.anAutomaticSelectionSettingsHaveUnsavedChanges') }}<button type="button" class="btn btn-ghost btn-xs" :disabled="locked" @click="selectTab('selection')"><IconEdit :size="14" /><span>{{ t('coco.anBackToConfigureAndSave') }}</span></button></SettingsNotice>
         <GroupMatchingRules v-if="visible && workspace?.mode === 'local'" ref="rulesEditor" v-show="tab === 'rules'" :group-name="groupName" @navigate="requestNavigation" />
         <SiteTargetSettings v-if="visible && sitesVisited" ref="sitesEditor" v-show="tab === 'sites'" :group-name="groupName" :scroll-list="false" />
         <div v-if="tab === 'status'" class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
@@ -371,85 +372,85 @@ onUnmounted(() => { disposed = true; close() })
         </div>
         <template v-if="configurationPage && selectable">
           <div class="settings-page-scroll min-h-0 flex-1 space-y-5 overflow-y-auto [scrollbar-gutter:stable]">
-            <button v-if="auxiliaryPage && tab !== 'bandwidth'" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="selectTab(tunePages.some(page => page.id === tab) ? 'advanced' : 'bandwidth')"><IconArrowLeft :size="16" /><span>{{ tunePages.some(page => page.id === tab) ? '返回高级参数' : '返回辅助决策' }}</span></button>
+            <button v-if="auxiliaryPage && tab !== 'bandwidth'" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="selectTab(tunePages.some(page => page.id === tab) ? 'advanced' : 'bandwidth')"><IconArrowLeft :size="16" /><span>{{ tunePages.some(page => page.id === tab) ? t('coco.anBackToAdvancedParameters') : t('coco.anBackToAssistedDecisions') }}</span></button>
             <template v-if="tab === 'selection'">
-              <label class="flex min-h-11 items-center justify-between gap-4 text-sm font-medium">启用自动选择<input id="group-automatic-enabled" v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
-              <HelpTip label="自动选择说明">在已选候选中自动选择出口，故障时寻找可用节点。正常时每 30 秒检测当前节点。自动选择独立于手动站点检测。</HelpTip>
-              <SettingsNotice v-if="!enabled">保存后停止自动选择，使用手动选择。已有候选节点、回切和带宽辅助设置会保留。</SettingsNotice>
+              <label class="flex min-h-11 items-center justify-between gap-4 text-sm font-medium">{{ t('coco.anEnableAutomaticSelection') }}<input id="group-automatic-enabled" v-model="enabled" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
+              <HelpTip :label="t('coco.anAboutAutomaticSelection')">{{ t('coco.anAutomaticallyChooseAnExitFromSelected') }}</HelpTip>
+              <SettingsNotice v-if="!enabled">{{ t('coco.anAfterSavingAutomaticSelectionStopsAnd') }}</SettingsNotice>
               <div v-else class="automatic-options space-y-5 pl-4">
                 <div class="space-y-1">
-                  <label class="flex min-h-11 items-center justify-between gap-4 text-sm">优选恢复后自动回切<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
-                  <HelpTip label="回切说明">控制优选恢复后的专门回查，按 5、10、15 分钟退避；开启带宽辅助决策时，回切也须通过综合收益判断。关闭此项不阻止其他检查触发的正常比较。</HelpTip>
+                  <label class="flex min-h-11 items-center justify-between gap-4 text-sm">{{ t('coco.anReturnAutomaticallyWhenPreferredNodesRecover') }}<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
+                  <HelpTip :label="t('coco.anAboutReturningToPreferred')">{{ t('coco.anControlsDedicatedPreferredRecoveryChecksWith') }}</HelpTip>
                 </div>
                 <div class="space-y-2 border-t border-base-content/10 pt-4">
-                <button type="button" class="summary-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab('pool')"><span>优选 {{ preferred.length }} 个 · 备选 {{ fallback.length }} 个</span><span class="flex items-center gap-1"><IconEdit :size="16" />配置候选</span></button>
-                <button type="button" class="summary-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab('bandwidth')"><span>带宽辅助决策{{ !bandwidth?.enabled ? '已关闭' : bandwidth.observeOnly ? ' · 仅观察' : '已开启' }}</span><span class="flex items-center gap-1"><IconEdit :size="16" />辅助决策</span></button>
+                <button type="button" class="summary-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab('pool')"><span>{{ t('coco.anPreferredFallback', { value: preferred.length, value2: fallback.length }) }}</span><span class="flex items-center gap-1"><IconEdit :size="16" />{{ t('coco.anConfigureCandidates') }}</span></button>
+                <button type="button" class="summary-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab('bandwidth')"><span>{{ t('coco.anBandwidthAssistedDecisions', { value: !bandwidth?.enabled ? t('coco.anOff') : bandwidth.observeOnly ? t('coco.anObserveOnly') : t('coco.anOn') }) }}</span><span class="flex items-center gap-1"><IconEdit :size="16" />{{ t('coco.anAssistedDecisions') }}</span></button>
               </div>
               </div>
             </template>
             <template v-else-if="tab === 'pool' && !editorKind">
-              <section v-for="kind in (['preferred', 'fallback'] as const)" :key="kind" class="border-b border-base-content/10 pb-4" :aria-label="kind === 'preferred' ? '优选节点' : '备选节点'">
+              <section v-for="kind in (['preferred', 'fallback'] as const)" :key="kind" class="border-b border-base-content/10 pb-4" :aria-label="kind === 'preferred' ? t('coco.anPreferredNodes') : t('coco.anFallbackNodes')">
                 <div class="flex items-center justify-between gap-2">
-                  <h3 class="text-sm font-medium">{{ kind === 'preferred' ? '优选' : '备选' }} · {{ pool(kind).length }} 个</h3>
-                  <button type="button" class="btn btn-ghost btn-sm min-h-11 shrink-0" :disabled="locked" @click="editPool(kind)"><IconEdit :size="16" /><span>编辑{{ kind === 'preferred' ? '优选' : '备选' }}</span></button>
+                  <h3 class="text-sm font-medium">{{ t('coco.anNodes', { value: kind === 'preferred' ? t('coco.anPreferred') : t('coco.anFallback'), value2: pool(kind).length }) }}</h3>
+                  <button type="button" class="btn btn-ghost btn-sm min-h-11 shrink-0" :disabled="locked" @click="editPool(kind)"><IconEdit :size="16" /><span>{{ t('coco.anEdit', { value: kind === 'preferred' ? t('coco.anPreferred') : t('coco.anFallback') }) }}</span></button>
                 </div>
-                <HelpTip :label="kind === 'preferred' ? '优选说明' : '备选说明'">{{ kind === 'preferred' ? '优先使用的候选节点' : '优选不可用时的后备候选' }}</HelpTip>
+                <HelpTip :label="kind === 'preferred' ? t('coco.anAboutPreferredNodes') : t('coco.anAboutFallbackNodes')">{{ kind === 'preferred' ? t('coco.anCandidatesToUseFirst') : t('coco.anBackupCandidatesWhenPreferredNodesAre') }}</HelpTip>
                 <ul v-if="pool(kind).length" class="space-y-1">
-                  <li v-for="name in (expanded[kind] ? pool(kind) : pool(kind).slice(0, 4))" :key="name" class="min-w-0 break-all py-1 text-sm" :class="!nodes.includes(name) ? 'text-warning' : ''">{{ name }}{{ !nodes.includes(name) ? '（已不在此组）' : '' }}</li>
+                  <li v-for="name in (expanded[kind] ? pool(kind) : pool(kind).slice(0, 4))" :key="name" class="min-w-0 break-all py-1 text-sm" :class="!nodes.includes(name) ? 'text-warning' : ''">{{ name }}{{ !nodes.includes(name) ? t('coco.anNoLongerInThisGroup') : '' }}</li>
                 </ul>
-                <p v-else class="py-2 text-sm text-base-content/50">尚未设置{{ kind === 'preferred' ? '优选' : '备选' }}节点</p>
-                <button v-if="pool(kind).length > 4" type="button" class="btn btn-ghost btn-sm mt-2 min-h-11" :aria-expanded="expanded[kind]" @click="expanded[kind] = !expanded[kind]"><IconChevronUp v-if="expanded[kind]" :size="16" /><IconChevronDown v-else :size="16" /><span>{{ expanded[kind] ? '收起' : '展开其余 ' + (pool(kind).length - 4) + ' 个' }}{{ kind === 'preferred' ? '优选' : '备选' }}节点</span></button>
+                <p v-else class="py-2 text-sm text-base-content/50">{{ t('coco.anNoNodesConfigured', { value: kind === 'preferred' ? t('coco.anPreferred') : t('coco.anFallback') }) }}</p>
+                <button v-if="pool(kind).length > 4" type="button" class="btn btn-ghost btn-sm mt-2 min-h-11" :aria-expanded="expanded[kind]" @click="expanded[kind] = !expanded[kind]"><IconChevronUp v-if="expanded[kind]" :size="16" /><IconChevronDown v-else :size="16" /><span>{{ t(expanded[kind] ? 'coco.anCollapseCandidatePool' : 'coco.anExpandCandidatePool', { count: pool(kind).length - 4, pool: kind === 'preferred' ? t('coco.anPreferred') : t('coco.anFallback') }) }}</span></button>
               </section>
-              <SettingsNotice>已选 {{ totalSelected }} / 32 · 优选至少 1 个，两类不能重复。</SettingsNotice>
+              <SettingsNotice>{{ t('coco.anSelectedAtLeastPreferredNodePools', { value: totalSelected }) }}</SettingsNotice>
             </template>
             <template v-else-if="tab === 'pool' && editorKind">
-              <button type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="editorKind = null"><IconArrowLeft :size="16" /><span>返回候选摘要</span></button>
-              <HelpTip label="选择说明">勾选加入{{ editorLabel }}；已在{{ otherLabel }}中的节点需先移除。返回后统一保存生效。</HelpTip>
-              <input v-model="search" type="search" class="input min-h-11 w-full" placeholder="搜索节点名称" :aria-label="'搜索' + editorLabel + '候选节点'" />
-              <div class="flex flex-wrap gap-2" role="group" aria-label="节点筛选">
-                <button type="button" class="btn btn-sm min-h-11" :class="!onlySelected ? 'btn-primary' : 'btn-ghost'" :aria-pressed="!onlySelected" @click="onlySelected = false"><IconList :size="16" /><span>全部节点</span></button>
-                <button type="button" class="btn btn-sm min-h-11" :class="onlySelected ? 'btn-primary' : 'btn-ghost'" :aria-pressed="onlySelected" @click="onlySelected = true"><IconCheck :size="16" /><span>仅看已选 {{ editingPool.length }}</span></button>
+              <button type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="editorKind = null"><IconArrowLeft :size="16" /><span>{{ t('coco.anBackToCandidateSummary') }}</span></button>
+              <HelpTip :label="t('coco.anSelectionHelp')">{{ t('coco.anSelectANodeToAddIt', { value: editorLabel, value2: otherLabel }) }}</HelpTip>
+              <input v-model="search" type="search" class="input min-h-11 w-full" :placeholder="t('coco.anSearchNodeNames')" :aria-label="t('coco.anSearchCandidatePool', { pool: editorLabel })" />
+              <div class="flex flex-wrap gap-2" role="group" :aria-label="t('coco.anNodeFilter')">
+                <button type="button" class="btn btn-sm min-h-11" :class="!onlySelected ? 'btn-primary' : 'btn-ghost'" :aria-pressed="!onlySelected" @click="onlySelected = false"><IconList :size="16" /><span>{{ t('coco.anAllNodes') }}</span></button>
+                <button type="button" class="btn btn-sm min-h-11" :class="onlySelected ? 'btn-primary' : 'btn-ghost'" :aria-pressed="onlySelected" @click="onlySelected = true"><IconCheck :size="16" /><span>{{ t('coco.anSelectedOnly', { value: editingPool.length }) }}</span></button>
               </div>
-              <p v-if="totalSelected >= 32" class="text-xs text-warning">已达 32 个上限，请先取消已有选择再添加节点。</p>
-              <div class="space-y-1" :aria-label="editorLabel + '节点编辑列表'">
+              <p v-if="totalSelected >= 32" class="text-xs text-warning">{{ t('coco.anTheLimitOfNodesHasBeen') }}</p>
+              <div class="space-y-1" :aria-label="t('coco.anCandidatePoolEditor', { pool: editorLabel })">
                 <label v-for="name in visibleNodes" :key="name" class="flex min-h-11 items-center gap-3 border-b border-base-content/5 py-3 text-sm" :class="nodeDisabled(name) ? 'cursor-not-allowed text-base-content/40' : 'cursor-pointer'">
-                  <input type="checkbox" class="checkbox checkbox-primary checkbox-sm shrink-0" :checked="editingPool.includes(name)" :disabled="nodeDisabled(name)" :aria-label="editorLabel + '：' + name" @change="toggleNode(name)" />
-                  <span class="min-w-0 break-all">{{ name }}<span v-if="otherPool.includes(name)" class="mt-1 block text-xs">已在{{ otherLabel }}中，不可选择</span><span v-else-if="!nodes.includes(name)" class="mt-1 block text-xs text-warning">已不在此组，请取消选择</span></span>
+                  <input type="checkbox" class="checkbox checkbox-primary checkbox-sm shrink-0" :checked="editingPool.includes(name)" :disabled="nodeDisabled(name)" :aria-label="t('coco.anCandidateCheckbox', { pool: editorLabel, node: name })" @change="toggleNode(name)" />
+                  <span class="min-w-0 break-all">{{ name }}<span v-if="otherPool.includes(name)" class="mt-1 block text-xs">{{ t('coco.anAlreadyInCannotSelect', { value: otherLabel }) }}</span><span v-else-if="!nodes.includes(name)" class="mt-1 block text-xs text-warning">{{ t('coco.anNoLongerInThisGroupDeselect') }}</span></span>
                 </label>
-                <p v-if="!visibleNodes.length" class="py-3 text-sm text-base-content/50">{{ search ? '没有匹配的节点' : onlySelected ? '尚未选择节点' : '没有可选的具体节点' }}</p>
+                <p v-if="!visibleNodes.length" class="py-3 text-sm text-base-content/50">{{ search ? t('coco.anNoMatchingNodes') : onlySelected ? t('coco.anNoNodesSelected') : t('coco.anNoIndividualNodesAvailable') }}</p>
               </div>
             </template>
             <template v-else-if="tab === 'advanced'">
-              <SettingsNotice>以下参数仅用于带宽辅助决策，通常保留推荐值。</SettingsNotice>
+              <SettingsNotice>{{ t('coco.anTheseParametersApplyOnlyToBandwidth') }}</SettingsNotice>
               <div class="divide-y divide-base-content/10">
                 <button v-for="page in tunePages" :key="page.id" type="button" class="parameter-link btn btn-ghost min-h-11 w-full justify-between" :disabled="locked" @click="selectTab(page.id)">
-                  <span class="flex min-w-0 items-start gap-2 text-left"><IconAdjustments :size="16" class="mt-0.5 shrink-0" /><span><span class="block">{{ page.label }}<span v-if="pageInvalid(page.id)" class="ml-2 text-error">有配置错误</span><span v-else-if="pageDirty(page.id)" class="ml-2 text-warning">未保存</span></span><span class="mt-1 block text-xs font-normal text-base-content/60">{{ page.summary }}{{ customCount(page.id) ? ' · 已自定义 ' + customCount(page.id) + ' 项' : '' }}</span></span></span>
-                  <span class="flex shrink-0 items-center gap-1 text-xs">进入<IconChevronRight :size="14" /></span>
+                  <span class="flex min-w-0 items-start gap-2 text-left"><IconAdjustments :size="16" class="mt-0.5 shrink-0" /><span><span class="block">{{ t(page.label) }}<span v-if="pageInvalid(page.id)" class="ml-2 text-error">{{ t('coco.anConfigurationError') }}</span><span v-else-if="pageDirty(page.id)" class="ml-2 text-warning">{{ t('coco.anUnsaved') }}</span></span><span class="mt-1 block text-xs font-normal text-base-content/60">{{ t(page.summary) }}{{ customCount(page.id) ? t('coco.anCustomizedCountSuffix', { count: customCount(page.id) }) : '' }}</span></span></span>
+                  <span class="flex shrink-0 items-center gap-1 text-xs">{{ t('coco.anOpen') }}<IconChevronRight :size="14" /></span>
                 </button>
               </div>
             </template>
             <template v-else-if="bandwidthPage">
-              <p v-if="definitionsLoading" role="status" class="text-sm">正在读取参数…</p>
-              <div v-if="definitionsError" class="space-y-2 text-sm text-warning"><p role="alert">{{ definitionsError }}</p><button type="button" class="btn btn-ghost min-h-11" :disabled="locked || definitionsLoading" @click="readDefinitions"><IconReload :size="16" /><span>重读参数</span></button></div>
+              <p v-if="definitionsLoading" role="status" class="text-sm">{{ t('coco.anLoadingParameters') }}</p>
+              <div v-if="definitionsError" class="space-y-2 text-sm text-warning"><p role="alert">{{ definitionsError }}</p><button type="button" class="btn btn-ghost min-h-11" :disabled="locked || definitionsLoading" @click="readDefinitions"><IconReload :size="16" /><span>{{ t('coco.anReloadParameters') }}</span></button></div>
               <BandwidthSelectionSettings v-if="definitions" :key="tab" v-model="bandwidth" :definitions="definitions" :page="bandwidthPage.id" :disabled="locked || !enabled" :issue="bandwidthError" @navigate="selectTab" />
-              <button v-if="tab === 'budget'" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="selectTab('status')"><IconList :size="16" /><span>查看运行用量</span></button>
+              <button v-if="tab === 'budget'" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="selectTab('status')"><IconList :size="16" /><span>{{ t('coco.anViewOperationUsage') }}</span></button>
             </template>
           </div>
           <div class="shrink-0 space-y-2 border-t border-base-content/10 pt-3">
             <template v-if="editorKind">
-              <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/65"><span>{{ editorLabel }} {{ editingPool.length }} 个 · 合计 {{ totalSelected }} / 32</span><button type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="editorKind = null"><IconCheck :size="16" /><span>完成选择</span></button></div>
+              <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/65"><span>{{ t('coco.anNodesTotal', { value: editorLabel, value2: editingPool.length, value3: totalSelected }) }}</span><button type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="editorKind = null"><IconCheck :size="16" /><span>{{ t('coco.anFinishSelection') }}</span></button></div>
             </template>
             <template v-else>
               <div class="text-xs" aria-live="polite">
-                <p v-if="saving" role="status">正在保存或核对自动选择设置…</p>
-                <p v-else-if="saveError || needsRead || invalid" role="alert" class="text-error">{{ saveError || (needsRead ? '暂未确认配置是否生效，请重新读取状态后核对。' : invalid) }}</p>
-                <p v-else-if="changed" class="text-warning">自动选择设置有未保存修改</p>
-                <p v-else-if="saved" role="status" :class="refreshWarning ? 'text-warning' : 'text-success'">{{ refreshWarning || '自动选择设置已保存并生效' }}</p>
+                <p v-if="saving" role="status">{{ t('coco.anSavingOrVerifyingAutomaticSelectionSettings') }}</p>
+                <p v-else-if="saveError || needsRead || invalid" role="alert" class="text-error">{{ saveError || (needsRead ? t('coco.anConfigurationActivationIsNotYetConfirmed') : invalid) }}</p>
+                <p v-else-if="changed" class="text-warning">{{ t('coco.anAutomaticSelectionSettingsHaveUnsavedChanges2') }}</p>
+                <p v-else-if="saved" role="status" :class="refreshWarning ? 'text-warning' : 'text-success'">{{ refreshWarning || t('coco.anAutomaticSelectionSettingsSavedAndApplied') }}</p>
               </div>
               <div class="flex flex-wrap justify-end gap-2">
-                <button v-if="invalidPage" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="locateInvalid"><IconEdit :size="16" /><span>{{ !enabled ? '前往自动选择开启后修正' : !effectiveBandwidth?.enabled && invalidPage !== 'pool' ? '前往辅助决策开启后修正' : '前往' + allPages.find(page => page.id === invalidPage)?.label + '修正' }}</span></button>
-                <button v-if="needsRead" type="button" class="btn btn-outline min-h-11" :disabled="locked" @click="reread"><IconReload :size="16" /><span>重新读取状态</span></button>
-                <button type="button" class="btn btn-primary min-h-11" :disabled="locked || !!invalid || !changed || needsRead" @click="persist"><span v-if="saving" class="loading loading-spinner loading-xs" /><IconCheck v-else :size="16" /><span>{{ saving ? '正在保存…' : saved && !changed ? '已保存' : '保存自动选择设置' }}</span></button>
+                <button v-if="invalidPage" type="button" class="btn btn-ghost min-h-11" :disabled="locked" @click="locateInvalid"><IconEdit :size="16" /><span>{{ !enabled ? t('coco.anEnableAutomaticSelectionToFixThis') : !effectiveBandwidth?.enabled && invalidPage !== 'pool' ? t('coco.anEnableAssistedDecisionsToFixThis') : t('coco.anFixSettingsPage', { page: t(allPages.find(page => page.id === invalidPage)?.label ?? '') }) }}</span></button>
+                <button v-if="needsRead" type="button" class="btn btn-outline min-h-11" :disabled="locked" @click="reread"><IconReload :size="16" /><span>{{ t('coco.anReloadStatus') }}</span></button>
+                <button type="button" class="btn btn-primary min-h-11" :disabled="locked || !!invalid || !changed || needsRead" @click="persist"><span v-if="saving" class="loading loading-spinner loading-xs" /><IconCheck v-else :size="16" /><span>{{ saving ? t('coco.anSaving') : saved && !changed ? t('coco.anSaved') : t('coco.anSaveAutomaticSelectionSettings') }}</span></button>
               </div>
             </template>
           </div>

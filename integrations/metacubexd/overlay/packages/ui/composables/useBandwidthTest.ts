@@ -43,24 +43,25 @@ function randomClient() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 const messages: Record<string, string> = {
-  ACTIVE_CONFLICT: '运行配置正在变化，请等待稳定后重新测试。',
-  CONTROLLER_UNAVAILABLE: '代理核心尚未就绪，请确认运行状态后再测试。',
-  BANDWIDTH_BUSY: '已有节点带宽测试正在运行，已读取当前任务。',
-  BANDWIDTH_NOT_OWNER: '此任务由另一个浏览器发起，仅可查看进度。',
-  BANDWIDTH_UNAVAILABLE: '节点带宽测试暂不可用，请确认核心已就绪。',
-  BANDWIDTH_NODE_INVALID: '请选择当前策略组中的具体代理节点。',
-  BANDWIDTH_NODE_CONFLICT: '节点或生效配置已变化，请刷新工作区后重试。',
-  BANDWIDTH_CLIENT_INVALID: '浏览器任务标识无效，请重新打开此页面。',
+  ACTIVE_CONFLICT: 'coco.bandwidthErrorACTIVE_CONFLICT',
+  CONTROLLER_UNAVAILABLE: 'coco.bandwidthErrorCONTROLLER_UNAVAILABLE',
+  BANDWIDTH_BUSY: 'coco.bandwidthErrorBANDWIDTH_BUSY',
+  BANDWIDTH_NOT_OWNER: 'coco.bandwidthErrorBANDWIDTH_NOT_OWNER',
+  BANDWIDTH_UNAVAILABLE: 'coco.bandwidthErrorBANDWIDTH_UNAVAILABLE',
+  BANDWIDTH_NODE_INVALID: 'coco.bandwidthErrorBANDWIDTH_NODE_INVALID',
+  BANDWIDTH_NODE_CONFLICT: 'coco.bandwidthErrorBANDWIDTH_NODE_CONFLICT',
+  BANDWIDTH_CLIENT_INVALID: 'coco.bandwidthErrorBANDWIDTH_CLIENT_INVALID',
 }
 
 export function useBandwidthTest() {
+  const { t } = useNuxtApp().$i18n
   const { api, view } = useWorkspace()
   const status = ref<BandwidthStatus | null>(null)
   const visible = ref(false)
   const loading = ref(false)
   const sending = ref(false)
   const uncertain = ref(false)
-  const error = ref('')
+  const error = useLocalizedMessage()
   const client = ref('')
   const persistent = ref(false)
   let disposed = false
@@ -84,7 +85,8 @@ export function useBandwidthTest() {
     rememberPending(!!(result.task?.running && result.task.owned))
   }
   function message(cause: unknown) {
-    return cause instanceof CoCoProxyError ? messages[cause.code] ?? cocoproxyErrorMessage(cause) : cocoproxyErrorMessage(cause)
+    const key = cause instanceof CoCoProxyError ? messages[cause.code] : undefined
+    return key ? t(key) : cocoproxyErrorMessage(cause, t)
   }
   function stopPolling() {
     if (timer !== undefined) clearTimeout(timer)
@@ -116,10 +118,10 @@ export function useBandwidthTest() {
       })
       if (disposed || id !== readId) return false
       accept(result)
-      error.value = persistent.value ? '' : '无法保存浏览器任务标识，请允许会话存储后再开始测试。'
+      error.value = persistent.value ? '' : () => t('coco.clientStorageFailed')
       return true
     } catch (cause) {
-      if (!disposed && id === readId) error.value = message(cause)
+      if (!disposed && id === readId) error.value = () => message(cause)
       return false
     } finally { if (id === readId) { reading = false; readController = undefined; loading.value = false; schedule() } }
   }
@@ -142,7 +144,7 @@ export function useBandwidthTest() {
     // release the uncertainty lock; never retry the write automatically.
     if (failure) {
       const synchronized = await refresh(true)
-      error.value = synchronized ? message(failure) : '操作结果尚未确认，正在重新读取任务。请保持此弹窗开启。'
+      error.value = synchronized ? () => message(failure) : () => t('coco.taskUnknown')
     }
     schedule()
   }
@@ -161,7 +163,7 @@ export function useBandwidthTest() {
       if (current.transaction || current.fault) throw new CoCoProxyError('ACTIVE_CONFLICT')
       if (!current.active || !current.core?.ready) throw new CoCoProxyError('CONTROLLER_UNAVAILABLE')
       await mutate('/api/cocoproxy/bandwidth', { node, expectedActive: current.active })
-    } catch (cause) { error.value = message(cause) }
+    } catch (cause) { error.value = () => message(cause) }
     finally { sending.value = false; schedule() }
   }
   async function cancel() {
@@ -179,7 +181,7 @@ export function useBandwidthTest() {
       uncertain.value = sessionStorage.getItem(pendingKey) === '1'
     } catch {
       client.value ||= randomClient()
-      error.value = '无法保存浏览器任务标识，请允许会话存储后再开始测试。'
+      error.value = () => t('coco.clientStorageFailed')
     }
     const pending = uncertain.value
     await refresh(true)

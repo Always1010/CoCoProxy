@@ -1,3 +1,4 @@
+import { uiTestContext, useI18n } from './ui-i18n-helpers.ts';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
@@ -18,7 +19,7 @@ function harness(storage = new Map<string, string>()) {
   let failure = false;
   let readReply: (() => Promise<any>) | undefined;
   const exports: Record<string, any> = {};
-  new Script(code).runInNewContext({
+  new Script(code).runInNewContext({ ...uiTestContext,
     exports, ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     onMounted() {}, onUnmounted() {}, document: { hidden: false },
     setTimeout: () => 1, clearTimeout() {}, AbortSignal, AbortController,

@@ -59,14 +59,14 @@ const latencyClass = computed(() =>
 const latencyText = computed(() => {
   if (failureReason.value)
     return latencyFeedback.shortLatencyFailure(failureReason.value)
-  return latency.value ? `代理 ${latency.value} ms` : '代理未测'
+  return latency.value ? t('coco.anProxyMs', { value: latency.value }) : t('coco.anProxyNotTested')
 })
 
 const feedbackTitle = computed(() =>
   failureReason.value
     ? latencyFeedback.describeLatencyFailure(failureReason.value)
     : props.interactive
-      ? '测试代理延迟：通过此节点访问测试网址'
+      ? t('coco.anTestProxyLatencyAccessTheTest')
       : undefined,
 )
 
@@ -77,7 +77,7 @@ const ariaLabel = computed(() => {
   if (isTesting.value) return t('recommendation.testing')
   if (failureReason.value)
     return latencyFeedback.describeLatencyFailure(failureReason.value)
-  const value = latency.value ? `${latency.value} ms` : '尚未测试'
+  const value = latency.value ? `${latency.value} ms` : t('coco.anNotTestedYet')
   return props.interactive ? `${t('testLatency')}, ${value}` : value
 })
 </script>
@@ -103,7 +103,7 @@ const ariaLabel = computed(() => {
         aria-hidden="true"
         class="h-3 w-3 animate-spin rounded-full border-2 border-current/30 border-t-current"
       />
-      <span>测试中</span>
+      <span>{{ t('coco.anTesting') }}</span>
     </span>
     <span v-else>{{ latencyText }}</span>
   </span>

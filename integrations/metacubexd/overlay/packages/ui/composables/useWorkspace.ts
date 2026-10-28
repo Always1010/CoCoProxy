@@ -94,12 +94,17 @@ export interface WorkspaceView {
 }
 
 export function useWorkspace() {
+  const { t } = useNuxtApp().$i18n
   const api = useCoCoProxy()
   const view = useState<WorkspaceView | null>('cocoproxy-workspace', () => null)
   const busy = useState('cocoproxy-workspace-busy', () => false)
-  const error = useState('cocoproxy-workspace-error', () => '')
-  const feedback = useState('cocoproxy-workspace-feedback', () => '')
-  const operation = useState('cocoproxy-workspace-operation', () => '')
+  const errorCode = useState('cocoproxy-workspace-error', () => '')
+  const feedbackKey = useState('cocoproxy-workspace-feedback', () => '')
+  const operationKey = useState('cocoproxy-workspace-operation', () => '')
+  const messageParams = useState<Record<string, string>>('cocoproxy-workspace-message-params', () => ({}))
+  const error = computed(() => errorCode.value ? cocoproxyErrorMessage(new CoCoProxyError(errorCode.value), t) : '')
+  const feedback = computed(() => feedbackKey.value ? t(feedbackKey.value, messageParams.value) : '')
+  const operation = computed(() => operationKey.value ? t(operationKey.value, messageParams.value) : '')
   const workspace = computed(() => view.value?.workspace)
   const overrides = computed(() => {
     const settings = workspace.value
@@ -117,24 +122,25 @@ export function useWorkspace() {
   async function execute(action: () => Promise<void>) {
     if (busy.value) throw new CoCoProxyError('STORE_LOCKED')
     busy.value = true
-    error.value = ''
-    feedback.value = ''
+    errorCode.value = ''
+    feedbackKey.value = ''
     try { await action() }
-    catch (cause) { error.value = cocoproxyErrorMessage(cause); throw cause }
-    finally { busy.value = false; operation.value = '' }
+    catch (cause) { errorCode.value = cause instanceof CoCoProxyError ? cause.code : 'UNKNOWN'; throw cause }
+    finally { busy.value = false; operationKey.value = '' }
   }
 
   async function run(action: () => Promise<void>) {
     try { await execute(action) } catch { /* The shared alert reports the failure. */ }
   }
 
-  async function save(change: (settings: WorkspaceSettings) => void, message = '设置已生效') {
+  async function save(change: (settings: WorkspaceSettings) => void,
+    message: string | { key: string; params?: Record<string, string> } = 'coco.settingsSaved') {
     if (!workspace.value || !view.value) throw new CoCoProxyError('WORKSPACE_UNAVAILABLE')
     const { revision, ...current } = workspace.value
     const expectedActive = view.value.active
     const settings = JSON.parse(JSON.stringify(current)) as WorkspaceSettings
     change(settings)
-    operation.value = '正在使设置生效…'
+    operationKey.value = 'coco.applyingSettings'
     try {
       const saved = await api.request<{ workspace: WorkspaceSettings & { revision: number } }>('/api/cocoproxy/workspace', {
         method: 'PUT', body: { expectedRevision: revision, settings },
@@ -144,7 +150,8 @@ export function useWorkspace() {
       })
       await load()
       if (view.value.active !== result.active || view.value.pending) throw new CoCoProxyError('WORKSPACE_CONFLICT')
-      feedback.value = message
+      feedbackKey.value = typeof message === 'string' ? message : message.key
+      messageParams.value = typeof message === 'string' ? {} : message.params ?? {}
     } catch (cause) {
       // An interrupted request may already have taken effect. Read the core's
       // current state, but never retry a write or claim that it succeeded.
@@ -157,7 +164,8 @@ export function useWorkspace() {
     await execute(async () => {
       if (!view.value) throw new CoCoProxyError('WORKSPACE_UNAVAILABLE')
       const expectedRevision = view.value.workspace.revision
-      operation.value = `正在切换：${group} → ${name}`
+      messageParams.value = { group, name }
+      operationKey.value = 'coco.switching'
       try {
         const result = await api.request<{ active: string; view: WorkspaceView }>('/api/cocoproxy/workspace/select', {
           method: 'POST', body: { expectedRevision, expectedActive: view.value.active, group, name },
@@ -168,7 +176,7 @@ export function useWorkspace() {
           throw new CoCoProxyError('SELECTION_UNCONFIRMED')
         view.value = result.view
         api.generation.value = result.active
-        feedback.value = `已切换：${group} → ${name}`
+        feedbackKey.value = 'coco.switched'
       } catch (cause) {
         // A failed response can follow a committed switch. Read once; never
         // replay the write or infer success from the user's requested choice.

@@ -51,6 +51,7 @@ interface ProxyInfo {
 }
 
 export const useProxiesStore = defineStore('proxies', () => {
+  const { t } = useNuxtApp().$i18n
   const configStore = useConfigStore()
   const connectionsStore = useConnectionsStore()
   const latencyFeedback = useLatencyFeedback()
@@ -589,7 +590,7 @@ export const useProxiesStore = defineStore('proxies', () => {
       if (delay > 0) latencyFeedback.succeedNode(proxyName, delay)
       else {
         latencyFeedback.failNode(proxyName, 'failed')
-        toast.error('测延迟失败', {
+        toast.error(t('coco.latencyFailed'), {
           description: latencyFeedback.describeLatencyFailure('failed'),
         })
       }
@@ -645,9 +646,9 @@ export const useProxiesStore = defineStore('proxies', () => {
         } else latencyFeedback.failNode(memberName, 'failed')
       }
       if (succeeded === memberNames.length)
-        toast.success(`测延迟完成：${succeeded}/${memberNames.length} 个节点成功`)
+        toast.success(t('coco.nodesTested', { succeeded, total: memberNames.length }))
       else
-        toast.error(`测延迟完成：${succeeded}/${memberNames.length} 个节点成功`, {
+        toast.error(t('coco.nodesTested', { succeeded, total: memberNames.length }), {
           description: latencyFeedback.describeLatencyFailure('failed'),
         })
       try {
@@ -670,7 +671,7 @@ export const useProxiesStore = defineStore('proxies', () => {
       }
       nodeRecommendationStore.recordBatchResults(failedResults)
       const reason = latencyFailureReason(error)
-      toast.error(`测延迟完成：0/${memberNames.length} 个节点成功`, {
+      toast.error(t('coco.nodesTested', { succeeded: 0, total: memberNames.length }), {
         description: latencyFeedback.describeLatencyFailure(reason),
       })
     } finally {
@@ -786,14 +787,14 @@ export const useProxiesStore = defineStore('proxies', () => {
         succeeded === memberNames.length &&
         !nodeRecommendationStore.batchTestProgress.isRunning
       )
-        toast.success(`测延迟完成：${succeeded}/${memberNames.length} 个节点成功`)
+        toast.success(t('coco.nodesTested', { succeeded, total: memberNames.length }))
       else if (!nodeRecommendationStore.batchTestProgress.isRunning) {
         const dominantReason = failureCounts.probe_denied
           ? 'probe_denied'
           : failureCounts.timeout
             ? 'timeout'
             : 'failed'
-        toast.error(`测延迟完成：${succeeded}/${memberNames.length} 个节点成功`, {
+        toast.error(t('coco.nodesTested', { succeeded, total: memberNames.length }), {
           description: latencyFeedback.describeLatencyFailure(dominantReason),
         })
       }

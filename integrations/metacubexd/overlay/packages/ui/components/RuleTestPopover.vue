@@ -2,6 +2,7 @@
 import { IconRoute } from '@tabler/icons-vue'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
+const { t } = useI18n()
 interface Match {
   status: 'matched' | 'indeterminate'
   address?: string
@@ -25,7 +26,8 @@ const sourceIP = ref('')
 const sourcePort = ref('')
 const testing = ref(false)
 const result = ref<Result | null>(null)
-const error = ref('')
+const errorSource = shallowRef<(() => string) | null>(null)
+const error = computed(() => errorSource.value?.() ?? '')
 let pending: AbortController | undefined
 
 function cancel() {
@@ -45,21 +47,21 @@ function close() { opened.value = false; cancel() }
 function reset() {
   cancel()
   result.value = null
-  error.value = ''
+  errorSource.value = null
 }
 
 watch([target, network, destinationPort, sourceIP, sourcePort], reset)
 watch(() => view.value?.active, (value, previous) => {
   if (value !== previous && (result.value || testing.value)) {
     reset()
-    error.value = '运行配置已变化，请重新测试。'
+    errorSource.value = () => t('coco.pzTheActiveConfigurationChangedRunTheTestAgain')
   }
 })
 
 async function test() {
   if (testing.value || !target.value.trim()) return
   result.value = null
-  error.value = ''
+  errorSource.value = null
   const abort = new AbortController()
   pending = abort
   testing.value = true
@@ -76,64 +78,99 @@ async function test() {
     })
     if (!abort.signal.aborted) result.value = response
   } catch (cause) {
-    if (!abort.signal.aborted) error.value = cocoproxyErrorMessage(cause)
+    if (!abort.signal.aborted) errorSource.value = () => cocoproxyErrorMessage(cause, t)
   } finally {
     if (pending === abort) { pending = undefined; testing.value = false }
   }
 }
 
+const ruleMessageKeys: Record<string, string> = {
+  "未命中前面的规则，使用兜底策略": "coco.pzRuleResultFallbackPolicy",
+  "此规则需要 TCP／UDP 条件，请展开高级条件补充。": "coco.pzRuleResultProtocolRequired",
+  "此规则需要目的端口，请展开高级条件补充。": "coco.pzRuleResultDestinationPortRequired",
+  "此规则需要来源端口，请展开高级条件补充。": "coco.pzRuleResultSourcePortRequired",
+  "此规则需要来源 IP，请展开高级条件补充。": "coco.pzRuleResultSourceIpRequired",
+  "此规则集合暂不支持分析。": "coco.pzRuleResultRuleSetUnsupported",
+  "规则集合内容无法分析。": "coco.pzRuleResultRuleSetContentUnsupported",
+  "规则集合包含无法分析的地址。": "coco.pzRuleResultRuleSetAddressUnsupported",
+  "此规则集合类型暂不支持分析。": "coco.pzRuleResultRuleSetTypeUnsupported",
+  "策略组引用存在循环，无法确定出口。": "coco.pzRuleResultPolicyCycle",
+  "此策略组按连接选择或组合节点，无法仅由当前状态确定最终节点。": "coco.pzRuleResultPolicyConnectionSelection",
+  "此策略会重新匹配连接，无法确定最终出口。": "coco.pzRuleResultPolicyRematch",
+  "内核未返回完整的当前选择，无法确定最终出口。": "coco.pzRuleResultPolicyIncompleteSelection",
+  "策略组引用过深，无法确定最终出口。": "coco.pzRuleResultPolicyReferenceDepth",
+  "当前核心使用直连模式。": "coco.pzRuleResultCoreDirectMode",
+  "当前核心使用全局模式。": "coco.pzRuleResultCoreGlobalMode",
+  "此规则使用复杂表达式，暂无法分析。": "coco.pzRuleResultComplexRuleUnsupported",
+  "此策略不支持 UDP，请在高级条件中指定 TCP／UDP。": "coco.pzRuleResultPolicyUdpUnsupported",
+  "未命中任何规则，内核默认直连。": "coco.pzRuleResultDefaultDirect"
+}
+function ruleMessage(value: string) {
+  if (ruleMessageKeys[value]) return t(ruleMessageKeys[value]!)
+  const expression = value.match(/^暂不支持此规则的表达式：(.*)$/)
+  if (expression) return t('coco.pzRuleExpressionUnsupported', { type: expression[1] })
+  const unsupported = value.match(/^规则 (.*) 需要额外连接信息或暂不支持分析，无法确定后续去向。$/)
+  if (unsupported) return t('coco.pzRuleNeedsConnectionInfo', { type: unsupported[1] })
+  const domainSet = value.match(/^域名集合 (.*?)：(.*)$/)
+  if (domainSet) return t('coco.pzRuleDomainSetMatch', { provider: domainSet[1], entry: domainSet[2] })
+  const ipSet = value.match(/^IP 集合 (.*?)：(.*)$/)
+  if (ipSet) return t('coco.pzRuleIpSetMatch', { provider: ipSet[1], entry: ipSet[2] })
+  return value
+}
+
+const catalogLabels: Record<string, string> = { Proxy: 'coco.pzCatalogProxy', Overseas: 'coco.pzCatalogOverseas', Domestic: 'coco.pzCatalogDomestic', Other: 'coco.pzCatalogOther' }
 function policyName(name: string) {
-  if (name === 'DIRECT') return 'DIRECT（直连）'
-  if (name === 'REJECT' || name === 'REJECT-DROP') return `${name}（拒绝）`
-  const label = workspace.value?.mode === 'local' ? view.value?.catalog?.find(group => group.id === name)?.name : undefined
-  return label && label !== name ? `${label}（${name}）` : name
+  if (name === 'DIRECT') return t('coco.pzDirectDirectConnection')
+  if (name === 'REJECT' || name === 'REJECT-DROP') return t('coco.pzReject', { name: name })
+  const label = workspace.value?.mode === 'local' ? catalogLabels[name] ? t(catalogLabels[name]!) : view.value?.catalog?.find(group => group.id === name)?.name : undefined
+  return label && label !== name ? `${label} (${name})` : name
 }
 
 onBeforeUnmount(cancel)
 </script>
 
 <template>
-  <button class="btn btn-ghost btn-sm" title="测试规则" aria-label="测试规则" aria-haspopup="dialog" aria-controls="rule-test-popover" :aria-expanded="opened" @click="open">
+  <button class="btn btn-ghost btn-sm" :title="t('coco.pzTestRules')" :aria-label="t('coco.pzTestRules')" aria-haspopup="dialog" aria-controls="rule-test-popover" :aria-expanded="opened" @click="open">
     <IconRoute :size="18" />
-    <span>测试规则</span>
+    <span>{{ t('coco.pzTestRules') }}</span>
   </button>
-  <Modal id="rule-test-popover" ref="panel" title="规则测试" @close="close">
+  <Modal id="rule-test-popover" ref="panel" :title="t('coco.pzRuleTest')" @close="close">
     <form class="flex flex-col gap-3" @submit.prevent="test">
       <label class="input input-sm flex w-full items-center gap-2">
-        <span class="sr-only">域名或 IP</span>
-        <input ref="input" v-model="target" class="min-w-0 grow" aria-label="域名或 IP" placeholder="输入域名或 IP" maxlength="1024" autocomplete="off" autocapitalize="none" spellcheck="false" required />
+        <span class="sr-only">{{ t('coco.pzDomainOrIp') }}</span>
+        <input ref="input" v-model="target" class="min-w-0 grow" :aria-label="t('coco.pzDomainOrIp')" :placeholder="t('coco.pzEnterADomainOrIp')" maxlength="1024" autocomplete="off" autocapitalize="none" spellcheck="false" required />
       </label>
       <div class="flex items-center justify-between gap-2">
-        <span class="text-xs text-base-content/50">按当前已生效配置测试</span>
-        <button type="submit" class="btn btn-primary min-h-11" :disabled="testing || !target.trim()"><span v-if="testing" class="loading loading-spinner loading-xs" /><IconRoute v-else :size="16" /><span>{{ testing ? '正在测试' : '测试规则' }}</span></button>
+        <span class="text-xs text-base-content/50">{{ t('coco.pzTestAgainstTheActiveConfiguration') }}</span>
+        <button type="submit" class="btn btn-primary min-h-11" :disabled="testing || !target.trim()"><span v-if="testing" class="loading loading-spinner loading-xs" /><IconRoute v-else :size="16" /><span>{{ testing ? t('coco.pzTesting') : t('coco.pzTestRules') }}</span></button>
       </div>
       <details class="text-xs">
-        <summary class="w-fit cursor-pointer text-base-content/60">高级条件</summary>
+        <summary class="w-fit cursor-pointer text-base-content/60">{{ t('coco.pzAdvancedConditions') }}</summary>
         <div class="mt-2 grid grid-cols-2 gap-2">
-          <label class="flex flex-col gap-1">协议<select v-model="network" class="select select-sm w-full" aria-label="测试协议"><option value="">未指定</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-          <label class="flex flex-col gap-1">目的端口<input v-model="destinationPort" type="number" min="1" max="65535" class="input input-sm w-full" aria-label="测试目的端口" placeholder="可选" /></label>
-          <label class="flex flex-col gap-1">来源 IP<input v-model="sourceIP" class="input input-sm w-full" aria-label="测试来源 IP" placeholder="可选" maxlength="45" spellcheck="false" /></label>
-          <label class="flex flex-col gap-1">来源端口<input v-model="sourcePort" type="number" min="1" max="65535" class="input input-sm w-full" aria-label="测试来源端口" placeholder="可选" /></label>
+          <label class="flex flex-col gap-1">{{ t('coco.pzProtocol') }}<select v-model="network" class="select select-sm w-full" :aria-label="t('coco.pzTestProtocol')"><option value="">{{ t('coco.pzUnspecified') }}</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+          <label class="flex flex-col gap-1">{{ t('coco.pzDestinationPort') }}<input v-model="destinationPort" type="number" min="1" max="65535" class="input input-sm w-full" :aria-label="t('coco.pzTestDestinationPort')" :placeholder="t('coco.pzOptional')" /></label>
+          <label class="flex flex-col gap-1">{{ t('coco.pzSourceIp') }}<input v-model="sourceIP" class="input input-sm w-full" :aria-label="t('coco.pzTestSourceIp')" :placeholder="t('coco.pzOptional')" maxlength="45" spellcheck="false" /></label>
+          <label class="flex flex-col gap-1">{{ t('coco.pzSourcePort') }}<input v-model="sourcePort" type="number" min="1" max="65535" class="input input-sm w-full" :aria-label="t('coco.pzTestSourcePort')" :placeholder="t('coco.pzOptional')" /></label>
         </div>
       </details>
     </form>
-    <div v-if="testing" role="status" class="mt-3 border-t border-base-content/10 pt-3 text-sm text-base-content/60">正在测试…</div>
+    <div v-if="testing" role="status" class="mt-3 border-t border-base-content/10 pt-3 text-sm text-base-content/60">{{ t('coco.pzTesting2') }}</div>
     <div v-if="error" role="alert" class="mt-3 rounded-lg bg-error/10 p-3 text-sm text-error">{{ error }}</div>
     <div v-if="result" role="status" aria-live="polite" class="mt-3 space-y-3 border-t border-base-content/10 pt-3">
-      <div class="break-all text-xs text-base-content/60">{{ result.target }}<span v-if="result.results.length > 1"> · 按各解析地址分别分析</span></div>
+      <div class="break-all text-xs text-base-content/60">{{ result.target }}<span v-if="result.results.length > 1"> {{ t('coco.pzAnalyzeEachResolvedAddressSeparately') }}</span></div>
       <div v-for="(match, index) in result.results" :key="index" class="space-y-2 rounded-xl bg-base-200/70 p-3">
         <div v-if="match.address" class="break-all font-mono text-xs text-base-content/60">{{ match.address }}</div>
         <template v-if="match.status === 'matched'">
-          <div class="text-xs text-base-content/55">目标策略</div>
+          <div class="text-xs text-base-content/55">{{ t('coco.pzTargetPolicy') }}</div>
           <div class="break-all text-base font-semibold">{{ policyName(match.policy!) }}</div>
-          <div v-if="match.chain?.length" class="break-all text-xs"><span class="text-base-content/55">当前出口：</span>{{ match.chain.join(' → ') }}</div>
+          <div v-if="match.chain?.length" class="break-all text-xs"><span class="text-base-content/55">{{ t('coco.pzCurrentOutbound') }}</span>{{ match.chain.join(' → ') }}</div>
         </template>
-        <div v-else class="text-sm font-semibold text-warning">暂无法确定</div>
-        <div v-if="match.rule" class="text-xs"><span class="text-base-content/55">命中{{ match.status === 'matched' ? '规则' : '待判断规则' }}<span v-if="match.index !== undefined"> #{{ match.index + 1 }}</span></span><code class="mt-1 block break-all whitespace-pre-wrap">{{ match.rule }}</code></div>
-        <p class="break-all text-xs text-base-content/70">{{ match.detail }}</p>
-        <p v-if="match.warning" class="text-xs text-warning">{{ match.warning }}</p>
+        <div v-else class="text-sm font-semibold text-warning">{{ t('coco.pzUndetermined') }}</div>
+        <div v-if="match.rule" class="text-xs"><span class="text-base-content/55">{{ match.status === 'matched' ? t('coco.pzMatchedRule') : t('coco.pzPendingMatchedRule') }}<span v-if="match.index !== undefined"> #{{ match.index + 1 }}</span></span><code class="mt-1 block break-all whitespace-pre-wrap">{{ match.rule }}</code></div>
+        <p class="break-all text-xs text-base-content/70">{{ ruleMessage(match.detail) }}</p>
+        <p v-if="match.warning" class="text-xs text-warning">{{ ruleMessage(match.warning) }}</p>
       </div>
-      <p class="text-xs leading-relaxed text-base-content/45">规则分析不会连接目标网站；需要时使用核心 DNS。真实连接还可能受域名嗅探、入站条件和自动选路影响。</p>
+      <p class="text-xs leading-relaxed text-base-content/45">{{ t('coco.pzRuleAnalysisDoesNotConnectToTheDestinationWebsite') }}</p>
     </div>
   </Modal>
 </template>

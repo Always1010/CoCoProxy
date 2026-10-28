@@ -12,6 +12,7 @@ vi.mock('~/composables/useApi', () => ({
   unfixProxyInGroupAPI: vi.fn(), updateProxyProviderAPI: vi.fn(),
 }))
 beforeEach(() => {
+  vi.stubGlobal('useNuxtApp', () => ({ $i18n: { t: (key: string) => key } }))
   setActivePinia(createPinia())
   mocks.evidence = ref({ node: ['https://site.example/check'] })
   vi.stubGlobal('useState', () => mocks.evidence)

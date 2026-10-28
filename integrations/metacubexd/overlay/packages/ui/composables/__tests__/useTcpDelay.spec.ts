@@ -7,6 +7,7 @@ vi.mock('../useWorkspace', () => ({ useWorkspace: () => mocks.workspace }))
 
 describe('TCP delay results', () => {
   beforeEach(() => {
+    vi.stubGlobal('useNuxtApp', () => ({ $i18n: { t: (key: string) => key } }))
     const state = ref({})
     vi.stubGlobal('useState', () => state)
     vi.stubGlobal('onBeforeUnmount', vi.fn())

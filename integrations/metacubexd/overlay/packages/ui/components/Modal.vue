@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { IconX } from '@tabler/icons-vue'
+const { t } = useI18n()
 
 interface Props {
   compact?: boolean
@@ -98,8 +99,8 @@ defineExpose({ open, close })
         <button
           type="button"
           class="modal-close flex min-h-8 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-lg bg-transparent px-2"
-          title="关闭弹窗"
-          aria-label="关闭弹窗"
+          :title="t('coco.anCloseDialog')"
+          :aria-label="t('coco.anCloseDialog')"
           :disabled="closeDisabled"
           :style="{
             border: '1px solid var(--modal-border)',
@@ -108,7 +109,7 @@ defineExpose({ open, close })
           }"
           @click="requestClose"
         >
-          <IconX :size="18" aria-hidden="true" />
+          <IconX :size="18" aria-hidden="true" /><span class="text-xs">{{ t('coco.anClose') }}</span>
         </button>
       </div>
 

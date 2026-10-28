@@ -2,6 +2,7 @@
 import { IconArrowRight, IconCheck, IconChevronUp, IconHistory, IconRefresh, IconTrash, IconX } from '@tabler/icons-vue'
 import type { AutomaticStatus } from '~/composables/useWorkspace'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
+const { t, locale } = useI18n()
 
 const props = defineProps<{ groupName: string; selectable: boolean }>()
 const { api, view, overrides } = useWorkspace()
@@ -15,7 +16,7 @@ const loading = ref(false)
 const refreshing = ref(false)
 const clearing = ref(false)
 const confirmClear = ref(false)
-const error = ref('')
+const error = useLocalizedMessage()
 const updatedAt = ref<number>()
 const nearTop = ref(true)
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -31,33 +32,33 @@ const enabled = computed(() => !!policy.value && policy.value.enabled !== false)
 const hasHistory = computed(() => view.value?.automatic?.events.some(e => e.group === props.groupName))
 const available = computed(() => props.selectable && (enabled.value || hasHistory.value || (policy.value && view.value?.automatic?.error) || visible.value))
 const groupStatus = computed(() => status.value?.groups.find(g => g.name === props.groupName))
-const currentNode = computed(() => enabled.value && groupStatus.value?.current || view.value?.groups.find(g => g.name === props.groupName)?.activeSelected || '尚未确认')
-const currentPool = computed(() => enabled.value && policy.value?.preferred.includes(currentNode.value) ? '优选'
-  : enabled.value && policy.value?.fallback.includes(currentNode.value) ? '备选' : '')
+const currentNode = computed(() => enabled.value && groupStatus.value?.current || view.value?.groups.find(g => g.name === props.groupName)?.activeSelected || t('coco.anNotConfirmed'))
+const currentPool = computed(() => enabled.value && policy.value?.preferred.includes(currentNode.value) ? t('coco.anPreferred')
+  : enabled.value && policy.value?.fallback.includes(currentNode.value) ? t('coco.anFallback') : '')
 const events = computed(() => (status.value?.events ?? []).filter(e => e.group === props.groupName).slice().reverse())
 const eventKey = (event: HistoryEvent) => event.id ?? JSON.stringify([event.at, event.from, event.to, event.reason])
 const newCount = computed(() => {
   const shown = new Set(displayed.value.map(eventKey))
   return events.value.filter(e => !shown.has(eventKey(e))).length
 })
-const phases: Record<string, string> = {
-  outage: '暂无可用出口，退避重试', 'slow-search': '正在寻找更快的候选节点', 'failure-search': '正在寻找可用候选节点',
-  'failure-confirmation': '正在复核当前节点', 'return-confirmation': '正在确认优选恢复', backup: '使用备选，监测当前节点', monitoring: '监测当前节点',
-}
-const reasons: Record<string, string> = {
-  'bandwidth-improvement': '候选的保守吞吐收益超过切换成本，完成切换',
-  'preferred-restored': '优选节点恢复，并通过稳定性确认', 'faster-candidate': '当前节点连续变慢，候选节点满足改善条件',
-  'failure-recovery': '原节点检测失败，已确认替代节点可用', 'current-slow': '当前节点连续变慢',
-  'current-unavailable': '当前节点不可用', 'all-unavailable': '本轮未能确认可用出口',
-  'no-better-candidate': '暂未找到明显更快的候选节点', 'preferred-check-failed': '优选尚未稳定恢复',
-}
-const phase = computed(() => !enabled.value ? '自动选择已停用，保留历史供回看'
-  : status.value?.paused ? '自动选择已暂停'
-    : status.value?.suspended || view.value?.pending ? '运行暂不可用或配置待生效'
-      : groupStatus.value ? phases[groupStatus.value.phase] ?? '等待调度' : '等待调度或运行状态更新')
-const timeLabel = (at: number) => new Date(at).toLocaleString()
-const poolLabel = (pool?: string) => pool === 'preferred' ? '优选' : pool === 'fallback' ? '备选' : ''
-const eventLabel = (reason: string) => reason === 'bandwidth-improvement' ? '吞吐性能切换' : reason === 'preferred-restored' ? '优选回切' : reason === 'faster-candidate' ? '性能切换' : reason === 'failure-recovery' ? '故障切换' : '自动切换'
+const phases = computed<Record<string, string>>(() => ({
+  outage: t('coco.anNoAvailableExitRetryingWithBackoff'), 'slow-search': t('coco.anLookingForAFasterCandidate'), 'failure-search': t('coco.anLookingForAnAvailableCandidate'),
+  'failure-confirmation': t('coco.anRecheckingTheCurrentNode'), 'return-confirmation': t('coco.anConfirmingPreferredNodeRecovery'), backup: t('coco.anUsingFallbackMonitoringTheCurrentNode'), monitoring: t('coco.anMonitoringTheCurrentNode'),
+}))
+const reasons = computed<Record<string, string>>(() => ({
+  'bandwidth-improvement': t('coco.anSwitchedBecauseTheConservativeThroughputBenefit'),
+  'preferred-restored': t('coco.anThePreferredNodeRecoveredAndPassed'), 'faster-candidate': t('coco.anTheCurrentNodeRemainedSlowAnd'),
+  'failure-recovery': t('coco.anThePreviousNodeFailedChecksAnd'), 'current-slow': t('coco.anTheCurrentNodeRemainsSlow'),
+  'current-unavailable': t('coco.anTheCurrentNodeIsUnavailable'), 'all-unavailable': t('coco.anNoAvailableExitWasConfirmedIn'),
+  'no-better-candidate': t('coco.anNoSignificantlyFasterCandidateFoundYet'), 'preferred-check-failed': t('coco.anPreferredNodesHaveNotRecoveredReliably'),
+}))
+const phase = computed(() => !enabled.value ? t('coco.anAutomaticSelectionIsDisabledHistoryRemains')
+  : status.value?.paused ? t('coco.anAutomaticSelectionIsPaused')
+    : status.value?.suspended || view.value?.pending ? t('coco.anOperationIsUnavailableOrConfigurationIs')
+      : groupStatus.value ? phases.value[groupStatus.value.phase] ?? t('coco.anWaitingForScheduling') : t('coco.anWaitingForSchedulingOrAStatus'))
+const timeLabel = (at: number) => new Date(at).toLocaleString(locale.value)
+const poolLabel = (pool?: string) => pool === 'preferred' ? t('coco.anPreferred') : pool === 'fallback' ? t('coco.anFallback') : ''
+const eventLabel = (reason: string) => reason === 'bandwidth-improvement' ? t('coco.anThroughputSwitch') : reason === 'preferred-restored' ? t('coco.anReturnToPreferred') : reason === 'faster-candidate' ? t('coco.anPerformanceSwitch') : reason === 'failure-recovery' ? t('coco.anFailover') : t('coco.anAutomaticSwitch')
 
 function showLatest(scroll = true) {
   displayed.value = [...events.value]
@@ -87,13 +88,13 @@ async function readStatus(background = true) {
     const result = await api.request<AutomaticStatus>('/api/cocoproxy/automatic/status')
     if (visible.value && id === requestId && requestScope === scope.value) {
       if (result.scope !== requestScope || result.workspaceRevision !== view.value?.workspace.revision) {
-        error.value = '方案或设置已变化，请关闭面板并刷新工作区。'
+        error.value = () => t('coco.anThePlanOrSettingsChangedClose')
         return
       }
       accept(result)
     }
   } catch (cause) {
-    if (visible.value && id === requestId) error.value = cocoproxyErrorMessage(cause)
+    if (visible.value && id === requestId) error.value = () => cocoproxyErrorMessage(cause, t)
   } finally { if (id === requestId) { loading.value = false; refreshing.value = false } }
 }
 async function poll(currentSession: number) {
@@ -122,7 +123,7 @@ function open() {
 async function clearHistory() {
   if (clearing.value || refreshing.value || !confirmClear.value || !status.value?.scope) return
   if (status.value.workspaceRevision !== view.value?.workspace.revision) {
-    error.value = '方案或设置已变化，请关闭面板并刷新工作区。'
+    error.value = () => t('coco.anThePlanOrSettingsChangedClose')
     return
   }
   const id = ++requestId
@@ -139,7 +140,7 @@ async function clearHistory() {
       if (visible.value && id === requestId) { accept(result); showLatest(); confirmClear.value = false }
     }
   } catch (cause) {
-    if (visible.value && id === requestId) error.value = cocoproxyErrorMessage(cause)
+    if (visible.value && id === requestId) error.value = () => cocoproxyErrorMessage(cause, t)
   } finally { clearing.value = false }
 }
 function visibilityChanged() { if (!document.hidden) void readStatus() }
@@ -150,42 +151,42 @@ onUnmounted(() => { disposed = true; close(); document.removeEventListener('visi
 
 <template>
   <span v-if="available" class="shrink-0">
-    <button type="button" class="btn btn-ghost btn-sm min-h-11" :aria-label="`${groupName} 切换历史`" @click="open"><IconHistory :size="18" aria-hidden="true" /><span>切换历史</span></button>
+    <button type="button" class="btn btn-ghost btn-sm min-h-11" :aria-label="t('coco.anSwitchHistoryFor', { value: groupName })" @click="open"><IconHistory :size="18" aria-hidden="true" /><span>{{ t('coco.anSwitchHistory') }}</span></button>
   </span>
-  <Modal ref="dialog" :title="`${groupName} · 切换历史`" @close="close">
+  <Modal ref="dialog" :title="t('coco.anSwitchHistory2', { value: groupName })" @close="close">
     <template #content>
       <div class="mb-3 flex min-h-11 shrink-0 items-center gap-2">
-        <button v-if="newCount" type="button" class="btn btn-primary btn-sm min-h-11 shrink-0" @click="showLatest()"><IconChevronUp :size="16" aria-hidden="true" /><span>有 {{ newCount }} 条新记录 · 查看最新</span></button>
-        <p v-if="error" role="alert" class="min-w-0 text-sm text-warning">更新失败：{{ error }} 已显示的记录仍予保留。</p>
+        <button v-if="newCount" type="button" class="btn btn-primary btn-sm min-h-11 shrink-0" @click="showLatest()"><IconChevronUp :size="16" aria-hidden="true" /><span>{{ t('coco.anNewRecordsViewLatest', { value: newCount }) }}</span></button>
+        <p v-if="error" role="alert" class="min-w-0 text-sm text-warning">{{ t('coco.anUpdateFailedPreviouslyDisplayedRecordsAre', { value: error }) }}</p>
       </div>
       <div ref="scroller" class="min-h-0 flex-1 space-y-3 overflow-y-auto [scrollbar-gutter:stable]" @scroll="onScroll">
-      <section class="shrink-0 space-y-1 rounded-lg bg-base-200 p-3 text-sm" aria-label="当前自动选择状态" aria-live="polite">
-        <p>{{ enabled ? '自动选择已开启' : '自动选择已关闭' }}</p>
-        <p class="break-all">当前出口：{{ currentNode }}{{ currentPool ? ` · ${currentPool}` : '' }}</p>
+      <section class="shrink-0 space-y-1 rounded-lg bg-base-200 p-3 text-sm" :aria-label="t('coco.anCurrentAutomaticSelectionStatus')" aria-live="polite">
+        <p>{{ enabled ? t('coco.anAutomaticSelectionIsOn') : t('coco.anAutomaticSelectionIsOff') }}</p>
+        <p class="break-all">{{ t('coco.anCurrentExit', { value: currentNode, value2: currentPool ? ` · ${currentPool}` : '' }) }}</p>
         <p :class="groupStatus?.phase === 'outage' && enabled ? 'text-warning' : 'text-base-content/70'">{{ phase }}</p>
-        <p class="text-xs text-base-content/65">{{ enabled && groupStatus?.reason ? reasons[groupStatus.reason] ?? '运行状态发生变化' : '暂无补充原因' }}</p>
-        <p class="text-xs text-base-content/65 tabular-nums">下次检测：{{ enabled && !status?.suspended && !view?.pending && groupStatus?.nextAt ? timeLabel(groupStatus.nextAt) : '等待调度' }}</p>
+        <p class="text-xs text-base-content/65">{{ enabled && groupStatus?.reason ? reasons[groupStatus.reason] ?? t('coco.anTheOperationStatusChanged') : t('coco.anNoAdditionalReason') }}</p>
+        <p class="text-xs text-base-content/65 tabular-nums">{{ t('coco.anNextCheck', { value: enabled && !status?.suspended && !view?.pending && groupStatus?.nextAt ? timeLabel(groupStatus.nextAt) : t('coco.anWaitingForScheduling') }) }}</p>
       </section>
       <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
-        <span>{{ updatedAt ? `最近更新于 ${timeLabel(updatedAt)}` : '正在读取历史…' }}</span>
-        <button type="button" class="btn btn-ghost btn-sm min-h-11 min-w-28 shrink-0" :disabled="refreshing || clearing" @click="readStatus(false)"><IconRefresh :size="16" :class="{ 'animate-spin': refreshing }" aria-hidden="true" /><span>{{ refreshing ? '正在刷新' : '刷新' }}</span></button>
+        <span>{{ updatedAt ? t('coco.anLastUpdatedAt', { value: timeLabel(updatedAt) }) : t('coco.anLoadingHistory') }}</span>
+        <button type="button" class="btn btn-ghost btn-sm min-h-11 min-w-28 shrink-0" :disabled="refreshing || clearing" @click="readStatus(false)"><IconRefresh :size="16" :class="{ 'animate-spin': refreshing }" aria-hidden="true" /><span>{{ refreshing ? t('coco.anRefreshing') : t('coco.anRefresh') }}</span></button>
       </div>
-        <ol v-if="displayed.length" class="space-y-3" aria-label="当前组切换记录">
+        <ol v-if="displayed.length" class="space-y-3" :aria-label="t('coco.anSwitchRecordsForThisGroup')">
           <li v-for="event in displayed" :key="eventKey(event)" class="space-y-2 rounded-lg border border-base-content/10 p-3 text-sm">
             <div class="flex flex-wrap items-center justify-between gap-2"><time :datetime="new Date(event.at).toISOString()" class="text-xs text-base-content/60">{{ timeLabel(event.at) }}</time><span class="badge badge-sm">{{ eventLabel(event.reason) }}</span></div>
-            <div class="flex flex-wrap items-center gap-2"><span class="min-w-0 break-all">{{ event.from ?? '未选择' }}<span v-if="event.fromPool" class="ml-1 text-xs text-base-content/60">（{{ poolLabel(event.fromPool) }}）</span></span><IconArrowRight :size="16" class="shrink-0" aria-hidden="true" /><span class="min-w-0 break-all">{{ event.to ?? '未选择' }}<span v-if="event.toPool" class="ml-1 text-xs text-base-content/60">（{{ poolLabel(event.toPool) }}）</span></span></div>
-            <p class="text-xs leading-relaxed text-base-content/70">原因：{{ reasons[event.reason] ?? '自动选择已确认新的出口节点' }}</p>
+            <div class="flex flex-wrap items-center gap-2"><span class="min-w-0 break-all">{{ event.from ?? t('coco.anNotSelected') }}<span v-if="event.fromPool" class="ml-1 text-xs text-base-content/60">（{{ poolLabel(event.fromPool) }}）</span></span><IconArrowRight :size="16" class="shrink-0" aria-hidden="true" /><span class="min-w-0 break-all">{{ event.to ?? t('coco.anNotSelected') }}<span v-if="event.toPool" class="ml-1 text-xs text-base-content/60">（{{ poolLabel(event.toPool) }}）</span></span></div>
+            <p class="text-xs leading-relaxed text-base-content/70">{{ t('coco.anReason', { value: reasons[event.reason] ?? t('coco.anAutomaticSelectionConfirmedANewExit') }) }}</p>
           </li>
         </ol>
-        <p v-else-if="status" class="py-8 text-center text-sm text-base-content/60">{{ enabled ? '暂无保留的切换记录，之后确认的节点切换会显示在这里。' : '暂无保留的切换记录。' }}</p>
+        <p v-else-if="status" class="py-8 text-center text-sm text-base-content/60">{{ enabled ? t('coco.anNoRetainedSwitchRecordsConfirmedNode') : t('coco.anNoRetainedSwitchRecords') }}</p>
       </div>
       <footer class="mt-3 max-h-[50%] shrink-0 space-y-2 overflow-y-auto border-t border-base-content/10 pt-3">
-        <p class="text-xs text-base-content/60">每组最多保留 50 条，最长 7 天，较早记录自动清理。仅记录确认生效的自动切换。</p>
+        <p class="text-xs text-base-content/60">{{ t('coco.anEachGroupRetainsUpToRecords') }}</p>
         <div v-if="confirmClear" class="space-y-2 rounded-lg bg-base-200 p-3 text-sm">
-          <p class="break-all">清空“{{ groupName }}”的切换历史？此操作无法撤销，{{ enabled ? '自动选择将继续运行。' : '当前节点和自动选择设置不变。' }}</p>
-          <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="clearing" @click="confirmClear = false"><IconX :size="16" aria-hidden="true" /><span>取消</span></button><button type="button" class="btn btn-error btn-sm min-h-11" :disabled="clearing || refreshing" @click="clearHistory"><IconCheck :size="16" aria-hidden="true" /><span>{{ clearing ? '正在清空' : '确认清空' }}</span></button></div>
+          <p class="break-all">{{ t('coco.anClearSwitchHistoryForThisCannot', { value: groupName, value2: enabled ? t('coco.anAutomaticSelectionWillContinueRunning') : t('coco.anTheCurrentNodeAndAutomaticSelection') }) }}</p>
+          <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="clearing" @click="confirmClear = false"><IconX :size="16" aria-hidden="true" /><span>{{ t('coco.anCancel') }}</span></button><button type="button" class="btn btn-error btn-sm min-h-11" :disabled="clearing || refreshing" @click="clearHistory"><IconCheck :size="16" aria-hidden="true" /><span>{{ clearing ? t('coco.anClearing') : t('coco.anConfirmClear') }}</span></button></div>
         </div>
-        <div v-else class="flex justify-end"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="!events.length || refreshing || clearing || !updatedAt" @click="confirmClear = true"><IconTrash :size="16" aria-hidden="true" /><span>清空历史</span></button></div>
+        <div v-else class="flex justify-end"><button type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="!events.length || refreshing || clearing || !updatedAt" @click="confirmClear = true"><IconTrash :size="16" aria-hidden="true" /><span>{{ t('coco.anClearHistory') }}</span></button></div>
       </footer>
     </template>
   </Modal>

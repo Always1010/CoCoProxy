@@ -11,11 +11,11 @@ const navItems = computed(() => [
   { href: '/overview', name: t('overview'), icon: IconHome },
   { href: '/proxies', name: t('proxies'), icon: IconGlobe },
   { href: '/rules', name: t('rules'), icon: IconRuler },
-  { href: '/subscriptions', name: '订阅', icon: IconServerCog },
+  { href: '/subscriptions', name: t('coco.pzSubscriptions'), icon: IconServerCog },
   { href: '/connections', name: t('connections'), icon: IconNetwork },
   { href: '/traffic', name: t('dataUsage'), icon: IconChartAreaLine },
   { href: '/logs', name: t('logs'), icon: IconFileStack },
-  { href: '/cocoproxy', name: '设置', icon: IconSettings },
+  { href: '/cocoproxy', name: t('coco.pzSettings'), icon: IconSettings },
 ])
 const isActive = (href: string) => route.path === href
 
@@ -57,7 +57,7 @@ watch(
           aria-label="open sidebar"
         >
           <IconMenu2 class="h-5 w-5" />
-          <span class="text-xs">菜单</span>
+          <span class="text-xs">{{ t('coco.pzMenu') }}</span>
         </label>
 
         <!-- Logo -->

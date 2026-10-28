@@ -1,3 +1,4 @@
+import { uiTestContext, useI18n } from './ui-i18n-helpers.ts';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
@@ -25,7 +26,7 @@ function harness() {
     valueOf: () => new Date(value).valueOf(), format: () => '2026-10-28T12:00',
     subtract: (days: number) => date(new Date(value).valueOf() - days * 86400000),
   });
-  const context: any = {
+  const context: any = { ...uiTestContext,
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useHead() {}, watch() {}, onMounted() {}, onBeforeUnmount() {}, useDebounceFn: (fn: unknown) => fn,
     onClickOutside() {}, onKeyStroke() {},
