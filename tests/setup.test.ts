@@ -566,7 +566,7 @@ test('doctor blocks managed HTTPS on failed or unavailable evidence and keeps pr
 test('unified entry rejects mutation flags on read-only commands before reading private inputs', () => {
   for (const args of [['doctor', '--apply'], ['inspect', '--router-disabled'], ['prepare', '--apply'],
     ['initialize', '--admin-input', '/synthetic-private-login']]) {
-    const result = spawnSync(process.execPath, ['--experimental-strip-types', 'apps/setup/main.ts', ...args], {
+    const result = spawnSync(process.execPath, ['--no-warnings', '--experimental-strip-types', 'apps/setup/main.ts', ...args], {
       cwd: new URL('..', import.meta.url), encoding: 'utf8', windowsHide: true,
     });
     assert.equal(result.status, 1);
