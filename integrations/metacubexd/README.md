@@ -17,6 +17,8 @@
 
 Nitro 全局 WS upgrade gate 补足 crossws 0.3.5 对无处理器路径的默认升级行为，不能只靠 HTTP middleware。当前只支持单实例 Node preset；短期会话在进程内，受信任设备授权在私有状态目录持久保存，不支持多 worker 共享或同步撤销。
 
+用量由管理进程持续采集到私有 `usage.sqlite`，浏览器连接 store 只提供实时展示，不再写 IndexedDB 或在核心重启时清空用量。traffic 页面通过已认证后端查询分页数据，源 IP 备注不关联信任授权，也不识别 NAT 后设备。Node 内置 SQLite 随运行时提供，无额外数据库服务；构建保留 `node:sqlite` 为原生模块导入，部署运行时须支持它。
+
 上游默认核心 v1.19.27 不进入本项目运行锁；实际使用审核后的 Mihomo v1.19.33。来源与许可见本目录 MIT [LICENSE](LICENSE)及 Mihomo [GPLv3](../mihomo/LICENSE)。
 
 ## 准备与构建

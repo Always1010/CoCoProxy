@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assessStateSchema, assessStateContent, DEPLOYMENT_STATE_COMPATIBILITY, type StateStore } from '../packages/deployment/compatibility.ts';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { UsageStore, inspectUsageDatabase, USAGE_DATABASE } from '../packages/management/usage.ts';
 import { createHash } from 'node:crypto';
 import { compileConfig, canonicalJson } from '../packages/config/index.ts';
 import { parseStoredCandidate } from '../packages/transaction/index.ts';
@@ -17,7 +21,9 @@ test('state compatibility refuses newer or unknown schemas without guessing a da
   assert.equal(assessStateSchema('workspace', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('siteProbes', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('siteProbes', 1, { schemaVersion: 1, stateSchemas: { workspace: 1 } }), 'not-declared');
-  assert.equal(assessStateSchema('trustedDevices', 2, DEPLOYMENT_STATE_COMPATIBILITY), 'unsupported-version');
+  assert.equal(assessStateSchema('trustedDevices', 2, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
+  assert.equal(assessStateSchema('trustedDevices', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
+  assert.equal(assessStateSchema('trustedDevices', 3, DEPLOYMENT_STATE_COMPATIBILITY), 'unsupported-version');
   assert.equal(assessStateSchema('transaction', 1, undefined), 'not-declared');
   assert.equal(assessStateSchema('workspace', 1, { schemaVersion: 1, stateSchemas: {} }), 'not-declared');
   for (const value of [undefined, null, '1', 0, -1, 1.5]) {
@@ -36,6 +42,7 @@ test('content assessment reuses complete readers and refuses broken fields even 
     siteProbes: { version: 1, revision: 0, custom: [], groups: {} },
     automaticSelections: { version: 1, scope: 'synthetic', targets: {}, events: [] },
     automaticHistory: { version: 1, scopes: [] },
+    usage: { schemaVersion: 1, integrity: 'ok' },
     selection: { schemaVersion: 1, generation: candidate.id },
     subscription: { version: 1, id: 'sourceA', url: 'https://subscription.example/config', revision: 1, definitionRevision: 1,
       snapshot: null, etag: null, lastAttempt: null, lastError: null },
@@ -43,7 +50,7 @@ test('content assessment reuses complete readers and refuses broken fields even 
   for (const [store, input] of Object.entries(valid) as [StateStore, unknown][]) {
     const good = assessStateContent(store, input, DEPLOYMENT_STATE_COMPATIBILITY, 'sourceA');
     assert.equal(good.status, 'supported', store); assert.equal(good.content, 'valid', store);
-    const minimal = ['lifecycle', 'trustedDevices', 'selection'].includes(store) ? { schemaVersion: 1 }
+    const minimal = ['lifecycle', 'trustedDevices', 'selection', 'usage'].includes(store) ? { schemaVersion: 1 }
       : { version: 1 };
     const bad = assessStateContent(store, minimal, DEPLOYMENT_STATE_COMPATIBILITY, 'sourceA');
     assert.equal(bad.status, 'unsupported', store); assert.equal(bad.code, 'DEPLOYMENT_STATE_CONTENT_INVALID', store);
@@ -60,6 +67,20 @@ test('schema declarations alone do not establish a complete or unknown reader co
   const unknown = assessStateContent('transaction', state, { ...DEPLOYMENT_STATE_COMPATIBILITY, contentReaders: { transaction: 'unreviewed-reader' } });
   assert.equal(unknown.status, 'unknown'); assert.equal(unknown.code, 'DEPLOYMENT_STATE_CONTENT_READER_UNKNOWN');
   assert.equal(assessStateContent('transaction', { ...state, version: 2 }, DEPLOYMENT_STATE_COMPATIBILITY).status, 'unsupported');
+});
+
+test('upgrade inspects the real SQLite reader, rejects undeclared targets and blocks unsupported stored versions', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocoproxy-usage-compatibility-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await UsageStore.open(directory); store.close();
+  const host: UpgradeStateHost = { read: async () => null, list: async () => [], usage: () => inspectUsageDatabase(directory) };
+  const result = await inspectStateCompatibility(host, DEPLOYMENT_STATE_COMPATIBILITY);
+  assert.equal(result.findings.find(item => item.store === 'usage')?.contentCompatibility.status, 'supported');
+  const undeclared = await inspectStateCompatibility(host, { schemaVersion: 1, stateSchemas: {}, contentReaders: {} });
+  assert.equal(undeclared.findings.find(item => item.store === 'usage')?.contentCompatibility.status, 'unknown');
+  const db = new DatabaseSync(join(directory, USAGE_DATABASE)); db.exec('PRAGMA user_version=2'); db.close();
+  const incompatible = await inspectStateCompatibility(host, DEPLOYMENT_STATE_COMPATIBILITY);
+  assert.equal(incompatible.findings.find(item => item.store === 'usage')?.contentCompatibility.status, 'unsupported');
 });
 
 test('retained candidate readers share canonical bytes, generation and runtime recompile validation without running a core', () => {

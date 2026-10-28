@@ -57,6 +57,9 @@ def compare_preservation(before, after, frozen=False):
             'runtime-binding-reader-only-dynamic-targets-events-and-times-may-change', absent=before['files'].get('automaticSelections') is None)
         check('automatic-switch-history', not (before['files'].get('automaticHistory') is not None and after['files'].get('automaticHistory') is None),
             'private-history-reader-only-records-may-expire-or-grow', absent=before['files'].get('automaticHistory') is None)
+        usage_before, usage_after = before.get('usage'), after.get('usage')
+        check('usage-history', usage_before is None or usage_after is not None and usage_before == usage_after,
+            'sqlite-integrity-and-database-identity-with-stable-ip-notes-records-may-expire-or-grow', absent=usage_before is None)
         check('runtime-selection', after['runtime']['coherent'] and not (before['runtime']['active'] is not None and after['runtime']['active'] is None),
             'current-committed-active-selection-and-recompiled-candidate-not-process-identity-or-same-dynamic-target', absent=before['runtime']['active'] is None)
     required = [item['status'] for item in checks]
@@ -280,10 +283,10 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         enabled_units = [unit for unit, value in before.items() if value['enabled'] == 'enabled']
         if enabled_units:
             run([systemctl, 'disable', *enabled_units])
-        def preservation():
+        def preservation(frozen=False):
             return json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
-                payload / 'source/apps/deployment/preservation.ts', '--management-settings', candidate['management']['settingsPath']]))
-        baseline = preservation()
+                payload / 'source/apps/deployment/preservation.ts', '--management-settings', candidate['management']['settingsPath'], *(['--frozen'] if frozen else [])]))
+        baseline = preservation(True)
         need(baseline.get('ready') is True, 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
         run(installer + ['--operation', 'upgrade', *common])
         run(installer + ['--operation', 'upgrade', *common, '--apply'])
@@ -484,9 +487,9 @@ def main_locked(options):
             need(not before_lifecycle['paused'] or not before_units['cocoproxy-mihomo.service']['active'], 'REMOTE_PAUSED_ACTIVE_CORE_REQUIRES_REVIEW')
         before_preservation = None
         preservation_windows = []
-        def snapshot_preservation():
+        def snapshot_preservation(frozen=False):
             snapshot = json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
-                payload / 'source/apps/deployment/preservation.ts', '--management-settings', management['settingsPath']]))
+                payload / 'source/apps/deployment/preservation.ts', '--management-settings', management['settingsPath'], *(['--frozen'] if frozen else [])]))
             need(snapshot.get('schemaVersion') == 1 and isinstance(snapshot.get('files'), dict) and
                  isinstance(snapshot.get('directories'), dict) and isinstance(snapshot.get('contentChecks'), list), 'REMOTE_PRESERVATION_SNAPSHOT_INVALID')
             return snapshot
@@ -535,7 +538,7 @@ def main_locked(options):
                 # entering maintenance must remain valid, rather than look like
                 # changes caused by the subsequent file installation.
                 record_phase('services-stopped-network-retired')
-                before_preservation = snapshot_preservation()
+                before_preservation = snapshot_preservation(True)
                 record_phase('preservation-baseline-observed', preservation={'scope': 'stopped-baseline-readability',
                     'checks': before_preservation['contentChecks'], 'runtimeCode': before_preservation['runtime'].get('code')})
                 need(before_preservation.get('ready') is True, 'REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED'
@@ -554,7 +557,7 @@ def main_locked(options):
                 os.chmod(management['credentialPath'], 0o600)
             inspect_complete(options.manifest_sha256)
             if installed:
-                frozen = compare_preservation(before_preservation, snapshot_preservation(), frozen=True)
+                frozen = compare_preservation(before_preservation, snapshot_preservation(True), frozen=True)
                 preservation_windows.append(frozen)
                 record_phase('installed-state-verified', preservation=frozen)
                 need(frozen['status'] == 'pass', 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')

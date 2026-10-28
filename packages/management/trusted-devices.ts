@@ -48,6 +48,20 @@ export function parseTrustedDeviceDocument(value: unknown): TrustedDeviceDocumen
   return value as unknown as TrustedDeviceDocument;
 }
 
+/** Deterministic preference migration, shared with stopped upgrade preservation checks. */
+export function migrateTrustedDeviceDocument(value: TrustedDeviceDocument, now: number): TrustedDeviceDocument {
+  if (value.schemaVersion === 2) return value;
+  const used = new Set<string>();
+  const devices = value.devices.filter(item => item.expiresAt === null || item.expiresAt > now).map(item => {
+    const base = item.label.trim().normalize('NFC');
+    let label = base, suffix = 2;
+    while (used.has(labelKey(label))) label = `${base.slice(0, 145)}（${suffix++}）`;
+    used.add(labelKey(label));
+    return { ...item, label, lastIP: null, lastSeenAt: null };
+  });
+  return { ...value, schemaVersion: 2, devices };
+}
+
 /** Single management process, serialized durable mutations; never stores bearer tokens. */
 export class TrustedDeviceStore {
   private readonly stateDirectory: string;
@@ -76,15 +90,7 @@ export class TrustedDeviceStore {
       if (value.credentialFingerprint === store.fingerprint) {
         store.devices = value.devices;
         if (value.schemaVersion === 1) {
-          const used = new Set<string>();
-          const devices = store.devices.filter(item => store.live(item)).map(item => {
-            const base = item.label.trim().normalize('NFC');
-            let label = base, suffix = 2;
-            while (used.has(labelKey(label))) label = `${base.slice(0, 145)}（${suffix++}）`;
-            used.add(labelKey(label));
-            return { ...item, label, lastIP: null, lastSeenAt: null };
-          });
-          await store.save(devices);
+          await store.save(migrateTrustedDeviceDocument(value, store.time()).devices);
         }
       }
       return store;
