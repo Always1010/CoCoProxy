@@ -1,4 +1,5 @@
 import { CoCoProxyError, cocoproxyErrorMessage } from './useCoCoProxy'
+import type { CoCoProxyStatus } from './useCoCoProxy'
 
 export type BandwidthPhase = 'preparing' | 'latency' | 'download' | 'upload' | 'finishing' | 'cancelling' | 'complete' | 'partial' | 'failed' | 'cancelled'
 export interface BandwidthDirection {
@@ -41,6 +42,8 @@ function randomClient() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 const messages: Record<string, string> = {
+  ACTIVE_CONFLICT: '运行配置正在变化，请等待稳定后重新测试。',
+  CONTROLLER_UNAVAILABLE: '代理核心尚未就绪，请确认运行状态后再测试。',
   BANDWIDTH_BUSY: '已有节点带宽测试正在运行，已读取当前任务。',
   BANDWIDTH_NOT_OWNER: '此任务由另一个浏览器发起，仅可查看进度。',
   BANDWIDTH_UNAVAILABLE: '节点带宽测试暂不可用，请确认核心已就绪。',
@@ -127,7 +130,20 @@ export function useBandwidthTest() {
   }
   async function start(node: string) {
     if (!visible.value || !node || !canStart.value) return
-    await mutate('/api/cocoproxy/bandwidth', { node, expectedActive: view.value!.active })
+    sending.value = true
+    error.value = ''
+    stopPolling()
+    try {
+      // Automatic selection can advance the runtime generation while the page
+      // remains open. Bind this explicit test to a fresh server observation.
+      const current = await api.request<CoCoProxyStatus>('/api/cocoproxy/status', {
+        headers: { 'X-CoCoProxy-Bandwidth-Client': client.value }, signal: AbortSignal.timeout(8000),
+      })
+      if (current.transaction || current.fault) throw new CoCoProxyError('ACTIVE_CONFLICT')
+      if (!current.active || !current.core?.ready) throw new CoCoProxyError('CONTROLLER_UNAVAILABLE')
+      await mutate('/api/cocoproxy/bandwidth', { node, expectedActive: current.active })
+    } catch (cause) { error.value = message(cause) }
+    finally { sending.value = false; schedule() }
   }
   async function cancel() {
     if (!task.value?.running || !task.value.owned || loading.value || sending.value || uncertain.value || task.value.phase === 'cancelling') return

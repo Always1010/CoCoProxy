@@ -13,6 +13,8 @@ const empty = { limits: { durationMs: 6000, maxBytes: 200000000, timeoutMs: 3000
 function harness(storage = new Map<string, string>()) {
   const calls: { path: string; options: any }[] = [];
   let result: any = empty;
+  let runtime: any = { active: 'generation-two', core: { ready: true }, transaction: null, fault: null };
+  let statusFailure = false;
   let failure = false;
   const exports: Record<string, any> = {};
   new Script(code).runInNewContext({
@@ -24,14 +26,19 @@ function harness(storage = new Map<string, string>()) {
     CoCoProxyError: Error, cocoproxyErrorMessage: () => '读取失败',
     useWorkspace: () => ({ view: { value: { active: 'generation-one', pending: false } }, api: { request: async (path: string, options: any) => {
       calls.push({ path, options });
+      if (path === '/api/cocoproxy/status') {
+        if (statusFailure) throw new Error('synthetic runtime read failure');
+        return structuredClone(runtime);
+      }
       if (failure) throw new Error('synthetic connection loss');
       return structuredClone(result);
     } } }),
   });
-  return { ui: exports.useBandwidthTest(), calls, storage, setResult(value: unknown) { result = value; }, fail(value: boolean) { failure = value; } };
+  return { ui: exports.useBandwidthTest(), calls, storage, setResult(value: unknown) { result = value; }, fail(value: boolean) { failure = value; },
+    setRuntime(value: unknown) { runtime = value; }, failStatus(value: boolean) { statusFailure = value; } };
 }
 
-test('bandwidth unknown writes stay locked until status is confirmed without replaying the write', async () => {
+test('bandwidth starts against fresh runtime generation and unknown writes stay locked without replaying', async () => {
   const { ui, calls, fail, storage } = harness();
   assert.equal(await ui.restore(), false);
   ui.shown();
@@ -43,7 +50,9 @@ test('bandwidth unknown writes stay locked until status is confirmed without rep
   assert.equal(ui.canStart.value, false);
   assert.equal(storage.get('cocoproxy-bandwidth-pending'), '1');
   assert.equal(calls.filter(call => call.options.method === 'POST').length, 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.options.method === 'POST')!.options.body)), { node: 'node-b', expectedActive: 'generation-one' });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.options.method === 'POST')!.options.body)), { node: 'node-b', expectedActive: 'generation-two' });
+  const observed = calls.findIndex(call => call.path === '/api/cocoproxy/status');
+  assert.ok(observed >= 0 && observed < calls.findIndex(call => call.options.method === 'POST'));
   fail(false);
   await ui.refresh(true);
   assert.equal(ui.locked.value, false);
@@ -51,6 +60,22 @@ test('bandwidth unknown writes stay locked until status is confirmed without rep
   assert.equal(storage.has('cocoproxy-bandwidth-pending'), false);
   assert.equal(calls.filter(call => call.options.method === 'POST').length, 1);
   assert.ok(calls.every(call => call.options.headers['X-CoCoProxy-Bandwidth-Client'] === storage.get('cocoproxy-bandwidth-client')));
+});
+
+test('bandwidth never starts a transfer when fresh runtime status fails, is unready, or is changing', async () => {
+  const { ui, calls, failStatus, setRuntime, storage } = harness();
+  await ui.restore(); ui.shown(); await new Promise(resolve => setImmediate(resolve));
+  failStatus(true); await ui.start('node-b');
+  assert.equal(ui.locked.value, false); assert.equal(ui.uncertain.value, false);
+  failStatus(false);
+  for (const runtime of [
+    { active: 'generation-two', core: { ready: false } },
+    { active: 'generation-two', core: { ready: true }, transaction: { phase: 'activating' } },
+    { active: 'generation-two', core: { ready: true }, fault: 'recovery-required' },
+  ]) { setRuntime(runtime); await ui.start('node-b'); }
+  assert.equal(calls.filter(call => call.options.method === 'POST').length, 0);
+  assert.equal(storage.has('cocoproxy-bandwidth-pending'), false);
+  assert.equal(ui.locked.value, false);
 });
 
 test('bandwidth ownership restores the initiating browser and leaves observers read only', async () => {
