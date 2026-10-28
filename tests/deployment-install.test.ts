@@ -233,7 +233,7 @@ test('recovery refuses ambiguous legacy intent, uninstall, mismatched receipt an
 test('maintenance CLI rejects apply on read-only operations and unrelated recovery inputs without disclosing them', () => {
   for (const args of [['--operation', 'inspect', '--apply'], ['--operation', 'prepare', '--apply'],
     ['--operation', 'recover', '--input', '/synthetic-private-input']]) {
-    const result = spawnSync(process.execPath, ['--experimental-strip-types', 'apps/deployment/main.ts', ...args],
+    const result = spawnSync(process.execPath, ['--no-warnings', '--experimental-strip-types', 'apps/deployment/main.ts', ...args],
       { cwd: new URL('..', import.meta.url), encoding: 'utf8', windowsHide: true });
     assert.equal(result.status, 1);
     assert.equal(result.stdout, '');
