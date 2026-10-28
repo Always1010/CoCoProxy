@@ -75,6 +75,8 @@ const messages: Record<string, string> = {
   USAGE_UNAVAILABLE: '用量存储暂不可用，已有数据保留，请检查服务状态。',
   USAGE_QUERY_INVALID: '查询条件无效，时间范围最多为 365 天。',
   USAGE_DETAIL_EXPIRED: '此时间范围的明细已过期，请切换到来源查看每日汇总。',
+  USAGE_RANGE_EXPIRED: '查询开始时间已超出一年的保留期限，请缩小时间范围。',
+  USAGE_SCHEMA_UNSUPPORTED: '用量数据库版本不兼容，已有数据保留，请检查运行版本。',
   USAGE_ALIAS_INVALID: '请输入有效 IP 和不超过 40 字的来源备注。',
   USAGE_ALIAS_LIMIT: '来源备注数量已达上限，请先移除不再需要的备注。',
   DEVICE_TRUST_UNAVAILABLE: '此管理入口暂不支持信任设备，请使用临时登录。',

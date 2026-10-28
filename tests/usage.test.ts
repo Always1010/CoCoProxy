@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { UsageStore, parseUsageSnapshot, createUsageService, inspectUsageDatabase, USAGE_DETAIL_RETENTION, USAGE_DATABASE } from '../packages/management/usage.ts';
+import { UsageStore, parseUsageSnapshot, createUsageService, inspectUsageDatabase, USAGE_DETAIL_RETENTION, USAGE_DAILY_RETENTION, USAGE_DATABASE } from '../packages/management/usage.ts';
 import { createManagementGateway } from '../packages/management/http.ts';
 import { createAdminCredential } from '../packages/management/auth.ts';
 
@@ -68,6 +68,8 @@ test('expired domain details are unavailable while daily source totals and alias
   assert.equal(result.aliases['192.0.2.20'], '来源备注');
   assert.throws(() => f.store.query(query(start - 60_000, f.now() + 1, { dimension: 'host' })), { code: 'USAGE_DETAIL_EXPIRED' });
   assert.equal((await inspectUsageDatabase(f.root))?.detailRows, 0);
+  f.advance(USAGE_DAILY_RETENTION);
+  assert.throws(() => f.store.query(query(start - 60_000, start + 60_000)), { code: 'USAGE_RANGE_EXPIRED' });
 });
 
 test('background service collects without browser sessions, drains shutdown and retains the authentication/Origin boundary', async t => {
