@@ -218,6 +218,7 @@ export class UsageStore {
     const value = exactRecord(input, ['startTime', 'endTime', 'dimension'], ['filters', 'sort', 'order', 'search', 'page', 'pageSize', 'overview']);
     const { startTime: start, endTime: end, dimension } = value;
     if (!integer(start) || !integer(end) || end <= start || end - start > USAGE_DAILY_RETENTION || !dimensions.includes(dimension as UsageDimension)) throw new ManagementError('USAGE_QUERY_INVALID');
+    if (start < Math.floor((this.now() - USAGE_DAILY_RETENTION) / DAY) * DAY) throw new ManagementError('USAGE_RANGE_EXPIRED', 409);
     const page = value.page ?? 0, size = value.pageSize ?? 50, sort = value.sort ?? 'total', order = value.order ?? 'desc', search = value.search ?? '';
     if (!integer(page) || page > 100_000 || !integer(size) || size < 1 || size > 200 || !['label', 'upload', 'download', 'total', 'count'].includes(String(sort)) ||
         !['asc', 'desc'].includes(String(order)) || typeof search !== 'string' || search.length > 160 || (value.overview !== undefined && typeof value.overview !== 'boolean')) throw new ManagementError('USAGE_QUERY_INVALID');
