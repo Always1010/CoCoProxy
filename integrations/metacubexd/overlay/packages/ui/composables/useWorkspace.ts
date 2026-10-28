@@ -25,7 +25,15 @@ export interface BandwidthSelectionStatus {
   dayBytes: number
   hourLimit: number
   dayLimit: number
-  decision: { current: { low: number; high: number }; candidate: { low: number; high: number }; gain: number; cost: number; threshold: number; worthwhile: boolean } | null
+  hourReserve?: number
+  dayReserve?: number
+  searchBytes?: number
+  searchLimit?: number
+  urgent?: boolean
+  pool?: { name: string; preferred: boolean; current: boolean; state: string; reason: string; samples: number;
+    delayMs: number | null; mbps: number | null; measuredAt: number | null; nextAt: number; active: boolean }[]
+  decision: { current: { low: number; high: number }; candidate: { low: number; high: number }; gain: number; cost: number; threshold: number;
+    uncertainty?: number; guard?: boolean; worthwhile: boolean } | null
 }
 
 export interface AutoProbeSettings {

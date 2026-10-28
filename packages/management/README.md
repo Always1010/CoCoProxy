@@ -115,7 +115,9 @@ npm run test:management
 
 可选 `automatic[group].bandwidth` 由 `bandwidth-policy.ts` 的单一参数表解析；缺省关闭且不补写旧配置。GET `automatic/probes` 同时返回该参数表及缺省值；UI 保存仍经过工作区 CAS、原有配置事务与权限检查。`automatic-selector.ts` 保持旧探测路径，仅开启组把普通性能／回切建议交给 `bandwidth-selector.ts` 仲裁，故障恢复优先；下载任务异步执行，轻量前置／压力探测仍进入原共享并发和每分钟额度。现有每秒用量采样通过只读观察回调提供节点增量，不增加 controller 轮询。
 
-POST `/api/cocoproxy/automatic/bandwidth/check` 接收 `{expectedRevision, expectedActive, scope, group}`，只给已启用且允许主动验证的组排队一次比较；在共同锁内核验 revision、方案、代次、暂停及运行事务，不修改设置。手动发起可以跳过业务怀疑和检查冷却，不能绕过预算、保持时间或有效样本门槛。补充轻量探测最多使用滚动分钟额度中的前18次，至少留6次额度供原监测／恢复流程使用。
+POST `/api/cocoproxy/automatic/bandwidth/check` 接收 `{expectedRevision, expectedActive, scope, group}`，唤醒已开启增强的组候选池；在共同锁内核验 revision、方案、代次、暂停及运行事务，不修改设置。手动发起可跳过业务怀疑，不能绕过单节点退避、预算、业务空闲、保持时间或有效样本门槛。补充轻量探测最多使用滚动分钟额度中的前18次，至少留6次供原监测／恢复。关闭增强后原延迟策略保持原有触发、故障确认、候选顺序和回切规则。
+
+候选池每组记录全部已选节点，活动队列最多三个；单节点失败或无收益独立退避，已验证样本按条过期，搜索让出或预算不足保留进度。评分使用同一自动探测目标的延迟和受控下载吞吐，采用相对短板保护、保守收益、优选偏好及陌生候选风险。状态额外返回 `pool`、`searchBytes/searchLimit`、`hourReserve/dayReserve` 和 `urgent`，不把未知样本解释为零速度。网络任务保持单飞，事务悬挂期间作废测量证据；自身已确认切换保留池的退避及使用记录，外部配置/代次变化重建。前30秒增加轻量检查，前2分钟故障通过原恢复事务复核旧出口，失败节点增加退避。
 
 下载达标验证复用隔离传输的固定目标与清理边界，独立于手动双向测速，二者共享单任务名额；不依赖浏览器持续打开。预算及近期切换保存于私有 `automatic-bandwidth.json`（version 1），共同锁内原子预扣／结算，崩溃不退还未确认流量；部署兼容、停服文件摘要及恢复后可读性检查包含此文件。区间、触发、节奏、额度与可调参数详见[使用说明](../../docs/usage.md#可选的带宽辅助决策)。
 
