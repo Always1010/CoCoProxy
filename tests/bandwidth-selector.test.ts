@@ -10,6 +10,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
   settings?: Partial<BandwidthSettings>; bytes?: number; ledger?: BandwidthLedger; blocked?: boolean; storageFails?: boolean } = {}) {
   let now = 0, total = 0, loads = 0;
   const measures: string[] = [], switches: string[] = [], saved: BandwidthLedger[] = [], probes: string[] = [];
+  const starts: { node: string; at: number }[] = [];
   const counts = new Map<string, number>();
   const snapshot: AutoSnapshot = { key: 'synthetic', scope: 'scope', generation: '1', probes: DEFAULT_AUTO_PROBES,
     groups: [{ name: 'media', current: 'a', policy: { preferred: options.preferred ?? ['a', 'b'], fallback: options.fallback ?? [], returnToPreferred: true,
@@ -20,7 +21,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
     probe: async (_s, node) => { probes.push(node); return { ok: true, delay: options.delays?.[node] ?? (node === 'a' ? 80 : 150) }; },
     select: async (_s, _g, node) => { switches.push(node); snapshot.groups[0].current = node; snapshot.generation = String(Number(snapshot.generation) + 1); return true; },
     measure: async (_s, node, _settings, signal, report) => {
-      measures.push(node); report(options.bytes ?? 1000000);
+      measures.push(node); starts.push({ node, at: now }); report(options.bytes ?? 1000000);
       if (options.blocked) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
       const count = counts.get(node) ?? 0; counts.set(node, count + 1);
       const rates = options.rates?.[node];
@@ -28,7 +29,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
       return signal.aborted || mbps === -1 ? null : { delayMs: 999, mbps, bytes: options.bytes ?? 1000000 };
     } });
   engine.update(snapshot);
-  return { engine, snapshot, measures, switches, saved, probes, get loads() { return loads; }, get now() { return now; },
+  return { engine, snapshot, measures, starts, switches, saved, probes, get loads() { return loads; }, get now() { return now; },
     async step(bytes = 0, ready = true) {
       now += 1000; total += bytes;
       engine.update(snapshot);
@@ -161,5 +162,17 @@ test('custom no-gain backoff cap is honored on repeated unsuccessful comparisons
   }
   assert.deepEqual(delays, [120000, 300000, 300000]);
   assert.deepEqual(f.switches, []);
+  await f.engine.close();
+});
+
+test('120-second sampling still confirms after lightweight probe refresh delays the next download', async () => {
+  const f = fixture({ settings: { roundIntervalSeconds: 120 }, bytes: 8 * 1048576 });
+  f.engine.requestCheck('media');
+  for (let i = 0; i < 300 && !f.switches.length; i++) await f.step();
+  const current = f.starts.filter(s => s.node === 'a');
+  assert.ok(current.length >= 2);
+  assert.ok(current[1].at - current[0].at > 120000); // Refresh plus another scheduler tick.
+  assert.deepEqual(f.switches, ['b']);
+  assert.equal(f.measures.length, 4); // No repeated paid samples discarded solely for scheduler latency.
   await f.engine.close();
 });
