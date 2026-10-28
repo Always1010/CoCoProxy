@@ -3,7 +3,13 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { verifyDocumentationLinks } from '../scripts/release-layout.mjs';
+import { releaseAssetPlatform, verifyDocumentationLinks } from '../scripts/release-layout.mjs';
+
+test('release asset names hide the internal amd64 microarchitecture level', () => {
+  assert.equal(releaseAssetPlatform('linux-arm64'), 'linux-arm64');
+  assert.equal(releaseAssetPlatform('linux-amd64-v1'), 'linux-amd64');
+  assert.throws(() => releaseAssetPlatform('linux-amd64-v2'), error => error.code === 'RELEASE_PLATFORM_INVALID');
+});
 
 test('guide checks local links without requiring upstream dependency documentation targets', () => {
   const files = new Map([

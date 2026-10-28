@@ -7,7 +7,7 @@ import { copyFile, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs
 import { join } from 'node:path';
 import { stageExplicitRelease } from './stage-explicit-release.mjs';
 import { validateReleaseMetadata, validateReleaseTooling, validateReleaseVersion } from './release-metadata.mjs';
-import { assertReleaseSourcePaths } from './release-layout.mjs';
+import { assertReleaseSourcePaths, releaseAssetPlatform } from './release-layout.mjs';
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', windowsHide: true, ...options });
@@ -100,7 +100,7 @@ if (process.argv.length === 3 && process.argv[2] === '--validate') {
     // gzip removes only the .gz suffix.
     await copyFile(join(work, platform), binary);
     assert.equal(await sha256(binary), entry.binarySha256, 'Mihomo binary hash mismatch');
-    const name = `cocoproxy-${pkg.version}-${platform}`;
+    const name = `cocoproxy-${pkg.version}-${releaseAssetPlatform(platform)}`;
     const output = join(work, name);
     const receipt = await stageExplicitRelease({ sourceDir: source,
       serverDir: join(upstream, 'apps/server/.output'), runtimeDependencies: join(source, 'node_modules'),
