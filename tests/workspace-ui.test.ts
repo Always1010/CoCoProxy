@@ -7,6 +7,7 @@ import { localGroupNameError } from '../integrations/metacubexd/overlay/packages
 import { BANDWIDTH_FIELDS, DEFAULT_BANDWIDTH_SETTINGS, parseBandwidthSettings } from '../packages/management/bandwidth-policy.ts';
 import { parseWorkspaceSettings } from '../packages/management/workspace.ts';
 import type { AutoGroupPolicy } from '../packages/management/automatic-policy.ts';
+import { bandwidthIssue, bandwidthPages } from '../integrations/metacubexd/overlay/packages/ui/utils/group-bandwidth.ts';
 
 const apiExports: Record<string, any> = {};
 new Script(ts.transpileModule(await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useCoCoProxy.ts', import.meta.url), 'utf8'), {
@@ -17,66 +18,120 @@ const { CoCoProxyError, cocoproxyErrorMessage } = apiExports;
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useWorkspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 
-test('bandwidth settings validate pool limits and allow the independent switch to return to latency-only mode', async () => {
-  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/BandwidthSelectionSettings.vue', import.meta.url), 'utf8');
-  const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
-    + '\nexport { invalid, toggle, restore, load };';
-  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const props = { modelValue: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true }, disabled: false, groupName: 'Stream' };
-  const overrides = { value: { automatic: {} as Record<string, AutoGroupPolicy> } };
-  const exports: Record<string, any> = {};
-  new Script(code, { filename: 'BandwidthSelectionSettings.js' }).runInNewContext({
-    exports, defineProps: () => props, defineEmits: () => (_event: string, value: typeof props.modelValue) => { props.modelValue = value; },
-    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
-    defineExpose() {}, onMounted() {}, cocoproxyErrorMessage: () => '读取失败',
-    useWorkspace: () => ({ overrides, view: { value: null }, api: { request: async () => ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS } }) } }),
-  });
-  await exports.load();
-  assert.equal(exports.invalid.value, ''); // 30 s spacing is valid with the default 20 s task timeout.
+test('bandwidth validation remains available across pages and checks shared budgets', () => {
+  let current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true };
+  const automatic: Record<string, AutoGroupPolicy> = {};
+  const definitions = { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS };
+  const invalid = () => bandwidthIssue(current, definitions, automatic, 'Stream')?.message ?? '';
+  assert.equal(invalid(), '');
   for (const bad of [{ searchMiB: 16 }, { reserveHourMiB: 64 }, { freshSeconds: 60, roundIntervalSeconds: 60 },
     { hourMiB: 32 }, { dayMiB: 64, reserveDayMiB: 40 }]) {
-    props.modelValue = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...bad };
-    assert.notEqual(exports.invalid.value, '');
-    assert.throws(() => parseBandwidthSettings(props.modelValue));
+    current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...bad };
+    assert.notEqual(invalid(), '');
+    assert.throws(() => parseBandwidthSettings(current));
   }
   for (const limits of [{ hourMiB: 48, dayMiB: 64 }, { hourMiB: 32, dayMiB: 32, reserveHourMiB: 0, reserveDayMiB: 0 }]) {
-    props.modelValue = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...limits };
-    assert.equal(exports.invalid.value, '');
-    assert.doesNotThrow(() => parseBandwidthSettings(props.modelValue));
+    current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...limits };
+    assert.equal(invalid(), '');
+    assert.doesNotThrow(() => parseBandwidthSettings(current));
   }
   const policy = (limits = {}): AutoGroupPolicy => ({ preferred: ['a'], fallback: ['b'], returnToPreferred: true,
     bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...limits } });
-  // The current draft replaces its saved policy, including when it reduces the saved reserve.
-  overrides.value.automatic.Stream = policy({ reserveHourMiB: 32 });
-  for (const [current, other] of [[{ hourMiB: 48 }, { reserveHourMiB: 32 }],
+  automatic.Stream = policy({ reserveHourMiB: 32 });
+  for (const [own, other] of [[{ hourMiB: 48 }, { reserveHourMiB: 32 }],
     [{ dayMiB: 64 }, { reserveDayMiB: 64 }], [{ hourMiB: 48 }, { hourMiB: 80, confirmRounds: 3, searchMiB: 48 }]]) {
-    props.modelValue = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...current };
-    overrides.value.automatic.Other = policy(other);
-    assert.match(exports.invalid.value, /多个启用组/);
+    current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...own };
+    automatic.Other = policy(other);
+    assert.match(invalid(), /多个启用组/);
     assert.throws(() => parseWorkspaceSettings({ mode: 'local', subscriptionId: null, sourceIds: [], runMode: 'rule',
-      local: { selections: {}, rules: [], automatic: { Stream: { ...policy(), bandwidth: props.modelValue }, Other: policy(other) } },
+      local: { selections: {}, rules: [], automatic: { Stream: { ...policy(), bandwidth: current }, Other: policy(other) } },
       subscriptionOverrides: {},
     }), { code: 'AUTO_SETTINGS_INVALID' });
-    overrides.value.automatic.Other.enabled = false;
-    assert.equal(exports.invalid.value, '');
-    overrides.value.automatic.Other.enabled = true;
-    overrides.value.automatic.Other.bandwidth!.enabled = false;
-    assert.equal(exports.invalid.value, '');
+    automatic.Other.enabled = false;
+    assert.equal(invalid(), '');
+    automatic.Other.enabled = true;
+    automatic.Other.bandwidth!.enabled = false;
+    assert.equal(invalid(), '');
   }
-  overrides.value.automatic = {};
-  exports.restore();
-  assert.equal(exports.invalid.value, '');
-  props.modelValue.targetMbps = 7;
-  exports.toggle('enabled', { target: { checked: false } });
-  assert.equal(props.modelValue.enabled, false);
-  assert.equal(props.modelValue.targetMbps, 7);
-  assert.equal(exports.invalid.value, '');
-  assert.equal(parseBandwidthSettings(props.modelValue).enabled, false);
-  props.disabled = true;
-  exports.toggle('enabled', { target: { checked: true } });
-  assert.equal(props.modelValue.enabled, false);
+  const keys = bandwidthPages.flatMap(page => [...page.keys]);
+  assert.equal(new Set(keys).size, keys.length);
+  assert.deepEqual([...keys].sort(), Object.keys(BANDWIDTH_FIELDS).sort());
+  current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, busyStopMbps: 0.5 };
+  assert.equal(bandwidthIssue(current, definitions, {}, 'Stream')?.page, 'trigger');
+  current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, targetMbps: NaN };
+  assert.equal(bandwidthIssue(current, definitions, {}, 'Stream')?.key, 'targetMbps');
+  current.enabled = false;
+  assert.equal(bandwidthIssue(current, definitions, {}, 'Stream')?.key, 'targetMbps'); // Disabled settings still have to be serializable and pass server validation.
+  current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: false, hourMiB: 32 };
+  assert.equal(bandwidthIssue(current, definitions, {}, 'Stream'), undefined); // Disabled bandwidth exits the reserved-capacity check.
 });
 
+test('bandwidth mode changes preserve settings and restore affects only the displayed page', async () => {
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/BandwidthSelectionSettings.vue', import.meta.url), 'utf8');
+  const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
+    + '\nexport { setMode, restore };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const props = { modelValue: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, targetMbps: 7, hourMiB: 80 },
+    definitions: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS }, page: 'budget', disabled: false };
+  const exports: Record<string, any> = {};
+  new Script(code).runInNewContext({
+    exports, bandwidthPages, defineProps: () => props, defineEmits: () => (_event: string, value: typeof props.modelValue) => { props.modelValue = value; },
+    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }), watch() {},
+  });
+  exports.setMode('observe');
+  assert.equal(props.modelValue.enabled, true);
+  assert.equal(props.modelValue.observeOnly, true);
+  exports.setMode('off');
+  assert.equal(props.modelValue.enabled, false);
+  assert.equal(props.modelValue.targetMbps, 7);
+  exports.restore();
+  assert.equal(props.modelValue.hourMiB, DEFAULT_BANDWIDTH_SETTINGS.hourMiB);
+  assert.equal(props.modelValue.targetMbps, 7);
+  assert.equal(props.modelValue.enabled, false);
+  props.disabled = true;
+  exports.setMode('switch');
+  assert.equal(props.modelValue.enabled, false);
+});
+test('group status checks only saved active policies and binds requests to the displayed scope and revision', async () => {
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupSelectionStatus.vue', import.meta.url), 'utf8');
+  const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
+    + '\nexport { check, canCheck };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const props: any = { groupName: 'Stream', policyEnabled: true, bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true },
+    dirty: false, disabled: false, reading: false, error: '',
+    status: { scope: 'synthetic-scope', groups: [{ name: 'Stream', current: 'node-a', phase: 'monitoring' }], events: [] } };
+  const view = { value: { active: 'synthetic-generation', pending: false, workspace: { revision: 7 } } };
+  const calls: any[] = [];
+  const exports: Record<string, any> = {};
+  new Script(code).runInNewContext({
+    exports, defineProps: () => props, defineEmits: () => () => {}, onUnmounted() {},
+    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    cocoproxyErrorMessage: () => '读取失败',
+    useWorkspace: () => ({ view, api: { request: async (path: string, options: unknown) => { calls.push({ path, options }); } } }),
+  });
+  for (const blocked of [{ dirty: true }, { disabled: true }, { reading: true }, { policyEnabled: false }, { error: '读取失败' }]) {
+    Object.assign(props, blocked);
+    await exports.check();
+    assert.equal(calls.length, 0);
+    Object.assign(props, { dirty: false, disabled: false, reading: false, policyEnabled: true, error: '' });
+  }
+  for (const state of [{ paused: true }, { suspended: true }, { error: '不可用' }]) {
+    Object.assign(props.status, state);
+    await exports.check();
+    assert.equal(calls.length, 0);
+    Object.assign(props.status, { paused: false, suspended: false, error: '' });
+  }
+  view.value.pending = true;
+  await exports.check();
+  assert.equal(calls.length, 0);
+  view.value.pending = false;
+  await exports.check();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/api/cocoproxy/automatic/bandwidth/check');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].options.body)), {
+    expectedRevision: 7, expectedActive: 'synthetic-generation', scope: 'synthetic-scope', group: 'Stream',
+  });
+});
 test('automatic history keeps reading position, preserves failed refreshes and clears only the displayed group', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionHistory.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
@@ -314,7 +369,7 @@ test('selection never replays an ambiguous write or reports an unconfirmed respo
 test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
-    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving };';
+    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving, pageDirty, invalidPage, invalid };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const original = { preferred: ['second', 'first'], fallback: ['backup'], returnToPreferred: false };
   const settings = { local: { selections: {}, automatic: { Stream: structuredClone(original) } } };
@@ -325,12 +380,13 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   const proxyError = { value: '' };
   const navigations: unknown[] = [], closes: boolean[] = [];
   new Script(code, { filename: 'AutomaticSelectionSettings.js' }).runInNewContext({
-    exports, CoCoProxyError, cocoproxyErrorMessage, defineProps: () => ({ groupName: 'Stream', selectable: true }), defineExpose: () => {},
+    exports, bandwidthIssue, bandwidthPages, CoCoProxyError, cocoproxyErrorMessage, defineProps: () => ({ groupName: 'Stream', selectable: true }), defineExpose: () => {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: () => {}, onUnmounted: () => {}, document: { hidden: true }, setTimeout: () => 0, clearTimeout: () => {},
     navigateTo: (target: unknown) => navigations.push(target),
     useProxyRefresh: () => ({ error: proxyError, refresh: async () => { proxyError.value = refreshFails ? '合成刷新失败' : ''; } }),
-    useWorkspace: () => ({ view, overrides: { value: settings.local }, busy: { value: false }, error: { value: '' },
+    useWorkspace: () => ({ view, workspace: { value: { mode: 'local' } }, overrides: { value: settings.local }, busy: { value: false }, error: { value: '' },
+      api: { request: async () => ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS } }) },
       run: async (fn: () => Promise<void>) => fn(), load: async () => {},
       save: async (edit: (value: unknown) => void) => {
         saves++;
@@ -355,6 +411,12 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   assert.deepEqual(Array.from(exports.preferred.value), original.preferred);
   assert.deepEqual(Array.from(exports.fallback.value), original.fallback);
   assert.equal(exports.returnToPreferred.value, false);
+  for (const page of ['pool', 'bandwidth', 'budget', 'sampling']) {
+    exports.selectTab(page);
+    assert.equal(exports.tab.value, 'selection'); // The master switch gates every subordinate configuration page.
+  }
+  exports.editPool('preferred');
+  assert.equal(exports.editorKind.value, null);
   exports.enabled.value = true;
   await exports.persist();
   assert.deepEqual(JSON.parse(JSON.stringify(settings.local.automatic.Stream)), { ...original, enabled: true });
@@ -451,7 +513,7 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   assert.equal(exports.saveError.value, '');
   assert.match(exports.refreshWarning.value, /已生效，列表刷新失败/);
 
-  exports.bandwidth.value = { enabled: true, observeOnly: true, targetMbps: 8 };
+  exports.bandwidth.value = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, observeOnly: true, targetMbps: 8 };
   await exports.persist();
   exports.open();
   assert.equal(exports.bandwidth.value.enabled, true);
@@ -461,6 +523,22 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   await exports.persist(); exports.open();
   assert.equal(exports.bandwidth.value.enabled, false);
   assert.equal(exports.bandwidth.value.targetMbps, 10);
+
+  exports.bandwidth.value.enabled = true;
+  exports.selectTab('budget');
+  exports.bandwidth.value.hourMiB = 80;
+  assert.equal(exports.pageDirty('budget'), true);
+  exports.selectTab('sampling');
+  assert.equal(exports.bandwidth.value.hourMiB, 80);
+  exports.bandwidth.value.durationSeconds = 5;
+  exports.bandwidth.value.warmupSeconds = 5;
+  exports.selectTab('selection');
+  assert.equal(exports.invalidPage.value, 'sampling'); // Unmounting the parameter page cannot hide validation errors.
+  assert.match(exports.invalid.value, /预热/);
+  const beforeInvalid = saves;
+  await exports.persist();
+  assert.equal(saves, beforeInvalid);
+  exports.open();
 
   exports.dialog.value = { close: (force: boolean) => closes.push(force) };
   exports.rulesEditor.value = { saving: false };
@@ -479,6 +557,15 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   exports.sitesEditor.value = { dirty: false, saving: false };
   exports.rulesEditor.value = { saving: true };
   assert.equal(exports.beforeClose(), true); // Confirmed rule operations continue after the settings modal closes.
+
+  exports.rulesEditor.value = { saving: false };
+  delete (settings.local.automatic as Record<string, unknown>).Stream;
+  exports.dialog.value = undefined;
+  exports.open();
+  exports.bandwidth.value = { ...DEFAULT_BANDWIDTH_SETTINGS, hourMiB: 80 };
+  await exports.persist(); // A new group can stage bandwidth settings before enabling automatic selection or selecting candidates.
+  assert.equal((settings.local.automatic.Stream as any).bandwidth.hourMiB, 80);
+  assert.equal((settings.local.automatic.Stream as any).enabled, false);
 });
 
 test('site settings retain failed drafts and reconcile an interrupted save before allowing another write', async () => {

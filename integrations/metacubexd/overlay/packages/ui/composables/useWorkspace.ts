@@ -1,5 +1,7 @@
 import type { CoCoProxySource } from './useCoCoProxy'
 import { CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy } from './useCoCoProxy'
+import type { BandwidthSettings } from '../utils/group-bandwidth'
+export type { BandwidthSettings } from '../utils/group-bandwidth'
 
 export interface AutoGroupPolicy {
   enabled?: boolean
@@ -9,11 +11,6 @@ export interface AutoGroupPolicy {
   bandwidth?: BandwidthSettings
 }
 
-export interface BandwidthSettings {
-  enabled: boolean
-  observeOnly: boolean
-  [key: string]: number | boolean
-}
 export interface BandwidthSelectionStatus {
   phase: string
   reason: string
