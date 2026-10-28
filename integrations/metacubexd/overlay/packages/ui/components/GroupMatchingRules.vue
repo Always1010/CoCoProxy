@@ -128,7 +128,7 @@ watch(() => JSON.stringify([entries.value, type.value, payload.value, editing.va
             <p class="break-all text-sm">{{ templateRuleLabel(rule.value) }}</p>
             <div class="flex flex-wrap gap-2">
               <button v-if="isDomainRule(rule.value)" type="button" class="btn btn-ghost btn-sm min-h-11" :disabled="locked" :aria-label="`编辑组内规则 ${rule.index + 1}`" @click="edit(rule.index)"><IconEdit :size="16" /><span>编辑</span></button>
-              <NuxtLink v-else :to="customRulesLink" custom v-slot="{ href }"><a :href="href" class="btn btn-ghost btn-sm min-h-11" :aria-disabled="locked" @click.prevent="emit('navigate', customRulesLink)"><IconEdit :size="16" /><span>前往规则页编辑</span></a></NuxtLink>
+              <NuxtLink v-else :to="customRulesLink" custom v-slot="{ href }"><a :href="href ?? undefined" class="btn btn-ghost btn-sm min-h-11" :aria-disabled="locked" @click.prevent="emit('navigate', customRulesLink)"><IconEdit :size="16" /><span>前往规则页编辑</span></a></NuxtLink>
               <button type="button" class="btn btn-ghost btn-sm min-h-11 text-error" :disabled="locked" :aria-label="`删除组内规则 ${rule.index + 1}`" @click="remove(rule.index)"><IconTrash :size="16" /><span>删除</span></button>
             </div>
           </div>
@@ -142,7 +142,7 @@ watch(() => JSON.stringify([entries.value, type.value, payload.value, editing.va
         </section>
       </template>
       <div class="border-t border-base-content/10 pt-4">
-        <NuxtLink :to="effectiveRulesLink" custom v-slot="{ href }"><a :href="href" class="btn btn-outline min-h-11 w-full border-base-content/20 sm:w-auto" :aria-disabled="locked" @click.prevent="emit('navigate', effectiveRulesLink)"><IconList :size="16" /><span>查看本组生效规则</span></a></NuxtLink>
+        <NuxtLink :to="effectiveRulesLink" custom v-slot="{ href }"><a :href="href ?? undefined" class="btn btn-outline min-h-11 w-full border-base-content/20 sm:w-auto" :aria-disabled="locked" @click.prevent="emit('navigate', effectiveRulesLink)"><IconList :size="16" /><span>查看本组生效规则</span></a></NuxtLink>
       </div>
     </div>
     <div v-if="editable" class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-base-content/10 pt-3">
