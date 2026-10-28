@@ -141,6 +141,7 @@ for (const automatic of [false, true]) test(`built management server gates ${aut
           await page.goto(origin + '/#/cocoproxy');
           await page.locator('#cocoproxy-username').fill(username);
           await page.locator('#cocoproxy-password').fill(password);
+          await page.locator('#cocoproxy-device-label').fill('合成验收浏览器');
           await page.getByRole('button', { name: '登录', exact: true }).click();
           await page.waitForURL(/#\/overview$/);
           assert.equal(await page.locator('#cocoproxy-policy').count(), 0);
