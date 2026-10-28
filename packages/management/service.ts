@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { isIP } from 'node:net';
 import { privateRead } from '../storage/private-files.ts';
-import { loadRuntimeSettings, loadRuntimeCandidate, readSelection } from '../runtime/settings.ts';
+import { loadRuntimeSettings, loadRuntimeCandidate, readSelection, verifyBinary } from '../runtime/settings.ts';
 import { SystemdMihomoRuntime } from '../runtime/systemd.ts';
 import { HttpsSnapshotClient } from '../subscriptions/http.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
@@ -19,6 +19,7 @@ import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
 import { SiteProbeStore } from './site-probes.ts';
 import type { TimingObserver } from '../diagnostics/operation-timing.ts';
 import { createUsageService, parseUsageSnapshot } from './usage.ts';
+import { createBandwidthService } from './bandwidth.ts';
 
 export function stripControllerMount(request: Request): Request {
   const url = new URL(request.url);
@@ -158,13 +159,31 @@ export async function loadManagementGateway(path: string) {
       if (before.bootId !== after.bootId || before.pid !== after.pid || before.startTime !== after.startTime || !await isCurrent(status.active)) throw new ManagementError('ACTIVE_CONFLICT', 409);
       return parseUsageSnapshot(body, `${before.bootId}:${before.pid}:${before.startTime}`);
     } });
+    const bandwidth = createBandwidthService({
+      enabled: (controllerPolicy.allowedProbeOrigins as string[] | undefined)?.length !== 0,
+      isCurrent: async generation => await isCurrent(generation) && !(await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused &&
+        (await runtime.observe(generation)).ready,
+      snapshot: async (node, generation, signal) => {
+        if (!await isCurrent(generation) || (await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused ||
+            !(await runtime.observe(generation)).ready) throw new ManagementError('CONTROLLER_UNAVAILABLE', 503);
+        const { candidate } = await loadRuntimeCandidate(runtimeSettings, generation);
+        const nodes = candidate.config.proxies;
+        if (!Array.isArray(nodes) || !nodes.some(value => value !== null && typeof value === 'object' && !Array.isArray(value) && value.name === node))
+          throw new ManagementError('BANDWIDTH_NODE_INVALID');
+        const binaryPath = await verifyBinary(runtimeSettings);
+        signal.throwIfAborted();
+        if (!await isCurrent(generation)) throw new ManagementError('ACTIVE_CONFLICT', 409);
+        return { config: candidate.config, binaryPath, stateDirectory: runtimeSettings.stateDirectory };
+      },
+    });
     const gateway = createManagementGateway({ origin: settings.origin, credential, trustedDevices }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) :
-        new URL(request.url).pathname.startsWith('/api/cocoproxy/usage/') ? usage.fetch(request) : action(request, principal));
+        new URL(request.url).pathname.startsWith('/api/cocoproxy/usage/') ? usage.fetch(request) :
+          ['/api/cocoproxy/bandwidth', '/api/cocoproxy/bandwidth/cancel'].includes(new URL(request.url).pathname) ? bandwidth.fetch(request, principal) : action(request, principal));
     const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,
       () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'), undefined, onTiming);
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
       startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); usage.start(); return recovered; },
-      closeLifecycle: async () => { try { await usage.close(); } finally { await automatic!.close(); await lifecycle.close(); } } };
+      closeLifecycle: async () => { try { await bandwidth.close(); } finally { try { await usage.close(); } finally { await automatic!.close(); await lifecycle.close(); } } } };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }

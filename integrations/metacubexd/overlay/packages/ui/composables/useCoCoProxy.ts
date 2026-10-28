@@ -168,6 +168,7 @@ export function useCoCoProxy() {
     body?: unknown
     redirectUnauthorized?: boolean
     signal?: AbortSignal
+    headers?: Record<string, string>
   } = {}): Promise<T> {
     let response: Response
     try {
@@ -176,7 +177,7 @@ export function useCoCoProxy() {
         credentials: 'same-origin',
         cache: 'no-store',
         signal: options.signal,
-        headers: options.body === undefined ? undefined : { 'content-type': 'application/json' },
+        headers: { ...options.headers, ...(options.body === undefined ? {} : { 'content-type': 'application/json' }) },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
       })
     } catch {
