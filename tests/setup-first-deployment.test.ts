@@ -81,7 +81,7 @@ test('administrator, current candidate, core and persistent intent are separate 
 test('status CLI consumes private input, returns fixed observation errors off Linux and rejects mutations or arbitrary probes', async t => {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-first-status-')); t.after(() => rm(root, { recursive: true, force: true }));
   const inputPath = join(root, 'deployment.json'); await writeFile(inputPath, JSON.stringify(deployment), { mode: 0o600 });
-  const call = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', 'apps/setup/main.ts', ...args],
+  const call = (...args: string[]) => spawnSync(process.execPath, ['--no-warnings', '--experimental-strip-types', 'apps/setup/main.ts', ...args],
     { cwd: new URL('..', import.meta.url), encoding: 'utf8', windowsHide: true });
   if (process.platform !== 'linux') {
     const result = call('status', '--input', inputPath); assert.equal(result.status, 0, result.stderr);
@@ -103,7 +103,7 @@ test('a changing machine snapshot cancels passing observations without persistin
 });
 
 test('the removed recording command is rejected without accepting private facts', () => {
-  const result = spawnSync(process.execPath, ['--experimental-strip-types', 'apps/setup/main.ts', 'record-observations'],
+  const result = spawnSync(process.execPath, ['--no-warnings', '--experimental-strip-types', 'apps/setup/main.ts', 'record-observations'],
     { cwd: new URL('..', import.meta.url), encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 1); assert.equal(result.stdout, '');
   assert.equal(result.stderr.trim(), 'SETUP_ARGUMENTS_INVALID');

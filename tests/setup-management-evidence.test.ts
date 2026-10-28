@@ -73,7 +73,7 @@ test('setup CLI keeps the private HTTPS check and rejects removed evidence and m
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-management-report-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const input = join(root, 'deployment.json'); await writeFile(input, JSON.stringify(deployment), { mode: 0o600 });
-  const call = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', 'apps/setup/main.ts', ...args],
+  const call = (...args: string[]) => spawnSync(process.execPath, ['--no-warnings', '--experimental-strip-types', 'apps/setup/main.ts', ...args],
     { cwd: new URL('..', import.meta.url), encoding: 'utf8', windowsHide: true });
   const result = call('management-report', '--input', input);
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
