@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { IconArrowsExchange, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCpu, IconDevices, IconDownload, IconEdit, IconListDetails, IconRefresh, IconSearch, IconSelector, IconSum, IconUpload, IconUser, IconWorld, IconX } from '@tabler/icons-vue'
+import { IconArrowsExchange, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCpu, IconDevices, IconDownload, IconEdit, IconInfoCircle, IconListDetails, IconRefresh, IconSearch, IconSelector, IconSum, IconUpload, IconUser, IconWorld, IconX } from '@tabler/icons-vue'
+import { onClickOutside, onKeyStroke } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { cocoproxyErrorMessage, useCoCoProxy } from '~/composables/useCoCoProxy'
 import { formatBytes } from '~/utils'
@@ -51,6 +52,10 @@ const noteIP = ref('')
 const note = ref('')
 const saving = ref(false)
 const noteDialog = ref<HTMLDialogElement>()
+const infoOpen = ref(false)
+const infoContainer = ref<HTMLElement>()
+const infoButton = ref<HTMLButtonElement>()
+const infoClose = ref<HTMLButtonElement>()
 const pageSize = 50
 let overviewVersion = 0, detailVersion = 0, expandedVersion = 0
 let controller: AbortController | undefined
@@ -64,8 +69,23 @@ const isAddress = (value: string | null) => !!value && !['Inner', 'Unattributed'
 const display = (label: string) => label === 'Unattributed' ? '未归属流量' : label === 'Inner' ? '核心内部来源' : label
 const date = (value: number | null | undefined) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '尚无记录'
 const total = computed(() => overview.value?.summary ?? { upload: 0, download: 0, unattributed: 0, sources: 0 })
+const collectionUnavailable = computed(() => overview.value && (overview.value.sampleError || !overview.value.collecting))
+const hasDataNotes = computed(() => collectionUnavailable.value || !!overview.value?.gapCount || !!total.value.unattributed)
 const filters = () => selected.value === null ? {} : { [view.value]: selected.value }
 const query = (body: Record<string, unknown>, signal?: AbortSignal, queryRange = range.value) => api.request<Result>('/api/cocoproxy/usage/query', { method: 'POST', body: { ...queryRange, ...body }, signal })
+
+function closeInfo() {
+  infoOpen.value = false
+  infoButton.value?.focus()
+}
+async function toggleInfo() {
+  infoOpen.value = !infoOpen.value
+  if (infoOpen.value) { await nextTick(); infoClose.value?.focus() }
+}
+onClickOutside(infoContainer, () => { infoOpen.value = false })
+onKeyStroke('Escape', (event) => {
+  if (infoOpen.value) { event.preventDefault(); closeInfo() }
+})
 
 async function refresh(background = false) {
   const version = ++overviewVersion
@@ -101,7 +121,7 @@ async function loadDetails(background = false) {
   if (selected.value === null) { details.value = null; detailBusy.value = false; return }
   const key = JSON.stringify([view.value, selected.value, rangeDays.value, customStart.value, customEnd.value, sort.value, order.value, detailSearch.value, detailPage.value])
   if (key !== detailKey) { details.value = null; detailError.value = ''; detailKey = key }
-  detailBusy.value = !background || !details.value
+  detailBusy.value = !background
   try {
     const result = await query({ dimension: detailDimension.value, filters: filters(), sort: sort.value, order: order.value, search: detailSearch.value, page: detailPage.value, pageSize }, detailController.signal)
     if (version !== detailVersion) return
@@ -179,9 +199,34 @@ onBeforeUnmount(() => {
       <div class="flex flex-wrap gap-1 rounded-lg border border-base-content/10 bg-base-200/60 p-1" aria-label="用量维度">
         <button v-for="option in options" :key="option.value" type="button" class="btn btn-ghost btn-sm" :class="{ 'bg-primary text-primary-content': view === option.value }" :aria-pressed="view === option.value" @click="view = option.value"><component :is="option.icon" :size="16" />{{ option.label }}</button>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <label class="text-sm">时间范围 <select v-model.number="rangeDays" class="select select-bordered select-sm"><option :value="1 / 24">最近一小时</option><option :value="1">最近一天</option><option :value="7">最近七天</option><option :value="30">最近三十天</option><option :value="365">最近一年</option><option :value="-1">自定义</option></select></label>
-        <button type="button" class="btn btn-ghost btn-sm min-w-20" :disabled="refreshing" @click="refresh()"><IconRefresh :size="16" :class="{ 'animate-spin': refreshing }" />{{ refreshing ? '刷新中' : '刷新' }}</button>
+      <div class="flex flex-wrap items-end gap-2">
+        <label class="flex flex-col gap-1 text-xs">时间范围 <select v-model.number="rangeDays" class="select select-bordered select-sm w-36"><option :value="1 / 24">最近一小时</option><option :value="1">最近一天</option><option :value="7">最近七天</option><option :value="30">最近三十天</option><option :value="365">最近一年</option><option :value="-1">自定义</option></select></label>
+        <button type="button" class="btn btn-ghost btn-sm w-20 px-2" :disabled="refreshing" @click="refresh()"><IconRefresh :size="16" :class="{ 'animate-spin': refreshing }" />{{ refreshing ? '刷新中' : '刷新' }}</button>
+        <div ref="infoContainer" class="relative">
+          <button ref="infoButton" type="button" class="btn btn-ghost btn-sm px-2" aria-haspopup="dialog" aria-controls="usage-info" :aria-expanded="infoOpen" @click="toggleInfo"><IconInfoCircle :size="16" /><span>说明</span><span v-if="hasDataNotes" class="h-1.5 w-1.5 rounded-full bg-warning" aria-label="有数据提示" /></button>
+          <div v-if="infoOpen" id="usage-info" role="dialog" aria-labelledby="usage-info-title" class="absolute right-0 top-full z-30 mt-2 max-h-[calc(100dvh-2rem)] w-96 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-base-content/15 bg-base-200 p-4 text-sm shadow-xl max-sm:fixed max-sm:inset-x-4 max-sm:bottom-4 max-sm:top-auto max-sm:mt-0 max-sm:w-auto">
+            <div class="mb-4 flex items-center justify-between gap-3"><h2 id="usage-info-title" class="flex items-center gap-2 font-semibold"><IconInfoCircle :size="18" />用量说明</h2><button ref="infoClose" type="button" class="btn btn-ghost btn-xs" @click="closeInfo"><IconX :size="14" />关闭</button></div>
+            <div class="space-y-4 text-xs leading-relaxed">
+              <dl v-if="overview" class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+                <dt class="text-base-content/60">采集状态</dt><dd :class="{ 'text-warning': collectionUnavailable }">{{ collectionUnavailable ? '采集暂停，显示历史' : '正常采集' }}</dd>
+                <dt class="text-base-content/60">统计始于</dt><dd>{{ date(overview.status.startedAt) }}</dd>
+                <dt class="text-base-content/60">最近采集</dt><dd>{{ date(overview.status.lastSampleAt) }}</dd>
+                <dt class="text-base-content/60">最近保存</dt><dd>{{ date(overview.status.lastCommittedAt) }}</dd>
+              </dl>
+              <p v-else class="text-base-content/60">采集记录暂不可用。</p>
+              <div class="space-y-2 border-t border-base-content/10 pt-3 text-base-content/70">
+                <p>明细保留 30 天，每日来源汇总保留 1 年。</p>
+                <p>来源按 IP 汇总，NAT 后的多台设备无法拆分。</p>
+                <p v-if="overview?.resolution === 'day'">当前显示每日来源汇总，过期域名明细不可查询。</p>
+              </div>
+              <div v-if="hasDataNotes" class="space-y-2 border-t border-base-content/10 pt-3">
+                <p v-if="collectionUnavailable" class="text-warning">后台采集暂不可用，当前显示已保存历史，空白区间不代表零流量。</p>
+                <p v-if="overview?.gapCount">此范围有 {{ overview.gapCount }} 段采集间断或核心重置。</p>
+                <p v-if="total.unattributed">未归属流量 {{ formatBytes(total.unattributed) }}，已计入总量。</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <form v-if="rangeDays === -1" class="flex flex-wrap items-end gap-2" @submit.prevent="reset">
@@ -190,12 +235,7 @@ onBeforeUnmount(() => {
       <button type="submit" class="btn btn-primary btn-sm"><IconSearch :size="16" />查询</button>
     </form>
     <p v-if="error" class="alert alert-error text-sm" role="alert">{{ error }}</p>
-    <div v-if="overview" class="space-y-1 text-xs text-base-content/60" aria-live="polite">
-      <p>后台统计始于 {{ date(overview.status.startedAt) }} · 最近采集 {{ date(overview.status.lastSampleAt) }} · 最近保存 {{ date(overview.status.lastCommittedAt) }}</p>
-      <p>明细保留 30 天，每日来源汇总保留 1 年。{{ overview.resolution === 'day' ? '当前显示每日来源汇总，过期域名明细不可查询。' : '' }}来源按 IP 汇总，NAT 后的多台设备无法拆分。</p>
-      <p v-if="overview.sampleError || !overview.collecting" class="text-warning">后台采集暂不可用，当前显示已保存历史，空白区间不代表零流量。</p>
-      <p v-if="overview.gapCount || total.unattributed" class="text-warning">此范围有 {{ overview.gapCount ?? 0 }} 段采集间断或核心重置，未归属流量 {{ formatBytes(total.unattributed) }}，已计入总量。</p>
-    </div>
+    <p v-if="collectionUnavailable" class="text-xs text-warning" role="status">采集暂停，显示历史</p>
     <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
       <div v-for="card in [{ label: '来源 IP', value: total.sources, icon: IconDevices }, { label: '上传', value: formatBytes(total.upload), icon: IconUpload }, { label: '下载', value: formatBytes(total.download), icon: IconDownload }, { label: '总量', value: formatBytes(total.upload + total.download), icon: IconSum }]" :key="card.label" class="flex h-20 items-center gap-3 rounded-2xl border border-base-content/10 bg-base-200/60 p-3">
         <component :is="card.icon" :size="24" class="shrink-0 text-primary" /><div class="min-w-0"><p class="text-xs text-base-content/50">{{ card.label }}</p><p class="truncate text-lg font-bold">{{ overview ? card.value : '—' }}</p></div>
