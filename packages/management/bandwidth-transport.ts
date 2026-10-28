@@ -31,11 +31,27 @@ export function buildBandwidthConfig(config: JsonObject, node: string, port: num
     if (key !== 'listen' && key !== 'listen-routing-mark') dns[key] = structuredClone(value);
   }
   if (Object.keys(dns).length) dns['respect-rules'] = false;
+  // DNS policies are still parsed with respect-rules disabled. Carry only their
+  // referenced inline providers, without importing production routing/groups.
+  const providers: JsonObject = {};
+  for (const field of ['nameserver-policy', 'proxy-server-nameserver-policy']) {
+    const policy = dns[field];
+    if (!object(policy)) continue;
+    for (const key of Object.keys(policy)) {
+      if (!key.startsWith('rule-set:')) continue;
+      for (const name of key.slice('rule-set:'.length).split(',').map(value => value.trim())) {
+        const provider = object(config['rule-providers']) ? config['rule-providers'][name] : undefined;
+        if (!name || !object(provider) || provider.type !== 'inline') throw failure('BANDWIDTH_CONFIG_INVALID');
+        providers[name] = structuredClone(provider);
+      }
+    }
+  }
   return { port, 'allow-lan': false, 'bind-address': '127.0.0.1', mode: 'rule', 'log-level': 'silent', ipv6: config.ipv6 === true,
     'geo-auto-update': false, profile: { 'store-selected': false, 'store-fake-ip': false }, tun: { enable: false },
     // Native TUN excludes all local UIDs. The unprivileged manager uses host routes;
     // copying the production SO_MARK would require capabilities its unit deliberately lacks.
-    proxies: [{ ...structuredClone(leaf), name: 'BANDWIDTH-TARGET' }], rules: ['MATCH,BANDWIDTH-TARGET'], ...(Object.keys(dns).length ? { dns } : {}) };
+    proxies: [{ ...structuredClone(leaf), name: 'BANDWIDTH-TARGET' }], rules: ['MATCH,BANDWIDTH-TARGET'],
+    ...(Object.keys(providers).length ? { 'rule-providers': providers } : {}), ...(Object.keys(dns).length ? { dns } : {}) };
 }
 
 /** Counts application body bytes, including probes and unacknowledged upload writes. */
@@ -165,6 +181,23 @@ async function stopChild(child: ChildProcess): Promise<void> {
   });
 }
 
+/** Validate the exact task file before opening a listener; expose only fixed error codes. */
+async function validateChild(child: ChildProcess, signal: AbortSignal): Promise<void> {
+  let stopping: Promise<void> | undefined;
+  const stop = () => { stopping ??= stopChild(child); };
+  const timer = setTimeout(stop, 5000);
+  signal.addEventListener('abort', stop, { once: true });
+  const valid = await new Promise<boolean>(resolve => {
+    let failed = false;
+    child.once('error', () => { failed = true; });
+    child.once('close', code => resolve(!failed && code === 0));
+    if (signal.aborted) stop();
+  });
+  clearTimeout(timer); signal.removeEventListener('abort', stop);
+  await stopping;
+  if (!valid) throw failure('BANDWIDTH_CONFIG_INVALID');
+}
+
 function pause(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return new Promise(resolve => { const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
@@ -197,6 +230,8 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
     directory = await mkdtemp(join(input.stateDirectory, 'bandwidth-'));
     await chmod(directory, 0o700);
     await writeFile(join(directory, 'config.json'), JSON.stringify(config), { mode: 0o600, flag: 'wx' }); check();
+    child = runtime.start(input.binaryPath, ['-t', '-d', directory, '-f', join(directory, 'config.json')]);
+    await validateChild(child, lifetime.signal); check();
     child = runtime.start(input.binaryPath, ['-d', directory, '-f', join(directory, 'config.json')]);
     let exited = false;
     child.once('error', () => { exited = true; lifetime.abort(); });
@@ -278,7 +313,8 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
     return { reason };
   } catch (error) {
     const code = timedOut ? 'BANDWIDTH_TIMEOUT' : input.signal.aborted ? 'BANDWIDTH_CANCELLED' :
-      error instanceof Error && 'code' in error && error.code === 'BANDWIDTH_BYTE_LIMIT' ? 'BANDWIDTH_BYTE_LIMIT' : 'BANDWIDTH_UNAVAILABLE';
+      error instanceof Error && 'code' in error && ['BANDWIDTH_BYTE_LIMIT', 'BANDWIDTH_CONFIG_INVALID'].includes(String(error.code))
+        ? String(error.code) : 'BANDWIDTH_UNAVAILABLE';
     throw failure(code);
   } finally {
     emit({ phase: 'finishing' });

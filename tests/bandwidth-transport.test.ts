@@ -13,14 +13,21 @@ import test from 'node:test';
 import type { Duplex } from 'node:stream';
 import type { JsonObject } from '../packages/config/index.ts';
 import { BandwidthByteBudget, bandwidthBodyRequest, buildBandwidthConfig, runBandwidthTransfer } from '../packages/management/bandwidth-transport.ts';
+import { validateWithMihomo } from '../packages/mihomo/validator.ts';
 
 const source = (): JsonObject => ({ proxies: [
   { name: 'Chosen,with punctuation', type: 'ss', server: 'chosen.example', port: 443, cipher: 'aes-128-gcm', password: 'synthetic-selected' },
   { name: 'Other', type: 'ss', server: 'other.example', port: 443, password: 'synthetic-other' },
 ], 'proxy-groups': [{ name: 'Group', type: 'select', proxies: ['Other'] }],
+  'rule-providers': {
+    'dns-fixture': { type: 'inline', behavior: 'domain', payload: ['+.fixture.example'] },
+    'unused-routing': { type: 'inline', behavior: 'domain', payload: ['+.unused.example'] },
+  },
   'external-controller': '127.0.0.1:12345', secret: 'synthetic-controller', 'mixed-port': 10000,
   'allow-lan': true, tun: { enable: true }, dns: { enable: true, listen: '127.0.0.1:12346', 'listen-routing-mark': 100,
-    'respect-rules': true, nameserver: ['https://resolver.example/dns-query'],
+    'respect-rules': true, 'default-nameserver': ['192.0.2.53'], nameserver: ['https://resolver.example/dns-query'],
+    'proxy-server-nameserver': ['192.0.2.53'],
+    'nameserver-policy': { 'rule-set:dns-fixture': ['192.0.2.53#DIRECT'] },
     'proxy-server-nameserver-policy': { 'chosen.example': ['9.9.9.9'] } }, 'interface-name': 'test-egress', 'routing-mark': 123 });
 
 test('isolated config retains exactly the selected leaf and resolvers without live controls or privileged marks', () => {
@@ -35,14 +42,29 @@ test('isolated config retains exactly the selected leaf and resolvers without li
   assert.equal(config['proxy-groups'], undefined); assert.equal(config['external-controller'], undefined);
   assert.equal(config.secret, undefined); assert.equal(config['mixed-port'], undefined);
   assert.equal(config['interface-name'], undefined); assert.equal(config['routing-mark'], undefined);
-  assert.deepEqual(config.dns, { enable: true, 'respect-rules': false, nameserver: ['https://resolver.example/dns-query'],
+  assert.deepEqual(config['rule-providers'], { 'dns-fixture': (original['rule-providers'] as JsonObject)['dns-fixture'] });
+  assert.deepEqual(config.dns, { enable: true, 'respect-rules': false, 'default-nameserver': ['192.0.2.53'], nameserver: ['https://resolver.example/dns-query'],
+    'proxy-server-nameserver': ['192.0.2.53'],
+    'nameserver-policy': { 'rule-set:dns-fixture': ['192.0.2.53#DIRECT'] },
     'proxy-server-nameserver-policy': { 'chosen.example': ['9.9.9.9'] } });
+  const missing = source(); delete missing['rule-providers'];
+  assert.throws(() => buildBandwidthConfig(missing, 'Chosen,with punctuation', 23456), { code: 'BANDWIDTH_CONFIG_INVALID' });
   assert.ok(!JSON.stringify(config).includes('synthetic-other'));
   for (const name of ['Group', 'DIRECT', 'Missing']) assert.throws(() => buildBandwidthConfig(original, name, 23456), { code: 'BANDWIDTH_UNAVAILABLE' });
   for (const leaf of [{ name: 'Bad', type: 'direct' }, { name: 'Bad', type: 'ss', 'dialer-proxy': 'Other' }] as JsonObject[]) {
     assert.throws(() => buildBandwidthConfig({ proxies: [leaf] }, 'Bad', 23456), { code: 'BANDWIDTH_UNAVAILABLE' });
   }
 });
+
+test('real core validates isolated DNS rule-set dependencies and rejects the former dangling reference',
+  { skip: !process.env.COCOPROXY_TEST_MIHOMO, timeout: 20_000 }, async () => {
+    const config = buildBandwidthConfig(source(), 'Chosen,with punctuation', 23456);
+    const candidate = { id: 'a'.repeat(64), sha256: 'a'.repeat(64), config };
+    const options = { binaryPath: process.env.COCOPROXY_TEST_MIHOMO!, timeoutMs: 5000 };
+    await validateWithMihomo(candidate, options);
+    const broken = structuredClone(config); delete broken['rule-providers'];
+    await assert.rejects(validateWithMihomo({ ...candidate, config: broken }, options), { code: 'CORE_CONFIG_REJECTED' });
+  });
 
 async function localAgent(handler: (request: IncomingMessage, response: ServerResponse) => void) {
   const server = createServer(handler), sockets = new Set<Socket>();
@@ -112,21 +134,25 @@ s.write('HTTP/1.1 200 Connection established\\r\\n\\r\\n');
 if(process.argv[3]==='tls-failure')setTimeout(()=>s.end('HTTP/1.1 200 not TLS\\r\\n\\r\\n'),10);
 });}).listen(c.port,'127.0.0.1');`);
   const keep = join(root, 'keep.txt'); await writeFile(keep, 'keep');
-  for (const mode of ['cancel', 'tls-failure', 'timeout']) {
+  for (const mode of ['invalid-config', 'cancel', 'tls-failure', 'timeout']) {
     const controller = new AbortController(); let child: ChildProcess | undefined, configPath = '', seenLatency = false;
     const result = runBandwidthTransfer({ config: source(), node: 'Chosen,with punctuation', binaryPath: process.execPath,
       stateDirectory: root, signal: controller.signal, limits: { durationMs: 100, maxBytes: 1_000_000, timeoutMs: mode === 'timeout' ? 600 : 4000 },
       report: update => { if (update.phase === 'latency') { seenLatency = true; if (mode === 'cancel') setTimeout(() => controller.abort(), 25); } },
     }, { start: (binary, args) => {
-      configPath = args[3];
+      const validating = args[0] === '-t';
+      configPath = args.at(-1)!;
       const config = JSON.parse(readFileSync(configPath, 'utf8'));
       assert.deepEqual(config.proxies.map((leaf: JsonObject) => leaf.server), ['chosen.example']);
       assert.equal(config.authentication.length, 1);
-      if (process.platform !== 'win32') { assert.equal(statSync(configPath).mode & 0o777, 0o600); assert.equal(statSync(args[1]).mode & 0o777, 0o700); }
+      if (process.platform !== 'win32') { assert.equal(statSync(configPath).mode & 0o777, 0o600); assert.equal(statSync(args[validating ? 2 : 1]).mode & 0o777, 0o700); }
+      if (validating) {
+        child = spawn(binary, ['-e', `process.exit(${mode === 'invalid-config' ? 1 : 0})`], { stdio: 'ignore', windowsHide: true }); return child;
+      }
       child = spawn(binary, [script, configPath, mode], { stdio: 'ignore', windowsHide: true }); return child;
     } });
-    await assert.rejects(result, { code: mode === 'cancel' ? 'BANDWIDTH_CANCELLED' : mode === 'timeout' ? 'BANDWIDTH_TIMEOUT' : 'BANDWIDTH_UNAVAILABLE' });
-    assert.equal(seenLatency, true); assert.ok(child && (child.exitCode !== null || child.signalCode !== null));
+    await assert.rejects(result, { code: mode === 'invalid-config' ? 'BANDWIDTH_CONFIG_INVALID' : mode === 'cancel' ? 'BANDWIDTH_CANCELLED' : mode === 'timeout' ? 'BANDWIDTH_TIMEOUT' : 'BANDWIDTH_UNAVAILABLE' });
+    assert.equal(seenLatency, mode !== 'invalid-config'); assert.ok(child && (child.exitCode !== null || child.signalCode !== null));
     assert.throws(() => statSync(configPath), { code: 'ENOENT' });
     assert.deepEqual((await readdir(root)).sort(), ['keep.txt', 'synthetic-core.cjs']);
   }

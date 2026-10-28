@@ -33,6 +33,7 @@ const reasonLabels: Record<string, string> = {
   ACTIVE_CONFLICT: '生效配置已变化，测试停止', CONTROLLER_UNAVAILABLE: '代理核心暂不可用',
   BANDWIDTH_TIMEOUT: '已达到测试时限', BANDWIDTH_LIMIT: '已达到流量上限', BANDWIDTH_BYTE_LIMIT: '已达到流量上限', BANDWIDTH_SAMPLE_INSUFFICIENT: '有效样本不足',
   BANDWIDTH_UNAVAILABLE: '节点带宽测试暂不可用', BANDWIDTH_CANCELLED: '已取消测试',
+  BANDWIDTH_CONFIG_INVALID: '测速临时配置校验失败，未开始传输；日常代理不受此配置影响',
 }
 const reason = computed(() => task.value?.reason ? reasonLabels[task.value.reason] ?? '测试未能全部完成，请检查节点与服务状态后重试。' : '')
 
