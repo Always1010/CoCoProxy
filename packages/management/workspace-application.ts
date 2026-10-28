@@ -583,7 +583,13 @@ export function createWorkspaceApplication(options: {
       const next = { ...settings, revision: current.revision + 1 };
       compile(await build(next));
       const saved = await preferences.save(settings, current.revision);
-      return apply(saved, body.expectedActive);
+      const result = await apply(saved, body.expectedActive);
+      const confirmed = await view();
+      const settled = await store.status();
+      if (confirmed.workspace.revision !== saved.revision || (await load()).revision !== saved.revision || confirmed.pending ||
+          confirmed.active !== result.active || settled.active !== result.active || settled.transaction || settled.fault) invalid('WORKSPACE_CONFLICT');
+      if (confirmed.groups.find(group => group.name === body.group)?.activeSelected !== body.name) invalid('SELECTION_UNCONFIRMED');
+      return { ...result, view: confirmed };
     }
     throw new ManagementError('NOT_FOUND', 404);
   };

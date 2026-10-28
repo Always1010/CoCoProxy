@@ -130,15 +130,26 @@ export function useWorkspace() {
 
   async function select(group: string, name: string) {
     await execute(async () => {
-      await save(settings => {
-        const overrides = editOverrides(settings)
-        overrides.selections[group] = name
-        const automatic = overrides.automatic?.[group]
-        if (automatic) overrides.automatic![group] = { ...automatic, enabled: false }
-      }, '')
-      const observed = await api.request<{ proxies: Record<string, { now?: string }> }>('/api/clash/proxies')
-      if (observed.proxies[group]?.now !== name) throw new CoCoProxyError('SELECTION_UNCONFIRMED')
-      feedback.value = `已切换：${group} → ${name}`
+      if (!view.value) throw new CoCoProxyError('WORKSPACE_UNAVAILABLE')
+      const expectedRevision = view.value.workspace.revision
+      operation.value = `正在切换：${group} → ${name}`
+      try {
+        const result = await api.request<{ active: string; view: WorkspaceView }>('/api/cocoproxy/workspace/select', {
+          method: 'POST', body: { expectedRevision, expectedActive: view.value.active, group, name },
+        })
+        if (result.view.active !== result.active || result.view.pending || result.view.workspace.revision !== expectedRevision + 1)
+          throw new CoCoProxyError('WORKSPACE_CONFLICT')
+        if (result.view.groups.find(item => item.name === group)?.activeSelected !== name)
+          throw new CoCoProxyError('SELECTION_UNCONFIRMED')
+        view.value = result.view
+        api.generation.value = result.active
+        feedback.value = `已切换：${group} → ${name}`
+      } catch (cause) {
+        // A failed response can follow a committed switch. Read once; never
+        // replay the write or infer success from the user's requested choice.
+        try { await load() } catch { /* Preserve the original failure. */ }
+        throw cause
+      }
     })
   }
 
