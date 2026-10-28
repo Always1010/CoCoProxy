@@ -109,7 +109,6 @@ defineExpose({ open, close })
           @click="requestClose"
         >
           <IconX :size="18" aria-hidden="true" />
-          <span v-if="settingsLayout" class="text-xs">关闭</span>
         </button>
       </div>
 
