@@ -4,6 +4,7 @@ import { Script } from 'node:vm';
 import test from 'node:test';
 import ts from '../tooling/node_modules/typescript/lib/typescript.js';
 import { localGroupNameError } from '../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts';
+import { BANDWIDTH_FIELDS, DEFAULT_BANDWIDTH_SETTINGS, parseBandwidthSettings } from '../packages/management/bandwidth-policy.ts';
 
 const apiExports: Record<string, any> = {};
 new Script(ts.transpileModule(await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useCoCoProxy.ts', import.meta.url), 'utf8'), {
@@ -13,6 +14,39 @@ const { CoCoProxyError, cocoproxyErrorMessage } = apiExports;
 
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useWorkspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+
+test('bandwidth settings validate pool limits and allow the independent switch to return to latency-only mode', async () => {
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/BandwidthSelectionSettings.vue', import.meta.url), 'utf8');
+  const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
+    + '\nexport { invalid, toggle, restore, load };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const props = { modelValue: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true }, disabled: false };
+  const exports: Record<string, any> = {};
+  new Script(code, { filename: 'BandwidthSelectionSettings.js' }).runInNewContext({
+    exports, defineProps: () => props, defineEmits: () => (_event: string, value: typeof props.modelValue) => { props.modelValue = value; },
+    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    defineExpose() {}, onMounted() {}, cocoproxyErrorMessage: () => '读取失败',
+    useWorkspace: () => ({ view: { value: null }, api: { request: async () => ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS } }) } }),
+  });
+  await exports.load();
+  assert.equal(exports.invalid.value, ''); // 30 s spacing is valid with the default 20 s task timeout.
+  for (const bad of [{ searchMiB: 16 }, { reserveHourMiB: 64 }, { freshSeconds: 60, roundIntervalSeconds: 60 }]) {
+    props.modelValue = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...bad };
+    assert.notEqual(exports.invalid.value, '');
+    assert.throws(() => parseBandwidthSettings(props.modelValue));
+  }
+  exports.restore();
+  assert.equal(exports.invalid.value, '');
+  props.modelValue.targetMbps = 7;
+  exports.toggle('enabled', { target: { checked: false } });
+  assert.equal(props.modelValue.enabled, false);
+  assert.equal(props.modelValue.targetMbps, 7);
+  assert.equal(exports.invalid.value, '');
+  assert.equal(parseBandwidthSettings(props.modelValue).enabled, false);
+  props.disabled = true;
+  exports.toggle('enabled', { target: { checked: true } });
+  assert.equal(props.modelValue.enabled, false);
+});
 
 test('automatic history keeps reading position, preserves failed refreshes and clears only the displayed group', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionHistory.vue', import.meta.url), 'utf8');
