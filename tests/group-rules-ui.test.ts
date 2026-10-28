@@ -24,27 +24,31 @@ test('group rule utility passes strict indexed-access type checks', () => {
 async function editor(initial: string[], groupName = 'Work') {
   const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupMatchingRules.vue', import.meta.url), 'utf8');
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { entries, original, type, payload, editing, error, dirty, saved, saving, ownRules, templateRules, dependents, effectiveRulesLink, customRulesLink, add, edit, remove, persist };';
+    '\nexport { entries, original, type, payload, editing, error, dirty, saved, saving, needsRead, pendingApply, ownRules, templateRules, dependents, effectiveRulesLink, customRulesLink, add, edit, remove, persist, reread };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const settings = { local: { rules: [...initial], selections: { Work: 'Proxy', Stream: 'node-a' } as Record<string, string> } };
-  const view = { value: { groups: [{ name: 'Work', role: 'service', selected: 'Proxy' }], rules: [] as { value: string; source: string }[] } };
+  const view = { value: { groups: [{ name: 'Work', role: 'service', selected: 'Proxy' }], rules: [] as { value: string; source: string }[], pending: false } };
   const workspace = { value: { mode: 'local', runMode: 'rule' } };
   const exports: Record<string, any> = {};
-  let saves = 0, failApply = false;
+  let saves = 0, failure: Error | undefined, persistBeforeFailure = false;
   new Script(code, { filename: 'GroupMatchingRules.js' }).runInNewContext({
     ...rules, exports, Error, CoCoProxyError, defineProps: () => ({ groupName }), defineEmits: () => () => {}, defineExpose() {}, watch() {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
-    useWorkspace: () => ({ view, workspace, overrides: { value: settings.local }, busy: { value: false },
+    useWorkspace: () => ({ view, workspace, overrides: { get value() { return settings.local; } }, busy: { value: false }, load: async () => {},
       run: async (action: () => Promise<void>) => action(),
       save: async (edit: (value: typeof settings) => void) => {
         saves++;
         const draft = structuredClone(settings);
         edit(draft);
-        if (failApply) throw new Error('合成应用失败');
+        if (persistBeforeFailure) settings.local = draft.local;
+        if (failure) throw failure;
         settings.local = draft.local;
       } }),
   });
-  return Object.assign(exports, { settings, workspace, view, saves: () => saves, fail: () => { failApply = true; } });
+  return Object.assign(exports, { settings, workspace, view, saves: () => saves,
+    fail: (cause = new Error('合成应用失败'), persisted = false, pending = false) => {
+      failure = cause; persistBeforeFailure = persisted; view.value.pending = pending;
+    }, recover: () => { failure = undefined; view.value.pending = false; } });
 }
 
 test('group rule viewing opens effective rules while editing keeps the custom destination', async () => {
@@ -201,6 +205,76 @@ test('group rules block stale drafts, keep failed drafts and require staging the
   assert.equal(unstaged.dirty.value, true); // Closing also protects text not yet added to the list.
   unstaged.payload.value = '';
   assert.equal(unstaged.dirty.value, false);
+});
+
+test('group rule deletion retries after settings were saved but application failed', async () => {
+  const ui = await editor([]);
+  ui.payload.value = 'new.example';
+  ui.add();
+  await ui.persist();
+  assert.equal(ui.dirty.value, false);
+  ui.remove(0);
+  ui.fail(new CoCoProxyError('ACTIVATION_FAILED'), true, true);
+  await ui.persist();
+  assert.deepEqual(ui.settings.local.rules, []);
+  assert.equal(ui.dirty.value, true);
+  assert.equal(ui.needsRead.value, true);
+  assert.match(ui.error.value, /核心激活失败/);
+  const writes = ui.saves();
+  await ui.persist();
+  assert.equal(ui.saves(), writes); // Read the outcome before another write.
+  ui.remove(0);
+  ui.payload.value = 'blocked.example';
+  ui.add();
+  assert.deepEqual(Array.from(ui.entries.value), []); // Preserve the draft being reconciled.
+  ui.payload.value = '';
+  await ui.reread();
+  assert.equal(ui.dirty.value, false); // Closing cannot discard confirmed persisted settings.
+  assert.equal(ui.pendingApply.value, true); // Application can be retried without a new edit.
+  assert.equal(ui.needsRead.value, false);
+  ui.recover();
+  await ui.persist();
+  assert.equal(ui.error.value, '');
+  assert.equal(ui.dirty.value, false);
+  assert.match(ui.saved.value, /已保存并生效/);
+
+  // Further edits use the confirmed persisted baseline even before application succeeds.
+  ui.payload.value = 'another.example';
+  ui.add();
+  ui.fail(new CoCoProxyError('ACTIVATION_FAILED'), true, true);
+  await ui.persist();
+  await ui.reread();
+  ui.remove(0);
+  ui.recover();
+  await ui.persist();
+  assert.deepEqual(ui.settings.local.rules, []);
+  assert.equal(ui.error.value, '');
+  assert.equal(ui.dirty.value, false);
+  assert.equal(ui.pendingApply.value, false);
+});
+
+test('group rule reread confirms a lost response without writing or hiding unrelated conflicts', async () => {
+  const ui = await editor(['DOMAIN,old.example,Work']);
+  ui.remove(0);
+  ui.fail(new CoCoProxyError('NETWORK_UNKNOWN'), true);
+  await ui.persist();
+  const writes = ui.saves();
+  await ui.reread();
+  assert.equal(ui.saves(), writes);
+  assert.equal(ui.error.value, '');
+  assert.equal(ui.dirty.value, false);
+  assert.equal(ui.needsRead.value, false);
+
+  const conflicted = await editor(['DOMAIN,old.example,Work']);
+  conflicted.remove(0);
+  conflicted.fail(new CoCoProxyError('NETWORK_UNKNOWN'), true);
+  await conflicted.persist();
+  conflicted.settings.local.rules.push('DOMAIN,external.example,Stream');
+  await conflicted.reread();
+  assert.equal(conflicted.dirty.value, true);
+  await conflicted.persist();
+  assert.match(conflicted.error.value, /规则已发生变化/);
+  assert.deepEqual(conflicted.settings.local.rules, ['DOMAIN,external.example,Stream']);
 });
 
 test('group domain form rejects URLs, malformed expressions and duplicate rules', async () => {
