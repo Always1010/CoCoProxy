@@ -105,9 +105,7 @@ const ariaLabel = computed(() => {
       />
       <span>测试中</span>
     </span>
-    <Transition v-else name="latency-flip" mode="out-in">
-      <span :key="latencyText">{{ latencyText }}</span>
-    </Transition>
+    <span v-else>{{ latencyText }}</span>
   </span>
 </template>
 
@@ -130,19 +128,4 @@ const ariaLabel = computed(() => {
   transition-timing-function: var(--ease-press);
 }
 
-/* Number flip when latency value changes */
-.latency-flip-enter-active,
-.latency-flip-leave-active {
-  transition:
-    opacity var(--dur-fast) var(--ease-soft),
-    transform var(--dur-base) var(--ease-spring);
-}
-.latency-flip-enter-from {
-  opacity: 0;
-  transform: translateY(-6px) scale(0.85);
-}
-.latency-flip-leave-to {
-  opacity: 0;
-  transform: translateY(6px) scale(0.85);
-}
 </style>
