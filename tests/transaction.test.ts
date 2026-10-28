@@ -10,6 +10,7 @@ import { canonicalJson } from '../packages/config/index.ts';
 import type { Candidate } from '../packages/config/index.ts';
 import { FileTransactionStore, TransactionManager, TransactionError } from '../packages/transaction/index.ts';
 import type { RuntimeAdapter } from '../packages/transaction/index.ts';
+import { withOperationTiming, type OperationTiming } from '../packages/diagnostics/operation-timing.ts';
 
 function candidate(name: string): Candidate {
   const config = { name, token: 'synthetic-private-value' };
@@ -99,6 +100,32 @@ test('CAS includes null and successful state never claims current health', async
   assert.equal(result.transaction, null);
   await assert.rejects(manager.apply(second.id, null), code('ACTIVE_CONFLICT'));
   assert.ok(!JSON.stringify(result).includes('synthetic-private-value'));
+});
+
+test('operation timings isolate concurrent transactions, omit private data and cannot change success or failure', async t => {
+  const good = await fixture(t), bad = await fixture(t), target = candidate('timing-private-node');
+  await good.manager.stage(target); await bad.manager.stage(target);
+  bad.runtime.confirms = false;
+  const timings: OperationTiming[] = [];
+  const observe = (timing: OperationTiming) => { timings.push(timing); throw new Error('synthetic observer failure'); };
+  const results = await Promise.allSettled([
+    withOperationTiming('select', observe, () => good.manager.apply(target.id, null)),
+    withOperationTiming('reconcile', observe, () => bad.manager.apply(target.id, null)),
+  ]);
+  assert.equal(results[0].status, 'fulfilled');
+  assert.equal(results[1].status, 'rejected');
+  if (results[1].status === 'rejected') assert.equal(results[1].reason.code, 'CONFIRM_FAILED');
+  assert.equal(timings.length, 2);
+  const succeeded = timings.find(timing => timing.operation === 'select')!, failed = timings.find(timing => timing.operation === 'reconcile')!;
+  assert.equal(succeeded.outcome, 'ok'); assert.equal(failed.outcome, 'failed');
+  assert.equal(typeof succeeded.phases.commit, 'number'); assert.equal(succeeded.phases.restore, undefined);
+  assert.equal(typeof failed.phases.restore, 'number'); assert.equal(failed.phases.commit, undefined);
+  for (const timing of timings) {
+    for (const phase of ['lock', 'held', 'validate', 'activate', 'confirm'] as const) assert.equal(typeof timing.phases[phase], 'number');
+    assert.ok([timing.totalMs, ...Object.values(timing.phases)].every(value => Number.isFinite(value) && value >= 0));
+  }
+  for (const value of [good.root, bad.root, target.id, 'synthetic-private-value', 'timing-private-node'])
+    assert.ok(!JSON.stringify(timings).includes(value));
 });
 
 test('validation failure neither activates nor restores and errors are opaque', async t => {

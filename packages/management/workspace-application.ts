@@ -15,6 +15,7 @@ import { selectionChanges } from '../runtime/selections.ts';
 import { privateRead } from '../storage/private-files.ts';
 import { SiteProbeStore, siteScope } from './site-probes.ts';
 import { AutomaticHistoryStore, retainAutomaticEvents } from './automatic-history.ts';
+import { measurePhase } from '../diagnostics/operation-timing.ts';
 
 type Plan = { workspace: Workspace; policy: JsonObject; nodeDnsPolicy?: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string;
   automatic: { scope: string; key: string; signatures: Record<string, string>; policies: Record<string, AutoGroupPolicy>; choices: Record<string, string[]> }; bindingKey: string };
@@ -584,7 +585,7 @@ export function createWorkspaceApplication(options: {
       compile(await build(next));
       const saved = await preferences.save(settings, current.revision);
       const result = await apply(saved, body.expectedActive);
-      const confirmed = await view();
+      const confirmed = await measurePhase('readback', view);
       const settled = await store.status();
       if (confirmed.workspace.revision !== saved.revision || (await load()).revision !== saved.revision || confirmed.pending ||
           confirmed.active !== result.active || settled.active !== result.active || settled.transaction || settled.fault) invalid('WORKSPACE_CONFLICT');
