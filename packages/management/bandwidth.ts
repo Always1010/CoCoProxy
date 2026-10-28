@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { JsonObject } from '../config/index.ts';
 import { ManagementError, exactRecord, readJsonBody, type Principal } from './http.ts';
 import { runBandwidthTransfer, type BandwidthDirection, type BandwidthPhase, type BandwidthReport } from './bandwidth-transport.ts';
+import type { BandwidthSettings } from './bandwidth-policy.ts';
 
 export const BANDWIDTH_LIMITS = Object.freeze({ durationMs: 6000, maxBytes: 200_000_000, timeoutMs: 30_000 });
 export const BANDWIDTH_SERVER = Object.freeze({ name: 'Cloudflare', url: 'https://speed.cloudflare.com' });
@@ -32,6 +33,7 @@ export function createBandwidthService(options: {
 }) {
   let current: { task: BandwidthTask; owner: string; abort: AbortController; completion: Promise<void>; stopReason: string | null } | undefined;
   let stopped = false;
+  let automatic: { abort: AbortController; done: Promise<unknown> } | undefined;
   const transfer = options.transfer ?? runBandwidthTransfer;
 
   function owner(request: Request, principal: Principal): string | null {
@@ -42,7 +44,7 @@ export function createBandwidthService(options: {
     return createHash('sha256').update(JSON.stringify([principal.username, identity, client])).digest('hex');
   }
   function status(key: string | null) {
-    return { available: options.enabled !== false && !stopped, limits: BANDWIDTH_LIMITS, server: BANDWIDTH_SERVER,
+    return { available: options.enabled !== false && !stopped, automaticRunning: !!automatic, limits: BANDWIDTH_LIMITS, server: BANDWIDTH_SERVER,
       task: current ? structuredClone({ ...current.task, owned: key !== null && current.owner === key }) : null };
   }
   function stop(job: NonNullable<typeof current>, reason: string) {
@@ -103,6 +105,35 @@ export function createBandwidthService(options: {
   }
 
   return {
+    busy: () => !!current?.task.running || !!automatic,
+    async verify(node: string, generation: string, settings: BandwidthSettings, signal: AbortSignal,
+      reportBytes: (bytes: number) => void): Promise<{ mbps: number; delayMs: number; bytes: number } | null> {
+      if (stopped || options.enabled === false || current?.task.running || automatic || signal.aborted) return null;
+      const abort = new AbortController();
+      const job = { abort, done: Promise.resolve<unknown>(undefined) };
+      automatic = job;
+      const execute = async () => {
+        let bytes = 0, mbps: number | null = null, delayMs: number | null = null;
+        const joined = AbortSignal.any([signal, abort.signal]);
+        try {
+          const target = await options.snapshot(node, generation, joined);
+          joined.throwIfAborted();
+          const result = await transfer({ ...target, node, signal: joined,
+            limits: { durationMs: settings.durationSeconds * 1000, maxBytes: settings.taskMiB * 1048576, timeoutMs: settings.timeoutSeconds * 1000 },
+            verification: { targetMbps: settings.targetMbps, warmupMs: settings.warmupSeconds * 1000, minSampleMs: settings.minSampleSeconds * 1000 },
+            report: value => {
+              if (value.bytesUsed !== undefined) { bytes = value.bytesUsed; reportBytes(bytes); }
+              if (value.latency?.idle !== undefined) delayMs = value.latency.idle;
+              if (value.download?.status === 'success') mbps = value.download.mbps;
+            } });
+          return !result.reason && !joined.aborted && await options.isCurrent(generation) && mbps !== null && delayMs !== null
+            ? { mbps, delayMs, bytes } : null;
+        } catch { return null; }
+        finally { if (automatic === job) automatic = undefined; }
+      };
+      job.done = execute();
+      return await job.done as { mbps: number; delayMs: number; bytes: number } | null;
+    },
     async fetch(request: Request, principal: Principal) {
       const url = new URL(request.url);
       if (url.search) throw new ManagementError('INVALID_REQUEST');
@@ -114,7 +145,7 @@ export function createBandwidthService(options: {
         if (typeof body.node !== 'string' || !body.node.trim() || body.node.length > 256 || /[\u0000-\u001f\u007f]/.test(body.node) ||
             typeof body.expectedActive !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedActive)) throw new ManagementError('INVALID_REQUEST');
         if (stopped || options.enabled === false) throw new ManagementError('BANDWIDTH_DISABLED', 503);
-        if (current?.task.running) throw new ManagementError('BANDWIDTH_BUSY', 409);
+        if (current?.task.running || automatic) throw new ManagementError('BANDWIDTH_BUSY', 409);
         const now = Date.now();
         const job = { task: { id: randomUUID(), node: body.node, generation: body.expectedActive, phase: 'preparing', running: true, owned: false,
           reason: null, bytesUsed: 0, startedAt: now, phaseStartedAt: now, finishedAt: null,
@@ -135,6 +166,8 @@ export function createBandwidthService(options: {
     },
     async close() {
       stopped = true;
+      automatic?.abort.abort();
+      await automatic?.done;
       if (current) { stop(current, 'BANDWIDTH_CANCELLED'); await current.completion; }
     },
   };

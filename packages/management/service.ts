@@ -1,6 +1,6 @@
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, resolve, join } from 'node:path';
 import { isIP } from 'node:net';
-import { privateRead } from '../storage/private-files.ts';
+import { privateRead, atomicWrite } from '../storage/private-files.ts';
 import { loadRuntimeSettings, loadRuntimeCandidate, readSelection, verifyBinary } from '../runtime/settings.ts';
 import { SystemdMihomoRuntime } from '../runtime/systemd.ts';
 import { HttpsSnapshotClient } from '../subscriptions/http.ts';
@@ -20,6 +20,7 @@ import { SiteProbeStore } from './site-probes.ts';
 import type { TimingObserver } from '../diagnostics/operation-timing.ts';
 import { createUsageService, parseUsageSnapshot } from './usage.ts';
 import { createBandwidthService } from './bandwidth.ts';
+import { parseBandwidthLedger } from './bandwidth-selector.ts';
 
 export function stripControllerMount(request: Request): Request {
   const url = new URL(request.url);
@@ -131,6 +132,7 @@ export async function loadManagementGateway(path: string) {
       onTiming,
       allowedProbeOrigins: controllerPolicy.allowedProbeOrigins as string[] | undefined,
       automaticStatus: () => automatic?.status() ?? { groups: [], events: [] },
+      automaticBandwidthCheck: group => automatic?.requestBandwidthCheck(group) ?? false,
       automaticProbe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
       runtime, sourceClient, sourceDecoder: decodeSubscriptionProfile, automaticGateway: runtimeSettings.automaticGateway,
       observeSelections: async () => {
@@ -142,13 +144,23 @@ export async function loadManagementGateway(path: string) {
         for (const [name, value] of Object.entries(body.proxies)) if (typeof value.now === 'string') selections[name] = value.now;
         return { generation, selections };
       } });
+    let bandwidth: ReturnType<typeof createBandwidthService> | undefined;
     automatic = createAutomaticSelector({
       snapshot: async () => (await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused ? null : action.automaticSnapshot(),
       probe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
       switch: (snapshot, group, node, reason) => action.automaticSwitch(snapshot, group, node, reason),
+      bandwidth: {
+        busy: () => bandwidth?.busy() ?? true,
+        measure: (snapshot, node, settings, signal, report) => bandwidth?.verify(node, snapshot.generation, settings, signal, report) ?? Promise.resolve(null),
+        load: async () => {
+          try { return parseBandwidthLedger(JSON.parse(await privateRead(join(runtimeSettings.stateDirectory, 'automatic-bandwidth.json'), 1048576))); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, charges: [], switches: [] }; throw error; }
+        },
+        save: ledger => store.exclusive(() => atomicWrite(runtimeSettings.stateDirectory, 'automatic-bandwidth.json', JSON.stringify(ledger))),
+      },
     });
     const trustedDevices = await TrustedDeviceStore.load(runtimeSettings.stateDirectory, credential, settings.origin);
-    const usage = createUsageService({ directory: runtimeSettings.stateDirectory, sample: async () => {
+    const usage = createUsageService({ directory: runtimeSettings.stateDirectory, observe: sample => automatic?.observeUsage(sample), sample: async () => {
       const status = await store.status();
       if (!status.active || !await isCurrent(status.active)) throw new ManagementError('CONTROLLER_UNAVAILABLE', 503);
       const before = await runtime.accountingIdentity(status.active);
@@ -159,7 +171,7 @@ export async function loadManagementGateway(path: string) {
       if (before.bootId !== after.bootId || before.pid !== after.pid || before.startTime !== after.startTime || !await isCurrent(status.active)) throw new ManagementError('ACTIVE_CONFLICT', 409);
       return parseUsageSnapshot(body, `${before.bootId}:${before.pid}:${before.startTime}`);
     } });
-    const bandwidth = createBandwidthService({
+    bandwidth = createBandwidthService({
       enabled: (controllerPolicy.allowedProbeOrigins as string[] | undefined)?.length !== 0,
       isCurrent: async generation => await isCurrent(generation) && !(await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused &&
         (await runtime.observe(generation)).ready,
@@ -180,11 +192,11 @@ export async function loadManagementGateway(path: string) {
     const gateway = createManagementGateway({ origin: settings.origin, credential, trustedDevices }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) :
         new URL(request.url).pathname.startsWith('/api/cocoproxy/usage/') ? usage.fetch(request) :
-          ['/api/cocoproxy/bandwidth', '/api/cocoproxy/bandwidth/cancel'].includes(new URL(request.url).pathname) ? bandwidth.fetch(request, principal) : action(request, principal));
+          ['/api/cocoproxy/bandwidth', '/api/cocoproxy/bandwidth/cancel'].includes(new URL(request.url).pathname) ? bandwidth!.fetch(request, principal) : action(request, principal));
     const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,
       () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'), undefined, onTiming);
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
       startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); usage.start(); return recovered; },
-      closeLifecycle: async () => { try { await bandwidth.close(); } finally { try { await usage.close(); } finally { await automatic!.close(); await lifecycle.close(); } } } };
+      closeLifecycle: async () => { try { await automatic!.close(); } finally { try { await bandwidth!.close(); } finally { try { await usage.close(); } finally { await lifecycle.close(); } } } } };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }

@@ -57,6 +57,8 @@ def compare_preservation(before, after, frozen=False):
             'runtime-binding-reader-only-dynamic-targets-events-and-times-may-change', absent=before['files'].get('automaticSelections') is None)
         check('automatic-switch-history', not (before['files'].get('automaticHistory') is not None and after['files'].get('automaticHistory') is None),
             'private-history-reader-only-records-may-expire-or-grow', absent=before['files'].get('automaticHistory') is None)
+        check('automatic-bandwidth-budget', not (before['files'].get('automaticBandwidth') is not None and after['files'].get('automaticBandwidth') is None),
+            'private-bandwidth-ledger-reader-only-charges-and-switches-may-change', absent=before['files'].get('automaticBandwidth') is None)
         usage_before, usage_after = before.get('usage'), after.get('usage')
         check('usage-history', usage_before is None or usage_after is not None and usage_before == usage_after,
             'sqlite-integrity-and-database-identity-with-stable-ip-notes-records-may-expire-or-grow', absent=usage_before is None)

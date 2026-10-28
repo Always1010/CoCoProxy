@@ -8,6 +8,7 @@ import { describeTcpNode, probeTcpEndpoint, tcpEndpoint } from './tcp-delay.ts';
 import { memoizePolicyCompiler } from './shared-work.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_AUTO_PROBES, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings, type ProbeTarget } from './automatic-policy.ts';
+import { BANDWIDTH_FIELDS, DEFAULT_BANDWIDTH_SETTINGS } from './bandwidth-policy.ts';
 import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
 import { readAutomaticBindings, writeAutomaticBindings, type AutomaticBindings } from './automatic-bindings.ts';
 import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
@@ -89,6 +90,7 @@ export function createWorkspaceApplication(options: {
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
   allowedProbeOrigins?: readonly string[];
   automaticStatus?: () => unknown;
+  automaticBandwidthCheck?: (group: string) => boolean;
   automaticProbe?: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult>;
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
@@ -439,6 +441,18 @@ export function createWorkspaceApplication(options: {
     if (path === '/api/cocoproxy/automatic/status' && request.method === 'GET') {
       return exclusive(async () => automaticStatus(await load(), true));
     }
+    if (path === '/api/cocoproxy/automatic/bandwidth/check' && request.method === 'POST') {
+      const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'expectedActive', 'scope', 'group']);
+      return exclusive(async () => {
+        const workspace = await load(), state = await store.status();
+        if (workspace.revision !== body.expectedRevision || scopeOf(workspace) !== body.scope || !state.active || state.active !== body.expectedActive
+            || state.transaction || state.fault || (await readRuntimeLifecycle(options.stateDirectory)).paused) invalid('WORKSPACE_CONFLICT');
+        const policy = typeof body.group === 'string' && Object.hasOwn(activePolicies(workspace), body.group) ? activePolicies(workspace)[body.group] : null;
+        if (!policy?.bandwidth?.enabled || !policy.bandwidth.activeProbes) invalid('AUTO_SETTINGS_INVALID');
+        if (!options.automaticBandwidthCheck?.(body.group as string)) invalid('AUTO_PROBE_BUSY');
+        return automaticStatus(workspace);
+      });
+    }
     if (path === '/api/cocoproxy/automatic/history/clear' && request.method === 'POST') {
       const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'scope', 'group']);
       return exclusive(async () => {
@@ -454,6 +468,7 @@ export function createWorkspaceApplication(options: {
       });
     }
     if (path === '/api/cocoproxy/automatic/probes' && request.method === 'GET') return { defaults: DEFAULT_AUTO_PROBES,
+      bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS },
       allowedOrigins: [...(options.allowedProbeOrigins ?? ['https://www.gstatic.com'])] };
     if (path === '/api/cocoproxy/automatic/test' && request.method === 'POST') {
       if (!options.automaticProbe) invalid('AUTO_PROBE_UNAVAILABLE');

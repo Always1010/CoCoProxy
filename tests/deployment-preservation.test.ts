@@ -52,7 +52,7 @@ async function fixture(t: test.TestContext) {
   const project = async (selectedOrigin = origin, selectedCredential: AdminCredential = credential) => {
     const paths = { transaction: 'state.json', lifecycle: 'lifecycle.json', trustedDevices: 'auth/trusted-devices.json',
       workspace: 'workspace.json', siteProbes: 'site-probes.json', draft: 'draft.json', automaticSelections: 'automatic-selections.json',
-      automaticHistory: 'automatic-history.json', selection: 'selection.json' };
+      automaticHistory: 'automatic-history.json', automaticBandwidth: 'automatic-bandwidth.json', selection: 'selection.json' };
     const documents = {} as Parameters<typeof summarizePreservation>[0];
     for (const [id, path] of Object.entries(paths)) {
       try { documents[id as keyof typeof documents] = await readFile(join(root, path), 'utf8'); }

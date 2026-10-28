@@ -256,7 +256,8 @@ export class UsageStore {
 }
 
 /** Starts only with the existing lifecycle; no listener, browser session or second core supervisor. */
-export function createUsageService(options: { directory: string; sample: () => Promise<UsageSnapshot>; now?: () => number; intervalMs?: number }) {
+export function createUsageService(options: { directory: string; sample: () => Promise<UsageSnapshot>; now?: () => number; intervalMs?: number;
+  observe?: (snapshot: UsageSnapshot) => void }) {
   let store: UsageStore | undefined, opening: Promise<UsageStore> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined, pending: Promise<void> | undefined;
   let stopped = true, unavailable = false, sampleError = false;
@@ -267,7 +268,7 @@ export function createUsageService(options: { directory: string; sample: () => P
     return opening;
   };
   const tick = async () => {
-    try { const current = await get(); current.ingest(await options.sample()); sampleError = false; }
+    try { const current = await get(); const sample = await options.sample(); current.ingest(sample); options.observe?.(sample); sampleError = false; }
     catch { sampleError = true; try { store?.flush(); } catch { /* status exposes the persistent failure */ } }
     finally { if (!stopped) { timer = setTimeout(() => { pending = tick(); }, options.intervalMs ?? 1000); timer.unref(); } }
   };

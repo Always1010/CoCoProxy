@@ -4,6 +4,7 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import test from 'node:test';
 import { createBandwidthService, type BandwidthTarget } from '../packages/management/bandwidth.ts';
 import type { runBandwidthTransfer } from '../packages/management/bandwidth-transport.ts';
+import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-policy.ts';
 import { createAdminCredential } from '../packages/management/auth.ts';
 import { createManagementGateway, type Principal } from '../packages/management/http.ts';
 
@@ -19,6 +20,23 @@ function request(method = 'GET', body?: unknown, client = clientA, cookie = 'syn
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 const success = { status: 'success' as const, mbps: 123, liveMbps: null, bytes: 1_000_000 };
+
+test('automatic download verification shares the manual task slot until abort cleanup completes', async () => {
+  const entered = deferred(), cleanup = deferred(), stop = new AbortController();
+  const service = createBandwidthService({ snapshot: async () => target, isCurrent: async () => true,
+    transfer: async input => {
+      assert.ok(input.verification); entered.resolve();
+      await new Promise<void>(resolve => input.signal.addEventListener('abort', () => resolve(), { once: true }));
+      await cleanup.promise; return { reason: 'BANDWIDTH_CANCELLED' };
+    } });
+  const running = service.verify('node-b', generation, DEFAULT_BANDWIDTH_SETTINGS, stop.signal, () => {});
+  await entered.promise;
+  assert.equal((await service.fetch(request(), principal)).automaticRunning, true);
+  await assert.rejects(service.fetch(request('POST', { node: 'node-b', expectedActive: generation }), principal), { code: 'BANDWIDTH_BUSY' });
+  stop.abort(); assert.equal(service.busy(), true);
+  cleanup.resolve(); assert.equal(await running, null); assert.equal(service.busy(), false);
+  await service.close();
+});
 
 test('bandwidth task reserves globally before snapshot awaits and binds cancellation to the authenticated browser', async t => {
   const snapshot = deferred(), entered = deferred(), cleanup = deferred();
