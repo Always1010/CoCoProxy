@@ -3,24 +3,26 @@ import { IconLock, IconLogin } from '@tabler/icons-vue'
 import { cocoproxyErrorMessage, useCoCoProxy } from '~/composables/useCoCoProxy'
 
 definePageMeta({ layout: false })
-useHead({ title: '登录 · CoCoProxy' })
+const { t } = useI18n()
+useHead({ title: computed(() => t('coco.pzSignInCocoproxy')) })
 const { login } = useCoCoProxy()
 const username = ref('')
 const password = ref('')
 const trust = ref<'none' | '90days' | 'until-revoked'>('until-revoked')
 const deviceLabel = ref('')
 const busy = ref(false)
-const error = ref('')
+const errorSource = shallowRef<(() => string) | null>(null)
+const error = computed(() => errorSource.value?.() ?? '')
 
 async function submit() {
   if (busy.value) return
   busy.value = true
-  error.value = ''
+  errorSource.value = null
   try {
     await login(username.value, password.value, trust.value, deviceLabel.value)
     await navigateTo('/overview', { replace: true })
   } catch (cause) {
-    error.value = cocoproxyErrorMessage(cause)
+    errorSource.value = () => cocoproxyErrorMessage(cause, t)
   } finally {
     password.value = ''
     busy.value = false
@@ -34,37 +36,37 @@ async function submit() {
       <div class="card-body gap-5">
         <div class="flex items-center gap-3">
           <IconLock class="text-primary" :size="30" aria-hidden="true" />
-          <div><h1 class="text-2xl font-bold">CoCoProxy</h1><p class="text-sm text-base-content/65">管理会话登录</p></div>
+          <div><h1 class="text-2xl font-bold">CoCoProxy</h1><p class="text-sm text-base-content/65">{{ t('coco.pzManagementSignIn') }}</p></div>
         </div>
         <label class="flex flex-col gap-2 text-sm" for="cocoproxy-username">
-          用户名
+          {{ t('coco.pzUsername') }}
           <input id="cocoproxy-username" v-model="username" class="input input-bordered w-full" autocomplete="username" required maxlength="64" :disabled="busy" />
         </label>
         <label class="flex flex-col gap-2 text-sm" for="cocoproxy-password">
-          密码
+          {{ t('coco.pzPassword') }}
           <input id="cocoproxy-password" v-model="password" class="input input-bordered w-full" type="password" autocomplete="current-password" required :disabled="busy" />
         </label>
         <label class="flex flex-col gap-2 text-sm" for="cocoproxy-trust">
-          登录保持方式
+          {{ t('coco.pzSessionPersistence') }}
           <select id="cocoproxy-trust" v-model="trust" class="select select-bordered w-full" :disabled="busy">
-            <option value="until-revoked">长期信任此设备</option>
-            <option value="90days">信任 90 天（使用时续期）</option>
-            <option value="none">临时登录（8 小时）</option>
+            <option value="until-revoked">{{ t('coco.pzTrustThisDeviceIndefinitely') }}</option>
+            <option value="90days">{{ t('coco.pzTrustForDaysRenewedWhenUsed') }}</option>
+            <option value="none">{{ t('coco.pzTemporarySignInHours') }}</option>
           </select>
         </label>
         <label v-if="trust !== 'none'" class="flex flex-col gap-2 text-sm" for="cocoproxy-device-label">
-          设备名称（必填，不可重复）
-          <input id="cocoproxy-device-label" v-model="deviceLabel" class="input input-bordered w-full" placeholder="例如：办公电脑 Chrome" required maxlength="80" :disabled="busy" />
-          <span class="text-xs text-base-content/55">不同浏览器分别授权，请使用不同名称。</span>
+          {{ t('coco.pzDeviceNameRequiredAndUnique') }}
+          <input id="cocoproxy-device-label" v-model="deviceLabel" class="input input-bordered w-full" :placeholder="t('coco.pzForExampleOfficeComputerChrome')" required maxlength="80" :disabled="busy" />
+          <span class="text-xs text-base-content/55">{{ t('coco.pzEachBrowserIsAuthorizedSeparatelyUseADifferentName') }}</span>
         </label>
-        <p class="text-xs leading-relaxed text-base-content/55">{{ trust === 'none' ? '临时会话在 8 小时后或管理服务重启后失效。' : '此设备下次自动登录，管理服务重启后仍有效。主动退出或在设置中撤销设备后，需要重新登录。' }}</p>
+        <p class="text-xs leading-relaxed text-base-content/55">{{ trust === 'none' ? t('coco.pzTemporarySessionsExpireAfterHoursOrWhenTheManagement') : t('coco.pzThisDeviceWillSignInAutomaticallyIncludingAfterManagement') }}</p>
         <p v-if="error" class="text-sm text-error" role="alert">{{ error }}</p>
         <button class="btn btn-primary w-full" type="submit" :disabled="busy">
           <span v-if="busy" class="loading loading-spinner loading-sm" aria-hidden="true" />
           <IconLogin v-else :size="20" aria-hidden="true" />
-          {{ busy ? '登录中…' : '登录' }}
+          {{ busy ? t('coco.pzSigningIn') : t('coco.pzSignIn') }}
         </button>
-        <p class="text-xs leading-relaxed text-base-content/55">使用部署时设置的管理员账户。共用设备请选择临时登录。</p>
+        <p class="text-xs leading-relaxed text-base-content/55">{{ t('coco.pzUseTheAdministratorAccountConfiguredDuringDeploymentChooseTemporary') }}</p>
       </div>
     </form>
   </main>

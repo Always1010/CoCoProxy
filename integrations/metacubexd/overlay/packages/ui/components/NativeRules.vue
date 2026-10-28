@@ -300,7 +300,7 @@ const providersTotalSize = computed(() =>
               :size="18"
               :class="{ 'animate-spin text-success': allProviderIsUpdating }"
             />
-            <span>更新</span>
+            <span>{{ t('coco.anUpdate2') }}</span>
           </Button>
         </div>
       </div>
@@ -379,11 +379,12 @@ const providersTotalSize = computed(() =>
           <span>{{ t('clearFilters') }}</span>
         </Button>
 
-        <!-- Sort dropdown (icon-only, mirrors the proxies toolbar). Disabled
+        <!-- Sort dropdown, matching the proxies toolbar. Disabled
              while searching, since match-sorter relevance owns the ordering
              then — otherwise the control would silently no-op. -->
         <IconMenuSelect
           :icon="IconArrowsSort"
+          :label="t('sortBy')"
           :title="globalFilter ? t('sortOverriddenBySearch') : t('sortBy')"
           :options="sortOptions"
           :model-value="configStore.rulesOrderingType"
@@ -417,7 +418,7 @@ const providersTotalSize = computed(() =>
             </template>
             <template v-else>
               <IconFilter :size="48" class="mb-4 opacity-20" />
-              <span class="text-base-content/50">{{ group ? '当前目标暂无生效规则' : t('noRules') }}</span>
+              <span class="text-base-content/50">{{ group ? t('coco.anTheCurrentTargetHasNoEffective') : t('noRules') }}</span>
             </template>
           </div>
           <div
@@ -605,7 +606,7 @@ const providersTotalSize = computed(() =>
                             updatingMap[item.data.name],
                         }"
                       />
-                      <span>更新</span>
+                      <span>{{ t('coco.anUpdate2') }}</span>
                     </Button>
                   </div>
                 </div>

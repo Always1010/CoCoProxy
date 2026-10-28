@@ -1,3 +1,4 @@
+import { uiTestContext, useI18n } from './ui-i18n-helpers.ts';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
@@ -9,8 +10,8 @@ import * as rules from '../integrations/metacubexd/overlay/packages/ui/utils/gro
 const apiExports: Record<string, any> = {};
 new Script(ts.transpileModule(await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useCoCoProxy.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText).runInNewContext({ exports: apiExports, Error });
-const { CoCoProxyError } = apiExports;
+}).outputText).runInNewContext({ ...uiTestContext, exports: apiExports, Error });
+const { CoCoProxyError, cocoproxyErrorMessage } = apiExports;
 
 test('group rule utility passes strict indexed-access type checks', () => {
   const program = ts.createProgram({
@@ -31,8 +32,8 @@ async function editor(initial: string[], groupName = 'Work') {
   const workspace = { value: { mode: 'local', runMode: 'rule' } };
   const exports: Record<string, any> = {};
   let saves = 0, failure: Error | undefined, persistBeforeFailure = false;
-  new Script(code, { filename: 'GroupMatchingRules.js' }).runInNewContext({
-    ...rules, exports, Error, CoCoProxyError, defineProps: () => ({ groupName }), defineEmits: () => () => {}, defineExpose() {},
+  new Script(code, { filename: 'GroupMatchingRules.js' }).runInNewContext({ ...uiTestContext,
+    ...rules, exports, Error, CoCoProxyError, cocoproxyErrorMessage, defineProps: () => ({ groupName }), defineEmits: () => () => {}, defineExpose() {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useWorkspace: () => ({ view, workspace, overrides: { get value() { return settings.local; } }, busy: { value: false }, load: async () => {},
       run: async (action: () => Promise<void>) => { try { await action(); } catch { /* Shared workspace alert owns the propagated failure. */ } },
@@ -64,8 +65,8 @@ test('group rule viewing opens effective rules while editing keeps the custom de
   assert.equal(ui.customRulesLink.value.query.group, 'Microsoft');
 
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupMatchingRules.vue', import.meta.url), 'utf8');
-  assert.match(component, /:to="effectiveRulesLink"[^>]*>[\s\S]*?查看本组生效规则/);
-  assert.match(component, /:to="customRulesLink"[^>]*>[\s\S]*?前往规则页编辑/);
+  assert.match(component, /:to="effectiveRulesLink"[^>]*>[\s\S]*?coco\.anViewEffectiveRulesForThisGroup/);
+  assert.match(component, /:to="customRulesLink"[^>]*>[\s\S]*?coco\.anEditOnRulesPage/);
   const page = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/pages/rules.vue', import.meta.url), 'utf8');
   assert.match(page, /<NativeRules[^>]*:group="groupFilter"/);
 });
@@ -95,7 +96,7 @@ test('effective group rules ignore saved filters, track the group and keep navig
       toggleRulePolicyFilter: (value: string) => void;
       clearRuleFilters: () => void;
     };
-    new Script(code, { filename: 'NativeRules.js' }).runInNewContext({
+    new Script(code, { filename: 'NativeRules.js' }).runInNewContext({ ...uiTestContext,
       exports, defineProps: () => props,
       ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
       watch: (_get: unknown, callback: () => void) => watchers.push(callback),
@@ -254,11 +255,11 @@ test('group domain batch form rejects invalid and duplicate lines before writing
   assert.equal(ui.saves(), 0);
   assert.deepEqual(Array.from(ui.entries.value), ['DOMAIN-SUFFIX,example.com,Work']);
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupMatchingRules.vue', import.meta.url), 'utf8');
-  assert.match(component, /添加 \$\{draftCount\} 条并生效/);
+  assert.match(component, /coco\.anAddAndApply.*value: draftCount/);
   assert.doesNotMatch(component, />保存规则</);
-  assert.throws(() => rules.saveGroupRules(['DOMAIN,other.example,Stream'], ['DOMAIN,other.example,Stream'], [], 'Work'), /其他策略组/);
+  assert.throws(() => rules.saveGroupRules(['DOMAIN,other.example,Stream'], ['DOMAIN,other.example,Stream'], [], 'Work', useI18n().t), /其他策略组/);
   assert.equal(rules.ruleTarget('MATCH,Other'), 'Other');
-  assert.match(rules.templateRuleLabel('RULE-SET,cocoproxy-domestic-domain-v2,Domestic'), /国内域名集合/);
+  assert.match(rules.templateRuleLabel('RULE-SET,cocoproxy-domestic-domain-v2,Domestic', useI18n().t), /国内域名集合/);
 });
 
 test('group creation opens rule settings only after successful creation and preserves existing settings', async () => {
@@ -272,7 +273,7 @@ test('group creation opens rule settings only after successful creation and pres
   const calls: string[] = [];
   let failed = false;
   const exports: Record<string, any> = {};
-  new Script(code).runInNewContext({
+  new Script(code).runInNewContext({ ...uiTestContext,
     ...rules, exports,
     defineProps: () => ({ activeGroup: 'Proxy', configure: (name: string) => calls.push(`configure:${name}`) }),
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
@@ -294,10 +295,10 @@ test('group creation opens rule settings only after successful creation and pres
   await exports.add('Failed');
   assert.deepEqual(calls, ['failed']);
   assert.equal(settings.local.selections.Failed, undefined);
-  assert.match(rules.localGroupNameError('node-a', view.value), /节点名称/);
-  assert.match(rules.localGroupNameError('DIRECT', view.value), /保留/);
-  assert.match(rules.localGroupNameError('Steam', view.value), /预置服务/);
-  assert.match(rules.localGroupNameError('AI,Exit', view.value), /逗号/);
+  assert.match(rules.localGroupNameError('node-a', view.value, false, useI18n().t), /节点名称/);
+  assert.match(rules.localGroupNameError('DIRECT', view.value, false, useI18n().t), /保留/);
+  assert.match(rules.localGroupNameError('Steam', view.value, false, useI18n().t), /预置服务/);
+  assert.match(rules.localGroupNameError('AI,Exit', view.value, false, useI18n().t), /逗号/);
 });
 
 test('local rule targets exclude user-shared exits while retaining Proxy and subscription targets', () => {

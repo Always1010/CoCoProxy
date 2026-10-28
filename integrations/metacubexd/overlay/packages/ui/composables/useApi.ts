@@ -226,6 +226,8 @@ function getMockData(url: string): unknown {
 export function useRequest() {
   const { generation, clearSession } = useCoCoProxy()
   const app = useNuxtApp()
+  const { t } = app.$i18n
+  const requestError = (messageKey: string) => Object.assign(new Error(t(messageKey)), { messageKey })
   return ky.create({
     prefix: `${window.location.origin}/api/clash`,
     credentials: 'include',
@@ -236,21 +238,21 @@ export function useRequest() {
       beforeRequest: [({ request }) => {
         const url = new URL(request.url)
         if (url.origin !== window.location.origin || !url.pathname.startsWith('/api/clash/'))
-          throw new Error('请求地址无效。')
+          throw requestError('coco.invalidRequestUrl')
         request.headers.delete('Authorization')
         if (['PUT', 'DELETE'].includes(request.method)) {
           if (!generation.value || !/^[a-f0-9]{64}$/.test(generation.value))
-            throw new Error('请先重新读取核心状态，再执行操作。')
+            throw requestError('coco.readCoreFirst')
           request.headers.set('If-Match', generation.value)
         } else if (request.method !== 'GET') {
-          throw new Error('请在策略与订阅页面保存并应用配置。')
+          throw requestError('coco.saveFromWorkspace')
         }
       }],
       afterResponse: [async ({ request, response }) => {
         if (response.status === 401) {
           clearSession()
           await app.runWithContext(() => navigateTo('/login', { replace: true }))
-          throw new Error('会话已失效，请重新登录。')
+          throw requestError('coco.sessionExpired')
         }
         if (response.ok && request.method === 'GET') {
           const observed = response.headers.get('X-CoCoProxy-Generation')
@@ -268,9 +270,9 @@ export function useRequest() {
           throw new LatencyTestError('failed', body?.error?.code)
         }
         if (response.status === 409)
-          throw new Error('运行代次已变化，请重新读取状态。')
+          throw requestError('coco.generationChanged')
         if (!response.ok)
-          throw new Error('核心请求未完成，请重新读取状态。')
+          throw requestError('coco.coreRequestFailed')
       }],
       beforeError: [({ error, request }) => {
         if (error instanceof LatencyTestError) return error
@@ -278,7 +280,7 @@ export function useRequest() {
           return new LatencyTestError(
             error.name === 'TimeoutError' ? 'timeout' : 'failed',
           )
-        return new Error('核心请求未完成；如连接中断，操作结果未知，请重新读取状态。')
+        return requestError('coco.coreRequestUnknown')
       }],
     },
   })

@@ -2,6 +2,7 @@
 import { IconChevronDown } from '@tabler/icons-vue'
 import type { useSiteProbes, SiteResult } from '~/composables/useSiteProbes'
 import type { useSiteSettings } from '~/composables/useSiteSettings'
+const { t } = useI18n()
 const props = defineProps<{ proxyName: string; groupName: string }>()
 const context = inject<{ probes: ReturnType<typeof useSiteProbes>; sites: ReturnType<typeof useSiteSettings>; details: (group: string, node: string) => void } | null>('cocoproxy-sites', null)
 const store = useProxiesStore()
@@ -21,12 +22,12 @@ const results = computed(() => context?.probes.runs.value[props.groupName]?.resu
 const entries = computed(() => targets.value.map(target => results.value?.[target.id]))
 const successes = computed(() => entries.value.filter(result => result?.status === 'success').length)
 const label = computed(() => {
-  if (/^(REJECT|REJECT-DROP|PASS|COMPATIBLE)$/i.test(props.proxyName)) return '站点不适用'
-  if (!targets.value.length) return '站点未选'
-  if (!results.value) return '站点未测'
-  if (entries.value.some(result => result?.status === 'testing')) return '站点检测中'
-  if (entries.value.some(result => !result || ['cancelled', 'denied', 'busy', 'unavailable'].includes(result.status))) return '站点未完成'
-  return `站点 ${successes.value}/${targets.value.length}`
+  if (/^(REJECT|REJECT-DROP|PASS|COMPATIBLE)$/i.test(props.proxyName)) return t('coco.pzSitesNA')
+  if (!targets.value.length) return t('coco.pzNoSitesSelected')
+  if (!results.value) return t('coco.pzSitesUntested')
+  if (entries.value.some(result => result?.status === 'testing')) return t('coco.pzTestingSites')
+  if (entries.value.some(result => !result || ['cancelled', 'denied', 'busy', 'unavailable'].includes(result.status))) return t('coco.pzSitesIncomplete')
+  return t('coco.pzSites', { successful: successes.value, total: targets.value.length })
 })
 const config = useConfigStore()
 function color(result?: SiteResult) {
@@ -36,7 +37,7 @@ function color(result?: SiteResult) {
 </script>
 
 <template>
-  <button v-if="context && groupName" type="button" class="flex shrink-0 flex-col items-end gap-1 rounded px-1 py-0.5 text-[10px] tabular-nums hover:bg-base-content/5 sm:text-[11px]" :aria-label="`${proxyName} ${label}，查看站点结果`" @click.stop="context.details(groupName, nodeName)" @keydown.stop>
+  <button v-if="context && groupName" type="button" class="flex shrink-0 flex-col items-end gap-1 rounded px-1 py-0.5 text-[10px] tabular-nums hover:bg-base-content/5 sm:text-[11px]" :aria-label="t('coco.pzViewSiteResults', { node: proxyName, status: label })" @click.stop="context.details(groupName, nodeName)" @keydown.stop>
     <span class="inline-flex items-center gap-0.5 whitespace-nowrap text-base-content/70"><IconChevronDown :size="11" /><span>{{ label }}</span></span>
     <span v-if="targets.length" class="flex h-[3px] w-11 gap-px overflow-hidden rounded-full" aria-hidden="true"><span v-for="(entry, index) in entries" :key="index" class="h-full min-w-0 flex-1" :class="color(entry)" /></span>
   </button>

@@ -32,9 +32,9 @@ export const STREAMING_UNLOCK_TARGETS: ReachabilityTarget[] = [
 ]
 
 export const reachabilityLabels: Record<ReachabilityStatus, string> = {
-  testing: '检测中', cancelled: '已取消',
-  success: '可达', unreachable: '不可达', denied: '未获检测许可', timeout: '检测超时',
-  busy: '检测忙，请稍后重试', unavailable: '核心暂不可用，请刷新', error: '检测失败，请重试',
+  testing: 'coco.statusReachabilitytesting', cancelled: 'coco.statusReachabilitycancelled',
+  success: 'coco.statusReachabilitysuccess', unreachable: 'coco.statusReachabilityunreachable', denied: 'coco.statusReachabilitydenied', timeout: 'coco.statusReachabilitytimeout',
+  busy: 'coco.statusReachabilitybusy', unavailable: 'coco.statusReachabilityunavailable', error: 'coco.statusReachabilityerror',
 }
 export function useReachabilityBoard() {
   const { generation, session } = useCoCoProxy()

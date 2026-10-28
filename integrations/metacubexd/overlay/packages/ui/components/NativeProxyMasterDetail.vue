@@ -251,7 +251,7 @@ function aliveCount(group: ProxyType) {
         v-for="group in groups"
         :key="group.name"
         type="button"
-        :aria-label="`${isSharedGroup(group) ? '共享出口组' : '策略组'} ${group.name}${isAutomaticGroup(group) ? '，自动选择' : ''}`"
+        :aria-label="t('coco.anGroupAccessibleLabel', { type: isSharedGroup(group) ? t('coco.anSharedExitGroup') : t('coco.anProxyGroup'), name: group.name, automatic: isAutomaticGroup(group) ? t('coco.anAutomaticSelection2') : '' })"
         :aria-pressed="group.name === activeName"
         class="flex w-44 shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left transition-all duration-200 sm:w-auto sm:shrink"
         :class="
@@ -267,14 +267,14 @@ function aliveCount(group: ProxyType) {
             class="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded border border-info/25 bg-info/10 px-1 py-0.5 text-[0.65rem] leading-none text-info"
           >
             <IconLink :size="12" aria-hidden="true" />
-            <span>共享</span>
+            <span>{{ t('coco.anShared') }}</span>
           </span>
           <span
             v-if="isAutomaticGroup(group)"
             class="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[0.65rem] leading-none text-primary"
           >
             <IconRefresh :size="12" aria-hidden="true" />
-            <span>自动</span>
+            <span>{{ t('coco.anAuto') }}</span>
           </span>
         </span>
         <span class="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -290,7 +290,7 @@ function aliveCount(group: ProxyType) {
         </span>
       </button>
       <button v-if="railResize.canResize.value && railResize.hasPreference.value" type="button" class="btn btn-ghost btn-sm shrink-0 gap-1" @click="railResize.resetWidth">
-        <IconRefresh :size="14" aria-hidden="true" /><span>重置宽度</span>
+        <IconRefresh :size="14" aria-hidden="true" /><span>{{ t('coco.anResetWidth') }}</span>
       </button>
     </div>
 
@@ -298,13 +298,13 @@ function aliveCount(group: ProxyType) {
       v-if="activeGroup && railResize.canResize.value"
       role="separator"
       tabindex="0"
-      aria-label="调整策略组列表宽度"
+      :aria-label="t('coco.anResizeProxyGroupList')"
       aria-orientation="vertical"
       :aria-valuemin="railResize.minWidth"
       :aria-valuemax="railResize.maxWidth.value"
       :aria-valuenow="railResize.currentWidth.value"
-      aria-valuetext="左右方向键调宽，Home 恢复默认"
-      title="拖动调宽，双击恢复默认宽度"
+      :aria-valuetext="t('coco.anLeftRightToResizeHomeTo')"
+      :title="t('coco.anDragToResizeDoubleClickTo')"
       class="group-rail-separator absolute inset-y-0 z-10 w-3 -translate-x-1/2 cursor-col-resize rounded focus-visible:outline-2 focus-visible:outline-primary"
       :class="{ 'is-dragging': railResize.dragging.value }"
       @pointerdown="railResize.startResize"
@@ -330,13 +330,13 @@ function aliveCount(group: ProxyType) {
             <span class="truncate text-lg font-semibold text-base-content">{{
               activeGroup.name
             }}</span>
-            <span v-if="isSharedGroup(activeGroup)" class="badge badge-sm badge-info gap-1"><IconLink :size="12" aria-hidden="true" /><span>共享出口</span></span>
+            <span v-if="isSharedGroup(activeGroup)" class="badge badge-sm badge-info gap-1"><IconLink :size="12" aria-hidden="true" /><span>{{ t('coco.anSharedExit') }}</span></span>
             <span
               class="badge inline-flex min-w-0 items-center gap-1 badge-sm badge-primary"
             >
               <IconRefresh v-if="automaticEnabled" :size="14" class="shrink-0" aria-hidden="true" />
               <span class="shrink-0 font-bold">{{
-                automaticEnabled ? '自动选择' : canSelect ? '手动选择' : formatProxyType(activeGroup.type, t)
+                automaticEnabled ? t('coco.anAutomaticSelection') : canSelect ? t('coco.anManualSelection') : formatProxyType(activeGroup.type, t)
               }}</span>
               <template v-if="activeGroup.now?.length">
                 <IconChevronRight :size="16" class="shrink-0" />
@@ -352,15 +352,15 @@ function aliveCount(group: ProxyType) {
             {{ displayNodes.length }}/{{ activeNodes.length }}
           </span>
           <details ref="detectionMenu" class="dropdown dropdown-end">
-            <summary class="btn btn-ghost btn-sm" aria-label="选择检测类型"><IconBrandSpeedtest :size="18" /><span>检测</span><span aria-hidden="true">▾</span></summary>
+            <summary class="btn btn-ghost btn-sm" :aria-label="t('coco.anChooseCheckType')"><IconBrandSpeedtest :size="18" /><span>{{ t('coco.anChecks') }}</span><span aria-hidden="true">▾</span></summary>
             <div class="dropdown-content z-40 w-64 rounded-xl border border-base-content/10 bg-base-200 p-2 shadow-xl">
-              <p class="px-2 py-1 text-xs text-base-content/60">当前策略组 · 全部可检测节点<br />不受名称、地区和协议筛选影响</p>
-              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !allMembers.length" @click="detect('latency')"><IconBrandSpeedtest :size="16" /><span>代理延迟</span></button>
-              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !hasTcpNodes" @click="detect('tcp')"><IconBolt :size="16" /><span>TCP 延迟</span></button>
-              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !allMembers.length" @click="detect('sites')"><IconActivity :size="16" /><span>站点连通 · {{ siteCounts?.[activeGroup.name] ? `已选 ${siteCounts[activeGroup.name]} 项` : '选择站点' }}</span></button>
+              <p class="px-2 py-1 text-xs text-base-content/60">{{ t('coco.anCurrentProxyGroupAllTestableNodes') }}<br />{{ t('coco.anUnaffectedByNameRegionOrProtocol') }}</p>
+              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !allMembers.length" @click="detect('latency')"><IconBrandSpeedtest :size="16" /><span>{{ t('coco.anProxyLatency') }}</span></button>
+              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !hasTcpNodes" @click="detect('tcp')"><IconBolt :size="16" /><span>{{ t('coco.anTcpLatency') }}</span></button>
+              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" :disabled="detectionBusy || !allMembers.length" @click="detect('sites')"><IconActivity :size="16" /><span>{{ t('coco.anSiteConnectivity2', { value: siteCounts?.[activeGroup.name] ? t('coco.anSelected', { value: siteCounts[activeGroup.name] }) : t('coco.anChooseSites') }) }}</span></button>
               <div class="my-1 border-t border-base-content/10" role="separator" />
-              <p class="px-2 py-1 text-xs text-base-content/60">单节点测试</p>
-              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" @click="openBandwidthTest"><IconBrandSpeedtest :size="16" aria-hidden="true" /><span>节点带宽…</span></button>
+              <p class="px-2 py-1 text-xs text-base-content/60">{{ t('coco.anSingleNodeTest') }}</p>
+              <button type="button" class="btn btn-ghost btn-sm w-full justify-start" @click="openBandwidthTest"><IconBrandSpeedtest :size="16" aria-hidden="true" /><span>{{ t('coco.anNodeBandwidth') }}</span></button>
             </div>
           </details>
           <button
@@ -372,13 +372,13 @@ function aliveCount(group: ProxyType) {
             @click="scrollSelectedIntoView()"
           >
             <IconTarget :size="18" />
-            <span>定位</span>
+            <span>{{ t('coco.anLocate') }}</span>
           </button>
           <AutomaticSelectionSettings ref="groupSettings" :group-name="activeGroup.name" :selectable="canSelect" />
           <AutomaticSelectionHistory :group-name="activeGroup.name" :selectable="canSelect" />
         </div>
 
-        <p v-if="automaticEnabled" class="text-xs text-primary" role="status">点击节点可切换为手动选择</p>
+        <p v-if="automaticEnabled" class="text-xs text-primary" role="status">{{ t('coco.anSelectANodeToSwitchTo') }}</p>
         <GroupRuleSummary :group-name="activeGroup.name" @configure="groupSettings?.openRules()" />
 
         <!-- Quick-filter rail: region · protocol · features. Each facet group
@@ -499,7 +499,7 @@ function aliveCount(group: ProxyType) {
             @click="clearFilters"
           >
             <IconX :size="14" />
-            <span class="px-1 text-xs">清空筛选</span>
+            <span class="px-1 text-xs">{{ t('coco.anClearFilters') }}</span>
           </button>
         </div>
       </div>
@@ -516,7 +516,7 @@ function aliveCount(group: ProxyType) {
             v-if="canSelect"
             :proxy-name="name"
             :group-name="activeGroup.name"
-            :kind-label="groupRole(name) === 'shared' ? '共享出口' : ''"
+            :kind-label="groupRole(name) === 'shared' ? t('coco.anSharedExit') : ''"
             :test-url="activeGroup.testUrl || null"
             :timeout="activeGroup.timeout ?? null"
             :is-selected="activeGroup.now === name"

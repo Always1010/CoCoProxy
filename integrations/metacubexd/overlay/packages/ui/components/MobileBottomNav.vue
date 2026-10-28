@@ -26,7 +26,7 @@ const primaryItems = computed(() => [
   { href: '/overview', name: t('overview'), icon: IconHome },
   { href: '/proxies', name: t('proxies'), icon: IconGlobe },
   { href: '/rules', name: t('rules'), icon: IconRuler },
-  { href: '/subscriptions', name: '订阅', icon: IconServerCog },
+  { href: '/subscriptions', name: t('coco.anSubscriptions'), icon: IconServerCog },
 ])
 
 const leftPrimaryItems = computed(() => primaryItems.value.slice(0, 2))
@@ -37,7 +37,7 @@ const secondaryItems = computed(() => [
   { href: '/connections', name: t('connections'), icon: IconNetwork },
   { href: '/traffic', name: t('dataUsage'), icon: IconChartAreaLine },
   { href: '/logs', name: t('logs'), icon: IconFileStack },
-  { href: '/cocoproxy', name: '设置', icon: IconSettings },
+  { href: '/cocoproxy', name: t('coco.anSettings'), icon: IconSettings },
 ])
 
 const isActive = (href: string) => route.path === href
@@ -130,7 +130,7 @@ onMounted(() => {
 
   <!-- Bottom nav bar -->
   <nav
-    aria-label="Mobile bottom navigation"
+    :aria-label="t('coco.anMobileNavigation')"
     class="fixed inset-x-0 bottom-0 z-50 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] lg:hidden"
     :class="
       isVisible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'
@@ -179,7 +179,7 @@ onMounted(() => {
           >
             <component :is="nav.icon" class="h-5 w-5" />
           </div>
-          <span class="sr-only">{{ `Navigate to ${nav.name}` }}</span>
+          <span class="sr-only">{{ t('coco.anNavigateTo', { name: nav.name }) }}</span>
           <span
             aria-hidden="true"
             class="relative z-10 truncate px-0.5 text-[9px] font-medium transition-all duration-300 sm:text-[10px]"
@@ -203,30 +203,20 @@ onMounted(() => {
                 ? 'box-shadow: 0 4px 20px color-mix(in oklab, var(--color-primary) 40%, transparent)'
                 : ''
             "
-            aria-label="More menu"
+            :aria-label="t('more')"
             @click="togglePopup"
           >
             <Transition name="icon-spin" mode="out-in">
               <IconX v-if="popupOpen" class="h-6 w-6" />
               <IconPlus v-else class="h-6 w-6" />
             </Transition>
+            <span class="text-[9px] font-medium sm:text-[10px]">{{ t('more') }}</span>
             <!-- Indicator dot when a secondary page is active -->
             <span
               v-if="isSecondaryActive && !popupOpen"
               class="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-base-300 bg-primary"
             />
           </button>
-          <span
-            aria-hidden="true"
-            class="absolute bottom-1 text-[9px] font-medium transition-all duration-300 sm:text-[10px]"
-            :class="
-              popupOpen || isSecondaryActive
-                ? 'text-primary opacity-100'
-                : 'text-base-content/60 opacity-80'
-            "
-          >
-            {{ t('more') }}
-          </span>
         </div>
 
         <!-- Right 2 items: Rules, Subscriptions -->
@@ -262,7 +252,7 @@ onMounted(() => {
           >
             <component :is="nav.icon" class="h-5 w-5" />
           </div>
-          <span class="sr-only">{{ `Navigate to ${nav.name}` }}</span>
+          <span class="sr-only">{{ t('coco.anNavigateTo', { name: nav.name }) }}</span>
           <span
             aria-hidden="true"
             class="relative z-10 truncate px-0.5 text-[9px] font-medium transition-all duration-300 sm:text-[10px]"

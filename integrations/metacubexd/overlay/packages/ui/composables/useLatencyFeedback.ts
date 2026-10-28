@@ -26,19 +26,20 @@ const emptySummary = (): LatencySummary => ({
   running: false,
 })
 
-function describeLatencyFailure(reason: LatencyFailureReason): string {
-  if (reason === 'probe_denied') return '延迟测试未启用，或测试地址未获许可。'
-  if (reason === 'timeout') return '节点延迟测试超时。'
-  return '节点延迟测试失败，请检查核心与节点状态。'
-}
-
-function shortLatencyFailure(reason: LatencyFailureReason): string {
-  if (reason === 'probe_denied') return '未启用'
-  if (reason === 'timeout') return '超时'
-  return '失败'
-}
-
 export function useLatencyFeedback() {
+  const { t } = useNuxtApp().$i18n
+  function describeLatencyFailure(reason: LatencyFailureReason): string {
+    if (reason === 'probe_denied') return t('coco.probeDenied')
+    if (reason === 'timeout') return t('coco.probeTimeout')
+    return t('coco.probeFailed')
+  }
+
+  function shortLatencyFailure(reason: LatencyFailureReason): string {
+    if (reason === 'probe_denied') return t('coco.notEnabled')
+    if (reason === 'timeout') return t('coco.timeout')
+    return t('coco.failed')
+  }
+
   const nodeFeedback = useState<Record<string, LatencyFeedback>>(
     'cocoproxy-latency-feedback',
     () => ({}),

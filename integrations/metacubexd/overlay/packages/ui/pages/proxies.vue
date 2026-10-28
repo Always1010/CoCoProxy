@@ -1,5 +1,6 @@
 <script setup lang="ts">
-useHead({ title: '代理 · CoCoProxy' })
+const { t } = useI18n()
+useHead({ title: computed(() => t('coco.pzProxiesCocoproxy')) })
 const { workspace, run, load } = useWorkspace()
 const scheme = computed(() => `${workspace.value?.mode ?? 'initial'}:${workspace.value?.mode === 'subscription' ? workspace.value.subscriptionId ?? '' : ''}`)
 onMounted(() => run(load))

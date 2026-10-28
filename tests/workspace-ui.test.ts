@@ -1,3 +1,4 @@
+import { uiTestContext, useI18n } from './ui-i18n-helpers.ts';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
@@ -12,7 +13,7 @@ import { bandwidthIssue, bandwidthPages } from '../integrations/metacubexd/overl
 const apiExports: Record<string, any> = {};
 new Script(ts.transpileModule(await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useCoCoProxy.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText).runInNewContext({ exports: apiExports, Error });
+}).outputText).runInNewContext({ ...uiTestContext, exports: apiExports, Error });
 const { CoCoProxyError, cocoproxyErrorMessage } = apiExports;
 
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useWorkspace.ts', import.meta.url), 'utf8');
@@ -22,7 +23,7 @@ test('bandwidth validation remains available across pages and checks shared budg
   let current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true };
   const automatic: Record<string, AutoGroupPolicy> = {};
   const definitions = { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS };
-  const invalid = () => bandwidthIssue(current, definitions, automatic, 'Stream')?.message ?? '';
+  const invalid = () => bandwidthIssue(current, definitions, automatic, 'Stream', true, useI18n().t)?.message ?? '';
   assert.equal(invalid(), '');
   for (const bad of [{ searchMiB: 16 }, { reserveHourMiB: 64 }, { freshSeconds: 60, roundIntervalSeconds: 60 },
     { hourMiB: 32 }, { dayMiB: 64, reserveDayMiB: 40 }]) {
@@ -74,7 +75,7 @@ test('bandwidth switches retain subordinate settings and restore affects only th
   const props = { modelValue: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, targetMbps: 7, hourMiB: 80 },
     definitions: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS }, page: 'budget', disabled: false };
   const exports: Record<string, any> = {};
-  new Script(code).runInNewContext({
+  new Script(code).runInNewContext({ ...uiTestContext,
     exports, bandwidthPages, defineProps: () => props, defineEmits: () => (_event: string, value: typeof props.modelValue) => { props.modelValue = value; },
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }), watch() {},
   });
@@ -111,7 +112,7 @@ test('group status checks only saved active policies and binds requests to the d
   const calls: any[] = [];
   const emitted: unknown[][] = [];
   const exports: Record<string, any> = {};
-  new Script(code).runInNewContext({
+  new Script(code).runInNewContext({ ...uiTestContext,
     exports, defineProps: () => props, defineEmits: () => (...args: unknown[]) => emitted.push(args), onUnmounted() {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     cocoproxyErrorMessage: () => '读取失败',
@@ -156,7 +157,7 @@ test('automatic history keeps reading position, preserves failed refreshes and c
   const calls: { path: string; options?: any }[] = [];
   let fail = false, deferred: Promise<typeof result> | undefined;
   const exports: Record<string, any> = {};
-  new Script(code, { filename: 'AutomaticSelectionHistory.js' }).runInNewContext({
+  new Script(code, { filename: 'AutomaticSelectionHistory.js' }).runInNewContext({ ...uiTestContext,
     exports, defineProps: () => props, ref: (value: unknown) => ({ value }),
     computed: (get: () => unknown) => ({ get value() { return get(); } }), watch() {}, onMounted() {}, onUnmounted() {},
     document, setTimeout: () => 0, clearTimeout() {}, cocoproxyErrorMessage: () => '读取失败',
@@ -250,7 +251,7 @@ test('subscription editor loads existing fields and current revision, preserves 
   let saved: any;
   const error = { value: '' };
   const exports: Record<string, any> = {};
-  new Script(code, { filename: 'subscriptions.js' }).runInNewContext({
+  new Script(code, { filename: 'subscriptions.js' }).runInNewContext({ ...uiTestContext,
     exports, useHead: () => {}, ref: (value: unknown) => ({ value }), onMounted: () => {}, watch() {},
     onUnmounted: (fn: () => void) => { onLeave = fn; },
     useWorkspace: () => ({
@@ -336,7 +337,7 @@ for (const mode of ['local', 'subscription', 'legacy'] as const) {
     };
     class CoCoProxyError extends Error {}
     const exports: { useWorkspace?: () => { select: (group: string, node: string) => Promise<void> } } = {};
-    new Script(compiled, { filename: 'useWorkspace.js' }).runInNewContext({
+    new Script(compiled, { filename: 'useWorkspace.js' }).runInNewContext({ ...uiTestContext,
       exports,
       require: (name: string) => {
         assert.equal(name, './useCoCoProxy');
@@ -361,7 +362,7 @@ for (const mode of ['local', 'subscription', 'legacy'] as const) {
     assert.equal((states.get('cocoproxy-workspace')?.value as any).active, 'after');
     assert.equal(api.generation.value, 'after');
     assert.equal(states.get('cocoproxy-workspace-busy')?.value, false);
-    assert.match(String(states.get('cocoproxy-workspace-feedback')?.value), /已切换/);
+    assert.equal(states.get('cocoproxy-workspace-feedback')?.value, 'coco.switched');
   });
 }
 
@@ -377,7 +378,7 @@ test('selection never replays an ambiguous write or reports an unconfirmed respo
       if (failure === 'NETWORK_UNKNOWN') throw new CoCoProxyError(failure);
       return { active: 'after', view: { ...current, active: 'after', workspace: { revision: 8 } } };
     } };
-    new Script(compiled).runInNewContext({ exports,
+    new Script(compiled).runInNewContext({ ...uiTestContext, exports,
       require: () => ({ CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy: () => api }),
       useState: (key: string, initial: () => unknown) => {
         if (!states.has(key)) states.set(key, { value: initial() });
@@ -408,7 +409,7 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   const navigations: unknown[] = [], closes: boolean[] = [];
   const document = { hidden: true };
   let statusReply: (() => Promise<unknown>) | undefined;
-  new Script(code, { filename: 'AutomaticSelectionSettings.js' }).runInNewContext({
+  new Script(code, { filename: 'AutomaticSelectionSettings.js' }).runInNewContext({ ...uiTestContext,
     exports, bandwidthIssue, bandwidthPages, CoCoProxyError, cocoproxyErrorMessage, defineProps: () => ({ groupName: 'Stream', selectable: true }), defineExpose: () => {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: () => {}, onUnmounted: () => {}, document, setTimeout: () => 0, clearTimeout: () => {},
@@ -646,7 +647,7 @@ test('site settings retain failed drafts and reconcile an interrupted save befor
       current = [...change.selected];
     },
   };
-  new Script(code).runInNewContext({
+  new Script(code).runInNewContext({ ...uiTestContext,
     exports, CoCoProxyError, cocoproxyErrorMessage,
     defineProps: () => ({ groupName: 'Work', scrollList: false }), withDefaults: (value: unknown) => value,
     defineEmits: () => () => {}, defineExpose() {}, watch() {}, onMounted() {}, onUnmounted() {},
@@ -697,7 +698,7 @@ test('group manager creates a shared exit from Proxy and blocks deletion while s
   ] } };
   let saves = 0;
   const exports: Record<string, any> = {};
-  new Script(code, { filename: 'WorkspaceGroupsMenu.js' }).runInNewContext({
+  new Script(code, { filename: 'WorkspaceGroupsMenu.js' }).runInNewContext({ ...uiTestContext,
     exports, localGroupNameError, defineProps: () => ({ activeGroup: 'Proxy' }),
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useProxyRefresh: () => ({ refresh: async () => {} }),

@@ -15,7 +15,7 @@ export interface SiteRun {
   checkedAt: number | null
 }
 export const siteResultLabels: Record<SiteResult['status'], string> = {
-  testing: '检测中', success: '成功', failed: '失败', timeout: '超时', cancelled: '已取消', denied: '目标受限', busy: '检测繁忙', unavailable: '核心不可用',
+  testing: 'coco.statusSitetesting', success: 'coco.statusSitesuccess', failed: 'coco.statusSitefailed', timeout: 'coco.statusSitetimeout', cancelled: 'coco.statusSitecancelled', denied: 'coco.statusSitedenied', busy: 'coco.statusSitebusy', unavailable: 'coco.statusSiteunavailable',
 }
 
 /** Pure expansion shared by TCP and site detection, independent of list filters. */

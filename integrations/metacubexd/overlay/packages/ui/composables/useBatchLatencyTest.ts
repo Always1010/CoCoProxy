@@ -155,12 +155,12 @@ export function useBatchLatencyTest() {
     // Cancellation or a generation change must not claim completion or success.
     if (progress.value.completed < progress.value.total || generation.value !== startedGeneration || session.value !== startedSession) return allResults
     const succeeded = Object.values(allResults).filter(values => Object.values(values).some(delay => delay > 0)).length
-    if (succeeded === groups.length) toast.success(`测延迟完成：${succeeded}/${groups.length} 个策略组成功`)
+    if (succeeded === groups.length) toast.success(t('coco.groupsTested', { succeeded, total: groups.length }))
     else {
       const failures = [...results.values()]
       const reason = failures.some(result => result.reason === 'probe_denied') ? 'probe_denied'
         : failures.some(result => result.reason === 'timeout') ? 'timeout' : 'failed'
-      toast.error(`测延迟完成：${succeeded}/${groups.length} 个策略组成功`, { description: latencyFeedback.describeLatencyFailure(reason) })
+      toast.error(t('coco.groupsTested', { succeeded, total: groups.length }), { description: latencyFeedback.describeLatencyFailure(reason) })
     }
     return allResults
   }

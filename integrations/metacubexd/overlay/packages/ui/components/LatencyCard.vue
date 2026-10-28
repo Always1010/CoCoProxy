@@ -44,7 +44,7 @@ function getLatencyBarClass(latency: number | null | undefined) {
       <div class="flex items-center gap-2">
         <IconActivity class="h-5 w-5 text-primary" />
         <h3 class="m-0 text-base font-semibold text-base-content">
-          浏览器访问耗时
+          {{ t('coco.anBrowserRequestTime') }}
         </h3>
       </div>
       <div class="flex items-center gap-2">
@@ -56,8 +56,8 @@ function getLatencyBarClass(latency: number | null | undefined) {
           {{ t('average') }}: {{ averageLatency }}ms
         </span>
         <button
-          title="重新检测浏览器访问耗时"
-          aria-label="重新检测浏览器访问耗时"
+          :title="t('coco.anRecheckBrowserRequestTime')"
+          :aria-label="t('coco.anRecheckBrowserRequestTime')"
           class="flex min-h-8 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md border border-base-content/10 bg-transparent px-2 text-xs text-base-content/60 transition-all duration-200 hover:bg-base-300 hover:text-base-content disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="isTestingAll"
           @click="testAllLatencies"
@@ -68,12 +68,12 @@ function getLatencyBarClass(latency: number | null | undefined) {
               'animate-spin [animation-direction:reverse]': isTestingAll,
             }"
           />
-          <span>{{ isTestingAll ? '检测中' : '重新检测' }}</span>
+          <span>{{ isTestingAll ? t('coco.anChecking2') : t('coco.anRecheck') }}</span>
         </button>
       </div>
     </div>
 
-    <p class="mb-3 text-xs text-base-content/60">从当前浏览器访问站点的请求耗时；代理节点的站点连通性请在代理页检测。</p>
+    <p class="mb-3 text-xs text-base-content/60">{{ t('coco.anRequestTimeFromTheCurrentBrowser') }}</p>
     <div class="flex flex-col gap-3">
       <div
         v-for="item in allResults"

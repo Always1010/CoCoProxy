@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { IconChevronDown, IconChevronUp, IconDeviceFloppy, IconList, IconPlus, IconTrash } from '@tabler/icons-vue'
 import { customRuleTargets, ruleTarget } from '~/utils/group-rules'
-useHead({ title: '规则 · CoCoProxy' })
+const { t } = useI18n()
+useHead({ title: computed(() => t('coco.pzRulesCocoproxy')) })
 const { view, workspace, overrides, busy, load, run, save, editOverrides } = useWorkspace()
 const route = useRoute()
 const tab = ref<'effective' | 'custom'>(route.query.tab === 'custom' ? 'custom' : 'effective')
@@ -14,7 +15,9 @@ const entries = ref<string[]>([])
 const visibleEntries = computed(() => entries.value.map((value, index) => ({ value, index })).filter(entry => !groupFilter.value || ruleTarget(entry.value) === groupFilter.value))
 const dirty = computed(() => JSON.stringify(entries.value) !== JSON.stringify(overrides.value.rules))
 const targets = computed(() => customRuleTargets(workspace.value?.mode, view.value?.groups))
-const targetName = (name: string) => workspace.value?.mode === 'local' ? view.value?.catalog?.find(service => service.id === name)?.name ?? name : name
+const catalogLabels: Record<string, string> = { Proxy: 'coco.pzCatalogProxy', Overseas: 'coco.pzCatalogOverseas', Domestic: 'coco.pzCatalogDomestic', Other: 'coco.pzCatalogOther' }
+const catalogName = (id: string, fallback = id) => catalogLabels[id] ? t(catalogLabels[id]!) : fallback
+const targetName = (name: string) => workspace.value?.mode === 'local' ? catalogName(name, view.value?.catalog?.find(service => service.id === name)?.name ?? name) : name
 const type = ref('DOMAIN-SUFFIX')
 const payload = ref('')
 const target = ref('DIRECT')
@@ -49,36 +52,36 @@ onMounted(() => run(load))
   <div class="flex min-h-0 flex-1 flex-col gap-3">
     <WorkspaceToolbar :dirty="dirty"><template #actions><RuleTestPopover /></template></WorkspaceToolbar>
     <div role="tablist" class="tabs tabs-box w-fit shrink-0">
-      <button role="tab" class="tab" :class="{ 'tab-active': tab === 'effective' }" :aria-selected="tab === 'effective'" @click="tab = 'effective'">生效规则</button>
-      <button role="tab" class="tab" :class="{ 'tab-active': tab === 'custom' }" :aria-selected="tab === 'custom'" @click="tab = 'custom'">自定义规则<span v-if="entries.length" class="badge badge-sm ml-2">{{ entries.length }}</span></button>
+      <button role="tab" class="tab" :class="{ 'tab-active': tab === 'effective' }" :aria-selected="tab === 'effective'" @click="tab = 'effective'">{{ t('coco.pzEffectiveRules') }}</button>
+      <button role="tab" class="tab" :class="{ 'tab-active': tab === 'custom' }" :aria-selected="tab === 'custom'" @click="tab = 'custom'">{{ t('coco.pzCustomRules') }}<span v-if="entries.length" class="badge badge-sm ml-2">{{ entries.length }}</span></button>
     </div>
     <div v-if="tab === 'effective' && groupFilter" class="flex shrink-0 flex-wrap items-center gap-2 text-sm">
-      <span class="break-all">当前目标：{{ targetName(groupFilter) }}</span>
-      <button type="button" class="btn btn-ghost btn-sm min-h-11" @click="groupFilter = ''"><IconList :size="16" /><span>查看全部目标</span></button>
+      <span class="break-all">{{ t('coco.pzCurrentTarget') }}{{ targetName(groupFilter) }}</span>
+      <button type="button" class="btn btn-ghost btn-sm min-h-11" @click="groupFilter = ''"><IconList :size="16" /><span>{{ t('coco.pzViewAllTargets') }}</span></button>
     </div>
     <NativeRules v-if="tab === 'effective'" :key="view?.active ?? 'initial'" :group="groupFilter" class="min-h-0 flex-1" />
     <div v-else class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-      <label class="flex flex-wrap items-center gap-2 text-sm">按目标筛选<select v-model="groupFilter" class="select select-sm min-h-11" aria-label="按目标筛选规则"><option value="">全部目标</option><option v-for="value in [...new Set([...targets, groupFilter].filter(Boolean))]" :key="value" :value="value">{{ targetName(value) }}</option></select><span class="text-xs text-base-content/60">列表编号和移动操作沿用全部自定义规则的顺序</span></label>
-      <div class="flex items-center justify-between gap-2 px-1"><span class="text-xs text-base-content/50">优先匹配 · {{ workspace?.mode === 'local' ? '本地规则' : '仅覆盖当前配置' }} · 保存即生效</span><button class="btn btn-ghost btn-sm" title="保存规则并立即生效" aria-label="保存规则" :disabled="!dirty || busy" @click="run(saveRules)"><IconDeviceFloppy :size="18" />保存</button></div>
+      <label class="flex flex-wrap items-center gap-2 text-sm">{{ t('coco.pzFilterByTarget') }}<select v-model="groupFilter" class="select select-sm min-h-11" :aria-label="t('coco.pzFilterRulesByTarget')"><option value="">{{ t('coco.pzAllTargets') }}</option><option v-for="value in [...new Set([...targets, groupFilter].filter(Boolean))]" :key="value" :value="value">{{ targetName(value) }}</option></select><span class="text-xs text-base-content/60">{{ t('coco.pzRowNumbersAndMoveActionsFollowTheOrderOf') }}</span></label>
+      <div class="flex items-center justify-between gap-2 px-1"><span class="text-xs text-base-content/50">{{ t('coco.pzMatchFirst') }} {{ workspace?.mode === 'local' ? t('coco.pzLocalRules') : t('coco.pzOverrideCurrentConfigurationOnly') }} {{ t('coco.pzChangesTakeEffectWhenSaved') }}</span><button class="btn btn-ghost btn-sm" :title="t('coco.pzSaveRulesAndApplyImmediately')" :aria-label="t('coco.pzSaveRules')" :disabled="!dirty || busy" @click="run(saveRules)"><IconDeviceFloppy :size="18" />{{ t('coco.pzSave') }}</button></div>
       <template v-if="workspace">
         <form class="flex flex-wrap items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/60 p-3" @submit.prevent="add">
-          <select v-model="type" class="select select-sm w-44" aria-label="规则类型"><option v-for="value in ruleTypes" :key="value">{{ value }}</option></select>
-          <input v-model="payload" class="input input-sm min-w-36 flex-1" aria-label="匹配内容" :placeholder="payloadHint" required />
-          <select v-model="target" class="select select-sm max-w-52 flex-1" aria-label="目标策略"><option v-for="value in targets" :key="value" :value="value">{{ targetName(value) }}</option></select>
-          <button class="btn btn-primary btn-sm" type="submit" title="添加规则" aria-label="添加规则" :disabled="busy"><IconPlus :size="18" />添加</button>
+          <select v-model="type" class="select select-sm w-44" :aria-label="t('coco.pzRuleType')"><option v-for="value in ruleTypes" :key="value">{{ value }}</option></select>
+          <input v-model="payload" class="input input-sm min-w-36 flex-1" :aria-label="t('coco.pzMatchValue')" :placeholder="payloadHint" required />
+          <select v-model="target" class="select select-sm max-w-52 flex-1" :aria-label="t('coco.pzTargetPolicy')"><option v-for="value in targets" :key="value" :value="value">{{ targetName(value) }}</option></select>
+          <button class="btn btn-primary btn-sm" type="submit" :title="t('coco.pzAddRule')" :aria-label="t('coco.pzAddRule')" :disabled="busy"><IconPlus :size="18" />{{ t('coco.pzAdd') }}</button>
         </form>
         <div v-if="!visibleEntries.length" class="space-y-2 py-8 text-center text-sm text-base-content/45">
-          <p>{{ groupFilter ? '当前目标暂无自定义规则' : '暂无自定义规则' }}</p>
-          <p>内置规则请在生效规则中查看。</p>
-          <button type="button" class="btn btn-ghost btn-sm min-h-11" @click="tab = 'effective'"><IconList :size="16" /><span>{{ groupFilter ? '查看本组生效规则' : '查看生效规则' }}</span></button>
+          <p>{{ groupFilter ? t('coco.pzNoCustomRulesForThisTarget') : t('coco.pzNoCustomRules') }}</p>
+          <p>{{ t('coco.pzViewBuiltInRulesUnderEffectiveRules') }}</p>
+          <button type="button" class="btn btn-ghost btn-sm min-h-11" @click="tab = 'effective'"><IconList :size="16" /><span>{{ groupFilter ? t('coco.pzViewEffectiveRulesForThisGroup') : t('coco.pzViewEffectiveRules') }}</span></button>
         </div>
         <div v-for="{ index } in visibleEntries" :key="index" class="flex flex-wrap items-center gap-1 rounded-xl border border-base-content/8 bg-base-200/60 p-2">
           <span class="w-7 shrink-0 text-center text-xs text-base-content/35">{{ index + 1 }}</span>
-          <input v-model="entries[index]" class="input input-ghost input-sm min-w-0 flex-1 font-mono text-xs" :aria-label="`规则 ${index + 1}`" :disabled="busy" spellcheck="false" />
+          <input v-model="entries[index]" class="input input-ghost input-sm min-w-0 flex-1 font-mono text-xs" :aria-label="t('coco.pzRule', { number: index + 1 })" :disabled="busy" spellcheck="false" />
           <div class="ml-auto flex items-center gap-1">
-            <button class="btn btn-ghost btn-xs" title="上移" :aria-label="`上移规则 ${index + 1}`" :disabled="busy || index === 0" @click="move(index, -1)"><IconChevronUp :size="16" />上移</button>
-            <button class="btn btn-ghost btn-xs" title="下移" :aria-label="`下移规则 ${index + 1}`" :disabled="busy || index === entries.length - 1" @click="move(index, 1)"><IconChevronDown :size="16" />下移</button>
-            <button class="btn btn-ghost btn-xs text-error" title="删除" :aria-label="`删除规则 ${index + 1}`" :disabled="busy" @click="entries.splice(index, 1)"><IconTrash :size="16" />删除</button>
+            <button class="btn btn-ghost btn-xs" :title="t('coco.pzMoveUp')" :aria-label="t('coco.pzMoveRuleUp', { number: index + 1 })" :disabled="busy || index === 0" @click="move(index, -1)"><IconChevronUp :size="16" />{{ t('coco.pzMoveUp') }}</button>
+            <button class="btn btn-ghost btn-xs" :title="t('coco.pzMoveDown')" :aria-label="t('coco.pzMoveRuleDown', { number: index + 1 })" :disabled="busy || index === entries.length - 1" @click="move(index, 1)"><IconChevronDown :size="16" />{{ t('coco.pzMoveDown') }}</button>
+            <button class="btn btn-ghost btn-xs text-error" :title="t('coco.pzDelete')" :aria-label="t('coco.pzDeleteRule', { number: index + 1 })" :disabled="busy" @click="entries.splice(index, 1)"><IconTrash :size="16" />{{ t('coco.pzDelete') }}</button>
           </div>
         </div>
       </template>

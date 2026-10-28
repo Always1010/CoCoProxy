@@ -10,6 +10,7 @@ import {
 import byteSize from 'byte-size'
 import { loadHighcharts } from '~/composables/useHighcharts'
 import { getChartThemeColors } from '~/utils'
+const { t } = useI18n()
 
 const globalStore = useGlobalStore()
 const connectionsStore = useConnectionsStore()
@@ -450,7 +451,7 @@ onBeforeUnmount(() => {
 <template>
   <!-- Collapsed view in header (when target exists) -->
   <Teleport v-if="headerTargetExists" to="#header-traffic-indicator">
-    <div aria-label="实时流量"
+    <div :aria-label="t('coco.anLiveTraffic')"
       v-if="globalStore.latestTraffic"
       class="flex items-center gap-2 rounded-lg bg-[color-mix(in_oklab,var(--color-base-100)_50%,transparent)] px-2 py-1 transition-[background] duration-200 ease-in-out hover:bg-[var(--color-base-100)]"
     >

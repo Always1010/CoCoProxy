@@ -1,14 +1,18 @@
 /** Background reads retain existing data and report failures in the core banner. */
 export function useProxyRefresh() {
+  const { t } = useNuxtApp().$i18n
   const proxies = useProxiesStore()
-  const error = useState('cocoproxy-proxy-read-error', () => '')
+  const message = useState('cocoproxy-proxy-read-error', () => '')
+  const error = computed(() => message.value.startsWith('coco.') ? t(message.value) : message.value)
 
   async function refresh() {
     try {
       await proxies.fetchProxies()
-      error.value = ''
+      message.value = ''
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '无法读取核心代理数据，请重试。'
+      message.value = cause instanceof Error
+        ? 'messageKey' in cause && typeof cause.messageKey === 'string' ? cause.messageKey : cause.message
+        : 'coco.proxyReadFailed'
     }
   }
 
