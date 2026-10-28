@@ -164,7 +164,8 @@ export async function loadManagementGateway(path: string) {
       isCurrent: async generation => await isCurrent(generation) && !(await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused &&
         (await runtime.observe(generation)).ready,
       snapshot: async (node, generation, signal) => {
-        if (!await isCurrent(generation) || (await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused ||
+        if (!await isCurrent(generation)) throw new ManagementError('ACTIVE_CONFLICT', 409);
+        if ((await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused ||
             !(await runtime.observe(generation)).ready) throw new ManagementError('CONTROLLER_UNAVAILABLE', 503);
         const { candidate } = await loadRuntimeCandidate(runtimeSettings, generation);
         const nodes = candidate.config.proxies;
