@@ -50,3 +50,13 @@ test('conservative gain prices switching and uncertainty rather than rewarding b
   assert.equal(bandwidthSamples([{ at: 0, delayMs: 100, mbps: 8 }, { at: 20000, delayMs: 100, mbps: 8 }], defaults, 20000).length, 1);
   assert.equal(bandwidthSamples([{ at: 0, delayMs: 100, mbps: 8 }, { at: 30000, delayMs: 100, mbps: 0 }], defaults, at).length, 0);
 });
+
+test('maximum configured sampling interval allows bounded scheduling delay without reviving expired evidence', () => {
+  const settings = parseBandwidthSettings({ ...defaults, roundIntervalSeconds: 120 });
+  const pair = (gap: number) => [0, gap].map(at => ({ at, startedAt: at, delayMs: 100, mbps: 8 }));
+  assert.equal(bandwidthSamples(pair(121000), settings, 121000).length, 2);
+  assert.equal(bandwidthSamples(pair(150000), settings, 150000).length, 2);
+  assert.equal(bandwidthSamples(pair(151000), settings, 151000).length, 1);
+  assert.equal(bandwidthSamples(pair(121000), settings, 180001).length, 1);
+  assert.equal(bandwidthSamples(pair(119000), settings, 119000).length, 1);
+});

@@ -107,7 +107,10 @@ export function bandwidthSamples(samples: BandwidthSample[], settings: Bandwidth
         || !Number.isFinite(s.delayMs) || s.delayMs < 0 || !Number.isFinite(s.mbps) || s.mbps <= 0) break;
     if (next) {
       const gap = (next.startedAt ?? next.at) - (s.startedAt ?? s.at);
-      if (gap < settings.roundIntervalSeconds * 1000 || gap > 120000) break;
+      // The configured minimum cannot also be an exact deadline: allow probe/tick delays.
+      // Every individual sample must still pass freshSeconds above.
+      const maximumGap = Math.max(120, settings.roundIntervalSeconds + 30) * 1000;
+      if (gap < settings.roundIntervalSeconds * 1000 || gap > maximumGap) break;
     }
     values.unshift(s);
   }
