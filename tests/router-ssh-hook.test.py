@@ -284,7 +284,7 @@ console.log(JSON.stringify(routerParameters(parseSetupEnvironment(input))));"""
         names = ['package.json', 'packages/setup/router-adapter.ts', 'packages/setup/router-adapter.json',
                  'packages/config/index.ts', 'packages/config/compact-rules.ts', 'packages/routing/domestic-data.ts',
                  'packages/routing/legacy-domestic-data.ts', 'packages/routing/overseas-data.ts',
-                 'scripts/router-ssh-hook.py', 'examples/setup-environment.json']
+                 'scripts/router-ssh-hook.py']
         code = "import {selectedReleaseSource} from './scripts/release-layout.mjs'; console.log(JSON.stringify(process.argv.slice(1).map(selectedReleaseSource)))"
         result = subprocess.run(['node', '--input-type=module', '-e', code, *names], cwd=self.project, capture_output=True, check=True)
         self.assertTrue(all(json.loads(result.stdout)))
@@ -299,11 +299,12 @@ console.log(JSON.stringify(routerParameters(parseSetupEnvironment(input))));"""
                 archive.extractall(extracted, filter='data')
             script = """import {readFileSync} from 'node:fs';
 import {createRouterParameters} from './packages/setup/router-adapter.ts';
-const environment=JSON.parse(readFileSync('examples/setup-environment.json','utf8'));
+const environment=JSON.parse(readFileSync(0,'utf8'));
 environment.ports={dns:15353};
 console.log(JSON.stringify(createRouterParameters(environment)));"""
             result = subprocess.run(['node', '--experimental-strip-types', '--input-type=module', '-e', script],
-                                    cwd=extracted / 'source', capture_output=True, check=True)
+                                    cwd=extracted / 'source', input=(self.project / 'examples/setup-environment.json').read_text(),
+                                    text=True, capture_output=True, check=True)
             packaged_spec = importlib.util.spec_from_file_location('packaged_router_hook', extracted / 'source/scripts/router-ssh-hook.py')
             packaged = importlib.util.module_from_spec(packaged_spec)
             packaged_spec.loader.exec_module(packaged)
