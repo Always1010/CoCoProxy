@@ -28,6 +28,7 @@ function harness() {
   const context: any = {
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useHead() {}, watch() {}, onMounted() {}, onBeforeUnmount() {}, useDebounceFn: (fn: unknown) => fn,
+    onClickOutside() {}, onKeyStroke() {},
     dayjs: date, AbortController, document: { hidden: false },
     IconDevices: {}, IconWorld: {}, IconArrowsExchange: {}, IconCpu: {}, IconUser: {},
     useCoCoProxy: () => ({ request: async (_path: string, options: any) => reply(options.body) }),
@@ -44,17 +45,13 @@ test('usage background refresh retains displayed data and keeps refresh and deta
   const overview = ui.overview.value, details = ui.details.value, children = ui.expandedRows.value, range = ui.range.value;
   let complete!: () => void;
   const pending = new Promise<void>(resolve => { complete = resolve; });
-  let detailChecked = false, expandedChecked = false;
+  const observed: { kind: string; busy: boolean; retained: boolean }[] = [];
   setReply(async body => {
     if (body.overview) await pending;
     else if (body.filters.host) {
-      expandedChecked = true;
-      assert.equal(ui.expandedBusy.value, false);
-      assert.equal(ui.expandedRows.value, children);
+      observed.push({ kind: 'expanded', busy: ui.expandedBusy.value, retained: ui.expandedRows.value === children });
     } else {
-      detailChecked = true;
-      assert.equal(ui.detailBusy.value, false);
-      assert.equal(ui.details.value, details);
+      observed.push({ kind: 'detail', busy: ui.detailBusy.value, retained: ui.details.value === details });
     }
     return data(body);
   });
@@ -65,7 +62,7 @@ test('usage background refresh retains displayed data and keeps refresh and deta
   assert.equal(ui.range.value, range);
   complete();
   await updating;
-  assert.ok(detailChecked && expandedChecked);
+  assert.deepEqual(observed, [{ kind: 'detail', busy: false, retained: true }, { kind: 'expanded', busy: false, retained: true }]);
   assert.equal(ui.busy.value, false);
   assert.notEqual(ui.overview.value, overview);
   assert.notEqual(ui.range.value, range);
@@ -91,6 +88,16 @@ test('usage refresh failures retain matching results but never expose results fr
   await ui.select('192.0.2.30');
   assert.equal(ui.details.value, null);
   assert.equal(ui.detailError.value, '读取失败');
+  let retryLoading: boolean | undefined;
+  setReply(async body => {
+    if (!body.overview) {
+      retryLoading = ui.detailBusy.value;
+      throw new Error('synthetic retry failure');
+    }
+    return data(body);
+  });
+  await ui.refresh(true);
+  assert.equal(retryLoading, false);
 
   setReply(async () => { throw new Error('synthetic query failure'); });
   ui.view.value = 'host';
