@@ -152,7 +152,7 @@ export async function startPreview(options) {
     }
     await writeFile(join(ui, 'nuxt.product.config.ts'), configSource(await readFile(join(ui, 'nuxt.config.ts'))));
     const helper = join(project, 'scripts/ui-preview/server.mjs').replaceAll('\\', '/');
-    const optimize = ['@tanstack/vue-query', 'vue-sonner', '@tabler/icons-vue', '@floating-ui/vue', '@tanstack/vue-virtual', 'byte-size', 'dayjs', 'dayjs/locale/ru', 'dayjs/locale/zh-cn', 'dayjs/plugin/duration', 'dayjs/plugin/relativeTime', 'ky', 'highcharts', 'match-sorter', 'sortablejs', 'uqr', 'd3', 'markdown-it'];
+    const optimize = ['@tanstack/vue-query', 'vue-sonner', '@tabler/icons-vue', '@floating-ui/vue', '@tanstack/vue-virtual', 'byte-size', 'dayjs', 'dayjs/locale/zh-cn', 'dayjs/plugin/duration', 'dayjs/plugin/relativeTime', 'ky', 'highcharts', 'match-sorter', 'sortablejs', 'uqr', 'd3', 'markdown-it'];
     await writeFile(join(ui, 'nuxt.config.ts'), `import base from './nuxt.product.config'\nimport { createPreviewServer } from ${JSON.stringify(helper)}\nconst preview = createPreviewServer()\nexport default defineNuxtConfig({\n  ...base,\n  vite: { ...base.vite, cacheDir: ${JSON.stringify(join(ui, '.nuxt/vite'))}, optimizeDeps: { include: ${JSON.stringify(optimize)} } },\n  modules: [...(base.modules || []), async (_options, nuxt) => {\n    nuxt.options.runtimeConfig.public.uiPreviewOrigin = await preview.listen(${JSON.stringify(`http://127.0.0.1:${port}`)})\n    nuxt.hook('close', () => preview.close())\n  }],\n})\n`);
     // Keep Tailwind discovery inside this UI tree, including when dependency
     // junctions point into a different checkout on Windows.
