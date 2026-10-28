@@ -131,7 +131,7 @@ async function remove() {
       </template>
     </Modal>
     <Modal ref="deleteDialog" title="移除策略组" compact :fixed-height="false" :close-disabled="busy">
-      <p class="text-sm">确定移除「{{ deleting }}」？该组的自定义规则和节点选择设置也会一并移除。</p>
+      <p class="text-sm">确定移除「{{ deleting }}」？该组的自定义规则和自动选择设置也会一并移除。</p>
       <p v-if="deleting && removalReason(deleting)" class="mt-2 text-sm text-error" role="alert">{{ removalReason(deleting) }}</p>
       <template #actions>
         <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="deleteDialog?.close()"><IconArrowLeft :size="16" /><span>取消</span></button>
