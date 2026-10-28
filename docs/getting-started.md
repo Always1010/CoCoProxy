@@ -147,7 +147,7 @@ install -d -o root -g root -m 0700 /etc/cocoproxy-install
 
 ### 4.1 获取与核验
 
-从项目可信 Release 获取与目标架构对应的安装包、同名 `.manifest.json` 和 `SHA256SUMS`，并阅读该版本发行说明。`uname -m` 的 `aarch64` 对应 `linux-arm64`，`x86_64` 对应 `linux-amd64-v1`。例如本版文件名为 `cocoproxy-1.0.2-linux-arm64.tar.gz`，x86-64 用相应平台名。
+从项目可信 Release 获取与目标架构对应的安装包、同名 `.manifest.json` 和 `SHA256SUMS`，并阅读该版本发行说明。`uname -m` 的 `aarch64` 对应对外附件名 `linux-arm64`，`x86_64` 对应 `linux-amd64`。例如本版文件名为 `cocoproxy-1.0.2-linux-arm64.tar.gz` 和 `cocoproxy-1.0.2-linux-amd64.tar.gz`。AMD64 包内 manifest 仍以 `linux-amd64-v1` 记录固定 Mihomo 核心的 CPU 兼容基线；其中 `v1` 不是 CoCoProxy 版本号。
 
 在可信下载目录核对所选附件的 SHA-256 与发布值一致；将安装包解压到目标的 root 控制专用暂存目录。解压后结构应包含 `manifest.json`、`source/`、`server/`、`bin/mihomo`。核对包内 manifest 与已核验的包外 manifest 一致，记录可信的 manifest SHA-256。只对未知来源文件自算摘要不能建立信任。
 

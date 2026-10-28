@@ -22,6 +22,14 @@ export function assertReleaseSourcePaths(paths) {
     throw new ReleaseDocumentationError('SOURCE_LOCAL_DATA', '.local');
   }
 }
+export function releaseAssetPlatform(platform) {
+  const assetPlatform = {
+    'linux-arm64': 'linux-arm64',
+    'linux-amd64-v1': 'linux-amd64',
+  }[platform];
+  if (!assetPlatform) throw new ReleaseDocumentationError('RELEASE_PLATFORM_INVALID', platform);
+  return assetPlatform;
+}
 /** Check local inline, image, reference and HTML links against the supplied file set. */
 export function verifyDocumentationLinks(contents) {
   const names = new Set(contents.keys());

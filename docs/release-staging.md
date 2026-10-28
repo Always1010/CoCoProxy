@@ -16,7 +16,7 @@ GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游�
 
 固定输入以[组件清单](../integrations/metacubexd/components.json)为准，包括上游 tag、commit、源码及锁摘要、包管理器、两种平台的资产名、下载地址、压缩包摘要与核心摘要；[审核记录](../integrations/metacubexd/review.json)另存实际验证范围。构建和装配拒绝清单与审核、完整源码树之间的身份或摘要分歧，构建还要求 tooling 的包管理器版本与其锁一致。更新验证结论不会自动更改组件版本，下载入口也不查询 latest。
 
-全部检查成功后，独立发布任务用内置 `GITHUB_TOKEN` 的 `contents: write` 权限创建 Release，无须额外 PAT 或 SSH 密钥。构建任务只有仓库读取权限。发布附件包括两种架构的 `.tar.gz` 安装包、各自的 `.manifest.json`、CoCoProxy/MetaCubeXD/Mihomo 对应源码压缩包、`SOURCES.txt`、`RELEASE-NOTES.md` 和 `SHA256SUMS`。安装包由装配白名单生成，源码包使用 `git archive HEAD`，均不纳入 `.local/` 或跟随本地共享链接。
+全部检查成功后，独立发布任务用内置 `GITHUB_TOKEN` 的 `contents: write` 权限创建 Release，无须额外 PAT 或 SSH 密钥。构建任务只有仓库读取权限。发布附件包括两种架构的 `.tar.gz` 安装包、各自的 `.manifest.json`、CoCoProxy/MetaCubeXD/Mihomo 对应源码压缩包、`SOURCES.txt`、`RELEASE-NOTES.md` 和 `SHA256SUMS`。对外安装包平台名固定为 `linux-arm64` 和 `linux-amd64`；AMD64 manifest 内部仍记录 `linux-amd64-v1`，以精确标识固定 Mihomo 核心的 CPU 基线。安装包由装配白名单生成，源码包使用 `git archive HEAD`，均不纳入 `.local/` 或跟随本地共享链接。
 
 后续发布先更新根包和锁文件版本及发行说明，提交并推送目标分支，再创建并推送对应 Tag：
 
