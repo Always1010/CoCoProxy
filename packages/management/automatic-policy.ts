@@ -1,5 +1,6 @@
-// Older policies omit enabled and remain active.
-export type AutoGroupPolicy = { enabled?: boolean; preferred: string[]; fallback: string[]; returnToPreferred: boolean };
+import { parseBandwidthSettings, type BandwidthSettings } from './bandwidth-policy.ts';
+// Older policies omit enabled and remain active. Bandwidth remains opt-in.
+export type AutoGroupPolicy = { enabled?: boolean; preferred: string[]; fallback: string[]; returnToPreferred: boolean; bandwidth?: BandwidthSettings };
 export type ProbeTarget = { url: string; expectedStatus: number };
 export type AutoProbeSettings = { primary: ProbeTarget; secondary: ProbeTarget; timeoutMs: number; slowMs: number };
 
@@ -24,7 +25,7 @@ function record(value: unknown, keys: string[]): Record<string, unknown> {
 
 /** Node existence and group aliases are checked against the active configuration by the adapter. */
 export function parseAutoGroupPolicy(value: unknown): AutoGroupPolicy {
-  const input = record(value, ['enabled', 'preferred', 'fallback', 'returnToPreferred']);
+  const input = record(value, ['enabled', 'preferred', 'fallback', 'returnToPreferred', 'bandwidth']);
   if ('enabled' in input && typeof input.enabled !== 'boolean') return invalid();
   const names = (value: unknown): string[] => {
     if (!Array.isArray(value) || value.some(name => typeof name !== 'string' || !name.trim()
@@ -35,7 +36,10 @@ export function parseAutoGroupPolicy(value: unknown): AutoGroupPolicy {
   const preferred = names(input.preferred), fallback = names(input.fallback);
   const all = [...preferred, ...fallback];
   if ((!preferred.length && input.enabled !== false) || all.length > 32 || new Set(all).size !== all.length || typeof input.returnToPreferred !== 'boolean') return invalid();
-  return { ...('enabled' in input ? { enabled: input.enabled as boolean } : {}), preferred, fallback, returnToPreferred: input.returnToPreferred };
+  let bandwidth: BandwidthSettings | undefined;
+  if ('bandwidth' in input) { try { bandwidth = parseBandwidthSettings(input.bandwidth); } catch { return invalid(); } }
+  return { ...('enabled' in input ? { enabled: input.enabled as boolean } : {}), preferred, fallback, returnToPreferred: input.returnToPreferred,
+    ...(bandwidth ? { bandwidth } : {}) };
 }
 
 export function parseAutoProbeSettings(value: unknown): AutoProbeSettings {
