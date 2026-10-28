@@ -152,3 +152,28 @@ test('manager serializes persistent retries, keeps retrying transient failures, 
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(calls, stoppedAt);
 });
+
+test('healthy lifecycle probes leave the writer lock free and stale repair hints cannot act on a newer active or pause', async t => {
+  const stateDirectory = await fixture(t), store = new FileTransactionStore(stateDirectory);
+  const first = compileConfig(input), next = compileConfig({ ...input, policy: { rules: ['MATCH,DIRECT'] } });
+  await store.stage(first); await store.stage(next);
+  await new TransactionManager(store, runtime([])).apply(first.id, null);
+  await setRuntimeLifecycle(stateDirectory, { enabled: true, paused: false });
+  let repairs = 0;
+  const adapter = { ...runtime([]), needsReconcile: async () => false,
+    reconcile: async () => { repairs++; return true; } };
+  await store.exclusive(() => reconcileManagementRuntime(stateDirectory, adapter));
+  assert.equal(repairs, 0);
+  adapter.needsReconcile = async () => {
+    await new TransactionManager(store, runtime([])).apply(next.id, first.id);
+    return true;
+  };
+  await reconcileManagementRuntime(stateDirectory, adapter);
+  assert.equal(repairs, 0);
+  adapter.needsReconcile = async () => {
+    await setRuntimeLifecycle(stateDirectory, { enabled: true, paused: true });
+    return true;
+  };
+  await reconcileManagementRuntime(stateDirectory, adapter);
+  assert.equal(repairs, 0);
+});

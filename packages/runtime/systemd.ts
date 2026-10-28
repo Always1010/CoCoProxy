@@ -12,6 +12,7 @@ import { RuntimeError } from './types.ts';
 import type { CoreObservation, RuntimeSettings, RuntimeSelection, RuntimeUnitState } from './types.ts';
 
 const unitName = 'cocoproxy-mihomo.service';
+const networkAuditIntervalMs = 30_000;
 const properties = ['LoadState', 'ActiveState', 'SubState', 'MainPID', 'Job', 'FragmentPath', 'DropInPaths', 'NeedDaemonReload', 'User'];
 
 export function parseUnitState(output: string): RuntimeUnitState {
@@ -46,6 +47,7 @@ export interface RuntimeDependencies {
   writeSelection: (settings: RuntimeSettings, selection: RuntimeSelection) => Promise<void>;
   setSelection: typeof setControllerSelection;
   platform: NodeJS.Platform;
+  now: () => number;
 }
 
 async function writeSelection(settings: RuntimeSettings, selection: RuntimeSelection): Promise<void> {
@@ -66,12 +68,13 @@ async function verifySystemctl(settings: RuntimeSettings): Promise<string> {
 export class SystemdMihomoRuntime implements RuntimeAdapter {
   readonly settings: RuntimeSettings;
   private readonly deps: RuntimeDependencies;
+  private networkCheckedAt = -Infinity;
   constructor(settings: RuntimeSettings, dependencies: Partial<RuntimeDependencies> = {}) {
     this.settings = Object.freeze(parseRuntimeSettings(settings));
     this.deps = { command: runRuntimeCommand, assertUnit: assertManagedUnit, binary: verifyBinary,
       validate: validateWithMihomo, observe: observeCore, verifySystemctl, inspect: inspectCore,
       load: loadRuntimeCandidateReadonly, readSelection: readRuntimeSelection, writeSelection,
-      setSelection: setControllerSelection, platform: process.platform, ...dependencies };
+      setSelection: setControllerSelection, platform: process.platform, now: () => performance.now(), ...dependencies };
   }
 
   private async command(action: string, extra: string[] = []): Promise<string> {
@@ -191,6 +194,12 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
     return false;
   }
 
+  /** Read-only scheduling hint. Repair eligibility is checked again under the shared lock. */
+  async needsReconcile(generation: string): Promise<boolean> {
+    if (!(await this.observe(generation)).ready) return true;
+    return !!this.settings.automaticGateway && this.deps.now() - this.networkCheckedAt >= networkAuditIntervalMs;
+  }
+
   /** Called only under the shared transaction lock, for the committed active. */
   async reconcile(path: string, generation: string): Promise<boolean> {
     await this.candidate(path, generation);
@@ -203,6 +212,7 @@ export class SystemdMihomoRuntime implements RuntimeAdapter {
       // A failed first boot prepare leaves the oneshot inactive; start it first.
       await this.deps.command(binary, ['--no-ask-password', '--no-pager', 'start', 'cocoproxy-gateway-network.service']);
       await this.deps.command(binary, ['--no-ask-password', '--no-pager', 'reload', 'cocoproxy-gateway-network.service']);
+      this.networkCheckedAt = this.deps.now();
     }
     if ((await this.observe(generation)).ready) return true;
     await this.restore(path, generation);
