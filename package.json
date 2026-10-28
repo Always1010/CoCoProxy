@@ -1,6 +1,6 @@
 {
   "name": "cocoproxy",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "description": "Linux 代理网关的配置与可靠性集成",
