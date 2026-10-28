@@ -95,7 +95,7 @@ defineExpose({ open, close })
 
         <button
           type="button"
-          class="modal-close flex h-8 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-lg bg-transparent px-2 text-sm"
+          class="modal-close flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-transparent p-0"
           title="关闭弹窗"
           aria-label="关闭弹窗"
           :disabled="closeDisabled"
@@ -106,8 +106,7 @@ defineExpose({ open, close })
           }"
           @click="requestClose"
         >
-          <IconX :size="18" />
-          <span>关闭</span>
+          <IconX :size="18" aria-hidden="true" />
         </button>
       </div>
 
