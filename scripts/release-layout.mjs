@@ -51,6 +51,9 @@ export function verifyDocumentationLinks(contents) {
       catch { throw new ReleaseDocumentationError('DOCUMENT_LINK_INVALID', path); }
       if (!target) continue;
       const resolved = posix.normalize(posix.join(posix.dirname(path), target));
+      // Root collaboration rules intentionally link to ignored, machine-local
+      // material that must never become part of the tracked source or release.
+      if (path === 'AGENTS.md' && resolved.startsWith('.local/')) continue;
       if (target.startsWith('/') || target.includes('\\') || resolved.startsWith('../') || !names.has(resolved)) {
         throw new ReleaseDocumentationError('DOCUMENT_LINK_MISSING', `${path} -> ${resolved}`);
       }
