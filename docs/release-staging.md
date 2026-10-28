@@ -10,7 +10,7 @@
 
 每份新载荷记录 `buildInputs.backendInputSha256`，覆盖除 UI、文档和测试之外的保守构建输入集合。日常前端构建可声明 `frontendUpdate`，绑定基线 manifest 和相同的后端输入摘要；装配器复核摘要，不接受将已变化的后端声明为前端更新。此类产物仍包含完整文件清单，但其部署范围固定为前端，不能用于首次安装。普通全量载荷和 GitHub 正式发行不带此局部部署声明。
 
-[Release 工作流](../.github/workflows/release.yml) 在推送 `v<package.json 版本>` 的 Tag 时运行，例如首版 `v0.1.0-preview.1`。Tag 必须符合 SemVer，且与根 package.json、package-lock.json 版本一致；带预发布后缀的版本自动标记为 GitHub Pre-release。
+[Release 工作流](../.github/workflows/release.yml) 在推送 `v<package.json 版本>` 的 Tag 时运行，例如 `v1.0.0`。Tag 必须符合 SemVer，且与根 package.json、package-lock.json 版本一致；带预发布后缀的版本自动标记为 GitHub Pre-release。
 
 GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游源码校验、overlay、发行元数据、文档链接、安装配置、发行装配及部署测试；随后核验固定上游源码与锁文件、构建 UI/Server，并复用现有装配器生成 ARM64 和 x86-64 载荷。构建入口为 `scripts/build-github-release.mjs`，完整构建只允许在 Actions Linux 环境执行。两个平台均不在构建中执行外来 Mihomo；构建成功不替代目标设备验收。
 
@@ -21,11 +21,11 @@ GitHub 托管的 Ubuntu Runner 按锁安装构建依赖，执行类型、上游�
 后续发布先更新根包和锁文件版本及发行说明，提交并推送目标分支，再创建并推送对应 Tag：
 
 ```sh
-git tag -a v0.1.0-preview.1 -m 'CoCoProxy 0.1.0-preview.1'
-git push origin refs/tags/v0.1.0-preview.1
+git tag -a v1.0.0 -m 'CoCoProxy 1.0.0'
+git push origin refs/tags/v1.0.0
 ```
 
-上例版本仅用于首次发布；后续使用新版本号。不移动已经发布的 Tag，也不覆盖既有 Release。失败时查看 Actions 日志，临时下载故障可重跑失败任务；需要修正源码时应提交修复并发布新版本。
+上例版本仅为当前发布示例；后续使用新版本号。不移动已经发布的 Tag，也不覆盖既有 Release。失败时查看 Actions 日志，临时下载故障可重跑失败任务；需要修正源码时应提交修复并发布新版本。
 
 下载后先按可信 Release 的 `SHA256SUMS` 核对附件，再解压所选架构安装包。校验对应 `.manifest.json` 与包内 `manifest.json` 一致，其 SHA-256 即安装入口需要的 `manifestSha256`；继续按部署说明核验文件集和安装前置条件。
 

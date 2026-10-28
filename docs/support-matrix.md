@@ -1,6 +1,6 @@
 # 支持范围与设备条件
 
-CoCoProxy 安装在 Linux 外接设备上；路由器负责终端接入、流量交付、DNS 和独立关闭，两端按[路由器契约 v1](router-contract.md)协作，不要求同一项目或特定品牌。本页说明当前 `0.1.0-preview.1` 的设备条件和证据范围；组件字节以 [components.json](../integrations/metacubexd/components.json) 为准，审核见 [review.json](../integrations/metacubexd/review.json)，实际验收及缺口见[发行说明](release-notes.md)。
+CoCoProxy 安装在 Linux 外接设备上；路由器负责终端接入、流量交付、DNS 和独立关闭，两端按[路由器契约 v1](router-contract.md)协作，不要求同一项目或特定品牌。本页说明当前 `1.0.0` 的设备条件和证据范围；组件字节以 [components.json](../integrations/metacubexd/components.json) 为准，审核见 [review.json](../integrations/metacubexd/review.json)，实际验收及缺口见[发行说明](release-notes.md)。
 
 ## 支持状态与证据
 
