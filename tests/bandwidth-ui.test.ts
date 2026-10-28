@@ -16,11 +16,12 @@ function harness(storage = new Map<string, string>()) {
   let runtime: any = { active: 'generation-two', core: { ready: true }, transaction: null, fault: null };
   let statusFailure = false;
   let failure = false;
+  let readReply: (() => Promise<any>) | undefined;
   const exports: Record<string, any> = {};
   new Script(code).runInNewContext({
     exports, ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     onMounted() {}, onUnmounted() {}, document: { hidden: false },
-    setTimeout: () => 1, clearTimeout() {}, AbortSignal,
+    setTimeout: () => 1, clearTimeout() {}, AbortSignal, AbortController,
     sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
     crypto: { randomUUID: () => 'f63cb401-2645-42b9-b051-8235617d88bd' },
     CoCoProxyError: Error, cocoproxyErrorMessage: () => '读取失败',
@@ -31,12 +32,51 @@ function harness(storage = new Map<string, string>()) {
         return structuredClone(runtime);
       }
       if (failure) throw new Error('synthetic connection loss');
+      if (path === '/api/cocoproxy/bandwidth' && !options.method && readReply) return readReply();
       return structuredClone(result);
     } } }),
   });
   return { ui: exports.useBandwidthTest(), calls, storage, setResult(value: unknown) { result = value; }, fail(value: boolean) { failure = value; },
+    setReadReply(value?: () => Promise<any>) { readReply = value; },
     setRuntime(value: unknown) { runtime = value; }, failStatus(value: boolean) { statusFailure = value; } };
 }
+
+test('bandwidth background reads leave cancellation available and late replies cannot release uncertain writes', async () => {
+  const { ui, calls, storage, setResult, setReadReply, fail } = harness();
+  const running = { ...empty, task: { id: 'test-one', node: 'node-b', running: true, owned: true, phase: 'download' } };
+  setResult(running);
+  await ui.restore(); ui.shown(); await new Promise(resolve => setImmediate(resolve));
+  let complete!: (value: unknown) => void;
+  setReadReply(() => new Promise(resolve => { complete = resolve; }));
+  const background = ui.refresh();
+  const signal = calls.at(-1)!.options.signal;
+  assert.equal(ui.loading.value, false);
+  assert.equal(ui.sending.value, false);
+  setResult({ ...running, task: { ...running.task, phase: 'cancelling' } });
+  await ui.cancel();
+  assert.equal(signal.aborted, true);
+  assert.equal(ui.task.value.phase, 'cancelling');
+  complete(running); await background;
+  assert.equal(ui.task.value.phase, 'cancelling');
+  assert.equal(ui.error.value, '');
+
+  setReadReply(); setResult(running); await ui.refresh(true);
+  setReadReply(() => new Promise(resolve => { complete = resolve; }));
+  const beforeLostWrite = ui.refresh();
+  fail(true); await ui.cancel();
+  assert.equal(ui.uncertain.value, true);
+  complete(running); await beforeLostWrite;
+  assert.equal(ui.uncertain.value, true); // An old successful GET cannot confirm a later lost POST.
+  assert.equal(ui.locked.value, true);
+  assert.equal(storage.get('cocoproxy-bandwidth-pending'), '1');
+  assert.equal(calls.filter(call => call.options.method === 'POST').length, 2);
+  fail(false); setReadReply(); setResult({ ...running, task: { ...running.task, running: false, phase: 'cancelled' } });
+  await ui.refresh(true);
+  assert.equal(ui.uncertain.value, false);
+  assert.equal(ui.locked.value, false);
+  assert.equal(storage.has('cocoproxy-bandwidth-pending'), false);
+  assert.equal(calls.filter(call => call.options.method === 'POST').length, 2);
+});
 
 test('bandwidth starts against fresh runtime generation and unknown writes stay locked without replaying', async () => {
   const { ui, calls, fail, storage } = harness();
