@@ -151,6 +151,7 @@ async function applyEntries(next: string[], message: string) {
         saved.value = message
       } catch (cause) {
         reconcileFailure(cause, baseline, next, message)
+        throw cause
       }
     })
   } finally {

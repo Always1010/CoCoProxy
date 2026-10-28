@@ -35,7 +35,7 @@ async function editor(initial: string[], groupName = 'Work') {
     ...rules, exports, Error, CoCoProxyError, defineProps: () => ({ groupName }), defineEmits: () => () => {}, defineExpose() {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useWorkspace: () => ({ view, workspace, overrides: { get value() { return settings.local; } }, busy: { value: false }, load: async () => {},
-      run: async (action: () => Promise<void>) => action(),
+      run: async (action: () => Promise<void>) => { try { await action(); } catch { /* Shared workspace alert owns the propagated failure. */ } },
       save: async (edit: (value: typeof settings) => void) => {
         saves++;
         const draft = structuredClone(settings);
