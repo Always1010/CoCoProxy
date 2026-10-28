@@ -40,6 +40,7 @@ const detailSearch = ref('')
 const sort = ref<Sort>('total')
 const order = ref<'asc' | 'desc'>('desc')
 const busy = ref(false)
+const refreshing = ref(false)
 const detailBusy = ref(false)
 const expandedBusy = ref(false)
 const error = ref('')
@@ -56,6 +57,7 @@ let controller: AbortController | undefined
 let detailController: AbortController | undefined
 let expandedController: AbortController | undefined
 let timer: ReturnType<typeof setInterval> | undefined
+let overviewKey = '', detailKey = '', expandedKey = ''
 const current = computed(() => options.find(option => option.value === view.value)!)
 const detailDimension = computed<Dimension>(() => view.value === 'host' ? 'sourceIP' : 'host')
 const isAddress = (value: string | null) => !!value && !['Inner', 'Unattributed'].includes(value)
@@ -63,61 +65,72 @@ const display = (label: string) => label === 'Unattributed' ? '未归属流量' 
 const date = (value: number | null | undefined) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '尚无记录'
 const total = computed(() => overview.value?.summary ?? { upload: 0, download: 0, unattributed: 0, sources: 0 })
 const filters = () => selected.value === null ? {} : { [view.value]: selected.value }
-const query = (body: Record<string, unknown>, signal?: AbortSignal) => api.request<Result>('/api/cocoproxy/usage/query', { method: 'POST', body: { ...range.value, ...body }, signal })
+const query = (body: Record<string, unknown>, signal?: AbortSignal, queryRange = range.value) => api.request<Result>('/api/cocoproxy/usage/query', { method: 'POST', body: { ...queryRange, ...body }, signal })
 
-async function refresh() {
+async function refresh(background = false) {
   const version = ++overviewVersion
   controller?.abort(); controller = new AbortController()
-  busy.value = true; error.value = ''
+  busy.value = true; refreshing.value = !background
+  const key = JSON.stringify([view.value, rangeDays.value, rangeDays.value === -1 ? [customStart.value, customEnd.value] : null, rankPage.value, rankSearch.value])
+  if (key !== overviewKey) {
+    detailVersion++; expandedVersion++; detailController?.abort(); expandedController?.abort()
+    detailBusy.value = false; expandedBusy.value = false
+    overview.value = null; details.value = null; expanded.value = null; expandedRows.value = []; error.value = ''
+    overviewKey = key
+  }
   try {
     const endTime = rangeDays.value === -1 ? dayjs(customEnd.value).valueOf() : Date.now()
     const startTime = rangeDays.value === -1 ? dayjs(customStart.value).valueOf() : endTime - rangeDays.value * 86400000
     if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime) throw new Error('invalid range')
-    range.value = { startTime, endTime }
-    const result = await query({ dimension: view.value, overview: true, page: rankPage.value, pageSize, search: rankSearch.value }, controller.signal)
+    const nextRange = { startTime, endTime }
+    const result = await query({ dimension: view.value, overview: true, page: rankPage.value, pageSize, search: rankSearch.value }, controller.signal, nextRange)
     if (version !== overviewVersion) return
-    overview.value = result; aliases.value = result.aliases
+    range.value = nextRange; overview.value = result; aliases.value = result.aliases; error.value = ''
     if (selected.value === null || !result.rows.some(row => row.label === selected.value)) {
       selected.value = result.rows[0]?.label ?? null; detailPage.value = 0; expanded.value = null; expandedRows.value = []
     }
-    await loadDetails()
+    await loadDetails(background)
   } catch (cause) {
-    if (version === overviewVersion) { overview.value = null; details.value = null; error.value = cocoproxyErrorMessage(cause) }
-  } finally { if (version === overviewVersion) busy.value = false }
+    if (version === overviewVersion) error.value = overview.value ? '更新失败，显示上次数据。' : cocoproxyErrorMessage(cause)
+  } finally { if (version === overviewVersion) { busy.value = false; refreshing.value = false } }
 }
 
-async function loadDetails() {
+async function loadDetails(background = false) {
   const version = ++detailVersion
   detailController?.abort(); detailController = new AbortController()
   if (selected.value === null) { details.value = null; detailBusy.value = false; return }
-  detailBusy.value = true; detailError.value = ''
+  const key = JSON.stringify([view.value, selected.value, rangeDays.value, customStart.value, customEnd.value, sort.value, order.value, detailSearch.value, detailPage.value])
+  if (key !== detailKey) { details.value = null; detailError.value = ''; detailKey = key }
+  detailBusy.value = !background || !details.value
   try {
     const result = await query({ dimension: detailDimension.value, filters: filters(), sort: sort.value, order: order.value, search: detailSearch.value, page: detailPage.value, pageSize }, detailController.signal)
     if (version !== detailVersion) return
-    details.value = result
-    if (expanded.value) await loadExpanded()
-  } catch (cause) { if (version === detailVersion) { details.value = null; detailError.value = cocoproxyErrorMessage(cause) } }
+    details.value = result; detailError.value = ''
+    if (expanded.value) await loadExpanded(background)
+  } catch (cause) { if (version === detailVersion) detailError.value = details.value ? '更新失败，显示上次数据。' : cocoproxyErrorMessage(cause) }
   finally { if (version === detailVersion) detailBusy.value = false }
 }
 
 async function select(label: string) {
-  expandedVersion++; expandedController?.abort()
+  expandedVersion++; expandedController?.abort(); expandedBusy.value = false
   selected.value = label; detailPage.value = 0; expanded.value = null; expandedRows.value = []
   await loadDetails()
 }
-async function loadExpanded() {
+async function loadExpanded(background = false) {
   const version = ++expandedVersion
   expandedController?.abort(); expandedController = new AbortController()
-  if (!expanded.value) return
-  expandedBusy.value = true
+  if (!expanded.value) { expandedBusy.value = false; return }
+  const key = JSON.stringify([detailKey, expanded.value, expandedPage.value])
+  if (key !== expandedKey) { expandedRows.value = []; expandedTotal.value = 0; expandedKey = key }
+  expandedBusy.value = !background
   try {
     const result = await query({ dimension: view.value === 'outbound' ? 'sourceIP' : 'outbound', filters: { ...filters(), [detailDimension.value]: expanded.value }, page: expandedPage.value, pageSize }, expandedController.signal)
     if (version === expandedVersion) { expandedRows.value = result.rows; expandedTotal.value = result.totalRows }
-  } catch (cause) { if (version === expandedVersion) { expandedRows.value = []; detailError.value = cocoproxyErrorMessage(cause) } }
+  } catch (cause) { if (version === expandedVersion) detailError.value = expandedRows.value.length ? '更新失败，显示上次数据。' : cocoproxyErrorMessage(cause) }
   finally { if (version === expandedVersion) expandedBusy.value = false }
 }
 async function toggle(row: Row) {
-  if (expanded.value === row.label) { expanded.value = null; expandedVersion++; expandedController?.abort(); return }
+  if (expanded.value === row.label) { expanded.value = null; expandedVersion++; expandedController?.abort(); expandedBusy.value = false; return }
   expanded.value = row.label; expandedPage.value = 0; expandedRows.value = []; await loadExpanded()
 }
 function changeSort(field: Sort) {
@@ -138,7 +151,7 @@ async function saveNote() {
   finally { saving.value = false }
 }
 function reset() {
-  detailVersion++; expandedVersion++; detailController?.abort(); expandedController?.abort(); detailBusy.value = false
+  detailVersion++; expandedVersion++; detailController?.abort(); expandedController?.abort(); detailBusy.value = false; expandedBusy.value = false
   selected.value = null; details.value = null; expanded.value = null; rankPage.value = 0; detailPage.value = 0
   void refresh()
 }
@@ -152,7 +165,7 @@ watch(editing, async (open) => {
 })
 onMounted(() => {
   void refresh()
-  timer = setInterval(() => { if (!document.hidden && !busy.value && !editing.value) void refresh() }, 5000)
+  timer = setInterval(() => { if (!document.hidden && !busy.value && !detailBusy.value && !expandedBusy.value && !editing.value) void refresh(true) }, 5000)
 })
 onBeforeUnmount(() => {
   clearInterval(timer); overviewVersion++; detailVersion++; expandedVersion++
@@ -168,7 +181,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <label class="text-sm">时间范围 <select v-model.number="rangeDays" class="select select-bordered select-sm"><option :value="1 / 24">最近一小时</option><option :value="1">最近一天</option><option :value="7">最近七天</option><option :value="30">最近三十天</option><option :value="365">最近一年</option><option :value="-1">自定义</option></select></label>
-        <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="refresh"><IconRefresh :size="16" :class="{ 'animate-spin': busy }" />{{ busy ? '刷新中' : '刷新' }}</button>
+        <button type="button" class="btn btn-ghost btn-sm min-w-20" :disabled="refreshing" @click="refresh()"><IconRefresh :size="16" :class="{ 'animate-spin': refreshing }" />{{ refreshing ? '刷新中' : '刷新' }}</button>
       </div>
     </div>
     <form v-if="rangeDays === -1" class="flex flex-wrap items-end gap-2" @submit.prevent="reset">
@@ -200,28 +213,27 @@ onBeforeUnmount(() => {
             <span class="flex min-w-0 items-center gap-1 text-sm font-medium"><span class="min-w-0 break-all font-mono" :class="{ 'shrink-0': view === 'sourceIP' && !row.label.includes(':') }">{{ display(row.label) }}</span><span v-if="view === 'sourceIP' && aliases[row.label]" class="min-w-0 truncate text-xs text-base-content/60">（{{ aliases[row.label] }}）</span><span class="ml-auto shrink-0 pl-2 text-xs font-bold">{{ formatBytes(row.total) }}</span></span>
             <span class="flex gap-3 text-[10px] font-bold opacity-60"><span>↑ {{ formatBytes(row.upload) }}</span><span>↓ {{ formatBytes(row.download) }}</span></span>
           </button>
-          <p v-if="!overview?.rows.length" class="py-6 text-center text-sm text-base-content/50">{{ busy ? '读取中…' : '暂无已记录用量' }}</p>
+          <p v-if="!overview?.rows.length" class="py-6 text-center text-sm text-base-content/50">{{ refreshing ? '读取中…' : '暂无已记录用量' }}</p>
         </div>
         <div class="mt-2 flex items-center justify-between gap-1 text-xs">
-          <button type="button" class="btn btn-ghost btn-xs" :disabled="rankPage === 0 || busy" @click="rankPage--; refresh()"><IconChevronLeft :size="14" />上一页</button><span>{{ rankPage + 1 }} / {{ Math.max(1, Math.ceil((overview?.totalRows ?? 0) / pageSize)) }}</span><button type="button" class="btn btn-ghost btn-xs" :disabled="(rankPage + 1) * pageSize >= (overview?.totalRows ?? 0) || busy" @click="rankPage++; refresh()">下一页<IconChevronRight :size="14" /></button>
+          <button type="button" class="btn btn-ghost btn-xs" :disabled="rankPage === 0 || refreshing" @click="rankPage--; refresh()"><IconChevronLeft :size="14" />上一页</button><span>{{ rankPage + 1 }} / {{ Math.max(1, Math.ceil((overview?.totalRows ?? 0) / pageSize)) }}</span><button type="button" class="btn btn-ghost btn-xs" :disabled="(rankPage + 1) * pageSize >= (overview?.totalRows ?? 0) || refreshing" @click="rankPage++; refresh()">下一页<IconChevronRight :size="14" /></button>
         </div>
       </section>
-      <section class="min-h-[340px] min-w-0 rounded-xl border border-base-content/10 bg-base-200 p-2 xl:col-span-3"><TrafficTrendChart :data="overview?.trend ?? []" :start-time="range.startTime" :end-time="range.endTime" :is-loading="busy" title="流量" /></section>
+      <section class="min-h-[340px] min-w-0 rounded-xl border border-base-content/10 bg-base-200 p-2 xl:col-span-3"><TrafficTrendChart :data="overview?.trend ?? []" :start-time="range.startTime" :end-time="range.endTime" :is-loading="busy && !overview" title="流量" /></section>
     </div>
     <section class="rounded-xl border border-base-content/10 bg-base-200/60">
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-base-content/10 p-4">
-        <h2 class="flex min-w-0 items-center gap-2 font-semibold"><IconListDetails :size="20" />用量详情<span v-if="selected" class="truncate text-xs font-normal text-base-content/60">{{ display(selected) }}{{ view === 'sourceIP' && aliases[selected] ? `（${aliases[selected]}）` : '' }}</span></h2>
+        <h2 class="flex min-w-0 items-center gap-2 font-semibold"><IconListDetails :size="20" />用量详情<span v-if="selected" class="truncate text-xs font-normal text-base-content/60">{{ display(selected) }}{{ view === 'sourceIP' && aliases[selected] ? `（${aliases[selected]}）` : '' }}</span><span class="inline-flex shrink-0 items-center gap-1 text-xs font-normal text-base-content/60" :class="{ invisible: !detailBusy }" :aria-hidden="!detailBusy" role="status"><IconRefresh :size="12" :class="{ 'animate-spin': detailBusy }" />读取中</span></h2>
         <label class="flex items-center gap-2 text-xs"><IconSearch :size="14" /><input v-model="detailSearch" type="search" class="input input-bordered input-sm" aria-label="搜索用量详情" placeholder="搜索 IP、备注或主机" /></label>
       </div>
       <p v-if="detailError" class="p-4 text-sm text-warning" role="alert">{{ detailError }}</p>
-      <p v-if="detailBusy" class="px-4 pt-3 text-xs text-base-content/60" role="status">正在读取 {{ selected }} 的用量详情…</p>
       <div class="overflow-x-auto">
         <table class="table table-sm w-full">
           <thead><tr><th v-for="column in [{ key: 'label', label: detailDimension === 'sourceIP' ? '来源 IP' : '主机' }, { key: 'upload', label: '上传' }, { key: 'download', label: '下载' }, { key: 'total', label: '总量' }]" :key="column.key"><button class="inline-flex items-center gap-1 whitespace-nowrap" type="button" :aria-label="`按${column.label}排序`" @click="changeSort(column.key as Sort)">{{ column.label }}<IconSelector :size="14" /><span v-if="sort === column.key">{{ order === 'desc' ? '↓' : '↑' }}</span></button></th></tr></thead>
           <tbody>
             <template v-for="row in details?.rows ?? []" :key="row.label">
               <tr class="hover:bg-base-content/5"><td class="max-w-[55vw] sm:max-w-none"><div class="flex items-center gap-2"><button type="button" class="inline-flex min-w-0 items-center gap-1 text-left" :aria-expanded="expanded === row.label" @click="toggle(row)"><IconChevronDown v-if="expanded === row.label" :size="14" class="shrink-0" /><IconChevronRight v-else :size="14" class="shrink-0" /><span class="truncate font-mono text-xs">{{ display(row.label) }}{{ detailDimension === 'sourceIP' && aliases[row.label] ? `（${aliases[row.label]}）` : '' }}</span></button><button v-if="detailDimension === 'sourceIP' && isAddress(row.label)" type="button" class="btn btn-ghost btn-xs shrink-0" @click="editNote(row.label)"><IconEdit :size="12" />备注</button></div></td><td class="whitespace-nowrap">{{ formatBytes(row.upload) }}</td><td class="whitespace-nowrap">{{ formatBytes(row.download) }}</td><td class="whitespace-nowrap font-bold text-primary">{{ formatBytes(row.total) }}</td></tr>
-              <tr v-if="expanded === row.label"><td colspan="4" class="bg-base-content/5 p-4"><p class="mb-2 text-xs text-base-content/60">{{ view === 'outbound' ? '来源 IP' : '出口' }}</p><p v-if="expandedBusy" class="text-xs" role="status">读取中…</p><div v-for="child in expandedRows" :key="child.label" class="flex flex-wrap justify-between gap-2 py-1 text-xs"><span class="break-all">{{ display(child.label) }}{{ view === 'outbound' && aliases[child.label] ? `（${aliases[child.label]}）` : '' }}</span><span>↑ {{ formatBytes(child.upload) }} · ↓ {{ formatBytes(child.download) }} · {{ formatBytes(child.total) }}</span></div><p v-if="!expandedBusy && !expandedRows.length" class="text-xs text-base-content/50">暂无明细</p><div v-if="expandedTotal > pageSize" class="mt-2 flex justify-between"><button class="btn btn-ghost btn-xs" type="button" :disabled="expandedPage === 0 || expandedBusy" @click="expandedPage--; loadExpanded()"><IconChevronLeft :size="14" />上一页</button><button class="btn btn-ghost btn-xs" type="button" :disabled="(expandedPage + 1) * pageSize >= expandedTotal || expandedBusy" @click="expandedPage++; loadExpanded()">下一页<IconChevronRight :size="14" /></button></div></td></tr>
+              <tr v-if="expanded === row.label"><td colspan="4" class="bg-base-content/5 p-4"><p class="mb-2 flex items-center gap-2 text-xs text-base-content/60">{{ view === 'outbound' ? '来源 IP' : '出口' }}<span :class="{ invisible: !expandedBusy }" :aria-hidden="!expandedBusy" role="status">读取中…</span></p><div v-for="child in expandedRows" :key="child.label" class="flex flex-wrap justify-between gap-2 py-1 text-xs"><span class="break-all">{{ display(child.label) }}{{ view === 'outbound' && aliases[child.label] ? `（${aliases[child.label]}）` : '' }}</span><span>↑ {{ formatBytes(child.upload) }} · ↓ {{ formatBytes(child.download) }} · {{ formatBytes(child.total) }}</span></div><p v-if="!expandedBusy && !expandedRows.length" class="text-xs text-base-content/50">暂无明细</p><div v-if="expandedTotal > pageSize" class="mt-2 flex justify-between"><button class="btn btn-ghost btn-xs" type="button" :disabled="expandedPage === 0 || expandedBusy" @click="expandedPage--; loadExpanded()"><IconChevronLeft :size="14" />上一页</button><button class="btn btn-ghost btn-xs" type="button" :disabled="(expandedPage + 1) * pageSize >= expandedTotal || expandedBusy" @click="expandedPage++; loadExpanded()">下一页<IconChevronRight :size="14" /></button></div></td></tr>
             </template>
             <tr v-if="!details?.rows.length && !detailBusy"><td colspan="4" class="py-8 text-center text-base-content/50">{{ overview?.resolution === 'day' ? '此范围仅保留每日来源汇总，域名明细已过期。' : '暂无用量详情' }}</td></tr>
           </tbody>
