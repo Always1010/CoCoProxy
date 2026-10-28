@@ -5,6 +5,8 @@ import test from 'node:test';
 import ts from '../tooling/node_modules/typescript/lib/typescript.js';
 import { localGroupNameError } from '../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts';
 import { BANDWIDTH_FIELDS, DEFAULT_BANDWIDTH_SETTINGS, parseBandwidthSettings } from '../packages/management/bandwidth-policy.ts';
+import { parseWorkspaceSettings } from '../packages/management/workspace.ts';
+import type { AutoGroupPolicy } from '../packages/management/automatic-policy.ts';
 
 const apiExports: Record<string, any> = {};
 new Script(ts.transpileModule(await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useCoCoProxy.ts', import.meta.url), 'utf8'), {
@@ -20,21 +22,48 @@ test('bandwidth settings validate pool limits and allow the independent switch t
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
     + '\nexport { invalid, toggle, restore, load };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const props = { modelValue: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true }, disabled: false };
+  const props = { modelValue: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true }, disabled: false, groupName: 'Stream' };
+  const overrides = { value: { automatic: {} as Record<string, AutoGroupPolicy> } };
   const exports: Record<string, any> = {};
   new Script(code, { filename: 'BandwidthSelectionSettings.js' }).runInNewContext({
     exports, defineProps: () => props, defineEmits: () => (_event: string, value: typeof props.modelValue) => { props.modelValue = value; },
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     defineExpose() {}, onMounted() {}, cocoproxyErrorMessage: () => '读取失败',
-    useWorkspace: () => ({ view: { value: null }, api: { request: async () => ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS } }) } }),
+    useWorkspace: () => ({ overrides, view: { value: null }, api: { request: async () => ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS } }) } }),
   });
   await exports.load();
   assert.equal(exports.invalid.value, ''); // 30 s spacing is valid with the default 20 s task timeout.
-  for (const bad of [{ searchMiB: 16 }, { reserveHourMiB: 64 }, { freshSeconds: 60, roundIntervalSeconds: 60 }]) {
+  for (const bad of [{ searchMiB: 16 }, { reserveHourMiB: 64 }, { freshSeconds: 60, roundIntervalSeconds: 60 },
+    { hourMiB: 32 }, { dayMiB: 64, reserveDayMiB: 40 }]) {
     props.modelValue = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...bad };
     assert.notEqual(exports.invalid.value, '');
     assert.throws(() => parseBandwidthSettings(props.modelValue));
   }
+  for (const limits of [{ hourMiB: 48, dayMiB: 64 }, { hourMiB: 32, dayMiB: 32, reserveHourMiB: 0, reserveDayMiB: 0 }]) {
+    props.modelValue = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...limits };
+    assert.equal(exports.invalid.value, '');
+    assert.doesNotThrow(() => parseBandwidthSettings(props.modelValue));
+  }
+  const policy = (limits = {}): AutoGroupPolicy => ({ preferred: ['a'], fallback: ['b'], returnToPreferred: true,
+    bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...limits } });
+  // The current draft replaces its saved policy, including when it reduces the saved reserve.
+  overrides.value.automatic.Stream = policy({ reserveHourMiB: 32 });
+  for (const [current, other] of [[{ hourMiB: 48 }, { reserveHourMiB: 32 }],
+    [{ dayMiB: 64 }, { reserveDayMiB: 64 }], [{ hourMiB: 48 }, { hourMiB: 80, confirmRounds: 3, searchMiB: 48 }]]) {
+    props.modelValue = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...current };
+    overrides.value.automatic.Other = policy(other);
+    assert.match(exports.invalid.value, /多个启用组/);
+    assert.throws(() => parseWorkspaceSettings({ mode: 'local', subscriptionId: null, sourceIds: [], runMode: 'rule',
+      local: { selections: {}, rules: [], automatic: { Stream: { ...policy(), bandwidth: props.modelValue }, Other: policy(other) } },
+      subscriptionOverrides: {},
+    }), { code: 'AUTO_SETTINGS_INVALID' });
+    overrides.value.automatic.Other.enabled = false;
+    assert.equal(exports.invalid.value, '');
+    overrides.value.automatic.Other.enabled = true;
+    overrides.value.automatic.Other.bandwidth!.enabled = false;
+    assert.equal(exports.invalid.value, '');
+  }
+  overrides.value.automatic = {};
   exports.restore();
   assert.equal(exports.invalid.value, '');
   props.modelValue.targetMbps = 7;

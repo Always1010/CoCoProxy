@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBandwidthSelector, parseBandwidthLedger, type BandwidthLedger } from '../packages/management/bandwidth-selector.ts';
-import { DEFAULT_BANDWIDTH_SETTINGS, type BandwidthSettings } from '../packages/management/bandwidth-policy.ts';
+import { DEFAULT_BANDWIDTH_SETTINGS, parseBandwidthSettings, type BandwidthSettings } from '../packages/management/bandwidth-policy.ts';
 import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts';
 import type { AutoSnapshot } from '../packages/management/automatic-selector.ts';
 
@@ -175,4 +175,29 @@ test('120-second sampling still confirms after lightweight probe refresh delays 
   assert.deepEqual(f.switches, ['b']);
   assert.equal(f.measures.length, 4); // No repeated paid samples discarded solely for scheduler latency.
   await f.engine.close();
+});
+
+test('an accepted minimum ordinary budget completes a comparison without needing degradation reserves', async () => {
+  for (const multiple of [false, true]) {
+    const settings = parseBandwidthSettings({ ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true,
+      ...(multiple ? {} : { hourMiB: 48, dayMiB: 64 }) });
+    const f = fixture({ settings, currentMbps: 6.5, delays: { a: 400, b: 50 }, bytes: 8 * 1048576 });
+    if (multiple) {
+      f.snapshot.groups.push({ name: 'other', current: 'x', policy: { preferred: ['x', 'y'], fallback: [], returnToPreferred: false,
+        bandwidth: parseBandwidthSettings({ ...settings, hourMiB: 48, reserveHourMiB: 8, dayMiB: 64, reserveDayMiB: 16 }) } });
+      f.engine.update(f.snapshot);
+    }
+    f.engine.requestCheck('media');
+    for (let i = 0; i < 100 && !f.switches.length; i++) {
+      await f.step();
+      assert.equal(f.engine.status('media')!.urgent, false);
+    }
+    assert.deepEqual(f.switches, ['b']);
+    assert.equal(f.measures.length, 4);
+    const status = f.engine.status('media')!;
+    assert.equal(status.hourLimit - status.hourReserve, 32 * 1048576);
+    assert.equal(status.dayLimit - status.dayReserve, 32 * 1048576);
+    assert.equal(status.hourBytes, 32 * 1048576);
+    await f.engine.close();
+  }
 });

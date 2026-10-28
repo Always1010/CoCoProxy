@@ -5,7 +5,7 @@ import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
 const props = defineProps<{ modelValue?: BandwidthSettings; disabled: boolean; status?: BandwidthSelectionStatus; groupName: string; canCheck: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: BandwidthSettings] }>()
-const { api, view } = useWorkspace()
+const { api, view, overrides } = useWorkspace()
 type Field = { label: string; default: number; min: number; max: number; unit: string; integer: boolean; basic: boolean }
 const definitions = ref<{ defaults: BandwidthSettings; fields: Record<string, Field> }>()
 const error = ref('')
@@ -28,6 +28,15 @@ const invalid = computed(() => {
   if (n('dayMiB') < n('hourMiB') || n('hourMiB') < n('taskMiB') * n('confirmRounds') * 2) return '每日预算须不少于每小时预算；每小时预算须容纳当前与候选的全部确认轮次。'
   if (n('searchMiB') < n('taskMiB') * n('confirmRounds') * 2) return '连续搜索额度须容纳当前与候选所需的全部有效样本。'
   if (n('reserveHourMiB') >= n('hourMiB') || n('reserveDayMiB') >= n('dayMiB')) return '劣化处理预留须小于对应总预算，预留包含在总额内。'
+  const confirmation = n('taskMiB') * n('confirmRounds') * 2
+  if (n('hourMiB') - n('reserveHourMiB') < confirmation || n('dayMiB') - n('reserveDayMiB') < confirmation) return `扣除劣化预留后，每小时和24小时预算均须至少剩余 ${confirmation} MiB，才能完成当前与候选的普通比较。`
+  const combined = [s, ...Object.entries(overrides.value.automatic ?? {})
+    .filter(([name, policy]) => name !== props.groupName && policy.enabled !== false && policy.bandwidth?.enabled)
+    .map(([, policy]) => policy.bandwidth!)]
+  const required = Math.max(...combined.map(value => Number(value.taskMiB) * Number(value.confirmRounds) * 2))
+  const hour = Math.min(...combined.map(value => Number(value.hourMiB))) - Math.max(...combined.map(value => Number(value.reserveHourMiB)))
+  const day = Math.min(...combined.map(value => Number(value.dayMiB))) - Math.max(...combined.map(value => Number(value.reserveDayMiB)))
+  if (hour < required || day < required) return `多个启用组共用预算：最小总额减最大预留后，小时和24小时均须至少剩余 ${required} MiB；目前分别为 ${hour}、${day} MiB。请协调各组额度或预留。`
   if (n('taskMiB') * 1048576 < n('targetMbps') * 125000 * 1.25 * (n('warmupSeconds') + n('minSampleSeconds')) + 131072) return '单次流量额度不足以验证该目标，请增加额度或降低目标。'
   if (n('busyStopMbps') <= n('busyStartMbps')) return '检测中止阈值须高于启动阈值。'
   return ''
@@ -90,7 +99,7 @@ onMounted(load)
     <div v-if="error" class="flex flex-wrap items-center gap-2 text-xs text-warning"><span>{{ error }}</span><button type="button" class="btn btn-sm min-h-11" :disabled="disabled || loading" @click="load"><IconRefresh :size="16" /><span>重读参数</span></button></div>
     <template v-if="settings?.enabled && definitions">
       <label class="flex min-h-11 items-center justify-between gap-3 text-sm">仅观察，不执行带宽切换<input :checked="settings.observeOnly" type="checkbox" class="toggle toggle-sm" :disabled="disabled" @change="toggle('observeOnly', $event)" /></label>
-      <p class="text-xs text-base-content/65">开启带宽辅助决策后会按需自动下载验证并消耗流量，观察模式也会消耗验证流量。建议先用观察模式核对收益。多组同时开启时，采用各组最小配置作为全局流量预算。</p>
+      <p class="text-xs text-base-content/65">开启带宽辅助决策后会按需自动下载验证并消耗流量，观察模式也会消耗验证流量。建议先用观察模式核对收益。多组共用最小总预算和最大劣化预留，扣除预留后须能完成每个组的普通比较。</p>
       <div class="space-y-2">
         <label v-for="[key, field] in basic" :key="key" class="flex min-h-11 flex-wrap items-center justify-between gap-2 text-sm"><span>{{ field.label }}（{{ field.unit }}）</span><input :value="settings[key]" type="number" class="input input-sm w-28" :min="field.min" :max="field.max" :step="field.integer ? 1 : 0.01" :disabled="disabled" required @input="number(key, $event)" /></label>
       </div>

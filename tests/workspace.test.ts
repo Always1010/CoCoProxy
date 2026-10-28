@@ -28,6 +28,32 @@ const profile: JsonObject = { proxies: [node],
     { name: 'Auto', type: 'url-test', proxies: ['synthetic-node'], url: 'https://probe.example/generate_204', interval: 300, tolerance: 50 },
   ], rules: ['DOMAIN-SUFFIX,provider.example,Provider', 'MATCH,Provider'], 'tcp-concurrent': true };
 
+test('workspace rejects unaffordable combined bandwidth budgets but isolates disabled groups and schemes', () => {
+  const policy = (limits = {}) => ({ preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true,
+    bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...limits } });
+  const combinations = [
+    { small: policy({ hourMiB: 48 }), large: policy({ reserveHourMiB: 32 }) },
+    { small: policy({ dayMiB: 64 }), large: policy({ reserveDayMiB: 64 }) },
+    { small: policy({ hourMiB: 48 }), large: policy({ hourMiB: 80, confirmRounds: 3, searchMiB: 48 }) },
+  ];
+  for (const automatic of combinations) {
+    const local = { selections: {}, rules: [], automatic };
+    assert.throws(() => parseWorkspaceSettings(settings({ local })), { code: 'AUTO_SETTINGS_INVALID' });
+    for (const group of Object.values(automatic)) assert.doesNotThrow(() => parseWorkspaceSettings(settings({ local: {
+      ...local, automatic: { single: group },
+    } })));
+    assert.doesNotThrow(() => parseWorkspaceSettings(settings({ local: { ...local,
+      automatic: { ...automatic, large: { ...automatic.large, enabled: false } },
+    } })));
+    assert.doesNotThrow(() => parseWorkspaceSettings(settings({ local: { ...local,
+      automatic: { ...automatic, large: { ...automatic.large, bandwidth: { ...automatic.large.bandwidth, enabled: false } } },
+    } })));
+    assert.doesNotThrow(() => parseWorkspaceSettings(settings({ local: { ...local, automatic: { small: automatic.small } },
+      subscriptionOverrides: { sample: { ...local, automatic: { large: automatic.large } } },
+    })));
+  }
+});
+
 test('site choices save without applying routing and reject stale scope and referenced deletion', async t => {
   const f = await fixture(t);
   await f.source('pool', { proxies: [node] });
