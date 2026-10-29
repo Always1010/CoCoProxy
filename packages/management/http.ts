@@ -116,9 +116,19 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
   function validate(request: Request, websocket = false): URL {
       const url = new URL(request.url);
       if (url.origin !== origin || url.username || url.password || url.hash) throw new ManagementError('ORIGIN_DENIED', 421);
-      // Only the controller allowlist interprets its encoded names and queries.
+      // Encoded path names belong to the controller. Decision history is the
+      // only management query endpoint, with an exact, bounded read-only shape.
       const controller = url.pathname.startsWith('/api/clash/');
-      if ((!controller && (url.search || url.pathname.includes('%'))) || request.headers.has('authorization')) throw new ManagementError('INVALID_REQUEST');
+      const decisionHistory = request.method === 'GET' && url.pathname === '/api/cocoproxy/automatic/bandwidth/history';
+      if ((!controller && ((url.search && !decisionHistory) || url.pathname.includes('%'))) || request.headers.has('authorization')) throw new ManagementError('INVALID_REQUEST');
+      if (decisionHistory) {
+        const query = url.searchParams;
+        if (url.search.length > 65536 || ['scope', 'revision', 'group'].some(key => !query.get(key))
+            || [...query.keys()].some(key => !['scope', 'revision', 'group', 'round'].includes(key) || query.getAll(key).length !== 1)
+            || !/^(0|[1-9]\d{0,15})$/.test(query.get('revision')!)
+            || query.get('scope')!.length > 16384 || query.get('group')!.length > 1024
+            || (query.has('round') && (!query.get('round') || query.get('round')!.length > 128))) throw new ManagementError('INVALID_REQUEST');
+      }
       const sourceDelete = request.method === 'DELETE' && /^\/api\/cocoproxy\/sources\/[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(url.pathname);
       if (!sourceDelete && !(controller ? ['GET', 'PUT', 'DELETE'] : ['GET', 'POST', 'PUT']).includes(request.method)) throw new ManagementError('METHOD_NOT_ALLOWED', 405);
       if (request.headers.get('sec-fetch-site') === 'cross-site') throw new ManagementError('ORIGIN_DENIED', 403);
