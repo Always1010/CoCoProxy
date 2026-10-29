@@ -107,13 +107,13 @@ export function createBandwidthService(options: {
   return {
     busy: () => !!current?.task.running || !!automatic,
     async verify(node: string, generation: string, settings: BandwidthSettings, signal: AbortSignal,
-      reportBytes: (bytes: number) => void): Promise<{ mbps: number; delayMs: number; bytes: number } | null> {
+      reportBytes: (bytes: number) => void): Promise<{ mbps: number; delayMs: number; bytes: number; sampleMs?: number; warmupMs?: number } | null> {
       if (stopped || options.enabled === false || current?.task.running || automatic || signal.aborted) return null;
       const abort = new AbortController();
       const job = { abort, done: Promise.resolve<unknown>(undefined) };
       automatic = job;
       const execute = async () => {
-        let bytes = 0, mbps: number | null = null, delayMs: number | null = null;
+        let bytes = 0, mbps: number | null = null, delayMs: number | null = null, sampleMs: number | undefined, warmupMs: number | undefined;
         const joined = AbortSignal.any([signal, abort.signal]);
         try {
           const target = await options.snapshot(node, generation, joined);
@@ -124,15 +124,15 @@ export function createBandwidthService(options: {
             report: value => {
               if (value.bytesUsed !== undefined) { bytes = value.bytesUsed; reportBytes(bytes); }
               if (value.latency?.idle !== undefined) delayMs = value.latency.idle;
-              if (value.download?.status === 'success') mbps = value.download.mbps;
+              if (value.download?.status === 'success') { mbps = value.download.mbps; sampleMs = value.download.sampleMs; warmupMs = value.download.warmupMs; }
             } });
           return !result.reason && !joined.aborted && await options.isCurrent(generation) && mbps !== null && delayMs !== null
-            ? { mbps, delayMs, bytes } : null;
+            ? { mbps, delayMs, bytes, sampleMs, warmupMs } : null;
         } catch { return null; }
         finally { if (automatic === job) automatic = undefined; }
       };
       job.done = execute();
-      return await job.done as { mbps: number; delayMs: number; bytes: number } | null;
+      return await job.done as { mbps: number; delayMs: number; bytes: number; sampleMs?: number; warmupMs?: number } | null;
     },
     async fetch(request: Request, principal: Principal) {
       const url = new URL(request.url);

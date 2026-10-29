@@ -41,7 +41,7 @@ type Options = {
   now?: () => number;
   suspensionReason?: () => AutoSuspensionReason;
   diagnostic?: (event: AutoDiagnostic) => void;
-  bandwidth?: Pick<Parameters<typeof createBandwidthSelector>[0], 'measure' | 'busy' | 'load' | 'save'>;
+  bandwidth?: Pick<Parameters<typeof createBandwidthSelector>[0], 'measure' | 'busy' | 'load' | 'save' | 'trace'>;
 };
 
 /** All state advances through serialized ticks; deadlines never hold a worker or a timer open. */

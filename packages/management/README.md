@@ -141,6 +141,10 @@ POST `/api/cocoproxy/automatic/bandwidth/check` 接收 `{expectedRevision, expec
 
 下载达标验证复用隔离传输的固定目标与清理边界，独立于手动双向测速，二者共享单任务名额；不依赖浏览器持续打开。预算及近期切换保存于私有 `automatic-bandwidth.json`（version 1），共同锁内原子预扣／结算，崩溃不退还未确认流量；部署兼容、停服文件摘要及恢复后可读性检查包含此文件。区间、触发、节奏、额度与可调参数详见[使用说明](../../docs/usage.md#可选的带宽辅助决策)。
 
+`bandwidth-history.ts` 作为只读决策观察器保存轮次事件与比较快照，归档为私有 `automatic-bandwidth-history.json`（version 1）。检测池在清理证据前发出原始／有效样本、筛选上界、收益与成本、短板保护、资源等待、退避和最终结果；重复等待合并，未变更证据的重复比较不逐秒保存。每轮200事件／约500 KiB、每方案组100轮／7天、全局8 MiB；裁剪明确标记，异步合并写入复用共同锁，异常与原选择路径隔离。重启读入将旧未结束轮次标记中断，损坏文件不会被静默覆盖。该归档纳入部署内容读取与保留检查，不含节点配置、探测URL、凭据或原始异常。
+
+GET `/api/cocoproxy/automatic/bandwidth/history?scope=…&revision=…&group=…` 核验当前方案、工作区版本及手动策略组后返回轮次摘要和运行状态；可选 `round` 只返回指定轮次的完整详情，归档失败以独立 `error` 标志报告。沿用管理会话；关闭辅助或自动选择不阻止读取该组已有记录。查看不唤醒检测、不追加控制器采样；状态中的 `observation` 展示最近观测、业务低速触发门槛、达标抑制与空闲条件。
+
 工作区的 `RoutingOverrides.automatic[group]` 可选保存 `{preferred, fallback, returnToPreferred}`，顶层 `autoProbes` 可选保存 `{primary, secondary, timeoutMs, slowMs}`；地址条目是 `{url, expectedStatus}`。旧格式保持兼容。自动组仅接受原手动组内的具体代理，拒绝内建出口、组引用、重复、越界和原生自动组。部署许可在保存与运行探测前分别校验，默认 Cloudflare 复核地址须显式获准。
 
 GET `/api/cocoproxy/automatic/probes` 返回缺省检测配置及许可来源；POST `/api/cocoproxy/automatic/test` 接收 `{expectedRevision, expectedActive, probes}`，经实际当前节点验证两个地址，不保存配置；GET `/api/cocoproxy/automatic/status` 返回当前方案 `scope`、`workspaceRevision`、暂停状态、检测阶段及确认后的切换记录；POST `/api/cocoproxy/automatic/history/clear` 接收 `{expectedRevision, scope, group}`，仅清空匹配方案的指定手动策略组历史，不应用配置或修改自动选点状态。接口使用现有会话、Origin 和工作区冲突检查。浏览器 controller 路由不增加 `expected` 参数；内部探测额外核对核心每 URL 的 alive 标志，避免正数延迟掩盖状态码不匹配，并与手工探测互斥证据读回窗口。控制器 429 按 Retry-After 退避。

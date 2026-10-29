@@ -4,6 +4,7 @@ import { createBandwidthSelector, parseBandwidthLedger, type BandwidthLedger } f
 import { DEFAULT_BANDWIDTH_SETTINGS, parseBandwidthSettings, type BandwidthSettings } from '../packages/management/bandwidth-policy.ts';
 import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts';
 import type { AutoSnapshot } from '../packages/management/automatic-selector.ts';
+import { parseBandwidthHistory, type BandwidthRound } from '../packages/management/bandwidth-history.ts';
 
 function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateMbps?: number; currentMbps?: number;
   preferred?: string[]; fallback?: string[]; rates?: Record<string, number[]>; delays?: Record<string, number>;
@@ -11,11 +12,13 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
   let now = 0, total = 0, loads = 0;
   const measures: string[] = [], switches: string[] = [], saved: BandwidthLedger[] = [], probes: string[] = [];
   const starts: { node: string; at: number }[] = [];
+  const traces = new Map<string, BandwidthRound>();
   const counts = new Map<string, number>();
   const snapshot: AutoSnapshot = { key: 'synthetic', scope: 'scope', generation: '1', probes: DEFAULT_AUTO_PROBES,
     groups: [{ name: 'media', current: 'a', policy: { preferred: options.preferred ?? ['a', 'b'], fallback: options.fallback ?? [], returnToPreferred: true,
       bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, ...options.settings, enabled: options.enabled ?? true, observeOnly: options.observeOnly ?? false } } }] };
   const engine = createBandwidthSelector({ now: () => now,
+    trace: round => traces.set(round.id, round),
     load: async () => { loads++; return options.ledger ?? { version: 1, charges: [], switches: [] }; },
     save: async value => { if (options.storageFails) throw new Error('synthetic ledger failure'); saved.push(structuredClone(value)); },
     probe: async (_s, node) => { probes.push(node); return { ok: true, delay: options.delays?.[node] ?? (node === 'a' ? 80 : 150) }; },
@@ -29,7 +32,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
       return signal.aborted || mbps === -1 ? null : { delayMs: 999, mbps, bytes: options.bytes ?? 1000000 };
     } });
   engine.update(snapshot);
-  return { engine, snapshot, measures, starts, switches, saved, probes, get loads() { return loads; }, get now() { return now; },
+  return { engine, snapshot, measures, starts, switches, saved, probes, traces, get loads() { return loads; }, get now() { return now; },
     async step(bytes = 0, ready = true) {
       now += 1000; total += bytes;
       engine.update(snapshot);
@@ -44,6 +47,7 @@ test('legacy opt-out performs no ledger or network work; sustained low traffic o
   const off = fixture({ enabled: false });
   for (let i = 0; i < 100; i++) await off.step(200000);
   assert.equal(off.loads, 0); assert.deepEqual(off.measures, []); await off.engine.close();
+  assert.equal(off.traces.size, 0);
   const f = fixture();
   for (let i = 0; i < 70; i++) await f.step(200000);
   assert.deepEqual(f.measures, []); // Busy application traffic is suspicion, never a reason to steal bandwidth.
@@ -52,6 +56,15 @@ test('legacy opt-out performs no ledger or network work; sustained low traffic o
   assert.deepEqual(f.switches, ['b']);
   assert.equal(f.engine.status('media')?.reason, 'bandwidth-improvement');
   assert.ok(f.saved.some(s => s.charges.some(c => c.bytes === 8 * 1048576))); // Precharged before transfer.
+  const trace = [...f.traces.values()][0];
+  assert.equal(trace.trigger, 'traffic'); assert.equal(trace.reason, 'bandwidth-improvement'); assert.ok(trace.endedAt);
+  assert.ok(trace.events[0].observation!.activeSeconds >= 60); assert.ok(trace.events[0].observation!.mbps! < 6.4);
+  const decision = trace.events.find(e => e.comparison?.worthwhile)!.comparison!;
+  assert.equal(decision.currentNode, 'a'); assert.equal(decision.candidateNode, 'b');
+  assert.equal(decision.currentSamples.length, 2); assert.equal(decision.effectiveCandidate.length, 2);
+  assert.equal(decision.currentSamples[0].delayMs, 80); // Never the transfer-service RTT (999).
+  assert.ok(trace.events.some(e => e.sample?.valid && e.sample.bytes === 1000000));
+  assert.doesNotThrow(() => parseBandwidthHistory(JSON.parse(JSON.stringify({ version: 1, since: 0, evicted: false, rounds: [trace] }))));
   await f.engine.close();
 });
 
@@ -63,10 +76,14 @@ test('uncertain candidate and observation mode keep the current selection; persi
     if (options.observeOnly) assert.equal(f.engine.status('media')?.reason, 'would-switch');
     else assert.ok(f.engine.status('media')?.pool.some(n => n.name === 'b' && n.reason === 'no-clear-gain'));
     await f.engine.close();
+    const trace = [...f.traces.values()][0];
+    assert.ok(trace.events.some(e => e.comparison));
+    assert.ok(trace.events.some(e => e.reason === (options.observeOnly ? 'would-switch' : 'no-clear-gain')));
   }
   const f = fixture({ ledger: { version: 1, charges: [{ at: 0, bytes: 64 * 1048576 }], switches: [] } });
   f.engine.request('media', 'b'); for (let i = 0; i < 20; i++) await f.step();
   assert.deepEqual(f.measures, []); assert.equal(f.engine.status('media')?.reason, 'budget-exhausted');
+  assert.ok([...f.traces.values()][0].events.some(e => e.reason === 'budget-exhausted' && e.budget));
   await f.engine.close();
   assert.throws(() => parseBandwidthLedger({ version: 1, charges: [{ at: 0, bytes: -1 }], switches: [] }));
 });
@@ -81,6 +98,8 @@ test('disabling, generation changes and latency failure cancel in-flight work an
     await f.step(0, reason !== 'failure'); await f.engine.close();
     assert.deepEqual(f.switches, []);
     assert.equal(f.saved.at(-1)?.charges[0].bytes, 1000000);
+    const samples = [...f.traces.values()][0].events.filter(e => e.sample);
+    assert.equal(samples.length, 1); assert.equal(samples[0].sample!.valid, false); assert.equal(samples[0].sample!.bytes, 1000000);
   }
 });
 
@@ -103,6 +122,7 @@ test('latency screening orders downloads, stops hopeless probes and permits rela
   const healthy = fixture({ currentMbps: 8 }); healthy.engine.requestCheck('media');
   for (let i = 0; i < 100; i++) await healthy.step();
   assert.deepEqual(healthy.measures, ['a']); assert.deepEqual(healthy.switches, []); await healthy.engine.close();
+  assert.ok([...healthy.traces.values()][0].events.some(e => e.screening && e.node === 'b'));
   const poor = fixture({ currentMbps: 0.5, candidateMbps: 2, delays: { a: 2000, b: 800 } }); poor.engine.requestCheck('media');
   for (let i = 0; i < 100; i++) await poor.step();
   assert.deepEqual(poor.switches, ['b']); await poor.engine.close();

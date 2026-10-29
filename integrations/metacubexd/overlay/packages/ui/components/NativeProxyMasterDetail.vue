@@ -4,6 +4,7 @@ import AutomaticProxyNode from '~/components/AutomaticProxyNode.vue'
 import WorkspaceGroupsMenu from '~/components/WorkspaceGroupsMenu.vue'
 import AutomaticSelectionSettings from '~/components/AutomaticSelectionSettings.vue'
 import AutomaticSelectionHistory from '~/components/AutomaticSelectionHistory.vue'
+import BandwidthDecisionProcess from '~/components/BandwidthDecisionProcess.vue'
 import GroupRuleSummary from '~/components/GroupRuleSummary.vue'
 import NodeBandwidthTest from '~/components/NodeBandwidthTest.vue'
 import { useProxyWorkbench } from '~/composables/useProxyWorkbench'
@@ -376,6 +377,7 @@ function aliveCount(group: ProxyType) {
           </button>
           <AutomaticSelectionSettings ref="groupSettings" :group-name="activeGroup.name" :selectable="canSelect" />
           <AutomaticSelectionHistory :group-name="activeGroup.name" :selectable="canSelect" />
+          <BandwidthDecisionProcess :group-name="activeGroup.name" :selectable="canSelect" />
         </div>
 
         <p v-if="automaticEnabled" class="text-xs text-primary" role="status">{{ t('coco.anSelectANodeToSwitchTo') }}</p>

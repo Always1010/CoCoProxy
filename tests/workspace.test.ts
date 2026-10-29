@@ -15,6 +15,7 @@ import type { Workspace, WorkspaceSettings } from '../packages/management/worksp
 import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts';
 import type { AutoEngineStatus } from '../packages/management/automatic-diagnostics.ts';
 import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-policy.ts';
+import { createBandwidthTrace, type BandwidthRound, type BandwidthHistoryResult } from '../packages/management/bandwidth-history.ts';
 import { setRuntimeLifecycle } from '../packages/runtime/lifecycle.ts';
 import { AutomaticHistoryStore, retainAutomaticEvents, AUTOMATIC_HISTORY_AGE, AUTOMATIC_HISTORY_FILE_LIMIT } from '../packages/management/automatic-history.ts';
 import { randomUUID } from 'node:crypto';
@@ -76,6 +77,34 @@ test('site choices save without applying routing and reject stale scope and refe
   await f.save(settings({ sourceIds: ['other'] }), initial.workspaceRevision);
   assert.deepEqual((await f.call<Sites>('/workspace/sites')).selections, {});
   await assert.rejects(f.call('/workspace/sites', 'PUT', { ...body, expectedRevision: saved.revision }), { code: 'SITE_SETTINGS_CONFLICT' });
+});
+
+test('decision history binds scope and revision, loads details on demand and stays readable when disabled', async t => {
+  let round: BandwidthRound | undefined, reads = 0;
+  const f = await fixture(t, {}, undefined, async (scope, group) => {
+    reads++; assert.equal(scope, round!.scope); assert.equal(group, 'Proxy');
+    return { since: 1000, evicted: false, error: false, rounds: [round!] };
+  });
+  await f.source('pool', { proxies: [node] });
+  const saved = await f.save(settings({ sourceIds: ['pool'] }), 0);
+  const scope = JSON.stringify(['local', ['pool']]);
+  const trace = createBandwidthTrace(() => 1000, r => { round = r; });
+  trace.begin(scope, 'Proxy', 'synthetic-generation', 'synthetic-node', 'manual', DEFAULT_BANDWIDTH_SETTINGS, [{ name: 'synthetic-node', preferred: true }]);
+  trace.end('Proxy', 'current-sufficient');
+  const query = new URLSearchParams({ group: 'Proxy', scope, revision: String(saved.revision) });
+  const path = '/automatic/bandwidth/history?' + query;
+  const summary = await f.call<{ rounds: { id: string; events?: unknown; eventCount: number }[]; detail: null }>(path);
+  assert.equal(summary.rounds.length, 1); assert.equal(summary.rounds[0].events, undefined); assert.equal(summary.detail, null);
+  assert.equal(summary.rounds[0].eventCount, 2);
+  const detail = await f.call<{ detail: BandwidthRound }>(path + '&round=' + round!.id);
+  assert.equal(detail.detail.events.at(-1)!.reason, 'current-sufficient'); assert.equal(detail.detail.settings.enabled, false);
+  assert.equal((await f.call<{ detail: null }>(path + '&round=expired')).detail, null);
+  const before = reads;
+  for (const change of [{ scope: 'another-scheme' }, { revision: '-1' }, { group: 'missing' }]) {
+    const invalid = new URLSearchParams(query); for (const [key, value] of Object.entries(change)) invalid.set(key, value!);
+    await assert.rejects(f.call('/automatic/bandwidth/history?' + invalid));
+  }
+  assert.equal(reads, before); assert.deepEqual(f.bandwidthChecks, []);
 });
 
 test('automatic engine diagnostics remain visible without active groups and snapshot suspension has an explicit reason', async t => {
@@ -483,7 +512,8 @@ async function directory(t: TestContext) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
-async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, automaticStatus?: () => unknown) {
+async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, automaticStatus?: () => unknown,
+  automaticBandwidthHistory?: (scope: string, group: string) => Promise<BandwidthHistoryResult>) {
   // Keep the pure settings/store test runnable without the optional YAML runtime.
   const [{ createManagementApplication }, { decodeSubscriptionProfile }] = await Promise.all([
     import('../packages/management/application.ts'), import('../packages/subscriptions/yaml.ts'),
@@ -508,6 +538,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, aut
     automaticProbe: async () => ({ ok: true, delay: 25 }),
     automaticBandwidthCheck: group => { bandwidthChecks.push(group); return true; },
     automaticStatus,
+    automaticBandwidthHistory,
     observeSelections: async () => {
       const generation = (await new FileTransactionStore(state).status()).active;
       if (!generation || !observedChoices) throw new Error('Synthetic core unavailable');

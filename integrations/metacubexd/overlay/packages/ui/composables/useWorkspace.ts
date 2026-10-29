@@ -12,6 +12,8 @@ export interface AutoGroupPolicy {
 }
 
 export interface BandwidthSelectionStatus {
+  observation?: { observedAt: number | null; fresh: boolean; activeSeconds: number; trafficMiB: number; mbps: number | null;
+    requiredActiveSeconds: number; requiredTrafficMiB: number; suspectMbps: number; positiveUntil: number; quiet: boolean; trigger: string | null }
   phase: string
   reason: string
   candidate: string | null

@@ -2,6 +2,7 @@
 import { IconArrowLeft, IconBrandSpeedtest, IconChevronRight, IconList, IconRefresh } from '@tabler/icons-vue'
 import type { AutomaticStatus, BandwidthSettings } from '~/composables/useWorkspace'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
+import BandwidthDecisionProcess from '~/components/BandwidthDecisionProcess.vue'
 const { t, locale } = useI18n()
 
 const props = defineProps<{ groupName: string; status?: AutomaticStatus; policyEnabled: boolean; bandwidth?: BandwidthSettings; dirty: boolean; disabled: boolean; reading: boolean; error: string }>()
@@ -103,6 +104,7 @@ async function check() {
         <p v-if="feedback" role="status" class="text-sm">{{ feedback }}</p>
       </div>
       <div class="flex flex-col gap-2 border-t border-base-content/10 pt-3">
+        <BandwidthDecisionProcess :group-name="groupName" :selectable="true" :dirty="dirty" inline />
         <button type="button" class="btn btn-ghost min-h-11 justify-between" @click="detail = 'pool'"><span class="flex items-center gap-2"><IconList :size="16" />{{ t('coco.anCandidateDetails', { value: bandwidthStatus?.pool?.length ?? 0 }) }}</span><IconChevronRight :size="16" /></button>
         <button type="button" class="btn btn-ghost min-h-11 justify-between" @click="detail = 'history'"><span class="flex items-center gap-2"><IconList :size="16" />{{ t('coco.anRecentSwitches', { value: events.length }) }}</span><IconChevronRight :size="16" /></button>
       </div>

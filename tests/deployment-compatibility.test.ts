@@ -43,6 +43,7 @@ test('content assessment reuses complete readers and refuses broken fields even 
     automaticSelections: { version: 1, scope: 'synthetic', targets: {}, events: [] },
     automaticHistory: { version: 1, scopes: [] },
     automaticBandwidth: { version: 1, charges: [], switches: [] },
+    bandwidthHistory: { version: 1, since: 0, evicted: false, rounds: [] },
     usage: { schemaVersion: 1, integrity: 'ok' },
     selection: { schemaVersion: 1, generation: candidate.id },
     subscription: { version: 1, id: 'sourceA', url: 'https://subscription.example/config', revision: 1, definitionRevision: 1,

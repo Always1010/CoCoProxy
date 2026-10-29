@@ -92,6 +92,7 @@ export function createWorkspaceApplication(options: {
   allowedProbeOrigins?: readonly string[];
   automaticStatus?: () => unknown;
   automaticBandwidthCheck?: (group: string) => boolean;
+  automaticBandwidthHistory?: (scope: string, group: string) => Promise<import('./bandwidth-history.ts').BandwidthHistoryResult>;
   automaticProbe?: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult>;
 }) {
   const preferences = new WorkspaceStore(options.stateDirectory);
@@ -458,6 +459,20 @@ export function createWorkspaceApplication(options: {
     });
     if (path === '/api/cocoproxy/automatic/status' && request.method === 'GET') {
       return exclusive(async () => automaticStatus(await load(), true));
+    }
+    if (path === '/api/cocoproxy/automatic/bandwidth/history' && request.method === 'GET') {
+      const query = new URL(request.url).searchParams;
+      return exclusive(async () => {
+        const current = await load(), group = query.get('group'), scope = scopeOf(current);
+        if (query.get('scope') !== scope || query.get('revision') !== String(current.revision)) invalid('WORKSPACE_CONFLICT');
+        if (!group || !asGroups((await build(current, true)).policy).some(g => g.name === group && g.type === 'select')) invalid('AUTO_GROUP_INVALID');
+        const archive = await options.automaticBandwidthHistory?.(scope, group) ?? { since: null, evicted: false, error: true, rounds: [] };
+        const detail = query.get('round') ? archive.rounds.find(r => r.id === query.get('round')) ?? null : null;
+        return { ...archive, rounds: archive.rounds.map(r => ({ id: r.id, startedAt: r.startedAt, updatedAt: r.updatedAt, endedAt: r.endedAt,
+          current: r.current, trigger: r.trigger, reason: r.reason, nodes: r.nodes, truncated: r.truncated,
+          bytes: r.events.reduce((n, e) => n + (e.sample?.bytes ?? 0), 0), eventCount: r.events.length })), detail,
+          status: await automaticStatus(current) };
+      });
     }
     if (path === '/api/cocoproxy/automatic/bandwidth/check' && request.method === 'POST') {
       const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'expectedActive', 'scope', 'group']);

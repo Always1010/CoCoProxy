@@ -10,7 +10,7 @@ import type { Duplex } from 'node:stream';
 import type { JsonObject } from '../config/index.ts';
 
 export type BandwidthPhase = 'preparing' | 'latency' | 'download' | 'upload' | 'finishing';
-export type BandwidthDirection = { status: 'pending' | 'running' | 'success' | 'insufficient' | 'failed' | 'cancelled'; mbps: number | null; liveMbps: number | null; bytes: number };
+export type BandwidthDirection = { status: 'pending' | 'running' | 'success' | 'insufficient' | 'failed' | 'cancelled'; mbps: number | null; liveMbps: number | null; bytes: number; sampleMs?: number; warmupMs?: number };
 export type BandwidthReport = { phase?: BandwidthPhase; bytesUsed?: number; download?: BandwidthDirection; upload?: BandwidthDirection;
   latency?: { idle: number | null; download: number | null; upload: number | null }; reason?: string };
 type TransferInput = { config: JsonObject; node: string; binaryPath: string; stateDirectory: string; signal: AbortSignal;
@@ -369,6 +369,6 @@ export async function runDownloadVerification(input: {
   const elapsed = sampleAt ? performance.now() - sampleAt : 0;
   const status = input.signal.aborted ? 'cancelled' : failed ? 'failed'
     : elapsed < input.minSampleMs || bytes - sampleBytes < 1024 ? 'insufficient' : 'success';
-  return { status, bytes, liveMbps: null,
+  return { status, bytes, liveMbps: null, sampleMs: elapsed, warmupMs: sampleAt ? sampleAt - started : performance.now() - started,
     mbps: status === 'success' ? Math.min(input.targetMbps, (bytes - sampleBytes) * 8 / elapsed / 1000) : null };
 }
