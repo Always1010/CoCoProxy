@@ -48,7 +48,7 @@ class RemoteDeploymentTests(unittest.TestCase):
         receipt.write_text(json.dumps({'status': 'complete', 'release': '/old/release', 'manifestSha256': 'a' * 64, 'files': []}))
         manifest = {'commit': 'e' * 40, 'files': [{'path': 'bin/mihomo', 'sha256': 'c' * 64}]}
         if frontend:
-            manifest['frontendUpdate'] = {'schemaVersion': 1, 'baseManifestSha256': frontend_base * 64, 'backendInputSha256': 'f' * 64}
+            manifest['frontendUpdate'] = {'schemaVersion': 2, 'baseManifestSha256': frontend_base * 64, 'backendInputSha256': 'f' * 64}
         if component:
             manifest['componentUpdate'] = {'schemaVersion': 1, 'components': component, 'baseManifestSha256': component_base * 64, 'reusedInputSha256': 'f' * 64}
         events = []

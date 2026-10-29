@@ -12,7 +12,7 @@ import { inspectServiceAccount, validServiceAccountRequest } from './service-acc
 import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory, assertPrivatePath,
   PathEvidenceError, type PathEvidenceHost } from './path-evidence.ts';
 import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, networkReceiptRemoved, NetworkObservationError } from './network-evidence.ts';
-import { validateComponentUpdate, validateFrontendUpdate } from './update-scope.mjs';
+import { validateBuildInputs, validateComponentUpdate, validateFrontendUpdate } from './update-scope.mjs';
 import { inspectUsageDatabase } from '../management/usage.ts';
 
 // This is deliberately an offline file installer. Service lifecycle, router
@@ -218,7 +218,7 @@ export function assertDeploymentStateCompatibility(files: Awaited<ReturnType<typ
 /** No links, sockets, devices, private areas or unlisted files enter a release. */
 export async function verifyRelease(payload: string, expected: string): Promise<{ files: Entry[]; coreSHA: string;
   frontendUpdate?: ReturnType<typeof validateFrontendUpdate>; backendInputSha256?: string;
-  componentUpdate?: ReturnType<typeof validateComponentUpdate>; frontendInputSha256?: string; serverInputSha256?: string }> {
+  componentUpdate?: ReturnType<typeof validateComponentUpdate>; frontendInputSha256?: string; serverInputSha256?: string; inputSchemaVersion?: number }> {
   require(HASH.test(expected), 'INSTALL_MANIFEST_HASH_REQUIRED');
   // Cross-platform artifact verification is also used by the synthetic tests.
   require(resolve(payload) === payload && !(await lstat(payload)).isSymbolicLink(), 'INSTALL_PAYLOAD_PATH_INVALID');
@@ -267,19 +267,25 @@ export async function verifyRelease(payload: string, expected: string): Promise<
   const core = value.files.find((entry: Entry) => entry.path === 'bin/mihomo');
   require(core && core.sha256 === value.components?.mihomo?.binarySha256 &&
     found.has('source/apps/runtime/launch-core.ts') && found.has('server/.output/server/index.mjs'), 'INSTALL_PAYLOAD_ENTRY_MISSING');
+  const inputSchemaVersion = value.buildInputs?.schemaVersion ?? 1;
+  require([1, 2].includes(inputSchemaVersion), 'INSTALL_BUILD_INPUTS_INVALID');
+  if (inputSchemaVersion === 2) {
+    try { validateBuildInputs(value.buildInputs); } catch { throw new InstallError('INSTALL_BUILD_INPUTS_INVALID'); }
+  }
   let frontendUpdate;
   if (value.frontendUpdate !== undefined) {
     try { frontendUpdate = validateFrontendUpdate(value.frontendUpdate); } catch { throw new InstallError('INSTALL_FRONTEND_DECLARATION_INVALID'); }
-    require(value.buildInputs?.backendInputSha256 === frontendUpdate.backendInputSha256, 'INSTALL_FRONTEND_DECLARATION_INVALID');
+    require(inputSchemaVersion === frontendUpdate.schemaVersion && value.buildInputs?.backendInputSha256 === frontendUpdate.backendInputSha256, 'INSTALL_FRONTEND_DECLARATION_INVALID');
   }
   let componentUpdate;
   if (value.componentUpdate !== undefined) {
     try { componentUpdate = validateComponentUpdate(value.componentUpdate); } catch { throw new InstallError('INSTALL_COMPONENT_DECLARATION_INVALID'); }
     const reusedSHA = componentUpdate.components === 'management' ? core.sha256
       : value.buildInputs?.[componentUpdate.components === 'core' ? 'serverInputSha256' : 'frontendInputSha256'];
-    require(!frontendUpdate && componentUpdate.reusedInputSha256 === reusedSHA, 'INSTALL_COMPONENT_DECLARATION_INVALID');
+    require(!frontendUpdate && (componentUpdate.components === 'management' || componentUpdate.schemaVersion === inputSchemaVersion)
+      && componentUpdate.reusedInputSha256 === reusedSHA, 'INSTALL_COMPONENT_DECLARATION_INVALID');
   }
-  return { files: value.files as Entry[], coreSHA: core.sha256 as string, frontendUpdate, componentUpdate,
+  return { files: value.files as Entry[], coreSHA: core.sha256 as string, frontendUpdate, componentUpdate, inputSchemaVersion,
     backendInputSha256: value.buildInputs?.backendInputSha256 as string | undefined,
     frontendInputSha256: value.buildInputs?.frontendInputSha256 as string | undefined,
     serverInputSha256: value.buildInputs?.serverInputSha256 as string | undefined };
@@ -290,7 +296,8 @@ export function assertComponentReuse(previous: Awaited<ReturnType<typeof verifyR
   const update = next.componentUpdate;
   const core = update?.components === 'core';
   const management = update?.components === 'management';
-  require(update && update.baseManifestSha256 === previousSHA
+  require(update && (management || update.schemaVersion === (previous.inputSchemaVersion ?? 1)
+    && update.schemaVersion === (next.inputSchemaVersion ?? 1)) && update.baseManifestSha256 === previousSHA
     && update.reusedInputSha256 === (management ? previous.coreSHA : core ? previous.serverInputSha256 : previous.frontendInputSha256),
     'INSTALL_COMPONENT_BASE_CHANGED');
   const prefix = core ? 'server/.output/' : 'server/.output/public/';
@@ -511,6 +518,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
     if (release.componentUpdate && options.operation === 'upgrade') assertComponentReuse(oldRelease, release, previous.manifestSha256);
     if (frontend && options.operation === 'upgrade') {
       require(previous.manifestSha256 === release.frontendUpdate!.baseManifestSha256 &&
+        oldRelease.inputSchemaVersion === release.frontendUpdate!.schemaVersion &&
         oldRelease.backendInputSha256 === release.frontendUpdate!.backendInputSha256 && oldRelease.coreSHA === release.coreSHA,
       'INSTALL_FRONTEND_BASE_CHANGED');
       require(posix.dirname(input.runtime.sourceDirectory) === posix.join(posix.dirname(target), previous.runtimeManifestSha256 ?? previous.manifestSha256),

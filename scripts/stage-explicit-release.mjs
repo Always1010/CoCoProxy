@@ -9,7 +9,7 @@ import { isDeepStrictEqual, promisify } from 'node:util';
 import { validateReleaseMetadata } from './release-metadata.mjs';
 import { assertReleaseSourcePaths, releaseIntegrationFiles, releaseLauncher, releaseReadme, selectedReleaseSource, verifyDocumentationLinks } from './release-layout.mjs';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/state-compatibility.mjs';
-import { backendInputSha256, reusedInputSha256, validateComponentUpdate, validateFrontendUpdate } from '../packages/deployment/update-scope.mjs';
+import { createBuildInputs, INPUT_SCHEMA_VERSION, validateComponentUpdate, validateFrontendUpdate } from '../packages/deployment/update-scope.mjs';
 
 const execute = promisify(execFile);
 const FILE_LIMIT = 256 * 1024 * 1024;
@@ -124,11 +124,14 @@ export async function stageExplicitRelease(options) {
     if (tree.length > COUNT_LIMIT) fail('PAYLOAD_LIMIT');
     try { assertReleaseSourcePaths(tree.map(entry => entry.path)); } catch (error) { fail(error.code); }
     const entries = new Map(tree.map(entry => [entry.path, entry]));
-    const backendSHA = backendInputSha256(tree);
-    const frontendSHA = reusedInputSha256(tree, 'backend');
+    const buildInputs = await createBuildInputs(tree, entry => git(sourceDir, ['cat-file', 'blob', entry.oid], true));
+    const backendSHA = buildInputs.backendInputSha256;
+    const frontendSHA = buildInputs.frontendInputSha256;
     const frontendUpdate = options.frontendUpdate && validateFrontendUpdate(options.frontendUpdate);
     const componentUpdate = options.componentUpdate && validateComponentUpdate(options.componentUpdate);
     if (frontendUpdate && componentUpdate) fail('BUILD_COMPONENT_BASE_INVALID');
+    if (frontendUpdate && frontendUpdate.schemaVersion !== INPUT_SCHEMA_VERSION
+      || componentUpdate && componentUpdate.components !== 'management' && componentUpdate.schemaVersion !== INPUT_SCHEMA_VERSION) fail('BUILD_COMPONENT_BASE_UPGRADE_REQUIRED');
     if (frontendUpdate && frontendUpdate.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
     const blob = async path => {
       const entry = entries.get(path);
@@ -148,7 +151,7 @@ export async function stageExplicitRelease(options) {
     for (const path of ['apps/setup/main.ts', 'scripts/cocoproxy-setup.sh']) if (!entries.has(path)) fail('SOURCE_REQUIRED_FILE_MISSING');
     const componentsBytes = await blob('integrations/metacubexd/components.json');
     const catalog = json(componentsBytes);
-    const serverSHA = reusedInputSha256(tree, 'core', catalog.management);
+    const serverSHA = buildInputs.serverInputSha256;
     try { validateReleaseMetadata(catalog, review, json(await blob('integrations/metacubexd/source-tree.json'))); }
     catch (error) { if (error?.code) fail(error.code); throw error; }
     const coreReview = catalog.mihomo;
@@ -287,7 +290,7 @@ export async function stageExplicitRelease(options) {
     catch (error) { if (error?.code) fail(error.code); throw error; }
     const manifest = {
       schemaVersion: 1, scope: 'local-explicit-proxy-payload', commit,
-      buildInputs: { backendInputSha256: backendSHA, frontendInputSha256: frontendSHA, serverInputSha256: serverSHA },
+      buildInputs,
       ...(frontendUpdate ? { frontendUpdate } : {}),
       ...(componentUpdate ? { componentUpdate } : {}),
       compatibility: DEPLOYMENT_STATE_COMPATIBILITY,
