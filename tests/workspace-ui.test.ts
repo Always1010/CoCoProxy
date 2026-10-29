@@ -25,8 +25,8 @@ test('bandwidth validation remains available across pages and checks shared budg
   const definitions = { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS };
   const invalid = () => bandwidthIssue(current, definitions, automatic, 'Stream', true, useI18n().t)?.message ?? '';
   assert.equal(invalid(), '');
-  for (const bad of [{ searchMiB: 16 }, { reserveHourMiB: 64 }, { freshSeconds: 60, roundIntervalSeconds: 60 },
-    { hourMiB: 32 }, { dayMiB: 64, reserveDayMiB: 40 }]) {
+  for (const bad of [{ searchMiB: 16 }, { reserveHourMiB: DEFAULT_BANDWIDTH_SETTINGS.hourMiB }, { freshSeconds: 60, roundIntervalSeconds: 60 },
+    { hourMiB: 32 }, { hourMiB: 64, dayMiB: 64, reserveDayMiB: 40 }]) {
     current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...bad };
     assert.notEqual(invalid(), '');
     assert.throws(() => parseBandwidthSettings(current));
@@ -40,7 +40,7 @@ test('bandwidth validation remains available across pages and checks shared budg
     bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...limits } });
   automatic.Stream = policy({ reserveHourMiB: 32 });
   for (const [own, other] of [[{ hourMiB: 48 }, { reserveHourMiB: 32 }],
-    [{ dayMiB: 64 }, { reserveDayMiB: 64 }], [{ hourMiB: 48 }, { hourMiB: 80, confirmRounds: 3, searchMiB: 48 }]]) {
+    [{ hourMiB: 64, dayMiB: 64 }, { reserveDayMiB: 64 }], [{ hourMiB: 48 }, { hourMiB: 80, confirmRounds: 3, searchMiB: 48 }]]) {
     current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...own };
     automatic.Other = policy(other);
     assert.match(invalid(), /多个启用组/);
