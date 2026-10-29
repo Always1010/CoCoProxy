@@ -46,6 +46,7 @@ const phases = computed<Record<string, string>>(() => ({
   'failure-confirmation': t('coco.anRecheckingTheCurrentNode'), 'return-confirmation': t('coco.anConfirmingPreferredNodeRecovery'), backup: t('coco.anUsingFallbackMonitoringTheCurrentNode'), monitoring: t('coco.anMonitoringTheCurrentNode'),
 }))
 const reasons = computed<Record<string, string>>(() => ({
+  'configuration-change': t('coco.anConfigurationChangedTheSelectedExit'),
   'bandwidth-improvement': t('coco.anSwitchedBecauseTheConservativeThroughputBenefit'),
   'preferred-restored': t('coco.anThePreferredNodeRecoveredAndPassed'), 'faster-candidate': t('coco.anTheCurrentNodeRemainedSlowAnd'),
   'failure-recovery': t('coco.anThePreviousNodeFailedChecksAnd'), 'current-slow': t('coco.anTheCurrentNodeRemainsSlow'),
@@ -58,7 +59,7 @@ const phase = computed(() => !enabled.value ? t('coco.anAutomaticSelectionIsDisa
       : groupStatus.value ? phases.value[groupStatus.value.phase] ?? t('coco.anWaitingForScheduling') : t('coco.anWaitingForSchedulingOrAStatus'))
 const timeLabel = (at: number) => new Date(at).toLocaleString(locale.value)
 const poolLabel = (pool?: string) => pool === 'preferred' ? t('coco.anPreferred') : pool === 'fallback' ? t('coco.anFallback') : ''
-const eventLabel = (reason: string) => reason === 'bandwidth-improvement' ? t('coco.anThroughputSwitch') : reason === 'preferred-restored' ? t('coco.anReturnToPreferred') : reason === 'faster-candidate' ? t('coco.anPerformanceSwitch') : reason === 'failure-recovery' ? t('coco.anFailover') : t('coco.anAutomaticSwitch')
+const eventLabel = (reason: string) => reason === 'configuration-change' ? t('coco.anConfigurationSwitch') : reason === 'bandwidth-improvement' ? t('coco.anThroughputSwitch') : reason === 'preferred-restored' ? t('coco.anReturnToPreferred') : reason === 'faster-candidate' ? t('coco.anPerformanceSwitch') : reason === 'failure-recovery' ? t('coco.anFailover') : t('coco.anAutomaticSwitch')
 
 function showLatest(scroll = true) {
   displayed.value = [...events.value]

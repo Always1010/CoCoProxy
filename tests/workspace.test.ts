@@ -231,6 +231,87 @@ test('decision setting edits retain the committed automatic exit and invalidate 
   assert.equal((await f.view()).pending, true);
 });
 
+test('configuration switches recover multiple groups once after partial history writes and respect clear', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node, { ...node, name: 'spare' }] });
+  const policy = { preferred: ['synthetic-node', 'spare'], fallback: [], returnToPreferred: true };
+  const initial = settings({ sourceIds: ['pool'], local: { sharedGroups: ['Work'],
+    selections: { Proxy: 'synthetic-node', Work: 'synthetic-node' }, rules: [], automatic: { Proxy: policy, Work: policy } } });
+  const saved = await f.save(initial, 0);
+  await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node', Work: 'synthetic-node' });
+  f.followSelections();
+  for (const group of ['Proxy', 'Work']) {
+    assert.equal(await f.action.automaticSwitch((await f.action.automaticSnapshot(true))!, group, 'spare', 'failure-recovery'), true);
+  }
+  const before = await f.view(), changed = withoutRevision(structuredClone(before.workspace));
+  for (const group of ['Proxy', 'Work']) changed.local.automatic![group].preferred = ['synthetic-node'];
+  const edited = await f.save(changed, saved.revision);
+  const append = AutomaticHistoryStore.prototype.append;
+  let writes = 0;
+  AutomaticHistoryStore.prototype.append = async function(scope, event) {
+    if (event.reason === 'configuration-change' && ++writes === 2) throw new Error('Synthetic history interruption');
+    return append.call(this, scope, event);
+  };
+  try { await f.apply(edited, before.active); }
+  finally { AutomaticHistoryStore.prototype.append = append; }
+  const pending = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
+  assert.equal(pending.pendingConfiguration.events.length, 2);
+  const scope = pending.scope;
+  // Clearing a group must suppress its pending record even after process loss.
+  await f.call('/automatic/history/clear', 'POST', { expectedRevision: edited.revision, scope, group: 'Work' });
+  f.restart();
+  await f.action.automaticSnapshot(true);
+  await f.action.automaticSnapshot(true);
+  const status = await f.call<{ events: { id: string; group: string; from: string; to: string; reason: string }[] }>('/automatic/status');
+  const changes = status.events.filter(e => e.reason === 'configuration-change');
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].group, 'Proxy');
+  assert.equal(changes[0].from, 'spare');
+  assert.equal(changes[0].to, 'synthetic-node');
+  assert.equal(status.events.filter(e => e.group === 'Work').length, 0);
+  assert.equal(new Set(status.events.map(e => e.id)).size, status.events.length);
+  const recovered = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
+  assert.equal(recovered.pendingConfiguration, undefined);
+  assert.equal(recovered.targets.Proxy.target, 'synthetic-node');
+});
+
+test('configuration changes record only committed and controller-confirmed exits', async t => {
+  for (const failure of ['activation', 'observation'] as const) await t.test(failure, async t => {
+    const f = await fixture(t);
+    await f.source('pool', { proxies: [node, { ...node, name: 'spare' }] });
+    const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: {
+      Proxy: { preferred: ['synthetic-node', 'spare'], fallback: [], returnToPreferred: true },
+    } } });
+    const saved = await f.save(initial, 0);
+    await f.apply(saved, null);
+    f.observe({ Proxy: 'synthetic-node' });
+    assert.equal(await f.action.automaticSwitch((await f.action.automaticSnapshot())!, 'Proxy', 'spare', 'failure-recovery'), true);
+    f.observe({ Proxy: 'spare' });
+    const before = await f.view(), changed = withoutRevision(structuredClone(before.workspace));
+    await f.source('replacement', { proxies: [node, { ...node, name: 'spare' }] });
+    changed.sourceIds = ['replacement'];
+    changed.local.automatic!.Proxy.preferred = ['synthetic-node'];
+    const edited = await f.save(changed, saved.revision);
+    if (failure === 'activation') {
+      f.fail();
+      await assert.rejects(f.apply(edited, before.active), { code: 'ACTIVATION_FAILED' });
+    } else await f.apply(edited, before.active);
+    f.restart();
+    await f.action.automaticSnapshot(true);
+    if (failure === 'activation') {
+      assert.equal(JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8')).scope, JSON.stringify(['local', ['pool']]));
+    }
+    const events = () => f.call<{ events: { reason: string }[] }>('/automatic/status');
+    assert.equal((await events()).events.filter(e => e.reason === 'configuration-change').length, 0);
+    if (failure === 'observation') {
+      f.observe({ Proxy: 'synthetic-node' });
+      await f.action.automaticSnapshot(true);
+      assert.equal((await events()).events.filter(e => e.reason === 'configuration-change').length, 1);
+    }
+  });
+});
+
 test('automatic switching rejects routing drafts and changed decision settings captured after its fresh snapshot', async t => {
   for (const change of ['rules', 'automatic'] as const) await t.test(change, async t => {
     const f = await fixture(t);
@@ -330,7 +411,9 @@ test('automatic activation failure rolls back only its private binding and manua
   manual.local.selections.Proxy = 'DIRECT';
   const updated = await f.save(withoutRevision(manual), manual.revision);
   assert.equal(updated.local.selections.Proxy, 'DIRECT');
+  await writeFile(join(f.state, 'automatic-selections.json'), '{', { mode: 0o600 });
   assert.equal(await f.action.automaticSnapshot(), null);
+  await assert.rejects(f.apply(updated, after.active), { code: 'ACTIVATION_FAILED' });
 });
 
 test('automatic history retains each group independently and expires old records without unstable equal-time ordering', () => {
@@ -599,10 +682,19 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, aut
   const timings: OperationTiming[] = [];
   let failActivation = false;
   let observedChoices: Record<string, string> | null = null;
+  let followSelections = false;
   const runtime = {
     validate: async () => { events.push('validate'); },
     activate: async () => { events.push('activate'); if (failActivation) throw new Error('EXAMPLE_ONLY_RUNTIME_DIAGNOSTIC'); },
-    confirm: async () => { events.push('confirm'); return true; },
+    confirm: async (generation: string) => {
+      events.push('confirm');
+      if (followSelections) {
+        const config = JSON.parse(await readFile(await new FileTransactionStore(state).readCandidate(generation), 'utf8')) as JsonObject;
+        observedChoices = Object.fromEntries((config['proxy-groups'] as JsonObject[]).filter(g => g.type === 'select')
+          .map(g => [String(g.name), String((g.proxies as string[])[0])]));
+      }
+      return true;
+    },
     restore: async () => { events.push('restore'); },
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }),
   };
@@ -642,6 +734,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, aut
   const candidate = async (id: string) => JSON.parse(await readFile(await new FileTransactionStore(state).readCandidate(id), 'utf8')) as JsonObject;
   return { state, events, bandwidthChecks, timings, call, view, save, apply, source, candidate, payloads, get action() { return action; },
     restart: () => { action = createAction(); }, fail: () => { failActivation = true; },
+    followSelections: () => { followSelections = true; },
     observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
 

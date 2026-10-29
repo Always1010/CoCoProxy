@@ -157,7 +157,7 @@ test('group status checks only saved active policies and binds requests to the d
 test('automatic history keeps reading position, preserves failed refreshes and clears only the displayed group', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionHistory.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { open, close, readStatus, clearHistory, onScroll, showLatest, scroller, displayed, newCount, error, confirmClear, available, loading, refreshing, status };';
+    '\nexport { open, close, readStatus, clearHistory, onScroll, showLatest, scroller, displayed, newCount, error, confirmClear, available, loading, refreshing, status, eventLabel, reasons };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const scope = JSON.stringify(['local', ['sample']]);
   const event = (id: string, group = 'Stream') => ({ id, group, at: 1000, from: 'node-a', to: 'node-b', reason: 'failure-recovery' });
@@ -188,6 +188,8 @@ test('automatic history keeps reading position, preserves failed refreshes and c
   });
   exports.open();
   await new Promise(resolve => setImmediate(resolve));
+  assert.equal(exports.eventLabel('configuration-change'), '配置变更');
+  assert.equal(exports.reasons.value['configuration-change'], '应用配置改变了该自动选择组的出口。');
   assert.deepEqual(Array.from(exports.displayed.value, (e: any) => e.id), ['one']);
   let completeRead!: (value: typeof result) => void;
   deferred = new Promise(resolve => { completeRead = resolve; });
