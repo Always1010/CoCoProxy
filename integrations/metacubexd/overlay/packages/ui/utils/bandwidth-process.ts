@@ -31,6 +31,39 @@ export type ProcessResponse = {
   since: number | null; evicted: boolean; error: boolean; rounds: ProcessRoundSummary[]; detail: ProcessRound | null; status: AutomaticStatus
 }
 
+export type ProcessTraceRow = { key: number; event: ProcessEvent; context?: ProcessEvent; startedAt: number; endedAt: number }
+
+/** Only join an action start to its immediately following result; never hide intervening decisions. */
+export function processTraceRows(events: ProcessEvent[]): ProcessTraceRow[] {
+  const rows: ProcessTraceRow[] = []
+  for (let index = 0; index < events.length; index++) {
+    const key = index, event = events[index]!, next = events[index + 1]
+    const result = event.kind === 'state' && next && event.node === next.node
+      && ((event.reason === 'screening-latency' && next.kind === 'probe') || (event.reason === 'collecting' && next.kind === 'sample'))
+    if (result) {
+      rows.push({ key, event: next, context: event, startedAt: event.at, endedAt: Math.max(next.at, next.until) })
+      index++
+    } else rows.push({ key, event, startedAt: event.sample?.startedAt ?? event.at, endedAt: Math.max(event.at, event.until) })
+  }
+  return rows
+}
+
+export function processRelativeTime(at: number, start: number) {
+  const seconds = Math.max(0, Math.floor((at - start) / 1000))
+  return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
+}
+
+export function processAction(event: ProcessEvent) {
+  if (event.kind !== 'state') return ['trigger', 'probe', 'sample', 'comparison', 'excluded', 'end'].includes(event.kind) ? event.kind : 'state'
+  if (event.reason === 'screening-latency') return 'probe'
+  if (event.reason === 'collecting') return 'sample'
+  if (['bandwidth-improvement', 'preferred-restored', 'failure-recovery', 'faster-candidate'].includes(event.reason)) return 'switch'
+  if (['configuration-changed', 'probe-target-changed', 'evidence-expired'].includes(event.reason)) return 'invalidate'
+  if (event.reason === 'current-sufficient') return 'verify'
+  if (event.reason === 'would-switch') return 'observe'
+  return 'wait'
+}
+
 export function processSampleLoss(sample: ProcessSample, settings: BandwidthSettings) {
   const delay = sample.delayMs / 1000
   const shortfall = Number(settings.shortageSeconds) * Math.max(0, Number(settings.targetMbps) / sample.mbps - 1)

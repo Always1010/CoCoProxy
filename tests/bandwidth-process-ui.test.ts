@@ -18,7 +18,7 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText).runInNewContext({ exports: helpers });
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { open, close, refresh, choose, check, data, detail, error, delayed, selectedId, canCheck, loading, scroller };';
+    '\nexport { open, close, refresh, choose, data, detail, rows, error, delayed, selectedId, loading, scroller };';
   const scope = JSON.stringify(['local', ['synthetic']]);
   const status = { scope, workspaceRevision: 7, groups: [{ name: 'Stream', current: 'node-a', bandwidth: { reason: 'waiting-traffic' } }] };
   let result: any = { since: 1000, error: false, evicted: false, rounds: [{ id: 'one' }], detail: null, status };
@@ -27,15 +27,14 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
   class Clock extends Date { static now() { return now; } }
   const calls: { path: string; options: any }[] = [];
   const view = { value: { workspace: { mode: 'local', sourceIds: ['synthetic'], revision: 7 }, active: 'generation', pending: false } };
-  const overrides = { value: { automatic: { Stream: { enabled: true, bandwidth: { enabled: true } } } } };
   let scheduled!: () => void;
   const exports: Record<string, any> = {};
   new Script(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText).runInNewContext({
-    ...uiTestContext, exports, URLSearchParams, AbortController, processReason: helpers.processReason, processSampleLoss: helpers.processSampleLoss,
+    ...uiTestContext, exports, URLSearchParams, AbortController, processReason: helpers.processReason, processTraceRows: helpers.processTraceRows,
     ref: (value: unknown) => ({ value }), defineProps: () => ({ groupName: 'Stream', selectable: true }), withDefaults: (p: unknown) => p,
     defineExpose() {}, watch() {}, onMounted() {}, onUnmounted() {}, setTimeout: (callback: () => void) => { scheduled = callback; return 1; }, clearTimeout() {},
     document: { hidden: false }, Date: Clock, CoCoProxyError, cocoproxyErrorMessage: () => '读取失败',
-    useWorkspace: () => ({ view, overrides, api: { request: async (path: string, options: any) => {
+    useWorkspace: () => ({ view, api: { request: async (path: string, options: any) => {
       calls.push({ path, options });
       if (fail) throw failure;
       return reply ? reply() : structuredClone(result);
@@ -52,7 +51,6 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
   scheduled();
   const finishPoll = complete;
   assert.equal(exports.loading.value, false);
-  assert.equal(exports.canCheck.value, true);
   const callCount = calls.length;
   await exports.refresh();
   assert.equal(calls.length, callCount); // Do not overlap background reads.
@@ -66,7 +64,6 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
   const manual = exports.refresh(false);
   assert.equal(backgroundSignal.aborted, true);
   assert.equal(exports.loading.value, true);
-  assert.equal(exports.canCheck.value, false);
   finishBackground({ ...result, rounds: [{ id: 'stale' }] }); await background;
   assert.equal(exports.loading.value, true); // The older read cannot finish the manual refresh.
   complete(structuredClone(result)); await manual;
@@ -93,24 +90,43 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
   exports.open(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(exports.data.value, undefined); assert.ok(exports.error.value);
   result = { ...result, status }; await exports.refresh();
-  reply = () => new Promise(resolve => { complete = resolve; });
-  const beforeCheck = exports.refresh();
-  const beforeCheckSignal = calls.at(-1)!.options.signal;
-  const finishBeforeCheck = complete;
-  reply = undefined;
-  result = { ...result, rounds: [{ id: 'after-check' }] };
-  await exports.check();
-  assert.equal(beforeCheckSignal.aborted, true);
-  finishBeforeCheck({ ...result, rounds: [{ id: 'before-check' }] }); await beforeCheck;
-  assert.equal(exports.data.value.rounds[0].id, 'after-check');
-  const writes = calls.filter(c => c.options.method === 'POST');
-  assert.equal(writes.length, 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(writes[0].options.body)), { expectedRevision: 7, expectedActive: 'generation', scope, group: 'Stream' });
-  overrides.value.automatic.Stream.enabled = false;
-  assert.equal(exports.canCheck.value, false);
+  exports.scroller.value = { scrollTop: 240, scrollTo() {} };
+  exports.choose('one'); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(new URL('https://management.example' + calls.at(-1)!.path).searchParams.get('round'), 'one');
+  assert.ok(calls.every(call => call.options.method === undefined));
   exports.close();
   fail = true; failure = new CoCoProxyError('STORE_LOCKED'); exports.open();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(exports.data.value, undefined); assert.equal(exports.error.value, '读取失败');
   exports.close();
+});
+
+test('trace rows keep recorded order and inputs when combining only adjacent starts and results', async () => {
+  const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/utils/bandwidth-process.ts', import.meta.url), 'utf8');
+  const helpers: Record<string, any> = {};
+  new Script(ts.transpileModule(source.replace(/^import .*$/gm, ''), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText).runInNewContext({ exports: helpers });
+  const events = [
+    { at: 0, until: 0, kind: 'state', reason: 'screening-latency', node: 'a', budget: { hourBytes: 12 } },
+    { at: 100, until: 100, kind: 'probe', reason: 'probe-ready', node: 'a', probe: { ok: true, delayMs: 100 } },
+    { at: 1000, until: 1000, kind: 'state', reason: 'collecting', node: 'a' },
+    { at: 2000, until: 2000, kind: 'sample', reason: 'sample-unknown', node: 'a', sample: { startedAt: 1000, valid: false, mbps: null } },
+    { at: 3000, until: 3000, kind: 'state', reason: 'collecting', node: 'b' },
+    { at: 4000, until: 4000, kind: 'end', reason: 'snapshot-failed' },
+    { at: 5000, until: 5000, kind: 'sample', reason: 'sample-unknown', node: 'b', sample: { startedAt: 3000, valid: false, mbps: null } },
+  ];
+  const before = JSON.stringify(events), rows = helpers.processTraceRows(events);
+  assert.equal(rows.length, 5);
+  assert.deepEqual(Array.from(rows, (r: any) => r.key), [0, 2, 4, 5, 6]);
+  assert.equal(rows[0].event, events[1]); assert.equal(rows[0].context, events[0]);
+  assert.equal(rows[0].context.budget.hourBytes, 12);
+  assert.equal(rows[0].startedAt, 0); assert.equal(rows[0].endedAt, 100);
+  assert.equal(rows[1].event.sample.valid, false); assert.equal(rows[1].event.sample.mbps, null);
+  assert.equal(rows[3].event.reason, 'snapshot-failed');
+  assert.equal(JSON.stringify(events), before);
+  assert.equal(helpers.processAction(events[5]), 'end');
+  assert.equal(helpers.processRelativeTime(92000, 0), '01:32');
+  const differentNode = [events[0], { ...events[1], node: 'other' }];
+  assert.equal(helpers.processTraceRows(differentNode).length, 2);
 });
