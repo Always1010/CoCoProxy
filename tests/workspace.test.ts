@@ -150,6 +150,84 @@ test('automatic selections preserve manual intent, use confirmed transactions, p
   assert.equal((await f.view()).pending, true);
 });
 
+test('automatic switching rejects routing drafts and changed decision settings captured after its fresh snapshot', async t => {
+  for (const change of ['rules', 'automatic'] as const) await t.test(change, async t => {
+    const f = await fixture(t);
+    await f.source('pool', { proxies: [node, { ...node, name: 'spare' }] });
+    const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: {
+      Proxy: { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true },
+    } } });
+    const saved = await f.save(initial, 0), active = await f.apply(saved, null);
+    f.observe({ Proxy: 'synthetic-node' });
+    const snapshot = await f.action.automaticSnapshot(); assert.ok(snapshot);
+    const edited = structuredClone(initial);
+    if (change === 'rules') edited.local.rules.push('DOMAIN,pending.example,DIRECT');
+    else edited.local.automatic!.Proxy.returnToPreferred = false;
+    const events = [...f.events];
+    const read = WorkspaceStore.prototype.read;
+    let reads = 0;
+    WorkspaceStore.prototype.read = async function() {
+      // The first read belongs to automaticSnapshot(true); the second captures
+      // the workspace that automaticSwitch will use for its proposed binding.
+      if (this.root === f.state && ++reads === 2) await new WorkspaceStore(f.state).save(edited, saved.revision);
+      return read.call(this);
+    };
+    try {
+      await assert.rejects(f.action.automaticSwitch(snapshot, 'Proxy', 'spare', 'failure-recovery'), { code: 'AUTO_STATE_CONFLICT' });
+    } finally { WorkspaceStore.prototype.read = read; }
+    const after = await f.view();
+    assert.equal(after.workspace.revision, saved.revision + 1);
+    assert.deepEqual(JSON.parse(JSON.stringify(after.workspace.local)), edited.local);
+    assert.equal(after.active, active.active);
+    assert.equal(after.pending, change === 'rules');
+    assert.deepEqual(f.events, events);
+    await assert.rejects(readFile(join(f.state, 'automatic-selections.json'), 'utf8'), { code: 'ENOENT' });
+    assert.deepEqual((await f.call<{ events: unknown[] }>('/automatic/status')).events, []);
+  });
+});
+
+test('automatic apply rejects source changes recaptured after its binding write and rolls the binding back', async t => {
+  const f = await fixture(t);
+  const metadata = await f.source('pool', { proxies: [node, { ...node, name: 'spare' }] });
+  const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: {
+    Proxy: { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true },
+  } } });
+  const saved = await f.save(initial, 0), active = await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node' });
+  const snapshot = await f.action.automaticSnapshot(); assert.ok(snapshot);
+  const events = [...f.events];
+  const exclusive = FileTransactionStore.prototype.exclusive;
+  let injected = false;
+  FileTransactionStore.prototype.exclusive = async function<T>(operation: (ownerToken: string) => Promise<T>): Promise<T> {
+    const result = await exclusive.call(this, operation) as T;
+    // Refresh only after the proposed binding's lock is released and before
+    // automatic apply rebuilds its candidate from the current source snapshot.
+    if (this.root === f.state && !injected) {
+      injected = true;
+      const proposed = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
+      assert.equal(proposed.targets.Proxy.target, 'spare');
+      f.payloads.set('https://subscription.example/pool?token=EXAMPLE_ONLY_TOKEN', JSON.stringify({
+        proxies: [{ ...node, server: '192.0.2.20' }, { ...node, name: 'spare' }],
+      }));
+      await f.call('/sources/pool/refresh', 'POST', { expectedRevision: metadata.revision });
+    }
+    return result;
+  };
+  try {
+    assert.equal(await f.action.automaticSwitch(snapshot, 'Proxy', 'spare', 'failure-recovery'), false);
+  } finally { FileTransactionStore.prototype.exclusive = exclusive; }
+  assert.equal(injected, true);
+  const after = await f.view();
+  assert.equal(after.active, active.active);
+  assert.equal(after.pending, true);
+  assert.equal(after.workspace.revision, saved.revision);
+  assert.deepEqual(f.events, events);
+  const bindings = JSON.parse(await readFile(join(f.state, 'automatic-selections.json'), 'utf8'));
+  assert.deepEqual(bindings.targets, {});
+  assert.equal(bindings.pendingEvent, undefined);
+  assert.deepEqual((await f.call<{ events: unknown[] }>('/automatic/status')).events, []);
+});
+
 test('automatic activation failure rolls back only its private binding and manual takeover remains available', async t => {
   const f = await fixture(t);
   await f.source('pool', { proxies: [node, { ...node, name: 'spare' }] });
