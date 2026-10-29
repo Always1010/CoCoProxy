@@ -87,11 +87,36 @@ test('early host guard uses fixed root network settings without changing network
   const original = renderAutomaticGatewayHostPlan(input);
   const withHost = renderAutomaticGatewayHostPlan({ ...input, hostStateDirectory: '/var/lib/cocoproxy', hostServiceUid: 12345 });
   assert.deepEqual(withHost.settings, original.settings);
+  for (const unit of [original.unit, original.earlyUnit]) assert.match(unit, /^CapabilityBoundingSet=CAP_NET_ADMIN$/m);
+  for (const unit of [withHost.unit, withHost.earlyUnit]) {
+    assert.match(unit, /^CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_READ_SEARCH$/m);
+    assert.match(unit, /^ReadWritePaths="\/var\/lib\/cocoproxy-gateway-network"$/m);
+  }
   assert.match(withHost.earlyUnit, /ExecStart="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/host_proxy.py" "--early-network" "\/etc\/cocoproxy\/gateway-network.json" "--state" "\/var\/lib\/cocoproxy" "--uid" "12345"/);
   assert.match(withHost.unit, /ExecStart="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/host_proxy.py"/);
   assert.match(withHost.unit, /ExecReload="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/host_proxy.py"/);
   assert.throws(() => renderAutomaticGatewayHostPlan({ ...input, hostStateDirectory: '/var/lib/cocoproxy' }));
   assert.throws(() => renderAutomaticGatewayHostPlan({ ...input, hostStateDirectory: input.stateDirectory, hostServiceUid: 12345 }));
+});
+
+test('host guard capabilities read private service state without allowing writes', {
+  skip: process.platform !== 'linux' || process.env.COCOPROXY_TEST_HOST_PERMISSIONS !== '1', timeout: 15_000,
+}, async () => {
+  const original = renderAutomaticGatewayHostPlan(input);
+  const withHost = renderAutomaticGatewayHostPlan({ ...input, hostStateDirectory: '/var/lib/cocoproxy', hostServiceUid: 12345 });
+  const child = spawn('sudo', ['-n', 'python3', '-I',
+    fileURLToPath(new URL('./fixtures/gateway-host-permissions.py', import.meta.url)),
+    fileURLToPath(new URL('../apps/gateway/host_proxy.py', import.meta.url))], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let output = '', diagnostics = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { diagnostics += chunk; });
+  child.stdin.end(JSON.stringify([original.earlyUnit, withHost.earlyUnit, withHost.unit]));
+  const timer = setTimeout(() => child.kill(), 12_000);
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+    assert.equal(code, 0, `host guard permission fixture failed: ${output} ${diagnostics}`);
+    assert.deepEqual(JSON.parse(output), { checked: 3 });
+  } finally { clearTimeout(timer); }
 });
 
 
