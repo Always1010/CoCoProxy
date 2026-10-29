@@ -189,19 +189,47 @@ test('soft relapse after a preferred return respects minimum residence and escal
 
 test('outage suspends normal monitoring, rotates at most three candidates, and backs off from completion', async () => {
   const h = harness({ preferred: ['primary', 'a', 'b', 'c', 'd', 'e', 'f'], fallback: [], probe: () => bad() });
-  await h.at(0); await h.at(2000); await h.at(2001); await h.at(2002); await h.at(2003);
+  await h.at(0); await h.at(2000);
+  for (let at = 2001; at <= 2006; at++) await h.at(at);
   assert.equal(h.engine.status().groups[0].phase, 'outage');
-  assert.equal(h.engine.status().groups[0].nextAt, 17_003);
+  assert.equal(h.engine.status().groups[0].nextAt, 17_006);
   const before = h.calls.length;
-  await h.at(17_003); await h.at(17_004);
-  assert.deepEqual(h.calls.slice(before).map(call => call.node), ['primary', 'a', 'b']);
-  assert.equal(h.engine.status().groups[0].nextAt, 47_004);
+  for (let at = 17_006; at <= 17_009; at++) await h.at(at);
+  assert.deepEqual(h.calls.slice(before).map(call => [call.node, call.secondary]), [
+    ['primary', false], ['a', false], ['primary', true], ['a', true], ['b', false], ['b', true],
+  ]);
+  assert.equal(h.engine.status().groups[0].nextAt, 47_009);
   const second = h.calls.length;
   await h.at(30_000); assert.equal(h.calls.length, second);
-  await h.at(47_004); await h.at(47_005);
-  assert.deepEqual(h.calls.slice(second).map(call => call.node), ['c', 'd', 'e']);
-  assert.equal(h.engine.status().groups[0].nextAt, 107_005);
+  // Wait for the first round's starts to leave the shared rolling quota.
+  for (let at = 77_009; at <= 77_012; at++) await h.at(at);
+  assert.deepEqual(h.calls.slice(second).map(call => [call.node, call.secondary]), [
+    ['c', false], ['d', false], ['c', true], ['d', true], ['e', false], ['e', true],
+  ]);
+  assert.equal(h.engine.status().groups[0].nextAt, 137_012);
   await h.engine.close();
+});
+
+test('failure and outage recover preferred nodes through the alternate target and keep its confirmed evidence', async () => {
+  for (const availableAt of [0, 20_000]) {
+    let primaryAvailable = false;
+    const h = harness({ current: 'dead', preferred: ['dead', 'working'], fallback: availableAt ? [] : ['backup'], bandwidth: true,
+      probe: (node, secondary, at) => node === 'dead' ? bad()
+        : node === 'backup' || at >= availableAt && (secondary || primaryAvailable) ? good() : bad() });
+    for (let at = 0; at <= 100_000; at += 1000) await h.at(at);
+    assert.deepEqual(h.switches.map(item => item.node), ['working']);
+    const switchedAt = h.switches[0].at;
+    const confirmed = h.calls.filter(call => call.node === 'working' && call.at <= switchedAt);
+    assert.deepEqual(confirmed.slice(-2).map(call => call.secondary), [true, true]);
+    assert.ok(h.calls.filter(call => call.at > switchedAt).every(call => call.secondary));
+    assert.ok(h.calls.every(call => call.node !== 'backup'));
+    assert.equal(h.engine.status().groups[0].bandwidth!.pool.find(node => node.name === 'working')!.delayMs, 100);
+    for (const call of h.calls) assert.ok(h.calls.filter(other => other.at > call.at - 60_000 && other.at <= call.at).length <= 24);
+    primaryAvailable = true;
+    await h.at(switchedAt + 900_000); await h.at(switchedAt + 930_000);
+    assert.equal(h.calls.at(-1)!.secondary, false);
+    await h.engine.close();
+  }
 });
 
 test('rolling quota is global, concurrent workers stay at two, and queued groups eventually run fairly', async () => {
