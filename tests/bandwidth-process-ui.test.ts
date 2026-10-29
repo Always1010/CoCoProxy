@@ -5,6 +5,11 @@ import { Script } from 'node:vm';
 import ts from '../tooling/node_modules/typescript/lib/typescript.js';
 import { uiTestContext } from './ui-i18n-helpers.ts';
 
+class CoCoProxyError extends Error {
+  readonly code: string;
+  constructor(code: string) { super(code); this.code = code; }
+}
+
 test('process viewer reads without triggering checks, keeps failed refreshes and rejects late or mismatched scope responses', async () => {
   const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/BandwidthDecisionProcess.vue', import.meta.url), 'utf8');
   const helpers: Record<string, any> = {};
@@ -13,11 +18,13 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText).runInNewContext({ exports: helpers });
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { open, close, refresh, choose, check, data, detail, error, selectedId, canCheck, loading, scroller };';
+    '\nexport { open, close, refresh, choose, check, data, detail, error, delayed, selectedId, canCheck, loading, scroller };';
   const scope = JSON.stringify(['local', ['synthetic']]);
   const status = { scope, workspaceRevision: 7, groups: [{ name: 'Stream', current: 'node-a', bandwidth: { reason: 'waiting-traffic' } }] };
   let result: any = { since: 1000, error: false, evicted: false, rounds: [{ id: 'one' }], detail: null, status };
   let reply: (() => Promise<any>) | undefined, fail = false;
+  let failure: Error = new Error('synthetic failure'), now = 1000;
+  class Clock extends Date { static now() { return now; } }
   const calls: { path: string; options: any }[] = [];
   const view = { value: { workspace: { mode: 'local', sourceIds: ['synthetic'], revision: 7 }, active: 'generation', pending: false } };
   const overrides = { value: { automatic: { Stream: { enabled: true, bandwidth: { enabled: true } } } } };
@@ -27,10 +34,10 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
     ...uiTestContext, exports, URLSearchParams, AbortController, processReason: helpers.processReason, processSampleLoss: helpers.processSampleLoss,
     ref: (value: unknown) => ({ value }), defineProps: () => ({ groupName: 'Stream', selectable: true }), withDefaults: (p: unknown) => p,
     defineExpose() {}, watch() {}, onMounted() {}, onUnmounted() {}, setTimeout: (callback: () => void) => { scheduled = callback; return 1; }, clearTimeout() {},
-    document: { hidden: false }, cocoproxyErrorMessage: () => '读取失败',
+    document: { hidden: false }, Date: Clock, CoCoProxyError, cocoproxyErrorMessage: () => '读取失败',
     useWorkspace: () => ({ view, overrides, api: { request: async (path: string, options: any) => {
       calls.push({ path, options });
-      if (fail) throw new Error('synthetic failure');
+      if (fail) throw failure;
       return reply ? reply() : structuredClone(result);
     } } }),
   });
@@ -66,6 +73,17 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
   assert.equal(exports.loading.value, false);
   assert.equal(exports.data.value, displayed);
   reply = undefined;
+  fail = true; failure = new CoCoProxyError('STORE_LOCKED');
+  await exports.refresh();
+  assert.equal(exports.error.value, ''); assert.equal(exports.delayed.value, true);
+  assert.equal(exports.data.value, displayed); assert.equal(exports.loading.value, false);
+  now += 15000; await exports.refresh();
+  assert.equal(exports.error.value, '读取失败'); assert.equal(exports.data.value, displayed);
+  fail = false; await exports.refresh();
+  assert.equal(exports.error.value, ''); assert.equal(exports.delayed.value, false);
+  fail = true; await exports.refresh(false); assert.equal(exports.error.value, '读取失败');
+  fail = false; await exports.refresh();
+  failure = new Error('synthetic failure');
   fail = true; await exports.refresh(); assert.equal(exports.error.value, '读取失败'); assert.equal(exports.data.value.rounds[0].id, 'one');
   fail = false;
   reply = () => new Promise(resolve => { complete = resolve; });
@@ -90,5 +108,9 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
   assert.deepEqual(JSON.parse(JSON.stringify(writes[0].options.body)), { expectedRevision: 7, expectedActive: 'generation', scope, group: 'Stream' });
   overrides.value.automatic.Stream.enabled = false;
   assert.equal(exports.canCheck.value, false);
+  exports.close();
+  fail = true; failure = new CoCoProxyError('STORE_LOCKED'); exports.open();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(exports.data.value, undefined); assert.equal(exports.error.value, '读取失败');
   exports.close();
 });

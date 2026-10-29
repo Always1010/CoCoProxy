@@ -669,6 +669,7 @@
       "title": "Decision process · {group}",
       "back": "Back to rounds",
       "updated": "Page updated: {time}",
+      "readDelayed": "Update delayed; keeping previous records and retrying automatically",
       "unknown": "Not recorded",
       "points": "{value} points",
       "disabled": "Bandwidth assistance is disabled; retained rounds remain available",
