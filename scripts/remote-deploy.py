@@ -174,7 +174,24 @@ def run(args, timeout=120):
     result = subprocess.run([str(arg) for arg in args], capture_output=True, timeout=timeout)
     if result.returncode:
         error = result.stderr.decode(errors='replace').strip()
-        raise RuntimeError(error if re.fullmatch(r'(INSTALL|SETUP|RUNTIME|REMOTE)_[A-Z0-9_]+', error) else 'REMOTE_STEP_FAILED')
+        code = error if re.fullmatch(r'(INSTALL|SETUP|RUNTIME|REMOTE)_[A-Z0-9_]+', error) else 'REMOTE_STEP_FAILED'
+        # Helpers can return their fixed diagnostic code in JSON on stdout.
+        # Never print arbitrary captured output, private argv or input paths.
+        try:
+            report = json.loads(result.stdout)
+            reported = report.get('code') if isinstance(report, dict) else None
+            if report.get('ok') is False and isinstance(reported, str) and re.fullmatch(r'(INSTALL|SETUP|RUNTIME|REMOTE|AUTOMATIC_GATEWAY)_[A-Z0-9_]+', reported):
+                code = reported
+        except (ValueError, AttributeError):
+            pass
+        diagnostic = {'phase': 'deployment-command', 'code': code, 'exitCode': result.returncode}
+        services = {'cocoproxy-management.service', 'cocoproxy-web.service', 'cocoproxy-mihomo.service',
+                    'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service'}
+        if len(args) == 3 and Path(args[0]).name == 'systemctl' and args[1] in ['start', 'stop', 'enable', 'disable'] and args[2] in services:
+            diagnostic.update(action=args[1], service=args[2])
+            code = diagnostic['code'] = 'REMOTE_SERVICE_COMMAND_FAILED'
+        print(json.dumps(diagnostic), file=sys.stderr)
+        raise RuntimeError(code)
     return result.stdout
 
 

@@ -43,6 +43,7 @@ async function fixture(t, failure) {
   const commands = []; let stagedOutput;
   const execute = async (command, args, options) => {
     commands.push({ command, args, cwd: options?.cwd, env: options?.env });
+    if (command === 'sudo' && failure === 'deploy') throw Object.assign(new Error('synthetic deploy failure'), { code: 'BUILD_COMMAND_FAILED' });
     if (command === 'git') return executeBuildCommand(command, args, options);
     if (command === 'tar') {
       const upstream = args[args.indexOf('-C') + 1];
@@ -78,6 +79,16 @@ test('build or source verification failures stop before staging and privilege el
   });
 });
 
+test('deployment failure is distinguished from successful compilation and payload verification', async t => {
+  const state = await fixture(t, 'deploy');
+  await assert.rejects(runBuildRelease(state.config, { deploy: true, execute: state.execute }), error => {
+    assert.equal(error.code, 'BUILD_DEPLOY_FAILED');
+    assert.match(buildFailureMessage(error), /构建与发行包核验已通过，部署阶段失败/u);
+    return true;
+  });
+  assert.equal(state.commands.filter(item => item.command === 'sudo').length, 1);
+});
+
 test('component selection rejects unsupported modes; a frontend base must match every backend input', async t => {
   assert.equal(readBuildSelection([]).components, 'all');
   assert.throws(() => readBuildSelection(['--components', 'unknown']), { code: 'BUILD_COMPONENTS_UNSUPPORTED' });
@@ -110,7 +121,7 @@ test('component selection rejects unsupported modes; a frontend base must match 
     assert.equal(error.inputComparison.recommendedComponents, 'management');
     assert.match(buildFailureMessage(error), /unknown-build-input.json.*removed/u);
     assert.match(buildFailureMessage(error), /--components management/u);
-    assert.match(buildFailureMessage(error), /代理会短暂中断/u);
+    assert.match(buildFailureMessage(error), /不满足时进入完整维护流程并短暂中断代理/u);
     return true;
   });
   assert.equal(state.commands.some(item => item.command === 'tar' || item.command === 'sudo'), false);
