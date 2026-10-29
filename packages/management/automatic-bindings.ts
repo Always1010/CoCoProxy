@@ -10,6 +10,7 @@ export type AutomaticBindings = {
   targets: Record<string, { signature: string; target: string }>;
   events: AutomaticEvent[];
   pendingEvent?: AutomaticEvent & { id: string; signature: string; revision: number };
+  pendingConfiguration?: { scope: string; generation: string; events: (AutomaticEvent & { id: string; signature: string })[] };
 };
 
 export function parseAutomaticBindings(input: unknown): AutomaticBindings {
@@ -25,7 +26,13 @@ export function parseAutomaticBindings(input: unknown): AutomaticBindings {
       throw new Error();
     }
     if (value.events.some((e: AutomaticEvent) => e.id !== undefined && (typeof e.id !== 'string' || !/^[a-f0-9-]{36}$/.test(e.id)))) throw new Error();
-    if ([...value.events, ...(value.pendingEvent ? [value.pendingEvent] : [])].some(e =>
+    const pending = value.pendingConfiguration;
+    if (pending !== undefined && (!pending || typeof pending.scope !== 'string' || pending.scope.length > 16384 ||
+        !/^[a-f0-9]{64}$/.test(pending.generation) || !Array.isArray(pending.events) ||
+        !pending.events.length || pending.events.length > 100 || new Set(pending.events.map(e => e?.group)).size !== pending.events.length ||
+        pending.events.some(e => !e || !/^[a-f0-9-]{36}$/.test(e.id) || !Number.isSafeInteger(e.at) || e.at < 0 ||
+          !name(e.group) || !name(e.from) || !name(e.to) || e.from === e.to || e.reason !== 'configuration-change' || !/^[a-f0-9]{64}$/.test(e.signature)))) throw new Error();
+    if ([...value.events, ...(value.pendingEvent ? [value.pendingEvent] : []), ...(pending?.events ?? [])].some(e =>
       [e.fromPool, e.toPool].some(pool => pool !== undefined && pool !== 'preferred' && pool !== 'fallback'))) throw new Error();
     if (value.pendingEvent !== undefined) {
       const e = value.pendingEvent;
@@ -49,5 +56,7 @@ export async function readAutomaticBindings(root: string): Promise<AutomaticBind
 
 /** Caller holds the common transaction lock. No controller secrets are stored. */
 export async function writeAutomaticBindings(root: string, value: AutomaticBindings): Promise<void> {
-  await atomicWrite(root, 'automatic-selections.json', JSON.stringify(value));
+  const contents = JSON.stringify(value);
+  if (Buffer.byteLength(contents) > 262144) throw new WorkspaceError('AUTO_STATE_CORRUPT');
+  await atomicWrite(root, 'automatic-selections.json', contents);
 }

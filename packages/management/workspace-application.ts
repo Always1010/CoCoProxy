@@ -250,8 +250,45 @@ export function createWorkspaceApplication(options: {
       bindingKey: hash(bindings), ...(Object.keys(nodeDnsPolicy).length ? { nodeDnsPolicy } : {}), ...(legacy ? { legacy } : {}) };
   }
 
-  async function apply(workspace: Workspace, expectedActive: unknown, automatic?: { group: string; target: string }) {
+  async function recoverConfigurationEvents(workspace: Workspace) {
+    const journal = await readAutomaticBindings(options.stateDirectory).catch(error => {
+      if (Object.keys(activePolicies(workspace)).length) throw error;
+      return null; // Explicit manual recovery must remain available with corrupt automatic state.
+    });
+    if (!journal?.pendingConfiguration) return;
+    await store.exclusive(async () => {
+      const current = await readAutomaticBindings(options.stateDirectory), pending = current?.pendingConfiguration;
+      if (!current || !pending) return;
+      const state = await store.status();
+      if (state.transaction || state.fault) return;
+      if (state.active === pending.generation) {
+        const observed = await options.observeSelections?.();
+        if (observed?.generation !== pending.generation) return;
+        const committed = JSON.parse(await privateRead(await store.readCandidate(pending.generation))) as JsonObject;
+        if (pending.events.some(e => {
+          const group = asGroups(committed).find(g => g.name === e.group);
+          return !Array.isArray(group?.proxies) || group.proxies[0] !== e.to || observed.selections[e.group] !== e.to;
+        })) return;
+        if (current.scope !== pending.scope) {
+          await history.write(await history.read());
+          current.scope = pending.scope; current.targets = {}; current.events = [];
+          delete current.pendingEvent;
+        }
+        for (const { signature, ...event } of pending.events) {
+          await history.append(current.scope, event);
+          current.events = [...current.events.filter(e => e.id !== event.id), event].slice(-50);
+          current.targets[event.group] = { signature, target: event.to };
+        }
+      }
+      // Uncommitted/rolled-back targets never become successful history entries.
+      delete current.pendingConfiguration;
+      await writeAutomaticBindings(options.stateDirectory, current);
+    });
+  }
+
+  async function apply(workspace: Workspace, expectedActive: unknown, automatic?: { group: string; target: string }, configuration = false) {
     if (!(expectedActive === null || (typeof expectedActive === 'string' && /^[a-f0-9]{64}$/.test(expectedActive)))) invalid();
+    if (configuration) await recoverConfigurationEvents(workspace);
     const plan = await build(workspace);
     const candidate = compile(plan);
     // Bind the UI's exact settings and snapshots before staging; never recapture
@@ -275,10 +312,33 @@ export function createWorkspaceApplication(options: {
           const snapshot = await subscriptions.snapshot(capture.id, capture.revision);
           if (snapshot.sha256 !== capture.digest) invalid('SOURCE_CONFLICT');
         }
+        if (configuration && expectedActive && candidate.id !== expectedActive && options.observeSelections && Object.keys(plan.automatic.policies).length) {
+          const observed = await options.observeSelections();
+          if (observed.generation !== expectedActive) invalid('ACTIVE_CONFLICT');
+          const previous = JSON.parse(await privateRead(await store.readCandidate(expectedActive as string))) as JsonObject;
+          const events: NonNullable<AutomaticBindings['pendingConfiguration']>['events'] = [];
+          for (const [name, policy] of Object.entries(plan.automatic.policies)) {
+            const from = observed.selections[name], group = asGroups(candidate.config).find(g => g.name === name);
+            const to = Array.isArray(group?.proxies) ? group.proxies[0] : undefined;
+            if (typeof from !== 'string' || typeof to !== 'string' || from === to ||
+                !asNodes(previous).some(node => node.name === from) || !asNodes(candidate.config).some(node => node.name === to)) continue;
+            events.push({ id: randomUUID(), at: Date.now(), group: name, from, to, reason: 'configuration-change',
+              ...(policy.preferred.includes(from) ? { fromPool: 'preferred' as const } : policy.fallback.includes(from) ? { fromPool: 'fallback' as const } : {}),
+              toPool: policy.preferred.includes(to) ? 'preferred' : 'fallback', signature: plan.automatic.signatures[name] });
+          }
+          if (events.length) {
+            const before = await readAutomaticBindings(options.stateDirectory);
+            const journal: AutomaticBindings = before ? structuredClone(before) :
+              { version: 1, scope: plan.automatic.scope, targets: {}, events: [] };
+            journal.pendingConfiguration = { scope: plan.automatic.scope, generation: candidate.id, events };
+            await writeAutomaticBindings(options.stateDirectory, journal);
+          }
+        }
       } catch (cause) {
         throw new TransactionError(cause instanceof WorkspaceError || cause instanceof SubscriptionError ? cause.code : 'WORKSPACE_UNAVAILABLE');
       }
     });
+    if (configuration) await recoverConfigurationEvents(workspace).catch(() => { /* Keep the durable journal; a confirmed apply must not be replayed. */ });
     return { ...result, active: candidate.id, workspaceRevision: workspace.revision };
   }
 
@@ -339,6 +399,7 @@ export function createWorkspaceApplication(options: {
   async function automaticSnapshot(fresh = false): Promise<AutoSnapshot | null> {
     if (automaticChanging) return suspendSnapshot('switching');
     const workspace = await load();
+    await recoverConfigurationEvents(workspace);
     if (workspace.runMode === 'direct') return suspendSnapshot('direct');
     if (!Object.keys(activePolicies(workspace)).length) return suspendSnapshot('disabled');
     const state = await store.status();
@@ -521,7 +582,9 @@ export function createWorkspaceApplication(options: {
         const bindings = await readAutomaticBindings(options.stateDirectory);
         // A process may have died after commit but before removing pendingEvent.
         // Suppress that old journal entry, while an in-process switch may still finish after clear.
-        const pendingId = !automaticChanging && bindings?.scope === body.scope && bindings.pendingEvent?.group === body.group ? bindings.pendingEvent.id : undefined;
+        const pendingId = !automaticChanging ?
+          (bindings?.scope === body.scope && bindings.pendingEvent?.group === body.group ? bindings.pendingEvent.id :
+            bindings?.pendingConfiguration?.scope === body.scope ? bindings.pendingConfiguration.events.find(e => e.group === body.group)?.id : undefined) : undefined;
         await history.clear(body.scope as string, body.group, pendingId);
         return automaticStatus(current);
       });
@@ -636,7 +699,7 @@ export function createWorkspaceApplication(options: {
       const body = exactRecord(await readJsonBody(request, 512), ['expectedRevision', 'expectedActive']);
       const workspace = await load();
       if (body.expectedRevision !== workspace.revision) invalid('WORKSPACE_CONFLICT');
-      return apply(workspace, body.expectedActive);
+      return apply(workspace, body.expectedActive, undefined, true);
     }
     if (path === '/api/cocoproxy/workspace/select' && request.method === 'POST') {
       const body = exactRecord(await readJsonBody(request, 8192), ['expectedRevision', 'expectedActive', 'group', 'name']);
