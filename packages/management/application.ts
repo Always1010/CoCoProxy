@@ -179,5 +179,6 @@ export function createManagementApplication(options: { stateDirectory: string; d
       throw new ManagementError('MANAGEMENT_UNAVAILABLE', 503);
     }
   };
-  return Object.assign(action, { automaticSnapshot: workspace.automaticSnapshot, automaticSwitch: workspace.automaticSwitch });
+  return Object.assign(action, { automaticSnapshot: workspace.automaticSnapshot, automaticSwitch: workspace.automaticSwitch,
+    automaticSuspensionReason: workspace.automaticSuspensionReason });
 }

@@ -1789,6 +1789,22 @@
     "pzRuleIpSetMatch": "IP 集合 {provider}：{entry}",
     "pzMatchedRule": "命中规则",
     "pzPendingMatchedRule": "命中待判断规则",
-    "anGroupAccessibleLabel": "{type} {name} {automatic}"
+    "anGroupAccessibleLabel": "{type} {name} {automatic}",
+    "autoEngineLabel": "后台调度",
+    "autoEngineRunning": "正常运行",
+    "autoEngineFailed": "后台运行异常，等待重试",
+    "autoEngineError": "{phase}异常（{code}），本次持续异常已出现 {count} 次。",
+    "autoEngineLastSnapshot": "最近成功读取运行配置",
+    "autoEngineLastCompleted": "最近调度结束",
+    "autoEngineQueue": "全局尚有 {count} 个检测任务等待派发。",
+    "autoEngineNextStart": "最早可启动时间：{time}；实际执行仍取决于排队和优先级。",
+    "autoEnginePhase": { "snapshot": "运行配置读取", "probe": "检测服务", "switch": "切换事务", "tick": "调度器" },
+    "autoEngineReason": {
+      "initializing": "等待首次调度", "inactive": "当前没有有效运行快照", "paused": "运行已暂停",
+      "direct": "直连模式下停止自动选择", "disabled": "没有启用自动选择的组", "runtime-unavailable": "运行核心尚未就绪",
+      "transaction": "等待配置事务完成", "fault": "配置事务存在故障", "pending": "等待配置生效或重新核验",
+      "switching": "正在应用自动切换", "stopped": "后台调度已停止", "quota": "等待轻量探测额度恢复",
+      "retry-after": "检测服务要求稍后重试", "queued": "等待下一批检测"
+    }
   }
 }

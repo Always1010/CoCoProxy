@@ -1,6 +1,7 @@
 import type { AutoGroupPolicy, AutoProbeSettings, ProbeTarget } from './automatic-policy.ts';
 import { createBandwidthSelector } from './bandwidth-selector.ts';
 import { ManagementError } from './http.ts';
+import { createAutomaticDiagnostics, type AutoDiagnostic, type AutoSuspensionReason } from './automatic-diagnostics.ts';
 
 export type AutoSnapshot = {
   key: string; generation: string; probes: AutoProbeSettings; scope?: string;
@@ -38,12 +39,17 @@ type Options = {
   probe: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult>;
   switch: (snapshot: AutoSnapshot, group: string, node: string, reason: string) => Promise<boolean>;
   now?: () => number;
+  suspensionReason?: () => AutoSuspensionReason;
+  diagnostic?: (event: AutoDiagnostic) => void;
   bandwidth?: Pick<Parameters<typeof createBandwidthSelector>[0], 'measure' | 'busy' | 'load' | 'save'>;
 };
 
 /** All state advances through serialized ticks; deadlines never hold a worker or a timer open. */
 export function createAutomaticSelector(options: Options) {
   const now = options.now ?? Date.now;
+  const diagnostics = createAutomaticDiagnostics(now, options.diagnostic);
+  let pendingProbes = 0;
+  let suspension: AutoSuspensionReason = 'initializing';
   let groups = new Map<string, Group>();
   let snapshot: AutoSnapshot | null = null;
   let closed = false, timer: ReturnType<typeof setInterval> | undefined;
@@ -56,6 +62,21 @@ export function createAutomaticSelector(options: Options) {
   const selectedSinceSnapshot = new Set<Group>();
   const invalidConflict = (error: unknown) => error instanceof ManagementError && error.code === 'ACTIVE_CONFLICT';
   const invalidateEvidence = () => { evidenceInvalid = true; evidenceEpoch++; };
+  function suspendEvidence() {
+    invalidateEvidence(); snapshot = null; pendingProbes = 0;
+    for (const g of groups.values()) g.health = 'unknown';
+    bandwidth.update(null);
+  }
+  async function readSnapshot() {
+    try {
+      const value = await options.snapshot(); diagnostics.success('snapshot');
+      if (value) diagnostics.snapshot();
+      return { value, failed: false };
+    } catch {
+      diagnostics.fail('snapshot'); suspendEvidence();
+      return { value: null, failed: true };
+    }
+  }
   const bandwidthProbes: { snapshot: AutoSnapshot; node: string; signal: AbortSignal; done: (result: ProbeResult) => void }[] = [];
   const safetyAt = new Map<string, number>();
   const bandwidth = createBandwidthSelector({ now, ...options.bandwidth,
@@ -134,16 +155,21 @@ export function createAutomaticSelector(options: Options) {
     selecting++;
     try {
     // A probe can outlive a configuration edit, selection edit, disconnect, or shutdown.
-    const live = await options.snapshot().catch(() => null);
+    const { value: live, failed } = await readSnapshot();
+    if (failed) return false;
     const item = live?.groups.find(item => item.name === g.name);
     if (live?.generation !== s.generation) invalidateEvidence();
     if (closed || evidenceInvalid || epoch !== evidenceEpoch || !live || !item || identity(live, item) !== g.identity || item.current !== g.current || groups.get(g.name) !== g) return false;
     const from = g.current;
     let applied = node === from;
     if (!applied) {
-      try { applied = await options.switch(s, g.name, node, reason); } catch (error) { if (invalidConflict(error)) invalidateEvidence(); applied = false; }
+      try { applied = await options.switch(s, g.name, node, reason); diagnostics.success('switch'); }
+      catch (error) {
+        if (invalidConflict(error)) invalidateEvidence(); else diagnostics.fail('switch');
+        applied = false;
+      }
       if (!applied && !evidenceInvalid && !closed) {
-        const after = await options.snapshot().catch(() => null);
+        const { value: after } = await readSnapshot();
         if (!after || after.generation !== s.generation) invalidateEvidence();
       }
     }
@@ -342,8 +368,10 @@ export function createAutomaticSelector(options: Options) {
 
   async function runTick() {
     if (closed) return;
-    const fresh = await options.snapshot().catch(() => null);
-    if (closed) return;
+    const { value: fresh, failed } = await readSnapshot();
+    if (closed || failed) return;
+    suspension = fresh ? 'inactive' : options.suspensionReason?.() ?? 'inactive';
+    pendingProbes = 0;
     // A confirmed enhanced selection may briefly suspend runtime snapshots while its transaction applies.
     // Keep its post-switch/failure state, but discard measurement evidence during the suspension.
     if (!fresh && selecting && [...groups.values()].some(g => g.policy.bandwidth?.enabled)) { bandwidth.update(null); return; }
@@ -394,21 +422,25 @@ export function createAutomaticSelector(options: Options) {
       shared.set(key, entries);
     }
     const queue = [...shared.values()];
+    pendingProbes = queue.length;
     if (!closed && epoch === evidenceEpoch) {
       starts = starts.filter(start => start > now() - 60_000);
       const allowance = Math.max(0, Math.min(AUTO_INTERVALS.maxConcurrency, AUTO_INTERVALS.startsPerMinute - starts.length));
       const batch = now() < blockedUntil ? [] : queue
         .filter(entries => !entries.every(job => job.auxiliary) || starts.length < 18).slice(0, allowance);
+      let probeFailed = false, observed = false;
       await Promise.all(batch.map(async entries => {
         if (epoch !== evidenceEpoch) return;
         const first = entries[0];
         // Supplemental work may not consume the final six starts reserved for the original scheduler.
         if (entries.every(job => job.auxiliary) && starts.length >= 18) return;
         starts.push(now());
+        pendingProbes--;
         fairCursor = (names.indexOf(first.group.name) + 1) % Math.max(1, names.length);
         let result: ProbeResult;
-        try { result = await options.probe(s, first.node, first.target); } catch (error) {
+        try { result = await options.probe(s, first.node, first.target); observed = true; } catch (error) {
           if (invalidConflict(error)) { invalidateEvidence(); return; }
+          probeFailed = true;
           result = { ok: false, delay: null };
         }
         const end = now();
@@ -422,6 +454,7 @@ export function createAutomaticSelector(options: Options) {
             && job.group.policy.bandwidth?.enabled && sameTarget(job.target, activeTarget(s))) bandwidth.observeProbe(job.group.name, job.node, result);
         }
       }));
+      if (probeFailed) diagnostics.fail('probe'); else if (observed) diagnostics.success('probe');
     }
     if (epoch !== evidenceEpoch) return;
     bandwidth.tick([...groups.values()].map(g => ({ name: g.name, degraded: g.slowCount >= 3,
@@ -432,7 +465,10 @@ export function createAutomaticSelector(options: Options) {
   function tick(): Promise<void> {
     if (closed) return Promise.resolve();
     if (running) return running;
-    running = runTick().finally(() => { running = null; });
+    diagnostics.start();
+    running = runTick().then(() => diagnostics.success('tick'), error => {
+      diagnostics.fail('tick'); suspendEvidence(); throw error;
+    }).finally(() => { diagnostics.complete(); running = null; });
     return running;
   }
   return {
@@ -441,6 +477,7 @@ export function createAutomaticSelector(options: Options) {
     requestBandwidthCheck: bandwidth.requestCheck,
     start() {
       if (closed || timer) return;
+      // tick records failures before the background driver contains the rejection.
       timer = setInterval(() => { void tick().catch(() => {}); }, 1000);
       timer.unref?.();
       void tick().catch(() => {});
@@ -448,6 +485,15 @@ export function createAutomaticSelector(options: Options) {
     async close() { closed = true; if (timer) clearInterval(timer); const closing = bandwidth.close(); await running; await closing; },
     status() {
       return {
+        engine: (() => {
+          const recent = starts.filter(start => start > now() - 60_000);
+          const quotaAt = recent.length >= AUTO_INTERVALS.startsPerMinute ? Math.min(...recent) + 60_000 : 0;
+          const nextStartAt = Math.max(blockedUntil, quotaAt);
+          return diagnostics.status(!closed && !!snapshot && !evidenceInvalid && !selecting, closed ? 'stopped' : !snapshot ? suspension
+            : selecting ? 'switching' : evidenceInvalid ? 'pending'
+            : now() < blockedUntil ? 'retry-after' : quotaAt > now() ? 'quota' : pendingProbes ? 'queued' : null,
+          pendingProbes, !closed && snapshot && nextStartAt > now() ? nextStartAt : null);
+        })(),
         scope: snapshot?.scope,
         groups: [...groups.values()].map(g => ({ name: g.name, current: g.current,
           health: g.health, phase: g.search?.kind === 'outage' ? 'outage' : g.search ? g.search.kind === 'slow' ? 'slow-search' : 'failure-search'

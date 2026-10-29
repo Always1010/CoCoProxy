@@ -4,6 +4,7 @@ import { DEFAULT_AUTO_PROBES, parseAutoGroupPolicy, parseAutoProbeSettings } fro
 import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-policy.ts';
 import { createAutomaticSelector, type AutoSnapshot, type ProbeResult } from '../packages/management/automatic-selector.ts';
 import { ManagementError } from '../packages/management/http.ts';
+import { createAutomaticDiagnostics, type AutoDiagnostic } from '../packages/management/automatic-diagnostics.ts';
 
 const good = (delay = 100): ProbeResult => ({ ok: true, delay });
 const bad = (): ProbeResult => ({ ok: false, delay: null });
@@ -91,6 +92,79 @@ test('healthy monitoring measures only unique current nodes every 30 seconds and
   assert.equal(h.switches.length, 0);
   assert.ok(h.engine.status().groups.every(group => group.phase === 'monitoring'));
   await h.engine.close();
+});
+
+test('automatic diagnostics bound repeated failures, report recovery once and contain a failing observer', () => {
+  let time = 0;
+  const events: AutoDiagnostic[] = [];
+  const diagnostics = createAutomaticDiagnostics(() => time, event => { events.push(event); throw new Error('synthetic observer failure'); });
+  diagnostics.fail('snapshot'); time = 1000; diagnostics.fail('snapshot');
+  assert.equal(events.length, 1);
+  time = 60_000; diagnostics.fail('snapshot');
+  assert.deepEqual(events.map(event => [event.event, event.code, event.count]), [
+    ['failure', 'AUTO_SNAPSHOT_UNAVAILABLE', 1], ['failure', 'AUTO_SNAPSHOT_UNAVAILABLE', 3],
+  ]);
+  time++; diagnostics.success('snapshot'); diagnostics.success('snapshot');
+  assert.equal(events.length, 3); assert.equal(events[2].event, 'recovered');
+  assert.equal(diagnostics.status(true, null, 0, null).error, null);
+});
+
+test('snapshot failures invalidate evidence, preserve residence and recover without leaking exception details', async () => {
+  let time = 0, unavailable = false;
+  const events: AutoDiagnostic[] = [], changes: string[] = [];
+  const snapshot: AutoSnapshot = { key: 'diagnostic-synthetic', generation: '1', probes: DEFAULT_AUTO_PROBES,
+    groups: [{ name: 'group', current: 'a', policy: { preferred: ['a', 'b'], fallback: [], returnToPreferred: false } }] };
+  const engine = createAutomaticSelector({ now: () => time,
+    snapshot: async () => { if (unavailable) throw new Error('EXAMPLE_ONLY_SECRET https://private.example/'); return snapshot; },
+    probe: async (_s, node) => good((node === 'a') === !changes.length ? 2000 : 100),
+    switch: async (_s, _g, node) => { changes.push(node); snapshot.groups[0].current = node; snapshot.generation = String(Number(snapshot.generation) + 1); return true; },
+    diagnostic: event => { events.push(event); throw new Error('Synthetic diagnostic sink unavailable'); },
+  });
+  for (const at of [0, 30_000, 60_000, 60_001, 62_001]) { time = at; await engine.tick(); }
+  assert.deepEqual(changes, ['b']);
+  unavailable = true; time = 63_000; await engine.tick();
+  assert.equal(engine.status().engine.state, 'error');
+  assert.equal(engine.status().engine.error?.phase, 'snapshot');
+  assert.equal(engine.status().groups[0].health, 'unknown');
+  assert.equal(engine.status().engine.lastSnapshotAt, 62_001);
+  unavailable = false;
+  for (const at of [64_000, 94_000, 124_000, 124_001, 126_001]) { time = at; await engine.tick(); }
+  assert.deepEqual(changes, ['b']); // The original two-minute residence was not lost.
+  assert.equal(engine.status().engine.state, 'running');
+  assert.equal(engine.status().engine.error, null);
+  assert.deepEqual(events.map(event => event.event), ['failure', 'recovered']);
+  assert.doesNotMatch(JSON.stringify({ events, engine: engine.status().engine }), /EXAMPLE_ONLY_SECRET|private\.example/);
+  await engine.close();
+  assert.equal(engine.status().engine.reason, 'stopped');
+});
+
+test('normal node failures and generation conflicts are distinct from probe service and unexpected tick failures', async () => {
+  let time = 0, mode = 'service', nullSnapshot = false, invalidReason = false;
+  const events: AutoDiagnostic[] = [];
+  const snapshot: AutoSnapshot = { key: 'synthetic', generation: '1', probes: DEFAULT_AUTO_PROBES,
+    groups: [{ name: 'group', current: 'a', policy: { preferred: ['a'], fallback: [], returnToPreferred: false } }] };
+  const engine = createAutomaticSelector({ now: () => time, snapshot: async () => nullSnapshot ? null : snapshot,
+    suspensionReason: () => { if (invalidReason) throw new Error('EXAMPLE_ONLY_PRIVATE_PATH'); return 'paused'; },
+    probe: async () => {
+      if (mode === 'service') throw new Error('EXAMPLE_ONLY_SECRET');
+      if (mode === 'conflict') throw new ManagementError('ACTIVE_CONFLICT', 409);
+      return bad();
+    }, switch: async () => false, diagnostic: event => { events.push(event); },
+  });
+  await engine.tick(); assert.equal(engine.status().engine.error?.code, 'AUTO_PROBE_UNAVAILABLE');
+  mode = 'node'; time = 2000; await engine.tick();
+  assert.equal(engine.status().engine.error, null); // A completed negative probe is still a working service.
+  nullSnapshot = true; time++; await engine.tick();
+  assert.equal(engine.status().engine.state, 'suspended'); assert.equal(engine.status().engine.reason, 'paused');
+  nullSnapshot = false; mode = 'conflict'; time++; await engine.tick();
+  assert.equal(engine.status().engine.error, null);
+  nullSnapshot = true; invalidReason = true; time++;
+  await assert.rejects(engine.tick(), /EXAMPLE_ONLY_PRIVATE_PATH/);
+  assert.equal(engine.status().engine.error?.code, 'AUTO_INTERNAL_ERROR');
+  invalidReason = false; time++; await engine.tick();
+  assert.equal(engine.status().engine.error, null);
+  assert.doesNotMatch(JSON.stringify(events), /EXAMPLE_ONLY/);
+  await engine.close();
 });
 
 test('failure requires delayed secondary evidence; candidates confirm in preferred order and stop before fallback', async () => {
@@ -246,6 +320,9 @@ test('rolling quota is global, concurrent workers stay at two, and queued groups
   assert.equal(h.calls.length, 2);
   for (let at = 1000; at <= 11_000; at += 1000) await h.at(at);
   assert.equal(h.calls.length, 24); assert.equal(maximum, 2);
+  assert.equal(h.engine.status().engine.reason, 'quota');
+  assert.equal(h.engine.status().engine.nextStartAt, 60_000);
+  assert.equal(h.engine.status().engine.pendingProbes, 6);
   await h.at(59_999); assert.equal(h.calls.length, 24);
   await h.at(60_000);
   for (let at = 61_000; at <= 71_000; at += 1000) await h.at(at);
@@ -284,6 +361,8 @@ test('retry-after postpones observations and serialized ticks cannot create dupl
   release({ ok: false, delay: null, retryAfterMs: 10_000 });
   await Promise.all([first, duplicate]);
   assert.equal(h.calls.length, 1);
+  assert.equal(h.engine.status().engine.reason, 'retry-after');
+  assert.equal(h.engine.status().engine.nextStartAt, 10_000);
   await h.at(9999); assert.equal(h.calls.length, 1);
   const after = h.at(10_000); await Promise.resolve(); await Promise.resolve(); release(good()); await after;
   assert.equal(h.calls.length, 2);

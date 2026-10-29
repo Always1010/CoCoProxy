@@ -145,8 +145,14 @@ export async function loadManagementGateway(path: string) {
         return { generation, selections };
       } });
     let bandwidth: ReturnType<typeof createBandwidthService> | undefined;
+    let automaticPaused = false;
     automatic = createAutomaticSelector({
-      snapshot: async () => (await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused ? null : action.automaticSnapshot(),
+      snapshot: async () => {
+        automaticPaused = (await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused;
+        return automaticPaused ? null : action.automaticSnapshot();
+      },
+      suspensionReason: () => automaticPaused ? 'paused' : action.automaticSuspensionReason(),
+      diagnostic: ({ event: transition, ...detail }) => console.info(JSON.stringify({ event: 'COCOPROXY_AUTOMATIC_DIAGNOSTIC', transition, ...detail })),
       probe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
       switch: (snapshot, group, node, reason) => action.automaticSwitch(snapshot, group, node, reason),
       bandwidth: {

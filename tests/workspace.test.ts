@@ -13,6 +13,7 @@ import { memoizePolicyCompiler } from '../packages/management/shared-work.ts';
 import { compileConfig } from '../packages/config/index.ts';
 import type { Workspace, WorkspaceSettings } from '../packages/management/workspace.ts';
 import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts';
+import type { AutoEngineStatus } from '../packages/management/automatic-diagnostics.ts';
 import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-policy.ts';
 import { setRuntimeLifecycle } from '../packages/runtime/lifecycle.ts';
 import { AutomaticHistoryStore, retainAutomaticEvents, AUTOMATIC_HISTORY_AGE, AUTOMATIC_HISTORY_FILE_LIMIT } from '../packages/management/automatic-history.ts';
@@ -75,6 +76,20 @@ test('site choices save without applying routing and reject stale scope and refe
   await f.save(settings({ sourceIds: ['other'] }), initial.workspaceRevision);
   assert.deepEqual((await f.call<Sites>('/workspace/sites')).selections, {});
   await assert.rejects(f.call('/workspace/sites', 'PUT', { ...body, expectedRevision: saved.revision }), { code: 'SITE_SETTINGS_CONFLICT' });
+});
+
+test('automatic engine diagnostics remain visible without active groups and snapshot suspension has an explicit reason', async t => {
+  const engine: AutoEngineStatus = { state: 'error', reason: 'inactive', lastStartedAt: 1000, lastCompletedAt: 1000,
+    lastSnapshotAt: null, pendingProbes: 0, nextStartAt: null,
+    error: { phase: 'snapshot', code: 'AUTO_SNAPSHOT_UNAVAILABLE', since: 1000, at: 1000, count: 1 } };
+  const f = await fixture(t, {}, () => ({ engine, groups: [], events: [] }));
+  const response = await f.call<{ engine: AutoEngineStatus; groups: unknown[] }>('/automatic/status');
+  assert.deepEqual(response.engine, engine); assert.deepEqual(response.groups, []);
+  assert.equal(await f.action.automaticSnapshot(), null);
+  assert.equal(f.action.automaticSuspensionReason(), 'disabled');
+  await f.save(settings({ runMode: 'direct' }), 0);
+  assert.equal(await f.action.automaticSnapshot(), null);
+  assert.equal(f.action.automaticSuspensionReason(), 'direct');
 });
 
 test('automatic selections preserve manual intent, use confirmed transactions, persist across reads and reject stale decisions', async t => {
@@ -468,7 +483,7 @@ async function directory(t: TestContext) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
-async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
+async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, automaticStatus?: () => unknown) {
   // Keep the pure settings/store test runnable without the optional YAML runtime.
   const [{ createManagementApplication }, { decodeSubscriptionProfile }] = await Promise.all([
     import('../packages/management/application.ts'), import('../packages/subscriptions/yaml.ts'),
@@ -492,6 +507,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}) {
     allowedProbeOrigins: ['https://www.gstatic.com', 'https://cp.cloudflare.com'],
     automaticProbe: async () => ({ ok: true, delay: 25 }),
     automaticBandwidthCheck: group => { bandwidthChecks.push(group); return true; },
+    automaticStatus,
     observeSelections: async () => {
       const generation = (await new FileTransactionStore(state).status()).active;
       if (!generation || !observedChoices) throw new Error('Synthetic core unavailable');

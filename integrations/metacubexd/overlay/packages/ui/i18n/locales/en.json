@@ -1789,6 +1789,22 @@
     "pzRuleIpSetMatch": "IP set {provider}: {entry}",
     "pzMatchedRule": "Matched rule",
     "pzPendingMatchedRule": "Pending rule",
-    "anGroupAccessibleLabel": "{type} {name} {automatic}"
+    "anGroupAccessibleLabel": "{type} {name} {automatic}",
+    "autoEngineLabel": "Background scheduler",
+    "autoEngineRunning": "Running normally",
+    "autoEngineFailed": "Background operation failed; waiting to retry",
+    "autoEngineError": "{phase} failed ({code}); {count} occurrences in this ongoing incident.",
+    "autoEngineLastSnapshot": "Last successful runtime snapshot",
+    "autoEngineLastCompleted": "Last scheduling completion",
+    "autoEngineQueue": "There are {count} global checks waiting to be dispatched.",
+    "autoEngineNextStart": "Earliest start: {time}; execution still depends on queue order and priority.",
+    "autoEnginePhase": { "snapshot": "Runtime snapshot", "probe": "Probe service", "switch": "Switch transaction", "tick": "Scheduler" },
+    "autoEngineReason": {
+      "initializing": "Waiting for the first scheduling pass", "inactive": "No valid runtime snapshot", "paused": "Runtime is paused",
+      "direct": "Automatic selection stops in direct mode", "disabled": "No groups have automatic selection enabled", "runtime-unavailable": "Runtime core is not ready",
+      "transaction": "Waiting for the configuration transaction", "fault": "Configuration transaction has a fault", "pending": "Waiting for configuration activation or verification",
+      "switching": "Applying an automatic switch", "stopped": "Background scheduler stopped", "quota": "Waiting for lightweight probe quota",
+      "retry-after": "Probe service requested a retry delay", "queued": "Waiting for the next batch of checks"
+    }
   }
 }
