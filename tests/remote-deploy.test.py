@@ -17,6 +17,21 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_command_failures_disclose_only_fixed_codes_and_known_service_actions(self):
+        cases = [
+            (['/usr/bin/systemctl', 'start', 'cocoproxy-gateway-guard.service'], b'', b'private systemd log',
+             'REMOTE_SERVICE_COMMAND_FAILED', {'action': 'start', 'service': 'cocoproxy-gateway-guard.service'}),
+            (['python3', '/private/helper.py'], b'{"ok":false,"code":"AUTOMATIC_GATEWAY_HOST_GUARD_REJECTED"}', b'private detail',
+             'AUTOMATIC_GATEWAY_HOST_GUARD_REJECTED', {}),
+            (['python3', '/private/helper.py'], b'{"ok":false,"code":"private detail"}', b'private detail', 'REMOTE_STEP_FAILED', {}),
+        ]
+        for args, stdout, stderr, code, fields in cases:
+            with self.subTest(code=code), patch.object(deploy.subprocess, 'run', return_value=SimpleNamespace(
+                    returncode=1, stdout=stdout, stderr=stderr)), contextlib.redirect_stderr(io.StringIO()) as output:
+                with self.assertRaisesRegex(RuntimeError, '^' + code + '$'):
+                    deploy.run(args)
+                self.assertEqual(json.loads(output.getvalue()), {'phase': 'deployment-command', 'code': code, 'exitCode': 1, **fields})
+
     def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False, stage_failure=False):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
