@@ -109,7 +109,7 @@ defineExpose({ open, close })
           }"
           @click="requestClose"
         >
-          <IconX :size="18" aria-hidden="true" /><span class="text-xs">{{ t('coco.anClose') }}</span>
+          <IconX :size="18" aria-hidden="true" />
         </button>
       </div>
 
