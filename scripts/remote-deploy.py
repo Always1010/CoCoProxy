@@ -26,6 +26,25 @@ INCOMING = Path('/opt/cocoproxy/incoming')
 NETWORK_RECEIPT = Path('/var/lib/cocoproxy-gateway-network/network-receipt.json')
 
 
+class DeploymentClock:
+    """Monotonic orchestration timings, not a client outage measurement."""
+    def __init__(self):
+        self.started = time.monotonic()
+        self.phases = []
+
+    def mark(self, phase):
+        self.phases.append({'phase': phase, 'elapsedMs': round((time.monotonic() - self.started) * 1000)})
+
+    def report(self):
+        return {'elapsedMs': round((time.monotonic() - self.started) * 1000), 'phases': list(self.phases),
+                'scope': 'coordinator-not-client-outage'}
+
+
+def preinstall_release(installer, common):
+    result = json.loads(run(installer + ['--operation', 'stage', *common, '--apply']))
+    need(result.get('staged') is True and result.get('liveSettingsChanged') is False, 'REMOTE_RELEASE_NOT_PREINSTALLED')
+
+
 def compare_preservation(before, after, frozen=False):
     """Digests stay in memory; public results disclose fixed roles and scope only."""
     checks = []
@@ -274,7 +293,7 @@ def management_ready(management):
 
 
 def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
-                    systemctl, service, node, inspect_complete, web_unit, journal, components='frontend'):
+                    systemctl, service, node, inspect_complete, web_unit, journal, clock, components='frontend'):
     """Only management-side maintenance. The installer proves the pinned runtime."""
     update = manifest.get('frontendUpdate')
     if components == 'frontend':
@@ -298,10 +317,18 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         print(json.dumps({'prepared': True, 'apply': False, 'components': components, 'commit': manifest['commit'],
                           'deployment': 'preserve-runtime', 'services': managed, 'preservedServices': preserved}))
         return
-    progress = {'status': 'running', 'phase': 'frontend-maintenance', 'manifestSha256': options.manifest_sha256,
+    progress = {'status': 'running', 'phase': 'release-preinstall', 'manifestSha256': options.manifest_sha256,
                 'previousServices': before, 'components': components, 'deployment': 'preserve-runtime'}
     replace(journal, progress)
     try:
+        preinstall_release(installer, common)
+        clock.mark('release-preinstalled')
+        progress['timings'] = clock.report()
+        replace(journal, progress)
+        clock.mark('management-maintenance-started')
+        progress['phase'] = 'management-maintenance'
+        progress['timings'] = clock.report()
+        replace(journal, progress)
         for unit in reversed(managed):
             run([systemctl, 'stop', unit])
         enabled_units = [unit for unit, value in before.items() if value['enabled'] == 'enabled']
@@ -312,7 +339,8 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
                 payload / 'source/apps/deployment/preservation.ts', '--management-settings', candidate['management']['settingsPath'], *(['--frozen'] if frozen else [])]))
         baseline = preservation(True)
         need(baseline.get('ready') is True, 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
-        run(installer + ['--operation', 'upgrade', *common])
+        # Apply repeats the complete read-only preflight before any live write;
+        # an extra dry-run here would duplicate it inside the outage window.
         run(installer + ['--operation', 'upgrade', *common, '--apply'])
         progress['phase'] = 'frontend-files-installed'
         replace(journal, progress)
@@ -344,11 +372,12 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         need((regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None) == network, 'REMOTE_NETWORK_RECEIPT_CHANGED')
         preserved_state = compare_preservation(baseline, preservation())
         need(preserved_state['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
-        replace(journal, {**progress, 'status': 'complete', 'phase': 'verified', 'preservation': preserved_state})
+        clock.mark('management-restored-verified')
+        replace(journal, {**progress, 'status': 'complete', 'phase': 'verified', 'preservation': preserved_state, 'timings': clock.report()})
         print(json.dumps({'installed': True, 'updated': True, 'components': components, 'commit': manifest['commit'],
-                          'manifestSha256': options.manifest_sha256, 'runtimePreserved': True, 'preservation': preserved_state}))
+                          'manifestSha256': options.manifest_sha256, 'runtimePreserved': True, 'preservation': preserved_state, 'timings': clock.report()}))
     except Exception:
-        replace(journal, {**progress, 'status': 'failed', 'lastCompletedPhase': progress['phase'], 'phase': 'manual-review-required'})
+        replace(journal, {**progress, 'status': 'failed', 'lastCompletedPhase': progress['phase'], 'phase': 'manual-review-required', 'timings': clock.report()})
         raise
 
 
@@ -378,10 +407,12 @@ def main(argv=None):
 
 
 def main_locked(options):
+    clock = DeploymentClock()
     journal = PRIVATE / 'remote-last.json'
     if journal.exists():
         need(json.loads(regular(journal, True))['status'] == 'complete', 'REMOTE_PREVIOUS_DEPLOYMENT_REQUIRES_REVIEW')
     payload, manifest = stage_payload(Path(options.payload), options.manifest_sha256)
+    clock.mark('transport-payload-staged')
     frontend = 'frontendUpdate' in manifest
     component_update = manifest.get('componentUpdate')
     components = 'frontend' if frontend else component_update['components'] if component_update else 'all'
@@ -468,7 +499,7 @@ def main_locked(options):
             run([node, '--experimental-strip-types', payload / 'source/apps/cli/main.ts', 'admin-init', '--input', admin, '--output', initial_credential])
         if frontend:
             return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
-                                   systemctl, service, node, inspect_complete, web_unit, journal)
+                                   systemctl, service, node, inspect_complete, web_unit, journal, clock)
         if installed and components != 'core' and preparation.get('runtimePreservation', {}).get('eligible') is True:
             candidate = new_input(old, options.manifest_sha256, runtime['binarySha256'], True)
             replace(next_path, candidate)
@@ -477,7 +508,7 @@ def main_locked(options):
             need(pinned.get('readiness') == 'prepared-not-applied' and pinned.get('review', {}).get('configurationChanged') is False,
                  'REMOTE_RUNTIME_PRESERVATION_NOT_READY')
             return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
-                                   systemctl, service, node, inspect_complete, web_unit, journal, components)
+                                   systemctl, service, node, inspect_complete, web_unit, journal, clock, components)
         gateway = bool(runtime.get('automaticGateway'))
         need(not installed or not gateway or router_command, 'REMOTE_ROUTER_HOOK_REQUIRED')
         router_enabled = False
@@ -503,7 +534,8 @@ def main_locked(options):
             return {'status': value['status'], 'sha256': hashlib.sha256(data).hexdigest()}
         previous_network = network_receipt()
         if options.preview:
-            print(json.dumps({'prepared': True, 'apply': False, 'operation': 'upgrade' if installed else 'install', 'commit': manifest['commit'], 'components': components, 'deployment': 'full-maintenance'}))
+            print(json.dumps({'prepared': True, 'apply': False, 'operation': 'upgrade' if installed else 'install', 'commit': manifest['commit'],
+                'components': components, 'deployment': 'full-maintenance', 'runtimePreservation': preparation.get('runtimePreservation')}))
             return
         units = ['cocoproxy-management.service', 'cocoproxy-mihomo.service']
         if gateway:
@@ -538,17 +570,22 @@ def main_locked(options):
                  isinstance(snapshot.get('directories'), dict) and isinstance(snapshot.get('contentChecks'), list), 'REMOTE_PRESERVATION_SNAPSHOT_INVALID')
             return snapshot
         progress = {'status': 'running', 'phase': 'maintenance', 'manifestSha256': options.manifest_sha256, 'components': components,
+                    'runtimePreservation': preparation.get('runtimePreservation'),
                     'previousServices': before_units, 'routerPreviouslyEnabled': router_enabled,
                     'previousNetworkReceipt': previous_network,
                     'previousLifecycle': {'present': before_lifecycle is not None,
                         'enabled': before_lifecycle['enabled'] if before_lifecycle else False,
                         'paused': before_lifecycle['paused'] if before_lifecycle else False}}
         def record_phase(phase, **facts):
-            progress.update(phase=phase, **facts)
+            clock.mark(phase)
+            progress.update(phase=phase, timings=clock.report(), **facts)
             replace(journal, progress)
-        record_phase('maintenance')
+        record_phase('preinstall')
         try:
             if installed:
+                preinstall_release(installer, common)
+                record_phase('release-preinstalled')
+                record_phase('maintenance-started')
                 # The new public CLI can drain the shared transaction without parsing
                 # old core settings, and returns an exact, fingerprint-bound intent token.
                 paused = maintenance('runtime-maintenance-pause')
@@ -588,7 +625,6 @@ def main_locked(options):
                 need(before_preservation.get('ready') is True, 'REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED'
                     if before_preservation.get('runtime', {}).get('coherent') is False else 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
             operation = 'upgrade' if installed else 'install'
-            run(installer + ['--operation', operation, *common])
             run(installer + ['--operation', operation, *common, '--apply'])
             record_phase('files-installed')
             replace(input_path, candidate)
@@ -625,6 +661,7 @@ def main_locked(options):
                         time.sleep(1)
                     else:
                         raise RuntimeError('REMOTE_CORE_NOT_READY')
+                record_phase('core-restored-ready')
                 restored_preservation = compare_preservation(before_preservation, snapshot_preservation())
                 preservation_windows.append(restored_preservation)
                 record_phase('restored-state-verified', preservation=restored_preservation)
@@ -637,18 +674,21 @@ def main_locked(options):
                 need(not previous['active'] or unit_value(unit, 'ActiveState') == 'active', 'REMOTE_SERVICE_NOT_RESTORED')
                 need(unit_value(unit, 'UnitFileState') == previous['enableState'], 'REMOTE_SERVICE_ENABLE_INTENT_CHANGED')
             if router_enabled:
+                record_phase('router-restore-started')
                 run([*router_command, 'enable'], timeout=300)
                 need(json.loads(run([*router_command, 'status']))['enabled'] is True, 'REMOTE_ROUTER_NOT_RESTORED')
+            record_phase('services-and-delivery-restored')
             preservation = {'schemaVersion': 1, 'status': 'not-applicable', 'code': 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE'}
             if installed:
                 preservation = {'schemaVersion': 1, 'status': 'pass', 'scope': 'verified-install-window-and-restored-stable-state',
                     'windows': preservation_windows, 'notAssessed': ['real-restored-authentication', 'long-running-business-availability']}
             replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit'], 'components': components,
-                'preservation': preservation})
+                'preservation': preservation, 'timings': clock.report()})
             print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256, 'components': components,
-                'preservation': preservation, 'routerRestored': bool(router_enabled), 'initialConfigurationRequired': not installed}))
+                'preservation': preservation, 'routerRestored': bool(router_enabled), 'initialConfigurationRequired': not installed,
+                'deployment': 'full-maintenance', 'runtimePreservation': preparation.get('runtimePreservation'), 'timings': clock.report()}))
         except Exception:
-            progress.update(status='failed', lastCompletedPhase=progress['phase'], phase='manual-review-required')
+            progress.update(status='failed', lastCompletedPhase=progress['phase'], phase='manual-review-required', timings=clock.report())
             replace(journal, progress)
             raise
 

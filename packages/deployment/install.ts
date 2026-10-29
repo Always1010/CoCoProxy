@@ -447,9 +447,37 @@ async function atomic(path: string, bytes: string, mode: number, uid = 0) {
 export async function prepareUpgrade(options: Omit<InstallOptions, 'operation' | 'apply' | 'reviewedConfigurationSha256'>) {
   return deployment({ ...options, operation: 'upgrade', apply: false }, true);
 }
+/** Preinstall immutable release bytes only. Live settings/receipt remain old. */
+export async function stageUpgrade(options: Omit<InstallOptions, 'operation' | 'apply' | 'reviewedConfigurationSha256'>) {
+  return deployment({ ...options, operation: 'upgrade', apply: true }, true, true);
+}
 export async function deployRelease(options: InstallOptions) { return deployment(options, false); }
 
-async function deployment(options: InstallOptions, preparing: boolean) {
+export function preparedReleaseIdentity(previousManifestSha256: string, manifestSha256: string, inputBytes: Buffer, preserveRuntime: boolean) {
+  require(HASH.test(previousManifestSha256) && HASH.test(manifestSha256), 'INSTALL_PREPARED_RELEASE_INVALID');
+  return { schemaVersion: 1, previousManifestSha256, manifestSha256, inputSha256: digest(inputBytes), preserveRuntime };
+}
+
+export function assertPreparedReleaseIdentity(value: unknown, expected: ReturnType<typeof preparedReleaseIdentity>) {
+  require(JSON.stringify(value) === JSON.stringify(expected), 'INSTALL_PREPARED_RELEASE_CHANGED');
+}
+
+async function copyRelease(payload: string, target: string, release: Awaited<ReturnType<typeof verifyRelease>>, manifestSha256: string) {
+  await mkdir(target, { mode: 0o755 });
+  await chmod(target, 0o755); await chown(target, 0, 0);
+  for (const entry of release.files) {
+    const path = target + '/' + entry.path;
+    await mkdir(posix.dirname(path), { recursive: true, mode: 0o755 });
+    // The coordinator's private umask must not hide a newly copied runtime.
+    let directory = posix.dirname(path);
+    while (directory !== target) { await chmod(directory, 0o755); await chown(directory, 0, 0); directory = posix.dirname(directory); }
+    await writeExclusive(path, await regular(payload + '/' + entry.path, 256 * 1024 * 1024), parseInt(entry.mode, 8));
+  }
+  await writeExclusive(target + '/manifest.json', await regular(payload + '/manifest.json'), 0o644);
+  await verifyRelease(target, manifestSha256);
+}
+
+async function deployment(options: InstallOptions, preparing: boolean, stageOnly = false) {
   require(platform() === 'linux' && process.getuid?.() === 0, 'INSTALL_LINUX_ROOT_REQUIRED');
   require(['install', 'upgrade', 'uninstall'].includes(options.operation), 'INSTALL_OPERATION_INVALID');
   require(options.reviewedConfigurationSha256 === undefined || options.operation === 'upgrade', 'INSTALL_CONFIGURATION_REVIEW_UPGRADE_ONLY');
@@ -507,6 +535,23 @@ async function deployment(options: InstallOptions, preparing: boolean) {
   require(!(await info(STORE + '/install.lock')), 'INSTALL_PREVIOUS_APPLY_INCOMPLETE');
   const currentFiles = owned(plan); let previous: Receipt | null = null;
   let runtimePreservation: ReturnType<typeof assessRuntimePreservation> | undefined;
+  const preparedPath = STORE + '/prepared-' + options.manifestSha256 + '.json';
+  let staged = false;
+  let preparedIdentity: ReturnType<typeof preparedReleaseIdentity> | undefined;
+  async function verifyPrepared() {
+    await trusted(preparedPath); await privateFile(preparedPath, 0);
+    assertPreparedReleaseIdentity(JSON.parse((await regular(preparedPath)).toString()), preparedIdentity!);
+    await trusted(target);
+    require(((await lstat(target)).mode & 0o7777) === 0o755, 'INSTALL_PREPARED_RELEASE_CHANGED');
+    const verified = await verifyRelease(target, options.manifestSha256);
+    await trusted(target + '/manifest.json');
+    require(((await lstat(target + '/manifest.json')).mode & 0o7777) === 0o644, 'INSTALL_PREPARED_RELEASE_CHANGED');
+    for (const entry of verified.files) {
+      await trusted(target + '/' + entry.path);
+      require(((await lstat(target + '/' + entry.path)).mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_PREPARED_RELEASE_CHANGED');
+      await serviceAncestors(target + '/' + entry.path);
+    }
+  }
   if (await info(RECEIPT)) {
     await trusted(RECEIPT); await privateFile(RECEIPT, 0);
     previous = validateReceipt(JSON.parse((await regular(RECEIPT)).toString()));
@@ -560,7 +605,11 @@ async function deployment(options: InstallOptions, preparing: boolean) {
   let configurationReviewed = false;
   let review: { digest: string; configurationChanged: boolean; changedFiles: string[]; authorization: 'required-on-apply' } | undefined;
   if (options.operation === 'upgrade') {
-    require(previous!.release !== target && !(await info(target)), 'INSTALL_UPGRADE_NEW_RELEASE_REQUIRED');
+    preparedIdentity = preparedReleaseIdentity(previous!.manifestSha256, options.manifestSha256, inputBytes, preserveRuntime);
+    if (await info(preparedPath)) {
+      await verifyPrepared(); staged = true;
+    }
+    require(previous!.release !== target && (!(await info(target)) || staged), 'INSTALL_UPGRADE_NEW_RELEASE_REQUIRED');
     // A separate explicit review permits schema-validated configuration migration;
     // receipt identity, owners, paths and lifecycle checks above remain mandatory.
     let unchanged = !(input.web && !previous!.files.some(file => file.path === '/etc/systemd/system/cocoproxy-web.service'));
@@ -644,6 +693,8 @@ async function deployment(options: InstallOptions, preparing: boolean) {
       'pause automatic lifecycle', 'stop and disable deployment units', 'remove owned gateway network resources', 'repeat complete apply preflight'],
     state: { action: 'preserve-in-place', automaticProgramRollback: false } } : {}) };
   if (!options.apply) return preview;
+  if (stageOnly) require(preview.readiness === 'prepared-not-applied' && review?.configurationChanged === false,
+    'INSTALL_PREPARED_RELEASE_NOT_READY');
   if (!(await info(STORE))) { await mkdir(STORE, { mode: 0o700 }); await chown(STORE, 0, 0); await chmod(STORE, 0o700); }
   // Exclusive intent lock survives errors/crashes. An operator must inspect the
   // pending receipt before recovery; never guess/overwrite an incomplete install.
@@ -658,14 +709,25 @@ async function deployment(options: InstallOptions, preparing: boolean) {
   try {
     const observed = await info(RECEIPT) ? JSON.parse((await regular(RECEIPT)).toString()) : null;
     require(JSON.stringify(observed) === JSON.stringify(previous), 'INSTALL_RECEIPT_CHANGED');
-    if (options.operation !== 'uninstall') require(!(await info(target)), 'INSTALL_TARGET_EXISTS');
+    if (staged) await verifyPrepared();
+    else if (options.operation !== 'uninstall') require(!(await info(target)), 'INSTALL_TARGET_EXISTS');
     if (previous) await checkOwned(previous.files);
     require(digest(await regular(inputPath, 128 * 1024)) === digest(inputBytes), 'INSTALL_INPUT_CHANGED');
-    await assertDeploymentLifecycle(input.runtime.stateDirectory, input.runtime.serviceUid, preserveRuntime);
+    await assertDeploymentLifecycle(input.runtime.stateDirectory, input.runtime.serviceUid, stageOnly || preserveRuntime);
     if (options.operation === 'upgrade') assertDeploymentStateCompatibility((await inspectStateCompatibility(stateHost, declaration)).findings);
-    await stopped(input.runtime.systemctlPath, units);
-    if (!preserveRuntime) await networkClear(input);
+    if (!stageOnly) {
+      await stopped(input.runtime.systemctlPath, units);
+      if (!preserveRuntime) await networkClear(input);
+    }
   } catch (error) { await unlink(lock); throw error; }
+  if (stageOnly) {
+    if (!staged) {
+      await copyRelease(payload, target, release, options.manifestSha256);
+      await atomic(preparedPath, JSON.stringify(preparedIdentity) + '\n', 0o600);
+    }
+    await unlink(lock);
+    return { ...preview, operation: 'stage', staged: true, reused: staged, liveSettingsChanged: false };
+  }
   const next: Receipt = { schemaVersion: 1, status: 'pending', release: target, manifestSha256: options.manifestSha256,
     files: currentFiles, serviceUid: input.runtime.serviceUid, stateDirectory: input.runtime.stateDirectory,
     credentialPath: input.management.credentialPath, transaction: { id: lockOwner.id, operation: options.operation } };
@@ -679,19 +741,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
       await chown(directory.path, directory.owner === 'root' ? 0 : directory.owner, 0);
       await chmod(directory.path, parseInt(directory.mode, 8));
     }
-    await mkdir(target, { mode: 0o755 });
-    await chmod(target, 0o755); await chown(target, 0, 0);
-    for (const entry of release.files) {
-      const path = target + '/' + entry.path;
-      await mkdir(posix.dirname(path), { recursive: true, mode: 0o755 });
-      // mkdir modes are affected by the caller's umask. Newly copied runtime
-      // parents must remain readable by the dedicated service identity.
-      let directory = posix.dirname(path);
-      while (directory !== target) { await chmod(directory, 0o755); await chown(directory, 0, 0); directory = posix.dirname(directory); }
-      await writeExclusive(path, await regular(payload + '/' + entry.path, 256 * 1024 * 1024), parseInt(entry.mode, 8));
-    }
-    await writeExclusive(target + '/manifest.json', await regular(payload + '/manifest.json'), 0o644);
-    await verifyRelease(target, options.manifestSha256);
+    if (!staged) await copyRelease(payload, target, release, options.manifestSha256);
     for (const file of plan.files.filter(file => !preserveRuntime || file.path === '/etc/systemd/system/cocoproxy-management.service')) {
       await atomic(file.path, file.content, parseInt(file.mode, 8), file.owner === 'root' ? 0 : file.owner);
     }
@@ -700,6 +750,7 @@ async function deployment(options: InstallOptions, preparing: boolean) {
   await run(input.runtime.systemctlPath, ['daemon-reload']);
   next.status = options.operation === 'uninstall' ? 'uninstalled' : 'complete';
   await atomic(RECEIPT, JSON.stringify(next) + '\n', 0o600);
+  if (staged) await unlink(preparedPath);
   await unlink(lock);
   return preview;
 }

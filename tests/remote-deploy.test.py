@@ -17,7 +17,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False, stage_failure=False):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -107,6 +107,10 @@ class RemoteDeploymentTests(unittest.TestCase):
                 if operation == 'inspect':
                     return json.dumps({'installed': True, 'release': 'matches-receipt', 'receipt': {'status': 'complete', 'manifestSha256': 'b' * 64},
                         'files': [{'status': 'matches-receipt'}], 'lock': {'present': False}}).encode()
+                if operation == 'stage':
+                    if stage_failure:
+                        raise RuntimeError('INSTALL_SYNTHETIC_STAGE_FAILURE')
+                    return b'{"staged":true,"liveSettingsChanged":false}'
                 if '--apply' in args and fail_apply:
                     raise RuntimeError('INSTALL_SYNTHETIC_FAILURE')
                 if '--apply' in args and change_during_install:
@@ -115,7 +119,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                 action = args[1]
                 if action == 'show':
                     if args[3].startswith('--property='):
-                        pid = '99' if runtime_changed and any('--apply' in event for event in events) else '42'
+                        pid = '99' if runtime_changed and any('upgrade' in event and '--apply' in event for event in events) else '42'
                         return ('ActiveState=' + ('active' if active[args[2]] else 'inactive') + '\nMainPID=' + pid + '\nExecMainStartTimestampMonotonic=1234\nUnitFileState=' + enabled[args[2]]).encode()
                     return (('active' if active[args[2]] else 'inactive') if args[4] == 'ActiveState' else enabled[args[2]]).encode()
                 for unit in args[2:]:
@@ -178,6 +182,17 @@ class RemoteDeploymentTests(unittest.TestCase):
                         deploy.main_locked(args)
                     self.assertTrue(router['enabled'])
                     self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'failed')
+
+    def test_preinstallation_failure_never_pauses_runtime_or_mutates_services_and_router(self):
+        for preserve in [False, True]:
+            with self.subTest(preserve_runtime=preserve):
+                temporary, stack, private, before, events, router, args = self.scenario(preserve_runtime=preserve, stage_failure=True)
+                with temporary, stack:
+                    with self.assertRaisesRegex(RuntimeError, 'INSTALL_SYNTHETIC_STAGE_FAILURE'):
+                        deploy.main_locked(args)
+                    self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
+                    self.assertTrue(router['enabled'])
+                    self.assertFalse(any('runtime-maintenance-pause' in event or event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'disable', 'enable'] for event in events))
 
     def test_frontend_update_pins_runtime_and_never_enters_router_or_runtime_maintenance(self):
         temporary, stack, private, before, events, router, args = self.scenario(frontend=True)
@@ -248,14 +263,17 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertLess(find('check-adapter'), find('runtime-maintenance-pause'))
             self.assertLess(find('prepare'), find('runtime-maintenance-pause'))
             self.assertLess(find('disable'), find('remove'))
-            self.assertLess(find('remove'), find('--apply'))
+            stage_index = find('stage')
+            apply_index = next(index for index, command in enumerate(events) if 'upgrade' in command and '--apply' in command)
+            self.assertLess(stage_index, find('runtime-maintenance-pause'))
+            self.assertLess(find('remove'), apply_index)
             enable_router = next(index for index, command in enumerate(events) if command[0].endswith('router-hook') and command[1] == 'enable')
             self.assertLess(find('runtime-status'), enable_router)
             snapshots = [index for index, command in enumerate(events) if any(item.replace('\\', '/').endswith('/apps/deployment/preservation.ts') for item in command)]
             self.assertEqual(len(snapshots), 3)
             self.assertLess(find('stop'), snapshots[0])
-            self.assertLess(snapshots[0], find('--apply'))
-            self.assertLess(find('--apply'), snapshots[1])
+            self.assertLess(snapshots[0], apply_index)
+            self.assertLess(apply_index, snapshots[1])
             self.assertLess(snapshots[1], find('runtime-maintenance-restore'))
             self.assertLess(find('runtime-status'), snapshots[2])
             self.assertLess(snapshots[2], enable_router)
@@ -266,6 +284,10 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertTrue(router['enabled'])
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['preservation'], report['preservation'])
+            phases = [entry['phase'] for entry in report['timings']['phases']]
+            self.assertLess(phases.index('release-preinstalled'), phases.index('maintenance-started'))
+            self.assertIn('services-and-delivery-restored', phases)
+            self.assertEqual(report['timings']['scope'], 'coordinator-not-client-outage')
 
     def test_rejected_preparation_retains_reason_codes_without_private_values_or_maintenance(self):
         report = {'readiness': 'compatibility-evidence-incomplete', 'review': {'configurationChanged': False, 'changedFiles': ['/private/synthetic-path']},

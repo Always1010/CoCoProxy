@@ -1,4 +1,4 @@
-import { deployRelease, prepareUpgrade, InstallError, type InstallOptions } from '../../packages/deployment/install.ts';
+import { deployRelease, prepareUpgrade, stageUpgrade, InstallError, type InstallOptions } from '../../packages/deployment/install.ts';
 import { inspectDeployment, recoverDeployment } from '../../packages/deployment/maintenance.ts';
 
 try {
@@ -24,8 +24,9 @@ try {
   } else {
     if (!values['--payload'] || !values['--input'] || !values['--manifest-sha256'] || values['--reviewed-recovery-sha256'] ||
       operation === 'prepare' && (apply || values['--reviewed-configuration-sha256'])) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
+    if (operation === 'stage' && (!apply || values['--reviewed-configuration-sha256'])) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
     const options = { payload: values['--payload'], input: values['--input'], manifestSha256: values['--manifest-sha256'], preserveRuntime };
-    result = operation === 'prepare' ? await prepareUpgrade(options) : await deployRelease({ ...options,
+    result = operation === 'prepare' ? await prepareUpgrade(options) : operation === 'stage' ? await stageUpgrade(options) : await deployRelease({ ...options,
       operation: operation as InstallOptions['operation'], reviewedConfigurationSha256: values['--reviewed-configuration-sha256'], apply });
   }
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
