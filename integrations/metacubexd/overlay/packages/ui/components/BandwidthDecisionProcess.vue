@@ -19,6 +19,7 @@ const error = useLocalizedMessage()
 const feedback = useLocalizedMessage()
 let timer: ReturnType<typeof setTimeout> | undefined
 let session = 0, requestId = 0, disposed = false
+let reading = false
 let controller: AbortController | undefined
 const scope = computed(() => {
   const workspace = view.value?.workspace
@@ -51,23 +52,25 @@ const costParts = (d: ProcessComparison) => [setting('switchCostSeconds') / sett
   d.reverse ? setting('reverseCostSeconds') / setting('horizonSeconds') : 0,
   d.currentPreferred && !d.candidatePreferred ? setting('fallbackPenaltyMs') / 1000 : 0]
 
-async function refresh() {
-  if (!visible.value || disposed || document.hidden || !view.value) return
+async function refresh(background = true) {
+  if (!visible.value || disposed || document.hidden || !view.value || (background && (reading || checking.value))) return
   const id = ++requestId, expectedScope = scope.value, revision = view.value.workspace.revision
   controller?.abort(); controller = new AbortController()
   const query = new URLSearchParams({ group: props.groupName, scope: expectedScope, revision: String(revision) })
   if (selectedId.value) query.set('round', selectedId.value)
-  loading.value = true
+  reading = true
+  loading.value = !background || !data.value
   try {
     const result = await api.request<ProcessResponse>('/api/cocoproxy/automatic/bandwidth/history?' + query, { signal: controller.signal })
     if (!visible.value || id !== requestId || expectedScope !== scope.value) return
     if (result.status.scope !== expectedScope || result.status.workspaceRevision !== view.value?.workspace.revision) {
       error.value = () => t('coco.anThePlanOrSettingsChangedClose'); return
     }
-    data.value = result; updatedAt.value = Date.now(); error.value = ''
+    if (JSON.stringify(result) !== JSON.stringify(data.value)) data.value = result
+    updatedAt.value = Date.now(); error.value = ''
   } catch (cause) {
     if (visible.value && id === requestId) error.value = () => cocoproxyErrorMessage(cause, t)
-  } finally { if (id === requestId) loading.value = false }
+  } finally { if (id === requestId) { reading = false; loading.value = false } }
 }
 async function poll(currentSession: number) {
   await refresh()
@@ -78,20 +81,22 @@ function open() {
   visible.value = true; dialog.value?.open(); void poll(session)
 }
 function close() {
-  session++; requestId++; visible.value = false; loading.value = false; controller?.abort()
+  session++; requestId++; visible.value = false; reading = false; loading.value = false; controller?.abort()
   if (timer) clearTimeout(timer)
 }
-function choose(id: string | null) { selectedId.value = id; scroller.value?.scrollTo({ top: 0 }); void refresh() }
+function choose(id: string | null) { selectedId.value = id; scroller.value?.scrollTo({ top: 0 }); void refresh(false) }
 async function check() {
   if (!canCheck.value || !view.value) return
   const expectedScope = scope.value, currentSession = session
+  // A read started before this action must not restore its older status.
+  requestId++; controller?.abort(); reading = false; loading.value = false
   checking.value = true; feedback.value = ''
   try {
     await api.request('/api/cocoproxy/automatic/bandwidth/check', { method: 'POST', body: {
       expectedRevision: view.value.workspace.revision, expectedActive: view.value.active, scope: expectedScope, group: props.groupName,
     } })
     if (visible.value && currentSession === session && scope.value === expectedScope) {
-      feedback.value = () => t('coco.anThisGroupSCandidateCheckIs'); await refresh()
+      feedback.value = () => t('coco.anThisGroupSCandidateCheckIs'); await refresh(false)
     }
   } catch (cause) { if (visible.value && currentSession === session) feedback.value = () => cocoproxyErrorMessage(cause, t) }
   finally { checking.value = false }
@@ -111,8 +116,8 @@ defineExpose({ open })
     <template #content>
       <div class="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <button v-if="selectedId" type="button" class="btn btn-ghost min-h-11" @click="choose(null)"><IconArrowLeft :size="16" aria-hidden="true" /><span>{{ t('coco.process.back') }}</span></button>
-        <span class="text-xs text-base-content/60">{{ t('coco.process.updated', { time: time(updatedAt) }) }}</span>
-        <button type="button" class="btn btn-ghost min-h-11" :disabled="loading" @click="refresh"><IconRefresh :size="16" :class="{ 'animate-spin': loading }" aria-hidden="true" /><span>{{ loading ? t('coco.anRefreshing') : t('coco.anRefresh') }}</span></button>
+        <span class="text-xs tabular-nums text-base-content/60">{{ t('coco.process.updated', { time: time(updatedAt) }) }}</span>
+        <button type="button" class="btn btn-ghost min-h-11 min-w-28 shrink-0" :disabled="loading || checking" @click="refresh(false)"><IconRefresh :size="16" :class="{ 'animate-spin': loading }" aria-hidden="true" /><span>{{ loading ? t('coco.anRefreshing') : t('coco.anRefresh') }}</span></button>
       </div>
       <p v-if="error" role="alert" class="mb-3 shrink-0 text-sm text-warning">{{ t('coco.anUpdateFailedPreviouslyDisplayedRecordsAre', { value: error }) }}</p>
       <div ref="scroller" class="min-h-0 flex-1 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
