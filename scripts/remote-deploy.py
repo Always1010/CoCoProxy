@@ -173,8 +173,10 @@ def replace(path, value):
 def run(args, timeout=120):
     result = subprocess.run([str(arg) for arg in args], capture_output=True, timeout=timeout)
     if result.returncode:
-        error = result.stderr.decode(errors='replace').strip()
-        code = error if re.fullmatch(r'(INSTALL|SETUP|RUNTIME|REMOTE)_[A-Z0-9_]+', error) else 'REMOTE_STEP_FAILED'
+        errors = result.stderr.decode(errors='replace').splitlines()
+        # Node may prepend runtime warnings to an installer's fixed error code.
+        codes = [line for line in errors if re.fullmatch(r'(INSTALL|SETUP|RUNTIME|REMOTE)_[A-Z0-9_]+', line)]
+        code = codes[-1] if codes else 'REMOTE_STEP_FAILED'
         # Helpers can return their fixed diagnostic code in JSON on stdout.
         # Never print arbitrary captured output, private argv or input paths.
         try:
