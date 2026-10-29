@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { createBuildInputs, validateBuildInputs } from '../packages/deployment/update-scope.mjs';
+import { compareBuildInputs, createBuildInputs, validateBuildInputs } from '../packages/deployment/update-scope.mjs';
 
 const ui = 'integrations/metacubexd/overlay/packages/ui/pages/example.vue';
 const baseline = {
@@ -34,6 +34,21 @@ test('local previews, tests and root release versions do not invalidate reusable
     assert.notDeepEqual(next.inputs, base.inputs, 'the manifest still records harmless changes for diagnosis');
   }
   assert.ok(!JSON.stringify(base.inputs).includes('original API'));
+});
+
+test('diagnostics explain field changes and component drift using the same inputs as the decision', async () => {
+  const base = await inputs();
+  const changed = editJSON('package.json', pkg => { pkg.version = '1.0.1'; pkg.scripts['test:new'] = 'node --test'; });
+  changed[ui] = 'updated UI';
+  delete changed['apps/management/server.ts'];
+  const next = await inputs(changed);
+  const frontend = compareBuildInputs(base, next, 'frontend');
+  assert.deepEqual(frontend.filter(change => change.blocking).map(change => [change.path, change.change]), [['apps/management/server.ts', 'removed']]);
+  assert.ok(frontend.some(change => change.field === '/scripts/test:new' && !change.blocking && change.change === 'added'));
+  assert.ok(frontend.some(change => change.field === '/version' && !change.blocking));
+  const backend = compareBuildInputs(base, next, 'backend');
+  assert.deepEqual(backend.filter(change => change.blocking).map(change => change.path), [ui]);
+  assert.equal(compareBuildInputs(base, next, 'core').filter(change => change.blocking).length, 2);
 });
 
 test('component isolation retains real dependencies, build tooling, permissions, deletions and unknown inputs', async () => {

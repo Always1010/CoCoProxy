@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { executeBuildCommand, runBuildRelease, readBuildSelection } from '../scripts/build-release.mjs';
+import { buildFailureMessage, executeBuildCommand, runBuildRelease, readBuildSelection } from '../scripts/build-release.mjs';
 import { createBuildInputs } from '../packages/deployment/update-scope.mjs';
 
 const exec = promisify(execFile);
@@ -85,13 +85,16 @@ test('component selection rejects unsupported modes; a frontend base must match 
   const state = await fixture(t);
   const base = join(state.config.workspace, 'base'); await mkdir(base);
   const path = 'synthetic.txt'; await write(join(base, path), 'base');
+  await write(join(base, 'bin/mihomo'), 'synthetic core', 0o755);
   const raw = await executeBuildCommand('git', ['-C', state.config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
   const entries = raw.split('\0').filter(Boolean).map(line => { const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line); return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] }; });
   const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: await createBuildInputs(entries, entry => readFile(join(state.config.snapshot, entry.path))),
-    files: [{ path, size: 4, sha256: sha256('base'), mode: '0644' }] };
+    components: { mihomo: { binarySha256: sha256('synthetic core') } },
+    files: [{ path, size: 4, sha256: sha256('base'), mode: '0644' }, { path: 'bin/mihomo', size: 14, sha256: sha256('synthetic core'), mode: '0755' }] };
   await write(join(base, 'manifest.json'), JSON.stringify(manifest));
   const plan = await runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base, preview: true });
-  assert.equal(plan.components, 'frontend'); assert.equal(state.commands.some(item => item.command === 'tar'), false);
+  assert.equal(plan.components, 'frontend'); assert.deepEqual(plan.inputComparison.changes, []);
+  assert.equal(state.commands.some(item => item.command === 'tar'), false);
   const result = await runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base });
   assert.equal(result.components, 'frontend');
   assert.equal(state.commands.some(item => item.command === 'npm'), false);
@@ -99,9 +102,23 @@ test('component selection rejects unsupported modes; a frontend base must match 
   await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BASE_UPGRADE_REQUIRED' });
   await write(join(base, 'manifest.json'), JSON.stringify({ ...manifest, buildInputs: { backendInputSha256: manifest.buildInputs.backendInputSha256 } }));
   await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BASE_UPGRADE_REQUIRED' });
-  manifest.buildInputs.backendInputSha256 = '0'.repeat(64);
+  manifest.buildInputs = await createBuildInputs([...entries, { path: 'unknown-build-input.json', mode: '0644', oid: '0'.repeat(40) }], entry => readFile(join(state.config.snapshot, entry.path)));
   await write(join(base, 'manifest.json'), JSON.stringify(manifest));
-  await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BACKEND_CHANGED' });
+  state.commands.length = 0;
+  await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), error => {
+    assert.equal(error.code, 'BUILD_FRONTEND_BACKEND_CHANGED');
+    assert.equal(error.inputComparison.recommendedComponents, 'management');
+    assert.match(buildFailureMessage(error), /unknown-build-input.json.*removed/u);
+    assert.match(buildFailureMessage(error), /--components management/u);
+    assert.match(buildFailureMessage(error), /代理会短暂中断/u);
+    return true;
+  });
+  assert.equal(state.commands.some(item => item.command === 'tar' || item.command === 'sudo'), false);
+  await write(state.config.core, 'changed core');
+  await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), error => {
+    assert.equal(error.inputComparison.recommendedComponents, 'all');
+    return true;
+  });
 });
 
 test('backend build reuses verified UI, skips UI generation and refuses UI drift before building', async t => {
@@ -117,7 +134,8 @@ test('backend build reuses verified UI, skips UI generation and refuses UI drift
   assert.equal(state.commands.some(item => item.args.includes('generate') || item.args[0] === 'scripts/typecheck-metacubexd-ui.mjs'), false);
   assert.ok(state.commands.some(item => item.args.includes('@metacubexd/server') && item.args.includes('build')));
   state.commands.length = 0;
-  manifest.buildInputs.frontendInputSha256 = '0'.repeat(64); await write(join(base, 'manifest.json'), JSON.stringify(manifest));
+  manifest.buildInputs = await createBuildInputs([...entries, { path: 'unknown-build-input.json', mode: '0644', oid: '0'.repeat(40) }], entry => readFile(join(state.config.snapshot, entry.path)));
+  await write(join(base, 'manifest.json'), JSON.stringify(manifest));
   await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'backend', baseRelease: base }), { code: 'BUILD_REUSED_INPUT_CHANGED' });
   assert.equal(state.commands.some(item => item.command === 'tar' || item.command === 'sudo'), false);
 });
@@ -141,7 +159,8 @@ test('core build reuses the complete server without UI/server compilation and re
   const result = await runBuildRelease(state.config, { execute: state.execute, components: 'core', baseRelease: base });
   assert.equal(result.components, 'core');
   assert.equal(state.commands.some(item => ['tar', 'npm'].includes(item.command) || item.args.some(arg => ['generate', 'build', '@metacubexd/ui', '@metacubexd/server'].includes(arg))), false);
-  manifest.buildInputs.serverInputSha256 = '0'.repeat(64); await write(join(base, 'manifest.json'), JSON.stringify(manifest));
+  manifest.buildInputs = await createBuildInputs([...entries, { path: 'unknown-build-input.json', mode: '0644', oid: '0'.repeat(40) }], entry => readFile(join(state.config.snapshot, entry.path)));
+  await write(join(base, 'manifest.json'), JSON.stringify(manifest));
   await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'core', baseRelease: base }), { code: 'BUILD_REUSED_INPUT_CHANGED' });
 });
 

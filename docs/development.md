@@ -100,17 +100,31 @@ sudo bash scripts/deploy-local.sh
 node scripts/build-deploy.mjs --config /absolute/private/build-config.json --components frontend
 ```
 
-基线默认从当前管理服务的 ExecStart 获取，也可用 `--base-release /absolute/installed-release` 显式指定。基线必须有对应模式所需的输入摘要且完整载荷校验通过；旧发行包缺少该信息时，先全量构建部署一次。`management` 使用已有核心二进制摘要，不要求新增构建输入摘要。前端模式要求前端以外的源码、依赖、构建输入不变，文档和测试变化不计入输入摘要。
+基线默认从当前管理服务的 ExecStart 获取，也可用 `--base-release /absolute/installed-release` 显式指定。基线必须有对应模式所需的输入摘要且完整载荷校验通过。新发行包使用 `buildInputs.schemaVersion: 2`，构建、装配与安装按同一版本校验；旧包仍可读取，但不能把旧摘要当作新版摘要比较。旧基线缺少新版摘要时，核心一致可先用 `--components management` 更新一次建立新版基线；核心变化时核对输入并使用完整更新。`management` 使用已有核心二进制摘要，不要求新版组件输入基线。
+
+局部更新按实际输入分类，不按提交标题判断，也不只比较最后一个提交。摘要保留文件路径、执行权限和内容身份；根 JSON 元数据按字段规范化比较。前端更新要求非前端有效输入不变，后端更新要求前端及共用有效输入不变：
+
+| 输入变化 | 判定 |
+| --- | --- |
+| UI 目录的页面、组件、翻译和配置 | 前端输入；阻止复用旧 UI 的 backend 模式 |
+| 业务 apps/packages、Server overlay | 后端或运行输入；阻止 frontend 模式 |
+| 部署模块、构建与发行工具、上游输入、未知文件 | 保守共用输入；不随意放行 |
+| 文档、根 tests/、.github/，以及明确列出的独立 UI 预览工具 | 不影响组件复用 |
+| 根 package.json 的 version、锁文件顶层及 packages[''] 的 version | 仅发行版本元数据，不影响组件复用 |
+| 根 scripts.test、scripts.test:*、scripts.dev:ui | 不影响组件复用；其他命令仍保守比较 |
+| 依赖、锁条目、integrity、engines、type、构建命令及未知字段 | 保留完整有效输入检查 |
+
+仅有无关字段变化不代表从源码或发行包删除这些字段；完整文件清单与摘要仍按实际内容生成。不会整体忽略 `package.json` 或 `scripts/`，发行装配规则变化仍可能要求扩大更新范围。
 
 前端模式重新生成 UI 并完成承载新资源所需的 Server 打包，省略根项目类型检查；它不是完全跳过 Server 打包。构建清单绑定基线 manifest 摘要，部署时重新核验；不得选择另一个基线强行安装。默认全量构建和 GitHub 正式发行始终从当前提交构建，不依赖已安装版本。
 
-后端模式要求基线具有 `frontendInputSha256`，复用已核验的 `server/.output/public`，跳过 UI generate 和 UI 类型检查，执行项目类型检查及 Server build。UI、上游或共享构建输入变化时拒绝。装配清单携带 `componentUpdate`，安装预检再次核对基线、全部静态资源和核心摘要；部署使用完整维护及恢复流程，会中断代理。它仅减少构建范围，不保证仅重启后端。所有局部模式均要求已有安装，旧基线缺少所需摘要时先全量构建部署。
+后端模式要求基线具有新版 `frontendInputSha256`，复用已核验的 `server/.output/public`，跳过 UI generate 和 UI 类型检查，执行项目类型检查及 Server build。UI、上游或有效共用构建输入变化时拒绝。装配清单携带 `componentUpdate`，安装预检再次核对基线、摘要规则版本、全部静态资源和核心摘要；部署使用完整维护及恢复流程，会中断代理。它仅减少构建范围，不保证仅重启后端。所有局部模式均要求已有安装。
 
 `management` 同时执行项目类型检查、UI generate、UI 类型检查和 Server build，使用基线中的 `bin/mihomo` 装配完整发行包。基线核心必须与当前配置的审核核心及当前提交审核清单一致；不一致时拒绝，不自动扩大为全量。`componentUpdate` 绑定基线 manifest 摘要和核心 SHA256，安装预检允许前后端产物变化，但要求核心内容、大小和权限与已安装版本一致。发行包仍携带同一核心，以保持现有完整载荷布局；此模式排除核心升级，不是无核心包。部署仍进入完整维护窗口，可能停止并重新启动 MiHomo、短暂中断代理。
 
 核心模式要求基线具有 `serverInputSha256`，复用整个 `server/.output`，跳过 UI/Server 编译与相应类型检查。保守复用摘要覆盖其余源码及构建输入；允许核心清单/审核记录变化，但单独绑定其中的管理组件元数据，修改管理版本、UI 或运行适配代码仍须全量构建。装配器继续按当前提交审核清单核对核心摘要、架构及依赖，安装预检比对全部 Server/UI 文件。核心来自既有固定二进制，不在此入口编译核心源码；未准备好输入时停止，不自动下载或安装。部署仍是完整维护，会中断代理。
 
-构建入口附加 `--preview` 只验证输入并输出计划，不编译、不装配、不部署、不覆盖成功记录；会使用已有工作区锁。普通克隆仓库预览要求已有构建工作区，不可与 `--prepare` 同用。部署 `--preview` 的暂存和锁语义见[部署说明](deployment.md)。
+构建入口附加 `--preview` 只验证输入并输出计划，不编译、不装配、不部署、不覆盖成功记录；会使用已有工作区锁。新版 frontend/backend/core 基线的计划包含 `inputComparison`，列出安装提交、目标提交，以及新增、删除、修改的文件或 JSON 字段和是否阻止复用。拒绝时输出相同明细；核心摘要已核对一致才建议 management，否则提示核对核心和完整更新。始终停止而不自动扩大范围，因为 management 与 frontend 的服务中断影响不同。普通克隆仓库预览要求已有构建工作区，不可与 `--prepare` 同用。部署 `--preview` 的暂存和锁语义见[部署说明](deployment.md)。
 
 配置包含绝对、规范且不经过符号链接的 `workspace`、`source`、`mirror`、`snapshot`、`runtimeDependencies`、`toolingDependencies`、`upstreamArchive`、`upstreamDependencies`、`core`、`releases`。其中 `source` 是可构建源码，`mirror` 是纯源码镜像，`snapshot` 是同次同步生成的干净 Git 根目录，`releases` 是发行输出父目录；这四者须位于 `workspace` 内且彼此及依赖输入没有包含关系。`runtimeDependencies` 和 `toolingDependencies` 分别指向已准备好的 `node_modules` 根目录；`upstreamDependencies` 指向保留 `pnpm-lock.yaml` 及上游各包 `node_modules` 的依赖工作区。pnpm 依赖内部链接可以保留，源码、快照、归档和核心路径不能通过链接重定向。
 

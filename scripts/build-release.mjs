@@ -5,7 +5,7 @@ import { constants, fstatSync } from 'node:fs';
 import { cp, lstat, mkdir, open, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createBuildInputs, INPUT_SCHEMA_VERSION, parseComponents } from '../packages/deployment/update-scope.mjs';
+import { compareBuildInputs, createBuildInputs, INPUT_SCHEMA_VERSION, parseComponents } from '../packages/deployment/update-scope.mjs';
 
 export function readBuildSelection(args) {
   const rest = []; let components = 'all'; let baseRelease; let preview = false; const seen = new Set();
@@ -31,14 +31,31 @@ export function buildFailureMessage(error) {
   const code = error.code?.startsWith('BUILD_') ? error.code : 'BUILD_FAILED';
   const guidance = {
     BUILD_FRONTEND_BASE_UPGRADE_REQUIRED: '旧安装缺少新版局部更新基线。核心一致时先用 --components management 更新一次；核心变化时使用全量构建部署。',
-    BUILD_FRONTEND_BACKEND_CHANGED: '前端以外的构建输入已变化，不能局部更新；请使用默认全量构建部署。',
+    BUILD_FRONTEND_BACKEND_CHANGED: '本次需要复用的非前端输入已变化，不能按 frontend 更新。',
     BUILD_FRONTEND_BASE_REQUIRED: '未找到可核验的管理服务基线；核对安装，或使用 --base-release 指定已有发行目录。',
     BUILD_COMPONENTS_UNSUPPORTED: '当前支持 --components all、frontend、backend、management（前后端）或 core。',
     BUILD_MANAGEMENT_CORE_CHANGED: '基线核心与当前审核核心不一致，不能仅更新前后端；请核对核心输入或使用全量构建部署。',
     BUILD_COMPONENT_BASE_UPGRADE_REQUIRED: '基线缺少新版组件复用摘要。核心一致时先用 --components management 更新一次；核心变化时使用全量构建部署。',
-    BUILD_REUSED_INPUT_CHANGED: '本次未选择的组件输入已变化，请使用全量构建部署。',
+    BUILD_REUSED_INPUT_CHANGED: '本次需要复用的组件输入已变化，不能按所选范围更新。',
+    BUILD_COMPONENT_INPUT_INVALID: '组件输入记录无效或摘要不符，请核对发行清单；不会自动扩大更新范围。',
   };
-  return `${code}${guidance[code] ? '\n' + guidance[code] : ''}`;
+  const lines = [code, ...(guidance[code] ? [guidance[code]] : [])];
+  const comparison = error.inputComparison;
+  if (comparison) {
+    lines.push(`请求范围：${comparison.components}`, `安装基线：${comparison.baseCommit}`, `目标版本：${comparison.targetCommit}`);
+    if (comparison.changes) for (const [blocking, title] of [[true, '阻止局部更新的变化：'], [false, '不阻止本次组件复用的变化：']]) {
+      const changes = comparison.changes.filter(change => change.blocking === blocking);
+      if (!changes.length) continue;
+      lines.push(title);
+      for (const change of changes.slice(0, 50)) lines.push(`  ${change.path}${change.field ? ' → ' + change.field : ''} [${change.change}]：${change.reason}`);
+      if (changes.length > 50) lines.push(`  另有 ${changes.length - 50} 项变化。`);
+    }
+    lines.push(comparison.recommendedComponents === 'management'
+      ? '已核对核心摘要一致。建议使用 --components management；会进入完整维护流程，代理会短暂中断。'
+      : '核心一致性未确认或核心已变化。请核对核心输入；需要完整更新时使用 --components all。');
+    lines.push('已停止；未自动切换更新模式。');
+  }
+  return lines.join('\n');
 }
 const inside = (parent, child) => { const part = relative(parent, child); return part !== '' && part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part); };
 const json = async path => JSON.parse((await regular(path)).toString('utf8'));
@@ -215,20 +232,29 @@ export async function componentBaseline(config, baseRelease, execute, components
     if (!match) fail('BUILD_SNAPSHOT_INVALID');
     return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] };
   });
-  if (manifest.buildInputs?.schemaVersion !== INPUT_SCHEMA_VERSION) fail(components === 'frontend'
+  const inputComparison = { components, baseCommit: manifest.commit,
+    targetCommit: config.expected?.commit ?? (await execute('git', ['-C', config.snapshot, 'rev-parse', 'HEAD'], { capture: true })).trim() };
+  const reject = async code => {
+    const core = manifest.files.find(entry => entry.path === 'bin/mihomo');
+    const coreUnchanged = core && core.sha256 === manifest.components?.mihomo?.binarySha256 && config.core
+      && core.sha256 === hash(await regular(config.core));
+    throw Object.assign(new Error(code), { code, inputComparison: { ...inputComparison, recommendedComponents: coreUnchanged ? 'management' : 'all' } });
+  };
+  if (manifest.buildInputs?.schemaVersion !== INPUT_SCHEMA_VERSION) await reject(components === 'frontend'
     ? 'BUILD_FRONTEND_BASE_UPGRADE_REQUIRED' : 'BUILD_COMPONENT_BASE_UPGRADE_REQUIRED');
   const buildInputs = await createBuildInputs(entries, entry => execute('git', ['-C', config.snapshot, 'cat-file', 'blob', entry.oid], { capture: true }));
+  inputComparison.changes = compareBuildInputs(manifest.buildInputs, buildInputs, components);
   if (components === 'frontend') {
     const backendSHA = buildInputs.backendInputSha256;
     if (!manifest.buildInputs?.backendInputSha256) fail('BUILD_FRONTEND_BASE_UPGRADE_REQUIRED');
-    if (manifest.buildInputs.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
-    return { baseRelease, frontendUpdate: { schemaVersion: INPUT_SCHEMA_VERSION, baseManifestSha256, backendInputSha256: backendSHA } };
+    if (manifest.buildInputs.backendInputSha256 !== backendSHA) await reject('BUILD_FRONTEND_BACKEND_CHANGED');
+    return { baseRelease, inputComparison, frontendUpdate: { schemaVersion: INPUT_SCHEMA_VERSION, baseManifestSha256, backendInputSha256: backendSHA } };
   }
   const inputKey = components === 'core' ? 'serverInputSha256' : 'frontendInputSha256';
   const reusedSHA = buildInputs[inputKey];
   if (!manifest.buildInputs?.[inputKey]) fail('BUILD_COMPONENT_BASE_UPGRADE_REQUIRED');
-  if (manifest.buildInputs[inputKey] !== reusedSHA) fail('BUILD_REUSED_INPUT_CHANGED');
-  return { baseRelease, componentUpdate: { schemaVersion: INPUT_SCHEMA_VERSION, components, baseManifestSha256, reusedInputSha256: reusedSHA } };
+  if (manifest.buildInputs[inputKey] !== reusedSHA) await reject('BUILD_REUSED_INPUT_CHANGED');
+  return { baseRelease, inputComparison, componentUpdate: { schemaVersion: INPUT_SCHEMA_VERSION, components, baseManifestSha256, reusedInputSha256: reusedSHA } };
 }
 
 /** The CLI holds the shared workspace lock for this entire operation. Injection is for synthetic orchestration tests. */
@@ -237,11 +263,11 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
   await validateBuildConfig(config);
   await verifyBuildInputs(config, execute);
   const baseline = components !== 'all' ? await componentBaseline(config, baseRelease, execute, components) : undefined;
-  const { frontendUpdate, componentUpdate } = baseline ?? {};
+  const { frontendUpdate, componentUpdate, inputComparison } = baseline ?? {};
   if (preview) return { preview: true, components, commit: config.expected.commit,
     build: components === 'frontend' ? ['frontend', 'server-public-assets'] : components === 'backend' ? ['backend', 'release'] : components === 'core' ? ['reviewed-core', 'release'] : ['frontend', 'backend', 'release'],
     deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance',
-    ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}) };
+    ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}), ...(inputComparison ? { inputComparison } : {}) };
   const catalog = await json(join(config.source, 'integrations/metacubexd/components.json'));
   const tooling = await json(join(config.source, 'tooling/package.json'));
   const installedPnpm = await json(join(config.toolingDependencies, 'pnpm/package.json'));
