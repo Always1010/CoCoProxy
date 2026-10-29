@@ -35,7 +35,7 @@ test('workspace rejects unaffordable combined bandwidth budgets but isolates dis
     bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, ...limits } });
   const combinations = [
     { small: policy({ hourMiB: 48 }), large: policy({ reserveHourMiB: 32 }) },
-    { small: policy({ dayMiB: 64 }), large: policy({ reserveDayMiB: 64 }) },
+    { small: policy({ hourMiB: 64, dayMiB: 64 }), large: policy({ reserveDayMiB: 64 }) },
     { small: policy({ hourMiB: 48 }), large: policy({ hourMiB: 80, confirmRounds: 3, searchMiB: 48 }) },
   ];
   for (const automatic of combinations) {

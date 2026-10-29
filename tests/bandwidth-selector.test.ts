@@ -80,7 +80,7 @@ test('uncertain candidate and observation mode keep the current selection; persi
     assert.ok(trace.events.some(e => e.comparison));
     assert.ok(trace.events.some(e => e.reason === (options.observeOnly ? 'would-switch' : 'no-clear-gain')));
   }
-  const f = fixture({ ledger: { version: 1, charges: [{ at: 0, bytes: 64 * 1048576 }], switches: [] } });
+  const f = fixture({ ledger: { version: 1, charges: [{ at: 0, bytes: DEFAULT_BANDWIDTH_SETTINGS.hourMiB * 1048576 }], switches: [] } });
   f.engine.request('media', 'b'); for (let i = 0; i < 20; i++) await f.step();
   assert.deepEqual(f.measures, []); assert.equal(f.engine.status('media')?.reason, 'budget-exhausted');
   assert.ok([...f.traces.values()][0].events.some(e => e.reason === 'budget-exhausted' && e.budget));
@@ -129,7 +129,7 @@ test('latency screening orders downloads, stops hopeless probes and permits rela
 });
 
 test('reserves protect degradation work, search yield preserves the pool and ledger failure prevents transfers', async () => {
-  const ledger: BandwidthLedger = { version: 1, charges: [{ at: 0, bytes: 32 * 1048576 }], switches: [] };
+  const ledger: BandwidthLedger = { version: 1, charges: [{ at: 0, bytes: (DEFAULT_BANDWIDTH_SETTINGS.hourMiB - 32) * 1048576 }], switches: [] };
   const f = fixture({ ledger }); f.engine.requestCheck('media');
   for (let i = 0; i < 40; i++) await f.step();
   assert.ok(f.measures.length <= 1); assert.equal(f.engine.status('media')!.reason, 'budget-exhausted');

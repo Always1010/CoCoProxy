@@ -7,6 +7,9 @@ test('bandwidth settings preserve legacy policies and validate coupled time and 
   const legacy = { preferred: ['a'], fallback: ['b'], returnToPreferred: true };
   assert.deepEqual(parseAutoGroupPolicy(legacy), legacy);
   assert.equal(parseBandwidthSettings({}).enabled, false);
+  assert.equal(parseBandwidthSettings({}).hourMiB, 128);
+  assert.equal(parseBandwidthSettings({}).dayMiB, 512);
+  assert.deepEqual(parseBandwidthSettings({ hourMiB: 64, dayMiB: 128 }), { ...defaults, hourMiB: 64, dayMiB: 128 });
   assert.equal(parseAutoGroupPolicy({ ...legacy, bandwidth: { enabled: true } }).bandwidth?.targetMbps, 8);
   assert.deepEqual(parseBandwidthSettings({ enabled: true, activeProbes: true }), { ...defaults, enabled: true });
   const optedOut = parseAutoGroupPolicy({ ...legacy, bandwidth: { enabled: true, activeProbes: false, observeOnly: true, targetMbps: 10, taskMiB: 10 } }).bandwidth!;
@@ -21,7 +24,7 @@ test('bandwidth settings preserve legacy policies and validate coupled time and 
   assert.equal(old.roundIntervalSeconds, 120); assert.equal(old.freshSeconds, 260);
   for (const value of [{ enabled: 1 }, { activeProbes: 0 }, { targetMbps: NaN }, { extra: true }, { confirmRounds: 1 }, { durationSeconds: 4 },
     { taskMiB: 1 }, { hourMiB: 16 }, { dayMiB: 32 }, { latestSeconds: 181 }, { targetMbps: 100 }, { roundIntervalSeconds: 20 },
-    { reserveHourMiB: 64 }, { reserveDayMiB: 128 }, { searchMiB: 16 }, { confirmRounds: 5, roundIntervalSeconds: 120 }]) {
+    { reserveHourMiB: defaults.hourMiB }, { reserveDayMiB: defaults.dayMiB }, { searchMiB: 16 }, { confirmRounds: 5, roundIntervalSeconds: 120 }]) {
     assert.throws(() => parseBandwidthSettings(value));
   }
 });
@@ -62,7 +65,7 @@ test('maximum configured sampling interval allows bounded scheduling delay witho
 });
 
 test('enabled bandwidth budgets must cover ordinary confirmation after reserves in both windows', () => {
-  for (const limits of [{ hourMiB: 32 }, { dayMiB: 64, reserveDayMiB: 40 }]) {
+  for (const limits of [{ hourMiB: 32 }, { hourMiB: 64, dayMiB: 64, reserveDayMiB: 40 }]) {
     assert.throws(() => parseBandwidthSettings({ ...defaults, enabled: true, ...limits }));
   }
   assert.equal(parseBandwidthSettings({ ...defaults, enabled: true, hourMiB: 48, dayMiB: 64 }).hourMiB, 48);
