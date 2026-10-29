@@ -8,7 +8,9 @@
 
 核心产物使用 `components: core` 和 `buildInputs.serverInputSha256`，仅允许复用完整 Server/UI 后装配审核核心。复用输入摘要排除核心清单/审核记录的文件摘要，但额外绑定管理组件元数据，防止同时升级管理组件。安装器对 Server/UI 全部文件的路径、模式、大小、摘要逐项比对，拒绝混用变化的服务端或前端产物。
 
-每份新载荷记录 `buildInputs.backendInputSha256`，覆盖除 UI、文档和测试之外的保守构建输入集合。日常前端构建可声明 `frontendUpdate`，绑定基线 manifest 和相同的后端输入摘要；装配器复核摘要，不接受将已变化的后端声明为前端更新。此类产物仍包含完整文件清单，但其部署范围固定为前端，不能用于首次安装。普通全量载荷和 GitHub 正式发行不带此局部部署声明。
+每份新载荷记录 `buildInputs.schemaVersion: 2`、三项组件复用摘要和用于差异诊断的输入记录。记录只包含项目相对路径、字段名、内容摘要、执行权限和分类，不包含源码内容、绝对环境路径或私有配置。根项目版本、已确认的测试/预览命令和独立预览工具不影响组件复用；依赖、构建部署工具及未知输入继续保守校验，具体边界见[开发说明](development.md#按组件构建)。
+
+日常前端构建可声明 `frontendUpdate.schemaVersion: 2`，绑定基线 manifest 和相同版本的非前端输入摘要；backend/core 同样使用第二版声明与对应摘要，management 只绑定已安装核心，可从旧基线建立新版摘要。装配器重新读取提交 blob 计算摘要，安装器检查摘要规则版本、基线及复用产物，不接受用旧摘要绕过新规则。旧载荷仍可读取，缺少新版基线时先明确提示过渡，不自动扩大部署范围。局部产物仍包含完整文件清单，不能用于首次安装。普通全量载荷和 GitHub 正式发行不带此局部部署声明。
 
 [Release 工作流](../.github/workflows/release.yml) 在推送 `v<package.json 版本>` 的 Tag 时运行，例如 `v1.0.2`。Tag 必须符合 SemVer，且与根 package.json、package-lock.json 版本一致；带预发布后缀的版本自动标记为 GitHub Pre-release。
 

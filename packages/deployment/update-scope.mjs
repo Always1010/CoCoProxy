@@ -16,15 +16,17 @@ const canonicalJSON = value => JSON.stringify(value, (_key, item) => item && typ
 const sha = value => createHash('sha256').update(value).digest('hex');
 const inputKey = entry => `${entry.path}\0${entry.field ?? ''}`;
 const active = entry => !['ignored', 'metadata'].includes(entry.scope);
+const reusedBy = (entry, components) => active(entry) && (components === 'frontend' ? entry.scope !== 'frontend'
+  : components === 'backend' ? entry.scope !== 'backend' : !catalogs.includes(entry.path) || entry.field === '/management');
 function inputIdentity(entries) {
   return sha(JSON.stringify([...entries].sort((a, b) => inputKey(a).localeCompare(inputKey(b), 'en'))
     .map(entry => [entry.path, entry.field ?? '', entry.mode, entry.oid])));
 }
 function inputDigests(inputs) {
   return {
-    backendInputSha256: inputIdentity(inputs.filter(entry => active(entry) && entry.scope !== 'frontend')),
-    frontendInputSha256: inputIdentity(inputs.filter(entry => active(entry) && entry.scope !== 'backend')),
-    serverInputSha256: inputIdentity(inputs.filter(entry => active(entry) && (!catalogs.includes(entry.path) || entry.field === '/management'))),
+    backendInputSha256: inputIdentity(inputs.filter(entry => reusedBy(entry, 'frontend'))),
+    frontendInputSha256: inputIdentity(inputs.filter(entry => reusedBy(entry, 'backend'))),
+    serverInputSha256: inputIdentity(inputs.filter(entry => reusedBy(entry, 'core'))),
   };
 }
 function inputScope(path) {
@@ -86,6 +88,28 @@ export function validateBuildInputs(value) {
   }
   for (const [key, digest] of Object.entries(inputDigests(value.inputs))) if (value[key] !== digest) fail('BUILD_COMPONENT_INPUT_INVALID');
   return value;
+}
+
+/** Compare the exact records used by the digest, including additions and deletions. */
+export function compareBuildInputs(previous, current, components) {
+  if (!['frontend', 'backend', 'core'].includes(components)) fail('BUILD_COMPONENTS_UNSUPPORTED');
+  validateBuildInputs(previous); validateBuildInputs(current);
+  const before = new Map(previous.inputs.map(entry => [inputKey(entry), entry]));
+  const after = new Map(current.inputs.map(entry => [inputKey(entry), entry]));
+  const reasons = {
+    ignored: '仅开发预览、测试或文档，不影响组件复用', metadata: '仅根项目发行版本，不影响组件复用',
+    frontend: '前端源码或配置变化', backend: '后端或运行源码变化', shared: '共用构建、部署或未知输入变化',
+  };
+  return [...new Set([...before.keys(), ...after.keys()])].sort((a, b) => a.localeCompare(b, 'en')).flatMap(key => {
+    const old = before.get(key), next = after.get(key);
+    if (old && next && old.mode === next.mode && old.oid === next.oid && old.scope === next.scope) return [];
+    const entry = next ?? old;
+    const blocking = Boolean(old && reusedBy(old, components) || next && reusedBy(next, components));
+    const reason = components === 'core' && catalogs.includes(entry.path) && !entry.field
+      ? '核心审核清单变化；管理组件输入另行校验' : reasons[entry.scope];
+    return [{ path: entry.path, ...(entry.field !== undefined ? { field: entry.field } : {}),
+      change: !old ? 'added' : !next ? 'removed' : 'modified', scope: entry.scope, blocking, reason }];
+  });
 }
 
 export function validateComponentUpdate(value) {

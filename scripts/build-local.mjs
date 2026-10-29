@@ -154,8 +154,8 @@ export async function runLocalBuild({ source, workspace, prepare = false, compon
     if (preview) {
       const commit = await cleanLocalCommit(paths.source, execute);
       const baseline = components !== 'all' ? await componentBaseline({ snapshot: paths.source }, baseRelease, execute, components) : {};
-      const { frontendUpdate, componentUpdate } = baseline;
-      return { preview: true, components, commit, deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance', ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}) };
+      const { frontendUpdate, componentUpdate, inputComparison } = baseline;
+      return { preview: true, components, commit, deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance', ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}), ...(inputComparison ? { inputComparison } : {}) };
     }
     await writeLocalJSON(paths.receipt, { schemaVersion: 1, status: 'building', source: paths.source });
     let run;
