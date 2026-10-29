@@ -6,6 +6,8 @@ import { privateDirectory } from '../../packages/storage/private-files.ts';
 import { FileTransactionStore } from '../../packages/transaction/index.ts';
 import { assertRuntimeLaunch } from '../../packages/runtime/launch-authorization.ts';
 import { readRuntimeLifecycle } from '../../packages/runtime/lifecycle.ts';
+import { runRuntimeCommand } from '../../packages/runtime/command.ts';
+import { fileURLToPath } from 'node:url';
 
 /** Replaces the service process, preserving systemd's MainPID and cgroup. */
 export async function runCore(settingsPath: string): Promise<void> {
@@ -23,11 +25,20 @@ export async function runCore(settingsPath: string): Promise<void> {
     if (generation === null) throw new RuntimeError('RUNTIME_SELECTION_MISSING');
     await assertRuntimeLaunch(store, generation);
     const binary = await verifyBinary(settings);
-    const { path, home } = await loadRuntimeCandidate(settings, generation);
+    const { path, home, candidate } = await loadRuntimeCandidate(settings, generation);
     await privateDirectory(home);
     if (await readSelection(settings) !== generation) throw new RuntimeError('RUNTIME_RECOVERY_REQUIRED');
     await assertRuntimeLaunch(store, generation);
     if ((await readRuntimeLifecycle(settings.stateDirectory)).paused) throw new RuntimeError('RUNTIME_LIFECYCLE_PAUSED');
+    if (settings.automaticGateway) {
+      // Ambient NET_ADMIN is already required by the reviewed native core. A
+      // separate table survives its graceful shutdown as well as a crash.
+      await runRuntimeCommand('/usr/bin/python3', ['-I', fileURLToPath(new URL('../gateway/host_proxy.py', import.meta.url)),
+        '--settings', settingsPath, '--enabled', String(candidate.config['x-cocoproxy-host-proxy'] === true)]);
+      if (await readSelection(settings) !== generation) throw new RuntimeError('RUNTIME_RECOVERY_REQUIRED');
+      await assertRuntimeLaunch(store, generation);
+      if ((await readRuntimeLifecycle(settings.stateDirectory)).paused) throw new RuntimeError('RUNTIME_LIFECYCLE_PAUSED');
+    }
     // The controller cannot inherit proxy settings, loader injections or core
     // feature switches from an operator's shell or the launcher environment.
     const environment = { PATH: '/usr/bin:/bin', LANG: 'C', HOME: home };

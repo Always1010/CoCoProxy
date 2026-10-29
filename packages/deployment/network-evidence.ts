@@ -66,7 +66,7 @@ export function firewallConflicts(value: unknown): string[] {
     if (entry.table === undefined && entry.metainfo === undefined) throw new NetworkObservationError();
     if (entry.table !== undefined && typeof object(entry.table).name !== 'string') throw new NetworkObservationError();
   }
-  return entries.some(entry => ['cocoproxy_auto_guard', 'mihomo'].includes(entry.table?.name)) ? ['INSTALL_NFT_CONFLICT'] : [];
+  return entries.some(entry => ['cocoproxy_auto_guard', 'cocoproxy_host_guard', 'mihomo'].includes(entry.table?.name)) ? ['INSTALL_NFT_CONFLICT'] : [];
 }
 export function tunConflicts(value: unknown): string[] {
   const links = rows(value);

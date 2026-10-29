@@ -612,6 +612,11 @@ def main_locked(options):
                     run([systemctl, 'disable', *enabled])
                 if gateway:
                     need(network_receipt() == previous_network, 'REMOTE_NETWORK_RECEIPT_CHANGED')
+                    host_helper = Path(receipt['release']) / 'source/apps/gateway/host_proxy.py'
+                    if host_helper.is_file():
+                        run(['python3', '-I', host_helper, '--early-network',
+                            Path(old['runtime']['settingsPath']).parent / 'gateway-network.json',
+                            '--state', old['runtime']['stateDirectory'], '--uid', str(old['runtime']['serviceUid']), '--retire'])
                     if previous_network['status'] == 'complete':
                         run(['python3', '-I', Path(receipt['release']) / 'source/apps/gateway/network.py', 'remove',
                             '--settings', Path(old['runtime']['settingsPath']).parent / 'gateway-network.json'])

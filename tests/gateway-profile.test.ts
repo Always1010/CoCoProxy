@@ -75,6 +75,23 @@ test('node resolver policies survive gateway reconstruction and reject intercept
 const invalid = (run: () => unknown) => assert.throws(run, (error: unknown) =>
   error instanceof AutomaticGatewayConfigError && error.code === 'AUTOMATIC_GATEWAY_CONFIG_INVALID' && error.message === error.code);
 
+test('host proxy opts in both local protocols and trusted recompilation without changing disabled generations', () => {
+  const disabled = compileAutomaticGatewayConfig(base(), settings());
+  assert.deepEqual(compileAutomaticGatewayConfig(base(), settings(), false), disabled);
+  const enabled = compileAutomaticGatewayConfig(base(), settings(), true), tun = enabled.config.tun as JsonObject;
+  assert.equal(enabled.config['x-cocoproxy-host-proxy'], true);
+  assert.notEqual(enabled.id, disabled.id);
+  assert.deepEqual(recompileAutomaticGatewayConfig(enabled.config, settings()), enabled);
+  assert.deepEqual(automaticGatewayPolicy(enabled.config), automaticGatewayPolicy(disabled.config));
+  assert.deepEqual(tun['include-interface'], ['lan-test', 'lo']);
+  assert.equal(tun['exclude-uid-range'], undefined);
+  for (const network of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '192.0.2.0/24'])
+    assert.ok((tun['route-exclude-address'] as string[]).includes(network));
+  for (const marker of ['true', 1, null, {}])
+    invalid(() => recompileAutomaticGatewayConfig({ ...enabled.config, 'x-cocoproxy-host-proxy': marker } as JsonObject, settings()));
+  invalid(() => compileAutomaticGatewayConfig(base(), settings(), 'true' as unknown as boolean));
+});
+
 test('native profile binds policy and all normalized deployment inputs to a canonical generation', () => {
   const source = base(), supplied = settings(), before = JSON.stringify([source, supplied]);
   const candidate = compileAutomaticGatewayConfig(source, supplied), config = candidate.config;
@@ -246,6 +263,7 @@ test('pinned reviewed core parses native profile without starting listeners or T
     assert.equal(AUTOMATIC_GATEWAY_CORE_SHA256, review.coreCandidate.binarySha256);
     assert.equal(createHash('sha256').update(await readFile(binaryPath)).digest('hex'), AUTOMATIC_GATEWAY_CORE_SHA256);
     await validateWithMihomo(compileAutomaticGatewayConfig(base(), settings()), { binaryPath });
+    await validateWithMihomo(compileAutomaticGatewayConfig(base(), settings(), true), { binaryPath });
     const source = base();
     Object.assign(source.deployment as JsonObject, { nameservers: ['https://192.0.2.54/dns-query'], sniffing: true,
       nodeNameserverPolicy: { 'node.example.test': ['https://resolver.example:5443/synthetic-private-token/dns-query'] } });

@@ -12,6 +12,25 @@ export const AUTOMATIC_GATEWAY_CORE_SHA256_BY_PLATFORM: Readonly<Record<'linux-a
   'linux-amd64-v1': '19cbe7ba1523a92ed2d0a30716ea093de57db05b7844db23de2b9c21fd7a1afa',
 });
 export const AUTOMATIC_GATEWAY_TUN_ADDRESS = '198.18.0.1/30';
+/** Host destinations which retain their existing local routes. */
+export const AUTOMATIC_GATEWAY_HOST_BYPASS = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8',
+  '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16', '224.0.0.0/4', '::1/128', 'fc00::/7', 'fe80::/10'];
+// The reviewed sing-tun interval encoder repeats the start key when a range
+// ends at the address family's maximum value. Do not pass 240.0.0.0/4 or
+// ff00::/8 here; the independent guard still permits local/broadcast traffic.
+
+function hostBypass(connected: string): string[] {
+  const ranges = [...new Set([connected, ...AUTOMATIC_GATEWAY_HOST_BYPASS])];
+  return ranges.filter(range => {
+    if (range.includes(':')) return true;
+    const [address, length] = range.split('/'), start = ipv4Number(address), size = 2 ** (32 - Number(length));
+    return !ranges.some(other => {
+      if (other === range || other.includes(':')) return false;
+      const [outer, prefix] = other.split('/'), outerStart = ipv4Number(outer), outerSize = 2 ** (32 - Number(prefix));
+      return outerStart <= start && outerStart + outerSize >= start + size;
+    });
+  });
+}
 
 export type AutomaticGatewaySettings = {
   schemaVersion: 1;
@@ -139,8 +158,9 @@ export function automaticGatewayManagesIPv4(n: AutomaticGatewaySettings, address
 }
 
 /** Reuse the existing offline policy compiler, then install the fixed native profile. */
-export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Candidate {
+export function compileAutomaticGatewayConfig(base: unknown, input: unknown, hostProxy = false): Candidate {
   try {
+    if (typeof hostProxy !== 'boolean') fail();
     const settings = parseAutomaticGatewaySettings(input);
     dataOnly(base);
     const compiled = compileConfig(base), dns = compiled.config.dns as JsonObject;
@@ -166,12 +186,14 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
       'interface-name': settings.ingressInterface,
       'routing-mark': settings.egressMark,
       'x-cocoproxy-gateway': { ...settings },
+      ...(hostProxy ? { 'x-cocoproxy-host-proxy': true } : {}),
       tun: { enable: true, device: 'cocoproxy-tun', stack: settings.tunStack ?? 'mips', mtu: settings.tunMtu,
         'auto-route': true, 'auto-redirect': true, 'auto-detect-interface': false, 'strict-route': true,
-        'include-interface': [settings.ingressInterface], 'route-exclude-address': [connected],
+        'include-interface': hostProxy ? [settings.ingressInterface, 'lo'] : [settings.ingressInterface],
+        'route-exclude-address': hostProxy ? hostBypass(connected) : [connected],
         // Forwarded clients belong to the gateway; local applications retain
         // the host's own routes, including management and system updates.
-        'exclude-uid-range': ['0:4294967294'],
+        ...(hostProxy ? {} : { 'exclude-uid-range': ['0:4294967294'] }),
         'iproute2-table-index': 2022, 'iproute2-rule-index': 9000,
         'auto-redirect-input-mark': 2023, 'auto-redirect-output-mark': 2024,
         'dns-mode': 'disabled', 'dns-hijack': [], gso: settings.tunGso ?? false, 'disable-icmp-forwarding': true },
@@ -184,7 +206,7 @@ export function compileAutomaticGatewayConfig(base: unknown, input: unknown): Ca
 }
 
 const overlayKeys = ['allow-lan', 'bind-address', 'mixed-port', 'external-controller', 'secret', 'tun', 'ipv6', 'dns', 'sniffer',
-  'interface-name', 'routing-mark', 'x-cocoproxy-gateway'];
+  'interface-name', 'routing-mark', 'x-cocoproxy-gateway', 'x-cocoproxy-host-proxy'];
 
 /** Extraction for trusted recompile, not proof that an arbitrary stored config is valid. */
 export function automaticGatewayPolicy(config: JsonObject): JsonObject {
@@ -200,11 +222,13 @@ export function recompileAutomaticGatewayConfig(config: JsonObject, input: unkno
   try {
     dataOnly(config);
     object(config);
+    const hostProxy = config['x-cocoproxy-host-proxy'];
+    if (hostProxy !== undefined && typeof hostProxy !== 'boolean') fail();
     const settings = parseAutomaticGatewaySettings(input), dns = object(config.dns), controller = config['external-controller'];
     if (typeof controller !== 'string' || !/^127\.0\.0\.1:([1-9]\d{0,4})$/.test(controller) || typeof config.secret !== 'string') fail();
     return compileAutomaticGatewayConfig({ schemaVersion: 1, deployment: {
       mixedPort: config['mixed-port'], controllerPort: Number(controller.slice(10)), controllerSecret: config.secret,
       dnsPort: settings.dnsPort, bootstrapResolvers: dns['default-nameserver'], ...deploymentDnsOptions(config),
-    }, policy: automaticGatewayPolicy(config) }, settings);
+    }, policy: automaticGatewayPolicy(config) }, settings, hostProxy === true);
   } catch { return fail(); }
 }

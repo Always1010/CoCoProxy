@@ -352,6 +352,7 @@ test('shared network predicates detect reserved resources and conservative numer
   for (const table of [2024, '22024', 2022]) assert.deepEqual(routeConflicts([{ dst: 'default', table }], n), ['INSTALL_ROUTE_CONFLICT']);
   assert.deepEqual(routeConflicts([{ table: 'main', dst: '198.51.100.0/24' }], n), []);
   assert.deepEqual(firewallConflicts({ nftables: [{ table: { family: 'inet', name: 'mihomo' } }] }), ['INSTALL_NFT_CONFLICT']);
+  assert.deepEqual(firewallConflicts({ nftables: [{ table: { family: 'inet', name: 'cocoproxy_host_guard' } }] }), ['INSTALL_NFT_CONFLICT']);
   assert.deepEqual(tunConflicts([{ ifname: 'cocoproxy-tun' }]), ['INSTALL_TUN_CONFLICT']);
   for (const malformed of [[{}], [{ priority: 100, fwmark: 'private malformed value' }], [{ priority: 100, fwmask: 255 }],
     [{ priority: 100, fwmark: '0', fwmask: '0', not: null, src: '198.51.100.0/24' }]]) {

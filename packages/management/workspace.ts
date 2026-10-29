@@ -16,6 +16,7 @@ export type WorkspaceSettings = {
   local: LocalRoutingOverrides;
   subscriptionOverrides: Record<string, RoutingOverrides>;
   autoProbes?: AutoProbeSettings;
+  hostProxy?: boolean;
 };
 export type Workspace = WorkspaceSettings & { revision: number };
 export class WorkspaceError extends Error {
@@ -89,7 +90,8 @@ export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {
   inspect(input, 0);
   const record = object(input);
   const required = ['mode', 'subscriptionId', 'sourceIds', 'runMode', 'local', 'subscriptionOverrides'];
-  if (required.some(key => !Object.hasOwn(record, key)) || Object.keys(record).some(key => ![...required, 'autoProbes'].includes(key))) fail();
+  if (required.some(key => !Object.hasOwn(record, key)) || Object.keys(record).some(key => ![...required, 'autoProbes', 'hostProxy'].includes(key))) fail();
+  if (record.hostProxy !== undefined && typeof record.hostProxy !== 'boolean') fail();
   if (!['legacy', 'local', 'subscription'].includes(record.mode as string) || !['rule', 'global', 'direct'].includes(record.runMode as string)) fail();
   if (!(record.subscriptionId === null || id(record.subscriptionId))) fail();
   if (record.mode === 'subscription' && record.subscriptionId === null) fail('PROFILE_REQUIRED');
@@ -104,7 +106,7 @@ export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {
   }
   return { mode: record.mode as WorkspaceSettings['mode'], runMode: record.runMode as WorkspaceSettings['runMode'],
     subscriptionId: record.subscriptionId as string | null, sourceIds: [...record.sourceIds] as string[], local: overrides(record.local, true), subscriptionOverrides,
-    ...(autoProbes ? { autoProbes } : {}) };
+    ...(autoProbes ? { autoProbes } : {}), ...(record.hostProxy !== undefined ? { hostProxy: record.hostProxy as boolean } : {}) };
 }
 
 export function parseWorkspaceDocument(input: unknown): Workspace {

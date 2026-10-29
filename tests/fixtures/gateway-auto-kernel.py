@@ -9,6 +9,9 @@ from pathlib import Path
 import sys
 import time
 
+sys.dont_write_bytecode = True
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 
 def module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -218,6 +221,10 @@ def driver(root):
         gateway.ip('addr', 'del', '192.0.2.2/24', 'dev', 'lan-test')
         gateway.ip('link', 'set', 'lan-test', 'up')
         gateway.ip('addr', 'add', '192.0.2.2/24', 'dev', 'lan-test')
+        # An address cycle removes the main DHCP/default route. The network
+        # helper intentionally restores only its own marked egress table; the
+        # fixture must model the address manager restoring the host route too.
+        gateway.ip('route', 'replace', 'default', 'via', '192.0.2.1')
         # A DHCP/address cycle can lose host-specific routes. Remove a known
         # route and guard as well to verify precise missing-resource repair.
         present = json.loads(gateway.call('exec', args=['python3', '-c', snapshot_code]))
@@ -245,10 +252,110 @@ def driver(root):
         for client in [first, second]:
             f.check(not client.call('http') and not client.call('udp'), 'CORE_STOP_LEAKED')
         f.check(origin.call('stats') == before, 'STOPPED_CORE_TOUCHED_ORIGIN')
+
+        # Exercise the same persistent production helper used by the launcher.
+        # Only its path contract is adapted: the disposable fixture is under
+        # /tmp, whereas installed service state has root-controlled ancestors.
+        host_state = root / 'host-state'
+        host_state.mkdir(mode=0o700)
+        owner = root.stat()
+        os.chown(host_state, owner.st_uid, owner.st_gid)
+        host_path = Path(network.__file__).with_name('host_proxy.py')
+        host_prefix = ("import json,importlib.util,os; from pathlib import Path; "
+                       + "s=importlib.util.spec_from_file_location('host_guard'," + repr(str(host_path)) + "); "
+                       + "h=importlib.util.module_from_spec(s); s.loader.exec_module(h); "
+                       + "n=json.load(open(" + repr(str(root / 'input.json')) + "))['network']; "
+                       + "h.checked_state=lambda path,uid:Path(path); ")
+
+        def host_helper(enabled, early=False, reject=False):
+            call = "h.apply(n,Path(" + repr(str(host_state)) + ")," + repr(enabled) + ",os.geteuid(),early=" + repr(early) + ")"
+            if reject:
+                call = "\ntry:\n " + call + "\nexcept RuntimeError:\n print('rejected')\nelse:\n raise RuntimeError('HOST_CONFLICT_ACCEPTED')"
+            return gateway.call('exec', args=['python3', '-c', host_prefix + call])
+
+        host_tcp, host_udp = gateway.call('http'), gateway.call('udp')
+        if not host_tcp or not host_udp:
+            raise RuntimeError('DISABLED_HOST_ROUTES_CHANGED_' + json.dumps({
+                'tcp': host_tcp, 'udp': host_udp, 'routes': json.loads(gateway.ip('-j', 'route', 'show', 'table', 'main')),
+                'rules': json.loads(gateway.ip('-j', '-4', 'rule', 'show'))}, separators=(',', ':')))
+        host_helper(True)
+        before = origin.call('stats')
+        f.check(not gateway.call('http') and not gateway.call('udp'), 'HOST_PRESTART_LEAKED')
+        f.check(origin.call('stats') == before, 'HOST_PRESTART_TOUCHED_ORIGIN')
+        gateway.call('start', label='host-core', binary=data['core'], args=['-d', '@ROOT', '-f', '@CONFIG'], config=data['hostConfig'])
+        for _ in range(40):
+            f.check(gateway.call('alive', label='host-core'), 'HOST_CORE_EXITED')
+            if 'cocoproxy-tun' in gateway.ip('-j', 'link', 'show'):
+                break
+            time.sleep(.1)
+        time.sleep(.3)
+        host_tcp, host_udp = gateway.call('http'), gateway.call('udp', key='host-established')
+        if not host_tcp or not host_udp:
+            # Probe tools in a child without check=True: a missing nft table
+            # must not kill the namespace worker and hide the original failure.
+            probes = [['ip', '-j', '-4', 'rule', 'show'], ['ip', '-j', 'route', 'get', '198.51.100.2'],
+                      ['nft', '-nn', 'list', 'tables'], ['nft', '-nn', 'list', 'table', 'inet', 'mihomo'],
+                      ['nft', '-nn', 'list', 'table', 'inet', 'cocoproxy_host_guard']]
+            probe_code = ("import subprocess,json; commands=json.loads(" + repr(json.dumps(probes)) + "); result=[]\n"
+                          + "for command in commands:\n"
+                          + " try:\n  p=subprocess.run(command,text=True,capture_output=True,timeout=2); result.append({'command':command,'code':p.returncode,'out':p.stdout[:4096],'err':p.stderr[:512]})\n"
+                          + " except Exception as error:\n  result.append({'command':command,'error':type(error).__name__})\n"
+                          + "print(json.dumps(result))")
+            core_log = (root / 'host-core.log').read_text(errors='replace')[-1024:]
+            raise RuntimeError('HOST_TCP_UDP_FAILED_' + json.dumps({
+                'tcp': host_tcp, 'udp': host_udp, 'coreLog': core_log,
+                'probes': json.loads(gateway.call('exec', args=['python3', '-c', probe_code]))}, separators=(',', ':')))
+        f.check(not gateway.call('udp', address='198.51.100.78') and
+                not first.call('udp', address='198.51.100.78'), 'HOST_CLIENT_POLICY_DIVERGED')
+        for address in ['198.51.100.2', '192.0.2.1', '127.0.0.53']:
+            f.check(gateway.call('dns', dnsAddress=address, dnsPort=53), 'HOST_DNS_NOT_SHARED_' + address)
+        f.check(gateway.call('dns_tcp', dnsAddress='127.0.0.53', dnsPort=53), 'HOST_TCP_DNS_NOT_SHARED')
+
+        # A second private connected network and both management entry paths
+        # must keep their original direct route before and after core failure.
+        f.execute(['ip', 'link', 'add', 'private-gw', 'type', 'veth', 'peer', 'name', 'private-peer'])
+        for role, interface, address in [(gateway, 'private-gw', '10.23.0.2'), (origin, 'private-peer', '10.23.0.3')]:
+            f.execute(['ip', 'link', 'set', interface, 'netns', str(role.process.pid)])
+            role.ip('addr', 'add', address + '/24', 'dev', interface)
+            role.ip('link', 'set', interface, 'up')
+        server = "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('0.0.0.0',18080)); s.listen(8)\nwhile True:\n c,_=s.accept(); c.sendall(b'ok'); c.close()"
+        gateway.call('start', label='management', binary='/usr/bin/python3', args=['-c', server], config={})
+        time.sleep(.15)
+
+        def management():
+            for role, address in [(first, '192.0.2.2'), (origin, '10.23.0.2'), (gateway, '127.0.0.1')]:
+                code = "import socket; s=socket.create_connection((" + repr(address) + ",18080),1); assert s.recv(2)==b'ok'; print('ok')"
+                f.check(role.call('exec', args=['python3', '-c', code]).strip() == 'ok', 'HOST_PRIVATE_MANAGEMENT_FAILED')
+        management()
+        f.check('private-gw' in gateway.ip('-j', 'route', 'get', '10.23.0.3'), 'SECOND_PRIVATE_ROUTE_CHANGED')
+        gateway.call('stop', label='host-core')
+        before = origin.call('stats')
+        f.check(not gateway.call('http') and not gateway.call('udp') and
+                not gateway.call('udp', key='host-established'), 'HOST_CORE_STOP_LEAKED')
+        f.check(origin.call('stats') == before, 'HOST_STOPPED_CORE_TOUCHED_ORIGIN')
+        management()
+        # Simulate a boot with no kernel table, then restore from the durable
+        # receipt. Kernel handles differ; every owned expression must agree.
+        gateway.nft('delete table inet cocoproxy_host_guard')
+        host_helper(False, early=True)
+        f.check(not gateway.call('udp'), 'HOST_EARLY_GUARD_FAILED')
+        gateway.nft('add rule inet cocoproxy_host_guard output ip daddr 203.0.113.9 accept')
+        f.check(host_helper(False, reject=True).strip() == 'rejected', 'HOST_UNKNOWN_RESOURCE_ACCEPTED')
+        # Remove only the fixture's injected rule by its actual kernel handle.
+        entries = json.loads(gateway.call('exec', args=['nft', '-j', '-a', 'list', 'chain', 'inet', 'cocoproxy_host_guard', 'output']))['nftables']
+        handle = [item['rule']['handle'] for item in entries if 'rule' in item][-1]
+        gateway.nft('delete rule inet cocoproxy_host_guard output handle ' + str(handle))
+        host_helper(False)
+        f.check(gateway.call('http') and gateway.call('udp'), 'HOST_DISABLED_NOT_RESTORED')
+        host_helper(False, early=True)
+        f.check(gateway.call('udp'), 'DISABLED_INTENT_REENABLED_ON_BOOT')
         return {'multiClientTcpUdp': True, 'newClientAddress': True, 'routerOnlyDns': True,
                 'tunReturnViaRouter': True, 'hostRoutesPreserved': True, 'wrongMacRejected': True, 'coreStopBlocked': True,
                 'addressAndResourceRecovery': True, 'unknownResourceRejected': True, 'earlyGuardBeforeLan': True,
-                'initialPrepareBootRecovery': True, 'repairBootRecovery': True, 'interruptedRemoveRejected': True}
+                'initialPrepareBootRecovery': True, 'repairBootRecovery': True, 'interruptedRemoveRejected': True,
+                'hostTcpUdpPolicy': True, 'hostDnsPolicy': True, 'hostPrivateManagement': True,
+                'hostCoreStopBlocked': True, 'hostDisabledRecovery': True, 'hostEarlyRecovery': True,
+                'hostGuardOwnership': True}
     finally:
         for role in reversed(list(roles.values())):
             role.close()

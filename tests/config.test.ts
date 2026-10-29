@@ -242,7 +242,7 @@ test('does not mutate or retain references to the input', () => {
 
 test('rejects protected deployment keys even when supplied with disabled values', () => {
   for (const key of ['tun', 'dns', 'allow-lan', 'port', 'mixed-port', 'socks-port', 'redir-port', 'tproxy-port', 'listeners', 'external-controller', 'external-controller-unix', 'secret', 'authentication', 'external-ui', 'external-ui-url', 'profile', 'hosts', 'sniffer', 'ipv6',
-    'iptables', 'tuic-server', 'ss-config', 'vmess-config', 'ntp', 'external-doh-server', 'external-controller-routing-mark', 'clash-for-android']) {
+    'iptables', 'tuic-server', 'ss-config', 'vmess-config', 'ntp', 'external-doh-server', 'external-controller-routing-mark', 'clash-for-android', 'x-cocoproxy-host-proxy']) {
     const value = input();
     (value.policy as JsonObject)[key] = false;
     fails(value, 'PROTECTED_FIELD');

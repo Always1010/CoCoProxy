@@ -57,16 +57,20 @@ ${excluded}  iifname "${n.ingressInterface}" meta nfproto ipv4 ip daddr != ${lan
 /** Pure installation proposal. Runtime checks root ownership and every path ancestor. */
 export function renderAutomaticGatewayHostPlan(input: {
   network: unknown; sourceDirectory: string; pythonPath: string; settingsPath: string; stateDirectory: string;
+  hostStateDirectory?: string; hostServiceUid?: number;
 }): { unit: string; earlyUnit: string; settings: AutomaticGatewayHostSettings; guardRules: string } {
   if (!input || typeof input !== 'object' || types.isProxy(input) ||
       ![Object.prototype, null].includes(Object.getPrototypeOf(input))) invalid();
   const descriptors = Object.getOwnPropertyDescriptors(input);
   const fields = ['network', 'sourceDirectory', 'pythonPath', 'settingsPath', 'stateDirectory'];
-  if (Reflect.ownKeys(descriptors).length !== fields.length || fields.some(field => {
+  const optional = ['hostStateDirectory', 'hostServiceUid'];
+  if (Reflect.ownKeys(descriptors).some(key => typeof key !== 'string' || ![...fields, ...optional].includes(key)) || fields.some(field => {
     const descriptor = descriptors[field];
     return !descriptor || !descriptor.enumerable || !('value' in descriptor);
   })) invalid();
-  const values = Object.fromEntries(fields.map(field => [field, descriptors[field].value]));
+  if (optional.some(field => descriptors[field] && (!descriptors[field].enumerable || !('value' in descriptors[field]))) ||
+      optional.some(field => !!descriptors[field] !== !!descriptors[optional[0]])) invalid();
+  const values = Object.fromEntries([...fields, ...optional.filter(field => descriptors[field])].map(field => [field, descriptors[field].value]));
   const network = parseAutomaticGatewaySettings(values.network);
   const source = installPath(values.sourceDirectory), python = installPath(values.pythonPath);
   const settingsPath = installPath(values.settingsPath), stateDirectory = installPath(values.stateDirectory);
@@ -79,16 +83,27 @@ export function renderAutomaticGatewayHostPlan(input: {
     .map(value => quote(value, true)).join(' ');
   const guard = [python, '-I', posix.join(source, 'apps/gateway/network.py'), 'guard', '--settings', settingsPath]
     .map(value => quote(value, true)).join(' ');
+  let hostGuard: string | undefined;
+  if (values.hostStateDirectory !== undefined) {
+    const hostState = installPath(values.hostStateDirectory);
+    if (!Number.isSafeInteger(values.hostServiceUid) || values.hostServiceUid <= 0 || values.hostServiceUid > 4294967294 ||
+        hostState === stateDirectory || hostState.startsWith(stateDirectory + '/') || stateDirectory.startsWith(hostState + '/')) invalid();
+    hostGuard = [python, '-I', posix.join(source, 'apps/gateway/host_proxy.py'), '--early-network', settingsPath,
+      '--state', hostState, '--uid', String(values.hostServiceUid)].map(value => quote(value, true)).join(' ');
+  }
   const earlyUnit = ['[Unit]', 'Description=CoCoProxy early ingress guard',
     'DefaultDependencies=no', 'After=local-fs.target', 'Before=network-pre.target', 'Wants=network-pre.target',
-    '', '[Service]', 'Type=oneshot', 'RemainAfterExit=true', 'User=root', `ExecStart=${guard}`, 'UMask=0077',
+    '', '[Service]', 'Type=oneshot', 'RemainAfterExit=true', 'User=root', `ExecStart=${guard}`,
+    ...(hostGuard ? [`ExecStart=${hostGuard}`] : []), 'UMask=0077',
     'TimeoutStartSec=30', 'TimeoutStopSec=10', 'NoNewPrivileges=true',
     'CapabilityBoundingSet=CAP_NET_ADMIN', 'ProtectSystem=strict', 'ProtectHome=true',
     'PrivateTmp=true', `ReadWritePaths=${quote(stateDirectory)}`, '',
     '[Install]', 'WantedBy=multi-user.target', ''].join('\n');
   const unit = ['[Unit]', 'Description=CoCoProxy automatic gateway network prerequisites',
     'After=network-online.target', 'Wants=network-online.target', '', '[Service]', 'Type=oneshot',
-    'RemainAfterExit=true', 'User=root', `ExecStart=${command}`, `ExecReload=${reload}`, 'UMask=0077',
+    'RemainAfterExit=true', 'User=root', `ExecStart=${command}`,
+    ...(hostGuard ? [`ExecStart=${hostGuard}`] : []), `ExecReload=${reload}`,
+    ...(hostGuard ? [`ExecReload=${hostGuard}`] : []), 'UMask=0077',
     'TimeoutStartSec=60', 'TimeoutStopSec=10', 'NoNewPrivileges=true',
     'CapabilityBoundingSet=CAP_NET_ADMIN', 'ProtectSystem=strict', 'ProtectHome=true',
     'PrivateTmp=true', `ReadWritePaths=${quote(stateDirectory)}`, '',

@@ -498,7 +498,8 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
   if (!preserveRuntime && options.operation !== 'uninstall') require(posix.dirname(input.runtime.sourceDirectory) === target, 'INSTALL_RELEASE_LAYOUT_REQUIRED');
   if (input.web) await verifyManagedWeb({ web: input.web, gatewayIPv4: input.runtime.automaticGateway.gatewayIPv4,
     origin: input.management.origin, listenPort: input.management.listenPort, serviceUid: input.runtime.serviceUid });
-  if (input.runtime.automaticGateway) require(release.files.some(file => file.path === 'source/apps/gateway/network.py'),
+  if (input.runtime.automaticGateway) require(['source/apps/gateway/network.py', 'source/apps/gateway/host_proxy.py']
+    .every(path => release.files.some(file => file.path === path)),
     'INSTALL_PAYLOAD_NETWORK_HELPER_MISSING');
   const reserved = (path: string) => path === STORE || path.startsWith(STORE + '/') || STORE.startsWith(path + '/');
   require(![target, input.runtime.stateDirectory, input.management.credentialPath, ...plan.files.map(file => file.path)].some(reserved),
