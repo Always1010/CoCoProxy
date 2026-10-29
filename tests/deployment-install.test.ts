@@ -12,9 +12,32 @@ import { inspectStateCompatibility, type UpgradeStateHost } from '../packages/de
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/compatibility.ts';
 import { assessRecoveryCredential, assertFinalizableReceipt, deploymentOwnerGone, inspectDeployment, recoverDeployment } from '../packages/deployment/maintenance.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
+import { assessRuntimePreservation } from '../packages/deployment/runtime-preservation.ts';
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
+
+test('runtime preservation permits management changes but rejects boot, runtime, dependency and state contract changes', () => {
+  const paths = ['bin/mihomo', 'source/apps/runtime/launch-core.ts', 'source/packages/runtime/settings.ts',
+    'source/packages/runtime/systemd.ts', 'source/packages/transaction/index.ts', 'source/packages/management/http.ts',
+    'source/packages/management/startup.ts', 'source/node_modules/yaml/package.json', 'server/.output/server/index.mjs'];
+  const base = { files: paths.map(path => ({ path, sha256: digest(path), size: 10, mode: '0644' })), coreSHA: digest('core'),
+    compatibility: { schemaVersion: 1 }, buildInputs: { schemaVersion: 2, inputs: [{
+      path: 'integrations/metacubexd/overlay/apps/server/plugins/boot-kernel.ts', oid: digest('boot'), mode: '0644' }] } };
+  const next = structuredClone(base);
+  for (const file of next.files.filter(file => file.path.endsWith('/http.ts') || file.path.startsWith('server/'))) file.sha256 = digest('new manager');
+  assert.equal(assessRuntimePreservation(base, next).eligible, true);
+  for (const path of paths.filter(path => !path.endsWith('/http.ts') && !path.startsWith('server/'))) {
+    const changed = structuredClone(next); changed.files.find(file => file.path === path)!.sha256 = digest('changed');
+    assert.equal(assessRuntimePreservation(base, changed).eligible, false, path);
+  }
+  assert.equal(assessRuntimePreservation(base, { ...next, compatibility: { schemaVersion: 2 } }).eligible, false);
+  assert.equal(assessRuntimePreservation(base, { ...next, buildInputs: undefined }).eligible, false);
+  const changedBoot = structuredClone(next); changedBoot.buildInputs.inputs[0].oid = digest('changed boot');
+  assert.equal(assessRuntimePreservation(base, changedBoot).eligible, false);
+  const unknown = structuredClone(next); unknown.files.push({ path: 'source/unknown-runtime.ts', sha256: digest('unknown'), size: 1, mode: '0644' });
+  assert.equal(assessRuntimePreservation(base, unknown).eligible, false);
+});
 
 test('backend updates bind the installed base and preserve all UI files and the reviewed core', () => {
   const file = { path: 'server/.output/public/index.html', size: 2, mode: '0644', sha256: digest('UI') };

@@ -51,7 +51,7 @@ export function buildFailureMessage(error) {
       if (changes.length > 50) lines.push(`  另有 ${changes.length - 50} 项变化。`);
     }
     lines.push(comparison.recommendedComponents === 'management'
-      ? '已核对核心摘要一致。建议使用 --components management；会进入完整维护流程，代理会短暂中断。'
+      ? '已核对核心摘要一致。建议使用 --components management；部署时核验运行时兼容性，不满足时进入完整维护流程并短暂中断代理。'
       : '核心一致性未确认或核心已变化。请核对核心输入；需要完整更新时使用 --components all。');
     lines.push('已停止；未自动切换更新模式。');
   }
@@ -266,7 +266,8 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
   const { frontendUpdate, componentUpdate, inputComparison } = baseline ?? {};
   if (preview) return { preview: true, components, commit: config.expected.commit,
     build: components === 'frontend' ? ['frontend', 'server-public-assets'] : components === 'backend' ? ['backend', 'release'] : components === 'core' ? ['reviewed-core', 'release'] : ['frontend', 'backend', 'release'],
-    deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance',
+    deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network'
+      : components === 'core' ? 'full-maintenance' : 'assess-runtime-compatibility-at-deployment; otherwise-full-maintenance',
     ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}), ...(inputComparison ? { inputComparison } : {}) };
   const catalog = await json(join(config.source, 'integrations/metacubexd/components.json'));
   const tooling = await json(join(config.source, 'tooling/package.json'));

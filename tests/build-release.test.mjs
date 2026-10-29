@@ -175,7 +175,7 @@ test('management builds both frontend and backend, pins the installed core and r
   const options = { execute: state.execute, components: 'management', baseRelease: base };
   const plan = await runBuildRelease(state.config, { ...options, preview: true });
   assert.deepEqual(plan.build, ['frontend', 'backend', 'release']);
-  assert.equal(plan.deployment, 'full-maintenance');
+  assert.equal(plan.deployment, 'assess-runtime-compatibility-at-deployment; otherwise-full-maintenance');
   assert.equal(plan.componentUpdate.reusedInputSha256, sha256(bytes));
   assert.equal(state.commands.some(item => item.command === 'tar'), false);
   const result = await runBuildRelease(state.config, { ...options, deploy: true });

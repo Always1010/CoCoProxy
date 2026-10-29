@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
+import urllib.parse
 
 PRIVATE = Path('/etc/cocoproxy-install')
 RECEIPT = Path('/var/lib/cocoproxy-deployment/receipt.json')
@@ -254,12 +256,30 @@ def stage_payload(source, manifest_sha):
     return stage, manifest
 
 
+def management_ready(management):
+    """Probe the private listener without credentials or an environment proxy."""
+    origin = urllib.parse.urlsplit(management['origin'])
+    request = urllib.request.Request('http://127.0.0.1:' + str(management['listenPort']) + '/api/cocoproxy/health',
+        headers={'Host': origin.netloc, 'X-Forwarded-Proto': origin.scheme})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    for _ in range(30):
+        try:
+            with opener.open(request, timeout=1) as response:
+                if response.status == 200 and json.loads(response.read(4096)) == {'responding': True, 'scope': 'management_only'}:
+                    return
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.2)
+    raise RuntimeError('REMOTE_MANAGEMENT_NOT_READY')
+
+
 def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
-                    systemctl, service, node, inspect_complete, web_unit, journal):
+                    systemctl, service, node, inspect_complete, web_unit, journal, components='frontend'):
     """Only management-side maintenance. The installer proves the pinned runtime."""
-    update = manifest['frontendUpdate']
-    need(isinstance(update, dict) and update.get('schemaVersion') in (1, 2) and
-         update.get('baseManifestSha256') == receipt['manifestSha256'], 'REMOTE_FRONTEND_BASE_CHANGED')
+    update = manifest.get('frontendUpdate')
+    if components == 'frontend':
+        need(isinstance(update, dict) and update.get('schemaVersion') in (1, 2) and
+             update.get('baseManifestSha256') == receipt['manifestSha256'], 'REMOTE_FRONTEND_BASE_CHANGED')
     managed = ['cocoproxy-management.service']
     if web_unit or any(item['path'] == '/etc/systemd/system/cocoproxy-web.service' for item in receipt['files']):
         managed.append('cocoproxy-web.service')
@@ -275,11 +295,11 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         need(active in ['active', 'inactive'] and enabled in ['enabled', 'disabled', 'static', 'indirect'], 'REMOTE_SERVICE_STATE_UNSUPPORTED')
         before[unit] = {'active': active == 'active', 'enabled': enabled}
     if options.preview:
-        print(json.dumps({'prepared': True, 'apply': False, 'components': 'frontend', 'commit': manifest['commit'],
-                          'services': managed, 'preservedServices': preserved}))
+        print(json.dumps({'prepared': True, 'apply': False, 'components': components, 'commit': manifest['commit'],
+                          'deployment': 'preserve-runtime', 'services': managed, 'preservedServices': preserved}))
         return
     progress = {'status': 'running', 'phase': 'frontend-maintenance', 'manifestSha256': options.manifest_sha256,
-                'previousServices': before, 'components': 'frontend'}
+                'previousServices': before, 'components': components, 'deployment': 'preserve-runtime'}
     replace(journal, progress)
     try:
         for unit in reversed(managed):
@@ -296,6 +316,8 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         run(installer + ['--operation', 'upgrade', *common, '--apply'])
         progress['phase'] = 'frontend-files-installed'
         replace(journal, progress)
+        frozen = compare_preservation(baseline, preservation(True), frozen=True)
+        need(frozen['status'] == 'pass', 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
         replace(input_path, candidate)
         inspect_complete(options.manifest_sha256)
         if enabled_units:
@@ -303,6 +325,15 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         for unit in managed:
             if before[unit]['active']:
                 run([systemctl, 'start', unit])
+        if before['cocoproxy-management.service']['active']:
+            management_ready(candidate['management'])
+        # The pinned launcher must still recognize the current committed state,
+        # including after a future systemd crash restart. It is never repointed.
+        if 'ActiveState=active' in stable['cocoproxy-mihomo.service']:
+            status = json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
+                Path(candidate['runtime']['sourceDirectory']).parent / 'source/apps/cli/main.ts', 'runtime-status',
+                '--state-dir', candidate['runtime']['stateDirectory'], '--runtime-settings', candidate['runtime']['settingsPath']]))
+            need((status.get('core') or {}).get('ready') is True, 'REMOTE_CORE_NOT_READY')
         for unit in managed:
             active = run([systemctl, 'show', unit, '-p', 'ActiveState', '--value']).decode().strip()
             enabled = run([systemctl, 'show', unit, '-p', 'UnitFileState', '--value']).decode().strip()
@@ -314,7 +345,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         preserved_state = compare_preservation(baseline, preservation())
         need(preserved_state['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
         replace(journal, {**progress, 'status': 'complete', 'phase': 'verified', 'preservation': preserved_state})
-        print(json.dumps({'installed': True, 'updated': True, 'components': 'frontend', 'commit': manifest['commit'],
+        print(json.dumps({'installed': True, 'updated': True, 'components': components, 'commit': manifest['commit'],
                           'manifestSha256': options.manifest_sha256, 'runtimePreserved': True, 'preservation': preserved_state}))
     except Exception:
         replace(journal, {**progress, 'status': 'failed', 'lastCompletedPhase': progress['phase'], 'phase': 'manual-review-required'})
@@ -438,6 +469,15 @@ def main_locked(options):
         if frontend:
             return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
                                    systemctl, service, node, inspect_complete, web_unit, journal)
+        if installed and components != 'core' and preparation.get('runtimePreservation', {}).get('eligible') is True:
+            candidate = new_input(old, options.manifest_sha256, runtime['binarySha256'], True)
+            replace(next_path, candidate)
+            common += ['--preserve-runtime']
+            pinned = json.loads(run(installer + ['--operation', 'prepare', *common]))
+            need(pinned.get('readiness') == 'prepared-not-applied' and pinned.get('review', {}).get('configurationChanged') is False,
+                 'REMOTE_RUNTIME_PRESERVATION_NOT_READY')
+            return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
+                                   systemctl, service, node, inspect_complete, web_unit, journal, components)
         gateway = bool(runtime.get('automaticGateway'))
         need(not installed or not gateway or router_command, 'REMOTE_ROUTER_HOOK_REQUIRED')
         router_enabled = False
