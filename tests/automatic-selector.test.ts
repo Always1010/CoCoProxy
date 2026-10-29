@@ -3,6 +3,7 @@ import test from 'node:test';
 import { DEFAULT_AUTO_PROBES, parseAutoGroupPolicy, parseAutoProbeSettings } from '../packages/management/automatic-policy.ts';
 import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-policy.ts';
 import { createAutomaticSelector, type AutoSnapshot, type ProbeResult } from '../packages/management/automatic-selector.ts';
+import { ManagementError } from '../packages/management/http.ts';
 
 const good = (delay = 100): ProbeResult => ({ ok: true, delay });
 const bad = (): ProbeResult => ({ ok: false, delay: null });
@@ -94,7 +95,10 @@ test('healthy monitoring measures only unique current nodes every 30 seconds and
 
 test('failure requires delayed secondary evidence; candidates confirm in preferred order and stop before fallback', async () => {
   let firstCalls = 0;
-  const h = harness({ preferred: ['primary', 'first', 'second'], probe: node => node === 'primary' || node === 'first' && ++firstCalls > 1 ? bad() : good() });
+  const h = harness({ preferred: ['primary', 'first', 'second'], probe: node => {
+    if (node === 'primary') throw new Error('ACTIVE_CONFLICT'); // A matching message alone is still a real failure.
+    return node === 'first' && ++firstCalls > 1 ? bad() : good();
+  } });
   await h.at(0); await h.at(1999);
   assert.equal(h.calls.length, 1);
   await h.at(2000); await h.at(2001);
@@ -263,6 +267,55 @@ test('retry-after postpones observations and serialized ticks cannot create dupl
   await h.engine.close();
 });
 
+test('structured generation conflicts discard evidence without refunding starts or retrying inside a tick', async () => {
+  let conflict = true;
+  const h = harness({ probe: () => { if (conflict) throw new ManagementError('ACTIVE_CONFLICT', 409); return good(); } });
+  for (let at = 0; at < 25_000; at += 1000) {
+    await h.at(at);
+    assert.equal(h.engine.status().groups[0].phase, 'monitoring');
+  }
+  assert.equal(h.calls.length, 24);
+  assert.equal(h.switches.length, 0);
+  conflict = false;
+  await h.at(59_999); assert.equal(h.calls.length, 24);
+  await h.at(60_000); assert.equal(h.calls.length, 25);
+  assert.equal(h.engine.status().groups[0].health, 'healthy');
+  await h.engine.close();
+});
+
+test('a committed group switch fences old in-flight and queued confirmations without resetting its residence', async () => {
+  for (const result of ['conflict', 'healthy'] as const) {
+    let time = 0, switched!: () => void;
+    const committed = new Promise<void>(resolve => { switched = resolve; });
+    const calls: { node: string; at: number; generation: string }[] = [], changes: string[] = [];
+    const snapshot: AutoSnapshot = { key: 'stable-config', generation: '1', probes: structuredClone(DEFAULT_AUTO_PROBES),
+      groups: ['a', 'b', 'c'].map(node => ({ name: node, current: node,
+        policy: { preferred: [node, node + '-next'], fallback: [], returnToPreferred: true } })) };
+    const engine = createAutomaticSelector({ now: () => time, snapshot: async () => snapshot,
+      probe: async (s, node) => {
+        calls.push({ node, at: time, generation: s.generation });
+        if (time === 35_000 && node === 'b-next') {
+          await committed;
+          if (result === 'conflict') throw new ManagementError('ACTIVE_CONFLICT', 409);
+        }
+        return time >= 30_000 && time <= 35_000 && !node.endsWith('-next') ? bad() : good();
+      },
+      switch: async (_s, group, node) => {
+        changes.push(group); snapshot.groups.find(item => item.name === group)!.current = node;
+        snapshot.generation = '2'; switched(); return true;
+      } });
+    for (const at of [0, 30_000, 32_000, 33_000, 35_000]) { time = at; await engine.tick(); }
+    assert.deepEqual(changes, ['a']);
+    assert.ok(!calls.some(call => call.at === 35_000 && call.node === 'c-next'));
+    for (const at of [36_000, 38_000]) { time = at; await engine.tick(); }
+    assert.deepEqual(changes, ['a']);
+    assert.equal(engine.status().groups[0].nextAt, 65_000);
+    assert.ok(engine.status().groups.slice(1).every(group => group.health === 'healthy' && group.phase === 'monitoring'));
+    assert.ok(calls.filter(call => call.at === 36_000).every(call => call.generation === '2' && ['b', 'c'].includes(call.node)));
+    await engine.close();
+  }
+});
+
 test('late probes cannot switch after snapshot changes or close; close waits for pending work', async () => {
   let resolveProbe!: (result: ProbeResult) => void;
   let held = false;
@@ -274,6 +327,7 @@ test('late probes cannot switch after snapshot changes or close; close waits for
   h.snapshot = { ...h.snapshot!, generation: '2' };
   resolveProbe(good()); await tick;
   assert.equal(h.switches.length, 0);
+  assert.equal(h.engine.status().groups[0].phase, 'failure-search');
   h.snapshot = null; await h.at(4002);
   assert.deepEqual(h.engine.status().groups, []);
   await h.engine.close();
