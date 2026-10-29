@@ -285,7 +285,7 @@ function aliveCount(group: ProxyType) {
             </span>
           </span>
           <span class="hidden truncate text-xs text-base-content/45 sm:block">
-            {{ group.now }}<template v-if="resolvedNode(group) !== group.now"> → {{ resolvedNode(group) }}</template>
+            {{ group.now }}
           </span>
         </span>
       </button>
