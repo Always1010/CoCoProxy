@@ -5,9 +5,38 @@ import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-pol
 import { createAutomaticSelector, type AutoSnapshot, type ProbeResult } from '../packages/management/automatic-selector.ts';
 import { ManagementError } from '../packages/management/http.ts';
 import { createAutomaticDiagnostics, type AutoDiagnostic } from '../packages/management/automatic-diagnostics.ts';
+import type { BandwidthRound } from '../packages/management/bandwidth-history.ts';
 
 const good = (delay = 100): ProbeResult => ({ ok: true, delay });
 const bad = (): ProbeResult => ({ ok: false, delay: null });
+
+test('bandwidth history preserves specific suspension causes without storing raw errors', async () => {
+  for (const mode of ['paused', 'transaction', 'locked', 'failed'] as const) {
+    let unavailable = false;
+    const records: BandwidthRound[] = [];
+    const snapshot: AutoSnapshot = { key: 'suspension-synthetic', generation: '1', probes: DEFAULT_AUTO_PROBES,
+      groups: [{ name: 'group', current: 'a', policy: { preferred: ['a', 'b'], fallback: [], returnToPreferred: false,
+        bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true } } }] };
+    const engine = createAutomaticSelector({ now: () => 1000,
+      snapshot: async () => {
+        if (!unavailable) return snapshot;
+        if (mode === 'locked') throw new ManagementError('STORE_LOCKED', 409);
+        if (mode === 'failed') throw new Error('EXAMPLE_ONLY_SECRET');
+        return null;
+      }, suspensionReason: () => mode === 'transaction' ? 'transaction' : 'paused',
+      probe: async () => good(), switch: async () => false,
+      bandwidth: { measure: async () => null, trace: record => records.push(record) },
+    });
+    await engine.tick();
+    assert.equal(engine.requestBandwidthCheck('group'), true);
+    unavailable = true; await engine.tick();
+    const expected = mode === 'locked' ? 'snapshot-locked' : mode === 'failed' ? 'snapshot-failed' : `runtime-${mode}`;
+    assert.equal(records.at(-1)?.reason, expected);
+    assert.equal(records.at(-1)?.events.at(-1)?.reason, expected);
+    assert.doesNotMatch(JSON.stringify(records), /EXAMPLE_ONLY_SECRET/);
+    await engine.close();
+  }
+});
 
 test('bandwidth opt-in cannot block legacy fault recovery or apply a late download result', async () => {
   let time = 0, total = 0, failed = false, measured = 0, aborted = false;
