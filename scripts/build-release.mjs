@@ -5,7 +5,7 @@ import { constants, fstatSync } from 'node:fs';
 import { cp, lstat, mkdir, open, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { backendInputSha256, reusedInputSha256, parseComponents } from '../packages/deployment/update-scope.mjs';
+import { createBuildInputs, INPUT_SCHEMA_VERSION, parseComponents } from '../packages/deployment/update-scope.mjs';
 
 export function readBuildSelection(args) {
   const rest = []; let components = 'all'; let baseRelease; let preview = false; const seen = new Set();
@@ -30,12 +30,12 @@ const fail = code => { throw Object.assign(new Error(code), { code }); };
 export function buildFailureMessage(error) {
   const code = error.code?.startsWith('BUILD_') ? error.code : 'BUILD_FAILED';
   const guidance = {
-    BUILD_FRONTEND_BASE_UPGRADE_REQUIRED: '旧安装缺少局部更新基线。请先不带 --components frontend 完成一次全量构建部署。',
+    BUILD_FRONTEND_BASE_UPGRADE_REQUIRED: '旧安装缺少新版局部更新基线。核心一致时先用 --components management 更新一次；核心变化时使用全量构建部署。',
     BUILD_FRONTEND_BACKEND_CHANGED: '前端以外的构建输入已变化，不能局部更新；请使用默认全量构建部署。',
     BUILD_FRONTEND_BASE_REQUIRED: '未找到可核验的管理服务基线；核对安装，或使用 --base-release 指定已有发行目录。',
     BUILD_COMPONENTS_UNSUPPORTED: '当前支持 --components all、frontend、backend、management（前后端）或 core。',
     BUILD_MANAGEMENT_CORE_CHANGED: '基线核心与当前审核核心不一致，不能仅更新前后端；请核对核心输入或使用全量构建部署。',
-    BUILD_COMPONENT_BASE_UPGRADE_REQUIRED: '基线缺少组件复用摘要，请先完成一次全量构建部署。',
+    BUILD_COMPONENT_BASE_UPGRADE_REQUIRED: '基线缺少新版组件复用摘要。核心一致时先用 --components management 更新一次；核心变化时使用全量构建部署。',
     BUILD_REUSED_INPUT_CHANGED: '本次未选择的组件输入已变化，请使用全量构建部署。',
   };
   return `${code}${guidance[code] ? '\n' + guidance[code] : ''}`;
@@ -215,18 +215,20 @@ export async function componentBaseline(config, baseRelease, execute, components
     if (!match) fail('BUILD_SNAPSHOT_INVALID');
     return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] };
   });
+  if (manifest.buildInputs?.schemaVersion !== INPUT_SCHEMA_VERSION) fail(components === 'frontend'
+    ? 'BUILD_FRONTEND_BASE_UPGRADE_REQUIRED' : 'BUILD_COMPONENT_BASE_UPGRADE_REQUIRED');
+  const buildInputs = await createBuildInputs(entries, entry => execute('git', ['-C', config.snapshot, 'cat-file', 'blob', entry.oid], { capture: true }));
   if (components === 'frontend') {
-    const backendSHA = backendInputSha256(entries);
+    const backendSHA = buildInputs.backendInputSha256;
     if (!manifest.buildInputs?.backendInputSha256) fail('BUILD_FRONTEND_BASE_UPGRADE_REQUIRED');
     if (manifest.buildInputs.backendInputSha256 !== backendSHA) fail('BUILD_FRONTEND_BACKEND_CHANGED');
-    return { baseRelease, frontendUpdate: { schemaVersion: 1, baseManifestSha256, backendInputSha256: backendSHA } };
+    return { baseRelease, frontendUpdate: { schemaVersion: INPUT_SCHEMA_VERSION, baseManifestSha256, backendInputSha256: backendSHA } };
   }
-  const management = components === 'core' ? (await json(join(config.snapshot, 'integrations/metacubexd/components.json'))).management : undefined;
-  const reusedSHA = reusedInputSha256(entries, components, management);
   const inputKey = components === 'core' ? 'serverInputSha256' : 'frontendInputSha256';
+  const reusedSHA = buildInputs[inputKey];
   if (!manifest.buildInputs?.[inputKey]) fail('BUILD_COMPONENT_BASE_UPGRADE_REQUIRED');
   if (manifest.buildInputs[inputKey] !== reusedSHA) fail('BUILD_REUSED_INPUT_CHANGED');
-  return { baseRelease, componentUpdate: { schemaVersion: 1, components, baseManifestSha256, reusedInputSha256: reusedSHA } };
+  return { baseRelease, componentUpdate: { schemaVersion: INPUT_SCHEMA_VERSION, components, baseManifestSha256, reusedInputSha256: reusedSHA } };
 }
 
 /** The CLI holds the shared workspace lock for this entire operation. Injection is for synthetic orchestration tests. */

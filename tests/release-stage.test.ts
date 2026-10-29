@@ -138,11 +138,12 @@ test('stages fixed HEAD runtime, complete production dependencies and reviewed c
   const verified = await verifyRelease(options.output, receipt.manifestSha256);
   assert.equal(verified.files.length, manifest.files.length);
   assert.equal(verified.coreSHA, digest('synthetic reviewed core'));
-  const frontendUpdate = { schemaVersion: 1 as const, baseManifestSha256: receipt.manifestSha256, backendInputSha256: verified.backendInputSha256! };
+  assert.equal(verified.inputSchemaVersion, 2);
+  const frontendUpdate = { schemaVersion: 2 as const, baseManifestSha256: receipt.manifestSha256, backendInputSha256: verified.backendInputSha256! };
   const frontendOutput = options.output + '-frontend';
   const frontendReceipt = await stageExplicitRelease({ ...options, output: frontendOutput, frontendUpdate });
   assert.deepEqual((await verifyRelease(frontendOutput, frontendReceipt.manifestSha256)).frontendUpdate, frontendUpdate);
-  const componentUpdate = { schemaVersion: 1 as const, components: 'backend' as const, baseManifestSha256: receipt.manifestSha256, reusedInputSha256: verified.frontendInputSha256! };
+  const componentUpdate = { schemaVersion: 2 as const, components: 'backend' as const, baseManifestSha256: receipt.manifestSha256, reusedInputSha256: verified.frontendInputSha256! };
   const backendOutput = options.output + '-backend';
   const backendReceipt = await stageExplicitRelease({ ...options, output: backendOutput, componentUpdate });
   assert.deepEqual((await verifyRelease(backendOutput, backendReceipt.manifestSha256)).componentUpdate, componentUpdate);

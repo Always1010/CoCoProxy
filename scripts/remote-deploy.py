@@ -256,7 +256,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
                     systemctl, service, node, inspect_complete, web_unit, journal):
     """Only management-side maintenance. The installer proves the pinned runtime."""
     update = manifest['frontendUpdate']
-    need(isinstance(update, dict) and update.get('schemaVersion') == 1 and
+    need(isinstance(update, dict) and update.get('schemaVersion') in (1, 2) and
          update.get('baseManifestSha256') == receipt['manifestSha256'], 'REMOTE_FRONTEND_BASE_CHANGED')
     managed = ['cocoproxy-management.service']
     if web_unit or any(item['path'] == '/etc/systemd/system/cocoproxy-web.service' for item in receipt['files']):

@@ -4,8 +4,8 @@ export interface StageExplicitReleaseOptions {
   runtimeDependencies: string;
   core: string;
   output: string;
-  frontendUpdate?: { schemaVersion: 1; backendInputSha256: string; baseManifestSha256: string };
-  componentUpdate?: { schemaVersion: 1; components: 'backend' | 'management' | 'core'; reusedInputSha256: string; baseManifestSha256: string };
+  frontendUpdate?: { schemaVersion: 1 | 2; backendInputSha256: string; baseManifestSha256: string };
+  componentUpdate?: { schemaVersion: 1 | 2; components: 'backend' | 'management' | 'core'; reusedInputSha256: string; baseManifestSha256: string };
   /** Code-only fixture override. Never supplied by deployment JSON or CLI. */
   reviewedCoreSha256?: string;
 }

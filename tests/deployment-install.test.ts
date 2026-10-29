@@ -21,6 +21,9 @@ test('backend updates bind the installed base and preserve all UI files and the 
   const previous = { files: [file], coreSHA: digest('core'), frontendInputSha256: digest('inputs') };
   const next = { ...previous, componentUpdate: { schemaVersion: 1 as const, components: 'backend' as const, baseManifestSha256: digest('base'), reusedInputSha256: digest('inputs') } };
   assert.doesNotThrow(() => assertComponentReuse(previous, next, digest('base')));
+  const version2 = { ...next, inputSchemaVersion: 2, componentUpdate: { ...next.componentUpdate, schemaVersion: 2 as const } };
+  assert.throws(() => assertComponentReuse(previous, version2, digest('base')), code('INSTALL_COMPONENT_BASE_CHANGED'));
+  assert.doesNotThrow(() => assertComponentReuse({ ...previous, inputSchemaVersion: 2 }, version2, digest('base')));
   assert.throws(() => assertComponentReuse(previous, next, digest('other base')), code('INSTALL_COMPONENT_BASE_CHANGED'));
   assert.throws(() => assertComponentReuse(previous, { ...next, files: [{ ...file, sha256: digest('changed UI') }] }, digest('base')), code('INSTALL_REUSED_PAYLOAD_CHANGED'));
   assert.throws(() => assertComponentReuse(previous, { ...next, coreSHA: digest('changed core') }, digest('base')), code('INSTALL_REUSED_PAYLOAD_CHANGED'));

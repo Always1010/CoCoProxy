@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { executeBuildCommand, runBuildRelease, readBuildSelection } from '../scripts/build-release.mjs';
-import { backendInputSha256, reusedInputSha256 } from '../packages/deployment/update-scope.mjs';
+import { createBuildInputs } from '../packages/deployment/update-scope.mjs';
 
 const exec = promisify(execFile);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -87,7 +87,7 @@ test('component selection rejects unsupported modes; a frontend base must match 
   const path = 'synthetic.txt'; await write(join(base, path), 'base');
   const raw = await executeBuildCommand('git', ['-C', state.config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
   const entries = raw.split('\0').filter(Boolean).map(line => { const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line); return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] }; });
-  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: { backendInputSha256: backendInputSha256(entries) },
+  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: await createBuildInputs(entries, entry => readFile(join(state.config.snapshot, entry.path))),
     files: [{ path, size: 4, sha256: sha256('base'), mode: '0644' }] };
   await write(join(base, 'manifest.json'), JSON.stringify(manifest));
   const plan = await runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base, preview: true });
@@ -96,6 +96,8 @@ test('component selection rejects unsupported modes; a frontend base must match 
   assert.equal(result.components, 'frontend');
   assert.equal(state.commands.some(item => item.command === 'npm'), false);
   await write(join(base, 'manifest.json'), JSON.stringify({ ...manifest, buildInputs: undefined }));
+  await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BASE_UPGRADE_REQUIRED' });
+  await write(join(base, 'manifest.json'), JSON.stringify({ ...manifest, buildInputs: { backendInputSha256: manifest.buildInputs.backendInputSha256 } }));
   await assert.rejects(runBuildRelease(state.config, { execute: state.execute, components: 'frontend', baseRelease: base }), { code: 'BUILD_FRONTEND_BASE_UPGRADE_REQUIRED' });
   manifest.buildInputs.backendInputSha256 = '0'.repeat(64);
   await write(join(base, 'manifest.json'), JSON.stringify(manifest));
@@ -107,7 +109,7 @@ test('backend build reuses verified UI, skips UI generation and refuses UI drift
   const path = 'server/.output/public/index.html'; await write(join(base, path), 'synthetic UI');
   const raw = await executeBuildCommand('git', ['-C', state.config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
   const entries = raw.split('\0').filter(Boolean).map(line => { const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line); return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] }; });
-  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: { frontendInputSha256: reusedInputSha256(entries, 'backend') },
+  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: await createBuildInputs(entries, entry => readFile(join(state.config.snapshot, entry.path))),
     files: [{ path, size: 12, sha256: sha256('synthetic UI'), mode: '0644' }] };
   await write(join(base, 'manifest.json'), JSON.stringify(manifest));
   const result = await runBuildRelease(state.config, { execute: state.execute, components: 'backend', baseRelease: base });
@@ -127,10 +129,13 @@ test('core build reuses the complete server without UI/server compilation and re
   const raw = await executeBuildCommand('git', ['-C', state.config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
   const entries = raw.split('\0').filter(Boolean).map(line => { const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line); return { mode: match[1] === '100755' ? '0755' : '0644', oid: match[2], path: match[3] }; });
   const catalog = JSON.parse(await readFile(join(state.config.snapshot, 'integrations/metacubexd/components.json')));
-  const coreOnlyEntries = entries.map(entry => entry.path === 'integrations/metacubexd/components.json' ? { ...entry, oid: 'f'.repeat(40) } : entry);
-  assert.equal(reusedInputSha256(coreOnlyEntries, 'core', catalog.management), reusedInputSha256(entries, 'core', catalog.management));
-  assert.notEqual(reusedInputSha256(entries, 'core', { ...catalog.management, commit: 'f'.repeat(40) }), reusedInputSha256(entries, 'core', catalog.management));
-  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs: { serverInputSha256: reusedInputSha256(entries, 'core', catalog.management) },
+  const buildInputs = await createBuildInputs(entries, entry => readFile(join(state.config.snapshot, entry.path)));
+  const changedCatalog = async management => createBuildInputs(entries.map(entry => entry.path === 'integrations/metacubexd/components.json'
+    ? { ...entry, oid: 'f'.repeat(40) } : entry), entry => entry.path === 'integrations/metacubexd/components.json'
+      ? Promise.resolve(JSON.stringify({ ...catalog, management, mihomo: { version: 'new core' } })) : readFile(join(state.config.snapshot, entry.path)));
+  assert.equal((await changedCatalog(catalog.management)).serverInputSha256, buildInputs.serverInputSha256);
+  assert.notEqual((await changedCatalog({ ...catalog.management, commit: 'f'.repeat(40) })).serverInputSha256, buildInputs.serverInputSha256);
+  const manifest = { schemaVersion: 1, commit: state.config.expected.commit, buildInputs,
     files: [{ path, size: 12, sha256: sha256('synthetic UI'), mode: '0644' }, { path: serverPath, size: 6, sha256: sha256('server'), mode: '0644' }] };
   await write(join(base, 'manifest.json'), JSON.stringify(manifest));
   const result = await runBuildRelease(state.config, { execute: state.execute, components: 'core', baseRelease: base });
