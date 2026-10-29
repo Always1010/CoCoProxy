@@ -14,7 +14,7 @@ export const AUTO_INTERVALS = {
 
 type Search = {
   kind: 'failure' | 'slow' | 'outage'; queue: string[]; index: number; due: number; baseline: number;
-  batch?: { nodes: string[]; results: Map<string, ProbeResult>; target: ProbeTarget };
+  batch?: { nodes: string[]; results: Map<string, ProbeResult>; target: ProbeTarget; alternate?: boolean };
   confirming?: { node: string; delay: number; due: number; target: ProbeTarget };
 };
 type Returning = {
@@ -74,7 +74,14 @@ export function createAutomaticSelector(options: Options) {
   const isBackup = (g: Group) => !g.policy.preferred.includes(g.current);
   const returnLimit = (s: AutoSnapshot) => s.probes.slowMs * 2 / 3;
   const activeTarget = (s: AutoSnapshot) => usePrimary ? s.probes.primary : s.probes.secondary;
-  const isPrimary = (s: AutoSnapshot, target: ProbeTarget) => target.url === s.probes.primary.url && target.expectedStatus === s.probes.primary.expectedStatus;
+  const sameTarget = (a: ProbeTarget, b: ProbeTarget) => a.url === b.url && a.expectedStatus === b.expectedStatus;
+  const isPrimary = (s: AutoSnapshot, target: ProbeTarget) => sameTarget(target, s.probes.primary);
+
+  function activateTarget(s: AutoSnapshot, target: ProbeTarget, at: number) {
+    if (usePrimary !== isPrimary(s, target)) bandwidth.invalidateProbeTarget();
+    usePrimary = isPrimary(s, target);
+    primaryRecoveryAt = usePrimary ? null : at + 900_000;
+  }
 
   function reconcile(s: AutoSnapshot | null, at: number) {
     const targets = s ? JSON.stringify([s.key, s.probes]) : null;
@@ -184,9 +191,7 @@ export function createAutomaticSelector(options: Options) {
         g.monitorAt = end + (g.policy.bandwidth?.enabled && g.bandwidthSwitchedAt !== undefined && end - g.bandwidthSwitchedAt < 30000 ? 5000 : 30000);
         if (secondary) {
           g.slowCount = 0; g.failureTarget = null;
-          if (usePrimary !== isPrimary(s, target)) bandwidth.invalidateProbeTarget();
-          usePrimary = isPrimary(s, target);
-          primaryRecoveryAt = usePrimary ? null : end + 900_000;
+          activateTarget(s, target, end);
           return;
         }
         g.slowCount = result.delay! > s.probes.slowMs ? g.slowCount + 1 : 0;
@@ -204,6 +209,20 @@ export function createAutomaticSelector(options: Options) {
     if (!search || at < search.due) return [];
     const priority = search.kind === 'slow' ? 1 : 0;
     const better = (delay: number) => search.kind !== 'slow' || (delay <= search.baseline * 0.6 && search.baseline - delay >= 300);
+    const exhaustedBatch = (end: number) => {
+      const batch = search.batch!;
+      // A dead current node cannot establish which endpoint is usable. Give each
+      // recovery batch one alternate-target pass through the same shared budget.
+      if (search.kind !== 'slow' && !batch.alternate && !sameTarget(s.probes.primary, s.probes.secondary)) {
+        batch.alternate = true;
+        batch.target = isPrimary(s, batch.target) ? s.probes.secondary : s.probes.primary;
+        batch.results.clear();
+      } else {
+        search.batch = undefined;
+        if (search.index >= search.queue.length) finishSearch(g, end);
+      }
+      search.due = end;
+    };
     if (search.confirming) {
       const candidate = search.confirming;
       if (at < candidate.due) return [];
@@ -212,16 +231,16 @@ export function createAutomaticSelector(options: Options) {
         const retry = retryAt(result, end);
         if (retry !== null) { candidate.due = retry; return; }
         if (healthy(result) && better(Math.max(candidate.delay, result.delay!))) {
-          await select(s, g, candidate.node, search.kind === 'slow' ? 'faster-candidate' : 'failure-recovery', end);
+          const selected = await select(s, g, candidate.node, search.kind === 'slow' ? 'faster-candidate' : 'failure-recovery', end);
+          if (selected && search.kind !== 'slow') activateTarget(s, candidate.target, now());
           // If the transactional adapter refuses, retry on a later round instead of spinning.
           if (g.search === search) finishSearch(g, end);
         } else {
           search.batch?.results.set(candidate.node, { ok: false, delay: null });
           const next = search.batch?.nodes.find(node => healthy(search.batch!.results.get(node)!) && better(search.batch!.results.get(node)!.delay!));
           search.confirming = next ? { node: next, delay: search.batch!.results.get(next)!.delay!, due: end + 2000, target: search.batch!.target } : undefined;
-          if (!next) search.batch = undefined;
           search.due = end;
-          if (!next && search.index >= search.queue.length) finishSearch(g, end);
+          if (!next) exhaustedBatch(end);
         }
       } }];
     }
@@ -245,9 +264,8 @@ export function createAutomaticSelector(options: Options) {
         if (batch.results.size !== batch.nodes.length) return;
         const match = batch.nodes.find(node => healthy(batch.results.get(node)!) && better(batch.results.get(node)!.delay!));
         if (match) search.confirming = { node: match, delay: batch.results.get(match)!.delay!, due: end + 2000, target: batch.target };
-        else search.batch = undefined;
         search.due = end;
-        if (!match && search.index >= search.queue.length) finishSearch(g, end);
+        if (!match) exhaustedBatch(end);
       } }));
   }
 
@@ -369,7 +387,7 @@ export function createAutomaticSelector(options: Options) {
         if (retry !== null) blockedUntil = Math.max(blockedUntil, retry);
         for (const job of entries) if (groups.get(job.group.name) === job.group) {
           await job.run(result, end);
-          if (job.group.policy.bandwidth?.enabled && job.target.url === activeTarget(s).url) bandwidth.observeProbe(job.group.name, job.node, result);
+          if (job.group.policy.bandwidth?.enabled && sameTarget(job.target, activeTarget(s))) bandwidth.observeProbe(job.group.name, job.node, result);
         }
       }));
       if (allowance < 2) break;
