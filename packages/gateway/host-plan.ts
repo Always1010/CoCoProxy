@@ -91,12 +91,15 @@ export function renderAutomaticGatewayHostPlan(input: {
     hostGuard = [python, '-I', posix.join(source, 'apps/gateway/host_proxy.py'), '--early-network', settingsPath,
       '--state', hostState, '--uid', String(values.hostServiceUid)].map(value => quote(value, true)).join(' ');
   }
+  // Root must read the service user's 0700 state/0600 receipt without gaining
+  // write access to that state. NET_ADMIN alone cannot traverse the directory.
+  const capabilities = 'CapabilityBoundingSet=CAP_NET_ADMIN' + (hostGuard ? ' CAP_DAC_READ_SEARCH' : '');
   const earlyUnit = ['[Unit]', 'Description=CoCoProxy early ingress guard',
     'DefaultDependencies=no', 'After=local-fs.target', 'Before=network-pre.target', 'Wants=network-pre.target',
     '', '[Service]', 'Type=oneshot', 'RemainAfterExit=true', 'User=root', `ExecStart=${guard}`,
     ...(hostGuard ? [`ExecStart=${hostGuard}`] : []), 'UMask=0077',
     'TimeoutStartSec=30', 'TimeoutStopSec=10', 'NoNewPrivileges=true',
-    'CapabilityBoundingSet=CAP_NET_ADMIN', 'ProtectSystem=strict', 'ProtectHome=true',
+    capabilities, 'ProtectSystem=strict', 'ProtectHome=true',
     'PrivateTmp=true', `ReadWritePaths=${quote(stateDirectory)}`, '',
     '[Install]', 'WantedBy=multi-user.target', ''].join('\n');
   const unit = ['[Unit]', 'Description=CoCoProxy automatic gateway network prerequisites',
@@ -105,7 +108,7 @@ export function renderAutomaticGatewayHostPlan(input: {
     ...(hostGuard ? [`ExecStart=${hostGuard}`] : []), `ExecReload=${reload}`,
     ...(hostGuard ? [`ExecReload=${hostGuard}`] : []), 'UMask=0077',
     'TimeoutStartSec=60', 'TimeoutStopSec=10', 'NoNewPrivileges=true',
-    'CapabilityBoundingSet=CAP_NET_ADMIN', 'ProtectSystem=strict', 'ProtectHome=true',
+    capabilities, 'ProtectSystem=strict', 'ProtectHome=true',
     'PrivateTmp=true', `ReadWritePaths=${quote(stateDirectory)}`, '',
     '# Explicitly start this unit after authorized host preflight; stopping retains the guard.', ''].join('\n');
   return { unit, earlyUnit, settings: { schemaVersion: 1, network, stateDirectory, ipPath: '/usr/sbin/ip',
