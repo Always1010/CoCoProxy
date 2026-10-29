@@ -501,8 +501,44 @@ function settings(changes: Partial<WorkspaceSettings> = {}): WorkspaceSettings {
   return { mode: 'local', subscriptionId: null, sourceIds: [], runMode: 'rule',
     local: { selections: {}, rules: [] }, subscriptionOverrides: {}, ...changes };
 }
+
+test('host proxy uses shared routing transactions, preserves desired versus active state and can be disabled', async t => {
+  const gateway = { schemaVersion: 1 as const, ingressInterface: 'lan-test', gatewayIPv4: '192.0.2.2', routerIPv4: '192.0.2.1',
+    routerMAC: '02:00:00:00:00:01', clientCIDR: '192.0.2.0/24', prefixLength: 24, dnsPort: 15353,
+    egressMark: 512, egressTable: 10002, egressPriority: 8000, tunMtu: 1500 };
+  // Bootstrap resolution is independent of the intercepted client subnet.
+  const f = await fixture(t, { bootstrapResolvers: ['198.51.100.53'] }, undefined, undefined, gateway);
+  assert.deepEqual((await f.view()).hostProxy, { available: true, enabled: false, active: null });
+  const initial = await f.save(settings(), 0), before = await f.apply(initial, null);
+  assert.deepEqual((await f.view()).hostProxy, { available: true, enabled: false, active: false });
+  const enabled = await f.save(settings({ hostProxy: true }), initial.revision);
+  const pending = await f.view();
+  assert.deepEqual(pending.hostProxy, { available: true, enabled: true, active: false });
+  assert.equal(pending.pending, true);
+  const active = await f.apply(enabled, before.active);
+  const previous = await f.candidate(before.active), next = await f.candidate(active.active);
+  assert.notEqual(active.active, before.active);
+  assert.equal(next['x-cocoproxy-host-proxy'], true);
+  assert.deepEqual(next.rules, previous.rules);
+  assert.deepEqual(next['proxy-groups'], previous['proxy-groups']);
+  assert.deepEqual((await f.view()).hostProxy, { available: true, enabled: true, active: true });
+  assert.equal((await f.view()).pending, false);
+  await assert.rejects(f.apply(initial, active.active), { code: 'WORKSPACE_CONFLICT' });
+  const disabled = await f.save(settings({ hostProxy: false }), enabled.revision);
+  const restored = await f.apply(disabled, active.active);
+  assert.equal(restored.active, before.active);
+  assert.deepEqual((await f.view()).hostProxy, { available: true, enabled: false, active: false });
+  for (const value of ['true', 1, null, {}]) assert.throws(() => parseWorkspaceSettings({ ...settings(), hostProxy: value }));
+
+  const explicit = await fixture(t);
+  assert.equal((await explicit.view()).hostProxy.available, false);
+  await assert.rejects(explicit.save(settings({ hostProxy: true }), 0), { code: 'HOST_PROXY_UNAVAILABLE' });
+  assert.equal((await explicit.view()).workspace.revision, 0);
+});
+
 function withoutRevision({ revision: _revision, ...value }: Workspace): WorkspaceSettings { return value; }
 type View = { workspace: Workspace; active: string | null; pending: boolean; error?: string;
+  hostProxy: { available: boolean; enabled: boolean; active: boolean | null };
   groups: { name: string; type: string; role: 'service' | 'shared'; selected: string; activeSelected: string | null; options: string[] }[];
   nodes: string[]; tcpNodes: { name: string; fingerprint: string; applicable: boolean }[];
   rules: { value: string; source: string; editable: boolean }[]; ruleCount: number; invalidSelections: string[] };
@@ -513,7 +549,8 @@ async function directory(t: TestContext) {
   return root;
 }
 async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, automaticStatus?: () => unknown,
-  automaticBandwidthHistory?: (scope: string, group: string) => Promise<BandwidthHistoryResult>) {
+  automaticBandwidthHistory?: (scope: string, group: string) => Promise<BandwidthHistoryResult>,
+  automaticGateway?: import('../packages/gateway/profile.ts').AutomaticGatewaySettings) {
   // Keep the pure settings/store test runnable without the optional YAML runtime.
   const [{ createManagementApplication }, { decodeSubscriptionProfile }] = await Promise.all([
     import('../packages/management/application.ts'), import('../packages/subscriptions/yaml.ts'),
@@ -533,6 +570,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, aut
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }),
   };
   const action = createManagementApplication({ stateDirectory: state, deployment: { ...deployment, ...deploymentOverrides }, runtime,
+    automaticGateway,
     onTiming: timing => { timings.push(timing); },
     allowedProbeOrigins: ['https://www.gstatic.com', 'https://cp.cloudflare.com'],
     automaticProbe: async () => ({ ok: true, delay: 25 }),

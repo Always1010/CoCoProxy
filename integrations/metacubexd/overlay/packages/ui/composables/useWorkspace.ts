@@ -77,6 +77,7 @@ export interface WorkspaceSettings {
   subscriptionId: string | null
   sourceIds: string[]
   runMode: 'rule' | 'global' | 'direct'
+  hostProxy?: boolean
   local: WorkspaceOverrides
   subscriptionOverrides: Record<string, WorkspaceOverrides>
   autoProbes?: AutoProbeSettings
@@ -101,6 +102,7 @@ export interface WorkspaceView {
   rules: { value: string; source: 'subscription' | 'template' | 'user' | 'legacy'; editable: boolean }[]
   pending: boolean
   active: string | null
+  hostProxy?: { available: boolean; enabled: boolean; active: boolean | null }
   error?: string
   invalidSelections?: string[]
   automatic?: AutomaticStatus

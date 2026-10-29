@@ -52,7 +52,8 @@ export function createFixtures(initial = 'normal') {
     catalog: [{ id: 'Proxy', name: '默认出口', default: true }, { id: 'Google', name: '示例搜索', default: false }, { id: 'Streaming', name: '示例视频', default: false }],
     rules: [...['DOMAIN-SUFFIX,search.example,Google', 'DOMAIN-SUFFIX,video.example,Streaming', 'MATCH,Proxy'].map(value => ({ value, source: 'template', editable: false })),
       ...overrides().rules.map(value => ({ value, source: 'user', editable: true }))],
-    pending: false, active: active(), automatic: automatic(), allowedProbeOrigins: ['https://probe.example', 'https://search.example', 'https://video.example'] };
+    pending: false, active: active(), hostProxy: { available: true, enabled: settings.hostProxy === true, active: settings.hostProxy === true },
+    automatic: automatic(), allowedProbeOrigins: ['https://probe.example', 'https://search.example', 'https://video.example'] };
   }
   function proxy(name, i = 0) {
     const group = groups().find(g => g.name === name);

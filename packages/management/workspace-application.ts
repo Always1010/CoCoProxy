@@ -86,7 +86,8 @@ export function createWorkspaceApplication(options: {
   subscriptions: SubscriptionStore;
   store: FileTransactionStore;
   manager: TransactionManager;
-  compile: (policy: JsonObject, nodeDnsPolicy?: JsonObject) => Candidate;
+  compile: (policy: JsonObject, nodeDnsPolicy?: JsonObject, hostProxy?: boolean) => Candidate;
+  hostProxyAvailable?: boolean;
   legacyPolicy: () => Promise<JsonObject | null>;
   observeSelections?: () => Promise<{ generation: string; selections: Record<string, string> }>;
   allowedProbeOrigins?: readonly string[];
@@ -99,8 +100,12 @@ export function createWorkspaceApplication(options: {
   const sites = new SiteProbeStore(options.stateDirectory, options.allowedProbeOrigins?.length !== 0);
   const history = new AutomaticHistoryStore(options.stateDirectory);
   const { subscriptions, store, manager } = options;
-  const cachedCompile = memoizePolicyCompiler(input => options.compile(input.policy as JsonObject, input.nodeDnsPolicy as JsonObject | undefined));
-  const compile = (plan: Plan) => cachedCompile({ policy: plan.policy, ...(plan.nodeDnsPolicy ? { nodeDnsPolicy: plan.nodeDnsPolicy } : {}) });
+  const cachedCompile = memoizePolicyCompiler(input => options.compile(input.policy as JsonObject, input.nodeDnsPolicy as JsonObject | undefined, input.hostProxy === true));
+  const compile = (plan: Plan) => {
+    if (plan.workspace.hostProxy && !options.hostProxyAvailable) invalid('HOST_PROXY_UNAVAILABLE');
+    return cachedCompile({ policy: plan.policy, hostProxy: plan.workspace.hostProxy === true,
+      ...(plan.nodeDnsPolicy ? { nodeDnsPolicy: plan.nodeDnsPolicy } : {}) });
+  };
   const building = new Map<string, Promise<Plan>>();
   let tcpProbes = 0;
   let testingProbes = false;
@@ -297,7 +302,15 @@ export function createWorkspaceApplication(options: {
       const group = groups.find(group => group.name === name);
       return !group || group.type !== 'select' || !group.options.includes(selected);
     }).map(([name]) => name);
+    let activeHostProxy: boolean | null = null;
+    if (status.active) {
+      try {
+        const activeConfig = JSON.parse(await privateRead(await store.readCandidate(status.active))) as JsonObject;
+        activeHostProxy = activeConfig['x-cocoproxy-host-proxy'] === true;
+      } catch { /* An unreadable active candidate must not be reported as disabled. */ }
+    }
     return { workspace, sources, active: status.active, pending: !candidate || candidate.id !== status.active,
+      hostProxy: { available: options.hostProxyAvailable === true, enabled: workspace.hostProxy === true, active: activeHostProxy },
       groups, nodes: policy ? asNodes(policy).map(proxy => String(proxy.name)) : [],
       tcpNodes: policy ? asNodes(policy).map(describeTcpNode) : [],
       catalog: serviceCatalog.map(({ id, name, default: enabled }) => ({ id, name, default: enabled })),
@@ -597,6 +610,7 @@ export function createWorkspaceApplication(options: {
       const current = await load();
       if (body.expectedRevision !== current.revision) invalid('WORKSPACE_CONFLICT');
       const settings = await seedLegacyChoices(current, parseWorkspaceSettings(body.settings));
+      if (settings.hostProxy && !options.hostProxyAvailable) invalid('HOST_PROXY_UNAVAILABLE');
       // Validate automatic pools and probe permissions before persisting any settings.
       if (Object.keys(activePolicies({ ...settings, revision: current.revision })).length || settings.autoProbes) {
         await build({ ...settings, revision: current.revision });

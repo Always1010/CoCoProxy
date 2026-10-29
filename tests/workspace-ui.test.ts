@@ -406,6 +406,81 @@ test('selection never replays an ambiguous write or reports an unconfirmed respo
   }
 });
 
+test('host proxy settings guard writes and distinguish saved settings from the active state after an apply failure', async () => {
+  let settings: any = { mode: 'local', subscriptionId: null, sourceIds: [], runMode: 'rule', revision: 7,
+    local: { selections: {}, rules: [] }, subscriptionOverrides: {} };
+  let active = 'before', activeEnabled = false, pending = false, failApply = true;
+  const currentView = () => ({ workspace: structuredClone(settings), active, pending,
+    hostProxy: { available: true, enabled: settings.hostProxy === true, active: activeEnabled } });
+  const states = new Map<string, { value: any }>([['cocoproxy-workspace', { value: currentView() }]]);
+  const calls: string[] = [];
+  const api = { generation: { value: active }, readStatus: async () => { calls.push('status'); return {}; },
+    request: async (path: string, options?: any) => {
+      calls.push(`${options?.method ?? 'GET'} ${path}`);
+      if (path === '/api/session/devices') return { devices: [] };
+      if (!options) return currentView();
+      assert.equal(options.body.expectedRevision, settings.revision);
+      if (options.method === 'PUT') {
+        settings = { ...structuredClone(options.body.settings), revision: settings.revision + 1 };
+        pending = true;
+        return { workspace: structuredClone(settings) };
+      }
+      assert.equal(options.body.expectedActive, active);
+      if (failApply) throw new CoCoProxyError('RELOAD_FAILED');
+      activeEnabled = settings.hostProxy === true; active = `generation-${settings.revision}`; pending = false;
+      return { active };
+    } };
+  const workspaceExports: Record<string, any> = {};
+  new Script(compiled).runInNewContext({ ...uiTestContext, exports: workspaceExports,
+    require: () => ({ CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy: () => api }),
+    useState: (key: string, initial: () => unknown) => {
+      if (!states.has(key)) states.set(key, { value: initial() });
+      return states.get(key);
+    },
+  });
+  const workspace = workspaceExports.useWorkspace();
+  const page = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/pages/cocoproxy.vue', import.meta.url), 'utf8');
+  const script = page.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
+    + '\nexport { changeHostProxy, retryHostProxy, refresh, busy, locked, hostProxyEnabled, hostProxyPending, visibleError };';
+  const exports: Record<string, any> = {};
+  new Script(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)
+    .runInNewContext({ ...uiTestContext, exports, CoCoProxyError, cocoproxyErrorMessage,
+      useCoCoProxy: () => api, useWorkspace: () => workspace, useHead() {}, onMounted() {}, ref: (value: unknown) => ({ value }),
+    });
+  const toggle = (checked: boolean) => exports.changeHostProxy({ target: { checked } });
+  workspace.view.value.hostProxy.available = false;
+  await toggle(true);
+  workspace.view.value.hostProxy.available = true;
+  workspace.busy.value = true;
+  await toggle(true);
+  workspace.busy.value = false;
+  exports.busy.value = true;
+  await toggle(true);
+  exports.busy.value = false;
+  assert.deepEqual(calls, []);
+  assert.equal(exports.hostProxyEnabled.value, false); // Existing settings without a flag remain off.
+  await toggle(true);
+  assert.equal(settings.hostProxy, true);
+  assert.equal(exports.hostProxyEnabled.value, true);
+  assert.equal(workspace.view.value.hostProxy.active, false);
+  assert.equal(exports.hostProxyPending.value, true);
+  assert.notEqual(exports.visibleError.value, '');
+  assert.equal(workspace.feedback.value, '');
+  assert.equal(exports.locked.value, false);
+  assert.deepEqual(calls.splice(0), ['PUT /api/cocoproxy/workspace', 'POST /api/cocoproxy/workspace/apply', 'GET /api/cocoproxy/workspace']);
+  failApply = false;
+  await exports.retryHostProxy();
+  assert.equal(workspace.view.value.hostProxy.active, true);
+  assert.equal(exports.hostProxyPending.value, false);
+  assert.equal(exports.visibleError.value, '');
+  await toggle(false);
+  assert.equal(settings.hostProxy, false);
+  assert.equal(workspace.view.value.hostProxy.active, false);
+  calls.length = 0;
+  await exports.refresh();
+  assert.deepEqual(calls.sort(), ['GET /api/cocoproxy/workspace', 'GET /api/session/devices', 'status'].sort());
+});
+
 test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]

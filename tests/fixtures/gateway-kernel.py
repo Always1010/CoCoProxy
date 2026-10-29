@@ -12,6 +12,9 @@ import sys
 import threading
 import time
 
+sys.dont_write_bytecode = True
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 LIMIT = 65536
 SELF = str(Path(__file__).resolve())
 HOST_USER, HOST_NET = sys.argv[-2:]
@@ -209,7 +212,7 @@ def role(name, root):
                         if op == 'http':
                             sock.connect((address, 8080))
                         elif op == 'dns_tcp':
-                            sock.connect(('192.0.2.2', 15353))
+                            sock.connect((request.get('dnsAddress', '192.0.2.2'), request.get('dnsPort', 15353)))
                         if key:
                             sockets[key] = sock
                     nonce = request.get('nonce', os.urandom(12).hex()).encode()
@@ -255,7 +258,7 @@ def role(name, root):
                                 response += chunk
                             response = response[2:]
                         else:
-                            sock.sendto(packet, ('192.0.2.2', 15353))
+                            sock.sendto(packet, (request.get('dnsAddress', '192.0.2.2'), request.get('dnsPort', 15353)))
                             response = sock.recvfrom(4096)[0]
                         expected = request.get('expected', '198.51.100.77')
                         value = response[:2] == packet[:2] and response[-4:] == socket.inet_aton(expected)

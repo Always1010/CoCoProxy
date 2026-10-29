@@ -83,6 +83,17 @@ test('host plan validates deployment boundaries without invoking user accessors'
   assert.deepEqual(renderAutomaticGatewayHostPlan(input), renderAutomaticGatewayHostPlan(input));
 });
 
+test('early host guard uses fixed root network settings without changing network receipt inputs', () => {
+  const original = renderAutomaticGatewayHostPlan(input);
+  const withHost = renderAutomaticGatewayHostPlan({ ...input, hostStateDirectory: '/var/lib/cocoproxy', hostServiceUid: 12345 });
+  assert.deepEqual(withHost.settings, original.settings);
+  assert.match(withHost.earlyUnit, /ExecStart="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/host_proxy.py" "--early-network" "\/etc\/cocoproxy\/gateway-network.json" "--state" "\/var\/lib\/cocoproxy" "--uid" "12345"/);
+  assert.match(withHost.unit, /ExecStart="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/host_proxy.py"/);
+  assert.match(withHost.unit, /ExecReload="\/usr\/bin\/python3" "-I" "\/opt\/cocoproxy\/apps\/gateway\/host_proxy.py"/);
+  assert.throws(() => renderAutomaticGatewayHostPlan({ ...input, hostStateDirectory: '/var/lib/cocoproxy' }));
+  assert.throws(() => renderAutomaticGatewayHostPlan({ ...input, hostStateDirectory: input.stateDirectory, hostServiceUid: 12345 }));
+});
+
 
 test('LAN guard covers the connected subnet and rejects router, gateway and LAN control source addresses', () => {
   const { clientIPv4: _, ...common } = network;
@@ -105,10 +116,15 @@ test('native LAN gateway sends multiple clients through reviewed TUN and retains
       bootstrapResolvers: ['198.51.100.2'], sniffing: true }, policy: { 'log-level': 'error',
       // Clients connect to an IP without querying core DNS. HTTP must recover
       // fixture.invalid from Host; an unrecovered TCP connection is rejected.
-      rules: ['DOMAIN,fixture.invalid,DIRECT', 'NETWORK,udp,DIRECT', 'MATCH,REJECT'] } }, lan).config;
+      rules: ['IP-CIDR,198.51.100.78/32,REJECT,no-resolve', 'DOMAIN,fixture.invalid,DIRECT', 'NETWORK,udp,DIRECT', 'MATCH,REJECT'] } }, lan).config;
+    const hostConfig = compileAutomaticGatewayConfig({ schemaVersion: 1, deployment: {
+      mixedPort: 17890, controllerPort: 19090, controllerSecret: 'synthetic-test-secret', dnsPort: 15353,
+      bootstrapResolvers: ['198.51.100.2'], sniffing: true }, policy: {
+      'log-level': 'error', rules: ['IP-CIDR,198.51.100.78/32,REJECT,no-resolve', 'DOMAIN,fixture.invalid,DIRECT', 'NETWORK,udp,DIRECT', 'MATCH,REJECT'],
+    } }, lan, true).config;
     const root = await mkdtemp(join(tmpdir(), 'cocoproxy-auto-lan-'));
     t.after(() => rm(root, { recursive: true, force: true }));
-    await writeFile(join(root, 'input.json'), JSON.stringify({ core, config, network: lan, guardRules: plan.guardRules }));
+    await writeFile(join(root, 'input.json'), JSON.stringify({ core, config, hostConfig, network: lan, guardRules: plan.guardRules }));
     const hostUser = await readlink('/proc/self/ns/user'), hostNet = await readlink('/proc/self/ns/net');
     const child = spawn('sudo', ['-n', 'python3',
       fileURLToPath(new URL('./fixtures/gateway-auto-kernel.py', import.meta.url)), '--launch', root, hostUser, hostNet],
@@ -119,9 +135,10 @@ test('native LAN gateway sends multiple clients through reviewed TUN and retains
     const timer = setTimeout(() => { try { process.kill(-child.pid!, 'SIGKILL'); } catch {} }, 65_000);
     try {
       const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-      assert.equal(code, 0, `isolated native gateway fixture failed: ${output.slice(0, 2048)} ${diagnostics.slice(0, 1024)}`);
+      assert.equal(code, 0, `isolated native gateway fixture failed: ${output.slice(0, 8192)} ${diagnostics.slice(0, 1024)}`);
       const result = JSON.parse(output);
       for (const key of ['multiClientTcpUdp', 'newClientAddress', 'routerOnlyDns', 'tunReturnViaRouter', 'hostRoutesPreserved', 'wrongMacRejected', 'coreStopBlocked', 'addressAndResourceRecovery', 'unknownResourceRejected', 'earlyGuardBeforeLan', 'initialPrepareBootRecovery', 'repairBootRecovery', 'interruptedRemoveRejected']) assert.equal(result[key], true, key);
+      for (const key of ['hostTcpUdpPolicy', 'hostDnsPolicy', 'hostPrivateManagement', 'hostCoreStopBlocked', 'hostDisabledRecovery', 'hostEarlyRecovery', 'hostGuardOwnership']) assert.equal(result[key], true, key);
     } finally {
       clearTimeout(timer);
       try { process.kill(-child.pid!, 'SIGKILL'); } catch {}

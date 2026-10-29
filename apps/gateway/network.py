@@ -430,6 +430,12 @@ def prepare(value, receipt, existing, boot, digest, wait_seconds=35):
 def remove(value, receipt, existing, boot, digest):
     n = value['network']
     require_upstream_stopped()
+    # The independently retained host guard must be retired through its exact
+    # receipt before removing gateway prerequisites, otherwise the host would
+    # remain blocked after an apparently complete network removal.
+    require(not any(item.get('table', {}).get('family') == 'inet' and
+                    item.get('table', {}).get('name') == 'cocoproxy_host_guard'
+                    for item in run([NFT, '-j', 'list', 'tables'])['nftables']))
     require(existing and existing.get('status') == 'complete' and existing.get('bootID') == boot and
             existing.get('inputHash') == digest and existing.get('resources') == snapshot(n))
     existing['status'] = 'incomplete'

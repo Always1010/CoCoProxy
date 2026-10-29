@@ -149,6 +149,7 @@ function render(input: unknown): DeploymentPlan {
   const networkPlan = core.settings.automaticGateway ? renderAutomaticGatewayHostPlan({
     network: core.settings.automaticGateway, sourceDirectory, pythonPath: '/usr/bin/python3',
     settingsPath: networkSettingsPath, stateDirectory: networkStateDirectory,
+    hostStateDirectory: stateDirectory, hostServiceUid: serviceUid,
   }) : null;
   if (coreUnitPath !== '/etc/systemd/system/cocoproxy-mihomo.service' ||
     unitPath !== '/etc/systemd/system/cocoproxy-management.service' ||
@@ -169,7 +170,7 @@ function render(input: unknown): DeploymentPlan {
     serverEntry, settingsPath, credentialPath, unitPath, policyPath,
     posix.join(sourceDirectory, 'apps/runtime/launch-core.ts'),
     ...(networkPlan ? [networkSettingsPath, '/etc/systemd/system/cocoproxy-gateway-network.service',
-      posix.join(sourceDirectory, 'apps/gateway/network.py'), '/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft',
+      posix.join(sourceDirectory, 'apps/gateway/network.py'), posix.join(sourceDirectory, 'apps/gateway/host_proxy.py'), '/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft',
       '/usr/bin/ip', '/usr/bin/nft'] : [])];
   if (webPlan) {
     const webFiles = [webPlan.settings.nginxPath, webPlan.settings.certificatePath, webPlan.settings.privateKeyPath,

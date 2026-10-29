@@ -52,6 +52,7 @@ const PROTECTED_ROOT_KEYS = new Set([
   'dns', 'hosts', 'sniffer', 'ipv6',
   'x-cocoproxy-network',
   'x-cocoproxy-gateway',
+  'x-cocoproxy-host-proxy',
   'geodata-mode', 'geodata-loader', 'geosite-matcher', 'geo-auto-update',
   'geo-update-interval', 'geox-url',
 ]);

@@ -37,7 +37,10 @@ export function createManagementApplication(options: { stateDirectory: string; d
   compileConfig({ schemaVersion: 1, deployment: options.deployment, policy: { rules: ['MATCH,REJECT'] } });
   const deployment = structuredClone(options.deployment) as JsonObject;
   const automaticGateway = options.automaticGateway === undefined ? undefined : parseAutomaticGatewaySettings(options.automaticGateway);
-  const compile = (input: unknown) => automaticGateway ? compileAutomaticGatewayConfig(input, automaticGateway) : compileConfig(input);
+  const compile = (input: unknown, hostProxy = false) => {
+    if (hostProxy && !automaticGateway) throw new ManagementError('HOST_PROXY_UNAVAILABLE', 503);
+    return automaticGateway ? compileAutomaticGatewayConfig(input, automaticGateway, hostProxy) : compileConfig(input);
+  };
   compile({ schemaVersion: 1, deployment, policy: { rules: ['MATCH,REJECT'] } });
   const store = new FileTransactionStore(options.stateDirectory);
   const drafts = new DraftStore(options.stateDirectory);
@@ -50,13 +53,14 @@ export function createManagementApplication(options: { stateDirectory: string; d
     return draft;
   }
   const workspace = createWorkspaceApplication({ stateDirectory: options.stateDirectory, subscriptions, store, manager,
+    hostProxyAvailable: automaticGateway !== undefined,
     observeSelections: options.observeSelections,
     allowedProbeOrigins: options.allowedProbeOrigins, automaticStatus: options.automaticStatus, automaticProbe: options.automaticProbe,
     automaticBandwidthCheck: options.automaticBandwidthCheck,
     automaticBandwidthHistory: options.automaticBandwidthHistory,
-    compile: (policy, nodeDnsPolicy) => compile({ schemaVersion: 1, deployment: nodeDnsPolicy ? {
+    compile: (policy, nodeDnsPolicy, hostProxy) => compile({ schemaVersion: 1, deployment: nodeDnsPolicy ? {
       ...deployment, nodeNameserverPolicy: { ...nodeDnsPolicy, ...(deployment.nodeNameserverPolicy as JsonObject | undefined) },
-    } : deployment, policy }),
+    } : deployment, policy }, hostProxy),
     legacyPolicy: async () => {
       const metadata = await drafts.metadata();
       if (metadata) return upgradeCompilerRulePolicy((await managedDraft(metadata.revision)).input.policy as JsonObject);
@@ -116,7 +120,8 @@ export function createManagementApplication(options: { stateDirectory: string; d
           sources.push({ id: snapshot.id, proxies: snapshot.proxies });
           captures.push({ id: snapshot.id, expectedRevision: source.expectedRevision, snapshotRevision: snapshot.sourceRevision, snapshotDigest: snapshot.sha256 });
         }
-        const candidate = compile({ schemaVersion: 1, deployment, policy: draft.input.policy, sources });
+        const hostProxy = (await new WorkspaceStore(options.stateDirectory).read())?.hostProxy === true;
+        const candidate = compile({ schemaVersion: 1, deployment, policy: draft.input.policy, sources }, hostProxy);
         await store.stage(candidate);
         return { generation: candidate.id, stagedRevision: draft.revision, sources: captures, staged: true, runtime: 'not_started' };
       }
@@ -126,9 +131,13 @@ export function createManagementApplication(options: { stateDirectory: string; d
         const candidate = JSON.parse(await privateRead(await store.readCandidate(body.generation)));
         const policy = automaticGateway ? automaticGatewayPolicy(candidate) : expandCompilerRuleSets(candidate);
         for (const key of protectedKeys) delete policy[key];
-        const expected = compile({ schemaVersion: 1, deployment, policy });
+        const preferences = new WorkspaceStore(options.stateDirectory);
+        const captured = await preferences.read();
+        const expected = compile({ schemaVersion: 1, deployment, policy }, captured?.hostProxy === true);
         if (expected.id !== body.generation) throw new ManagementError('DEPLOYMENT_MISMATCH', 409);
-        return { ...await manager.apply(body.generation, body.expectedActive) };
+        return { ...await manager.apply(body.generation, body.expectedActive, async () => {
+          if ((await preferences.read())?.revision !== captured?.revision) throw new TransactionError('WORKSPACE_CONFLICT');
+        }) };
       }
       if (path === '/api/cocoproxy/recover' && request.method === 'POST') {
         exactRecord(await readJsonBody(request, 128), []);
