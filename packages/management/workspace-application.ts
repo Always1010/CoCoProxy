@@ -10,6 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_AUTO_PROBES, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings, type ProbeTarget } from './automatic-policy.ts';
 import { BANDWIDTH_FIELDS, DEFAULT_BANDWIDTH_SETTINGS } from './bandwidth-policy.ts';
 import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
+import type { AutoEngineStatus, AutoSuspensionReason } from './automatic-diagnostics.ts';
 import { readAutomaticBindings, writeAutomaticBindings, type AutomaticBindings } from './automatic-bindings.ts';
 import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
 import { selectionChanges } from '../runtime/selections.ts';
@@ -103,6 +104,8 @@ export function createWorkspaceApplication(options: {
   let tcpProbes = 0;
   let testingProbes = false;
   let automaticChanging = false;
+  let snapshotSuspension: AutoSuspensionReason = 'initializing';
+  const suspendSnapshot = (reason: AutoSuspensionReason): null => { snapshotSuspension = reason; return null; };
   let snapshotCache: { revision: number; generation: string; expires: number; value: AutoSnapshot } | undefined;
 
   function checkProbePermission(probes: AutoProbeSettings): void {
@@ -307,11 +310,14 @@ export function createWorkspaceApplication(options: {
   }
 
   async function automaticSnapshot(fresh = false): Promise<AutoSnapshot | null> {
-    if (automaticChanging) return null;
+    if (automaticChanging) return suspendSnapshot('switching');
     const workspace = await load();
-    if (workspace.runMode === 'direct' || !Object.keys(activePolicies(workspace)).length) return null;
+    if (workspace.runMode === 'direct') return suspendSnapshot('direct');
+    if (!Object.keys(activePolicies(workspace)).length) return suspendSnapshot('disabled');
     const state = await store.status();
-    if (!state.active || state.transaction || state.fault || !options.observeSelections) return null;
+    if (state.fault) return suspendSnapshot('fault');
+    if (state.transaction) return suspendSnapshot('transaction');
+    if (!state.active || !options.observeSelections) return suspendSnapshot('runtime-unavailable');
     // The 1 s decision timer normally reads only small state files. Compiling
     // the complete routing template and observing the core is bounded to 30 s;
     // every write below independently refreshes and verifies this evidence.
@@ -319,7 +325,7 @@ export function createWorkspaceApplication(options: {
       return structuredClone(snapshotCache.value);
     }
     let plan = await build(workspace);
-    if (automaticChanging) return null;
+    if (automaticChanging) return suspendSnapshot('switching');
     if (compile(plan).id !== state.active) {
       // A crash can happen after the private binding is written but before the
       // configuration transaction commits. Repair only selection differences
@@ -349,10 +355,10 @@ export function createWorkspaceApplication(options: {
         await writeAutomaticBindings(options.stateDirectory, repaired);
       });
       plan = await build(workspace);
-      if (compile(plan).id !== state.active) return null;
+      if (compile(plan).id !== state.active) return suspendSnapshot('pending');
     }
     const observed = await options.observeSelections();
-    if (observed.generation !== state.active) return null;
+    if (observed.generation !== state.active) return suspendSnapshot('pending');
     // The prepared event shares the durable automatic binding. Recover only
     // after the full candidate and observed controller agree with committed active.
     const journal = await readAutomaticBindings(options.stateDirectory);
@@ -435,10 +441,10 @@ export function createWorkspaceApplication(options: {
     const archive = await history.read();
     if (prune) await history.write(archive);
     const events = retainAutomaticEvents(archive.scopes.find(s => s.scope === scopeOf(current))?.events ?? []);
-    const status = options.automaticStatus?.() as { scope?: string; groups: { name: string }[] } | undefined;
+    const status = options.automaticStatus?.() as { scope?: string; groups: { name: string }[]; engine?: AutoEngineStatus } | undefined;
     const state = await store.status();
     const paused = (await readRuntimeLifecycle(options.stateDirectory)).paused;
-    return { scope: scopeOf(current), workspaceRevision: current.revision, paused,
+    return { scope: scopeOf(current), workspaceRevision: current.revision, paused, engine: status?.engine,
       suspended: paused || !state.active || current.runMode === 'direct' || !!state.transaction || !!state.fault,
       groups: status?.scope === scopeOf(current) ?
         (status?.groups ?? []).filter(g => !!activePolicies(current)[g.name]) : [], events };
@@ -621,5 +627,5 @@ export function createWorkspaceApplication(options: {
     }
     throw new ManagementError('NOT_FOUND', 404);
   };
-  return Object.assign(handler, { automaticSnapshot, automaticSwitch, automaticRoute });
+  return Object.assign(handler, { automaticSnapshot, automaticSwitch, automaticRoute, automaticSuspensionReason: () => snapshotSuspension });
 }

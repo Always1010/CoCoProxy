@@ -12,8 +12,16 @@ const checking = ref(false)
 const feedback = useLocalizedMessage()
 const group = computed(() => props.status?.groups.find(item => item.name === props.groupName))
 const bandwidthStatus = computed(() => group.value?.bandwidth)
+const engine = computed(() => props.status?.engine)
+const engineSummary = computed(() => {
+  if (!engine.value) return ''
+  if (engine.value.state === 'error') return t('coco.autoEngineFailed')
+  if (props.status?.paused) return t('coco.autoEngineReason.paused')
+  if (props.status?.suspended && engine.value.state === 'running') return t('coco.anAutomaticSelectionIsSuspended')
+  return engine.value.reason ? t('coco.autoEngineReason.' + engine.value.reason) : t('coco.autoEngineRunning')
+})
 const events = computed(() => props.status?.events.filter(event => event.group === props.groupName).slice().reverse() ?? [])
-const canCheck = computed(() => props.policyEnabled && !!props.bandwidth?.enabled && !props.dirty && !props.disabled && !props.reading && !props.error && !!group.value && !!view.value?.active && !view.value?.pending && !props.status?.paused && !props.status?.suspended && !props.status?.error && !bandwidthStatus.value?.testingNode && !checking.value)
+const canCheck = computed(() => props.policyEnabled && !!props.bandwidth?.enabled && !props.dirty && !props.disabled && !props.reading && !props.error && !!group.value && !!view.value?.active && !view.value?.pending && !props.status?.paused && !props.status?.suspended && !props.status?.error && (!engine.value || engine.value.state === 'running') && !bandwidthStatus.value?.testingNode && !checking.value)
 let disposed = false
 onUnmounted(() => { disposed = true; emit('checking', false) })
 const phases = computed<Record<string, string>>(() => ({
@@ -67,14 +75,21 @@ async function check() {
     </div>
     <p v-if="error" role="alert" class="text-sm text-warning">{{ t('coco.anFailedToLoadStatusPreviousResults', { value: error }) }}</p>
     <p v-if="status?.error || status?.paused || status?.suspended" role="status" class="text-sm text-warning">{{ status?.error ? t('coco.anOperationIsUnavailableOrConfigurationIs') : (status?.suspended ? t('coco.anAutomaticSelectionIsSuspended') : t('coco.anAutomaticSelectionIsPaused')) }}</p>
+    <p v-if="engine?.error" role="alert" class="break-words text-sm text-warning">{{ t('coco.autoEngineError', { phase: t('coco.autoEnginePhase.' + engine.error.phase), code: engine.error.code, count: engine.error.count }) }}</p>
     <template v-if="detail === 'summary'">
       <dl class="status-facts text-sm">
         <dt>{{ t('coco.anCurrentExit2') }}</dt><dd class="break-all">{{ group?.current ?? view?.groups.find(item => item.name === groupName)?.activeSelected ?? t('coco.anNotSelectedYet') }}</dd>
-        <dt>{{ t('coco.anAutomaticSelection') }}</dt><dd>{{ !policyEnabled ? t('coco.anOff') : group ? (phases[group.phase] ?? t('coco.anAutomaticSelectionIsRunning')) : t('coco.anWaitingForOperationStatus') }}</dd>
+        <dt>{{ t('coco.anAutomaticSelection') }}</dt><dd>{{ !policyEnabled ? t('coco.anOff') : engine && (engine.state !== 'running' || status?.suspended || status?.paused) ? engineSummary : group ? (phases[group.phase] ?? t('coco.anAutomaticSelectionIsRunning')) : t('coco.anWaitingForOperationStatus') }}</dd>
         <dt>{{ t('coco.anCurrentReason') }}</dt><dd>{{ group?.reason ? reason(group.reason) : t('coco.anNoAdditionalReason') }}</dd>
-        <dt>{{ t('coco.anNextCheck2') }}</dt><dd class="tabular-nums">{{ group?.nextAt ? time(group.nextAt) : t('coco.anWaitingForScheduling') }}</dd>
+        <dt>{{ t('coco.anNextCheck2') }}</dt><dd class="tabular-nums">{{ engine && engine.state !== 'running' ? engineSummary : engine?.nextStartAt != null && group?.nextAt != null ? time(Math.max(group.nextAt, engine.nextStartAt)) : group?.nextAt != null ? time(group.nextAt) : t('coco.anWaitingForScheduling') }}</dd>
+        <template v-if="engine">
+          <dt>{{ t('coco.autoEngineLabel') }}</dt><dd>{{ engineSummary }}</dd>
+          <dt>{{ t('coco.autoEngineLastSnapshot') }}</dt><dd class="tabular-nums">{{ engine.lastSnapshotAt == null ? t('coco.anUnknown') : time(engine.lastSnapshotAt) }}</dd>
+          <dt>{{ t('coco.autoEngineLastCompleted') }}</dt><dd class="tabular-nums">{{ engine.lastCompletedAt == null ? t('coco.anUnknown') : time(engine.lastCompletedAt) }}</dd>
+        </template>
         <dt>{{ t('coco.anBandwidthAssistedDecisions2') }}</dt><dd>{{ !bandwidth?.enabled ? t('coco.anOff') : !policyEnabled ? t('coco.anAutomaticSelectionIsOffAndNot') : bandwidthStatus ? reason(bandwidthStatus.reason) : t('coco.anWaitingForOperationStatus') }}{{ bandwidth?.enabled && bandwidth.observeOnly ? t('coco.anObserveOnly') : '' }}</dd>
       </dl>
+      <p v-if="engine?.state === 'running' && (engine.pendingProbes || engine.nextStartAt != null)" role="status" class="text-sm text-base-content/70">{{ t('coco.autoEngineQueue', { count: engine.pendingProbes }) }} <span v-if="engine.nextStartAt != null">{{ t('coco.autoEngineNextStart', { time: time(engine.nextStartAt) }) }}</span></p>
       <div v-if="bandwidth?.enabled" class="flex min-h-10 items-start gap-2 text-sm" role="status"><span v-if="bandwidthStatus?.testingNode" class="loading loading-spinner loading-sm shrink-0" /><span class="break-all">{{ bandwidthStatus?.testingNode ? t('coco.anValidatingValidSamples', { value: bandwidthStatus.testingNode, value2: bandwidthStatus.round, value3: bandwidth?.confirmRounds }) : t('coco.anNoNodeIsCurrentlyBeingValidated') }}</span></div>
       <div v-if="bandwidthStatus" class="space-y-2 border-t border-base-content/10 pt-4 text-sm">
         <h4 class="font-medium">{{ t('coco.anAutomaticCheckUsage') }}</h4>

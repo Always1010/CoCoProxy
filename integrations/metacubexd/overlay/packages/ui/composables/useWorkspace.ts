@@ -40,7 +40,19 @@ export interface AutoProbeSettings {
   slowMs: number
 }
 
+export interface AutomaticEngineStatus {
+  state: 'running' | 'suspended' | 'error'
+  reason: 'initializing' | 'inactive' | 'paused' | 'direct' | 'disabled' | 'runtime-unavailable' | 'transaction' | 'fault' | 'pending' | 'switching' | 'stopped' | 'quota' | 'retry-after' | 'queued' | null
+  lastStartedAt: number | null
+  lastCompletedAt: number | null
+  lastSnapshotAt: number | null
+  error: { phase: 'snapshot' | 'probe' | 'switch' | 'tick'; code: string; since: number; at: number; count: number } | null
+  pendingProbes: number
+  nextStartAt: number | null
+}
+
 export interface AutomaticStatus {
+  engine?: AutomaticEngineStatus
   scope?: string
   workspaceRevision?: number
   paused?: boolean

@@ -103,7 +103,7 @@ test('bandwidth switches retain subordinate settings and restore affects only th
 test('group status checks only saved active policies and binds requests to the displayed scope and revision', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/GroupSelectionStatus.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
-    + '\nexport { check, canCheck };';
+    + '\nexport { check, canCheck, engineSummary };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const props: any = { groupName: 'Stream', policyEnabled: true, bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true },
     dirty: false, disabled: false, reading: false, error: '',
@@ -130,6 +130,18 @@ test('group status checks only saved active policies and binds requests to the d
     assert.equal(calls.length, 0);
     Object.assign(props.status, { paused: false, suspended: false, error: '' });
   }
+  for (const state of ['error', 'suspended']) {
+    props.status.engine = { state, reason: state === 'error' ? null : 'pending' };
+    await exports.check();
+    assert.equal(calls.length, 0);
+    assert.match(exports.engineSummary.value, state === 'error' ? /后台运行异常/ : /等待配置生效/);
+  }
+  props.status.groups = [];
+  props.status.engine = { state: 'error', reason: null };
+  assert.match(exports.engineSummary.value, /后台运行异常/);
+  props.status.groups = [{ name: 'Stream', current: 'node-a', phase: 'monitoring' }];
+  props.status.engine = { state: 'running', reason: 'quota' };
+  assert.match(exports.engineSummary.value, /等待轻量探测额度/);
   view.value.pending = true;
   await exports.check();
   assert.equal(calls.length, 0);
