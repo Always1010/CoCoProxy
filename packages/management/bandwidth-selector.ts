@@ -1,6 +1,7 @@
 import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
 import type { UsageSnapshot } from './usage.ts';
 import { createBandwidthTrace, type BandwidthRound } from './bandwidth-history.ts';
+import type { AutoSuspensionReason } from './automatic-diagnostics.ts';
 import { bandwidthBudgetLimits, bandwidthDecision, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold,
   type BandwidthSettings, type BandwidthSample } from './bandwidth-policy.ts';
 
@@ -134,10 +135,10 @@ export function createBandwidthSelector(options: {
     p.active = []; p.decision = null; p.candidate = null; p.testingNode = null;
     for (const n of p.nodes.values()) { n.samples = []; n.probe = null; if (n.nextAt <= options.now()) n.state = 'pending'; }
   }
-  function update(next: AutoSnapshot | null) {
+  function update(next: AutoSnapshot | null, reason: 'suspended' | `runtime-${AutoSuspensionReason}` | 'snapshot-locked' | 'snapshot-failed' | 'scheduler-error' = 'suspended') {
     const identity = (s: AutoSnapshot | null) => JSON.stringify([s?.key, s?.scope, s?.probes, enabled(s).map(g => [g.name, g.policy])]);
     if (!next) {
-      interrupt('suspended'); for (const p of pools.values()) { trace.end(p.name, 'suspended'); clearEvidence(p); }
+      interrupt(reason); for (const p of pools.values()) { trace.end(p.name, reason); clearEvidence(p); }
       snapshot = null; previous = undefined; observations.clear(); positives.clear(); return;
     }
     const changed = lastIdentity !== identity(next);

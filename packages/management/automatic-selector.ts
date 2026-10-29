@@ -62,18 +62,19 @@ export function createAutomaticSelector(options: Options) {
   const selectedSinceSnapshot = new Set<Group>();
   const invalidConflict = (error: unknown) => error instanceof ManagementError && error.code === 'ACTIVE_CONFLICT';
   const invalidateEvidence = () => { evidenceInvalid = true; evidenceEpoch++; };
-  function suspendEvidence() {
+  function suspendEvidence(reason: 'snapshot-locked' | 'snapshot-failed' | 'scheduler-error') {
     invalidateEvidence(); snapshot = null; pendingProbes = 0;
     for (const g of groups.values()) g.health = 'unknown';
-    bandwidth.update(null);
+    bandwidth.update(null, reason);
   }
   async function readSnapshot() {
     try {
       const value = await options.snapshot(); diagnostics.success('snapshot');
       if (value) diagnostics.snapshot();
       return { value, failed: false };
-    } catch {
-      diagnostics.fail('snapshot'); suspendEvidence();
+    } catch (error) {
+      diagnostics.fail('snapshot');
+      suspendEvidence(error && typeof error === 'object' && 'code' in error && error.code === 'STORE_LOCKED' ? 'snapshot-locked' : 'snapshot-failed');
       return { value: null, failed: true };
     }
   }
@@ -136,7 +137,7 @@ export function createAutomaticSelector(options: Options) {
       });
     }
     lastGeneration = s?.generation; evidenceInvalid = false; selectedSinceSnapshot.clear();
-    groups = next; snapshot = s ? structuredClone(s) : null; bandwidth.update(snapshot);
+    groups = next; snapshot = s ? structuredClone(s) : null; bandwidth.update(snapshot, `runtime-${suspension}`);
   }
 
   function scheduleReturn(g: Group, at: number) {
@@ -374,7 +375,7 @@ export function createAutomaticSelector(options: Options) {
     pendingProbes = 0;
     // A confirmed enhanced selection may briefly suspend runtime snapshots while its transaction applies.
     // Keep its post-switch/failure state, but discard measurement evidence during the suspension.
-    if (!fresh && selecting && [...groups.values()].some(g => g.policy.bandwidth?.enabled)) { bandwidth.update(null); return; }
+    if (!fresh && selecting && [...groups.values()].some(g => g.policy.bandwidth?.enabled)) { bandwidth.update(null, `runtime-${suspension}`); return; }
     reconcile(fresh, now());
     const s = snapshot;
     if (!s || now() < blockedUntil) return;
@@ -467,7 +468,7 @@ export function createAutomaticSelector(options: Options) {
     if (running) return running;
     diagnostics.start();
     running = runTick().then(() => diagnostics.success('tick'), error => {
-      diagnostics.fail('tick'); suspendEvidence(); throw error;
+      diagnostics.fail('tick'); suspendEvidence('scheduler-error'); throw error;
     }).finally(() => { diagnostics.complete(); running = null; });
     return running;
   }
