@@ -194,6 +194,43 @@ test('automatic selections preserve manual intent, use confirmed transactions, p
   assert.equal((await f.view()).pending, true);
 });
 
+test('decision setting edits retain the committed automatic exit and invalidate old decisions across restart', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node, { ...node, name: 'spare' }] });
+  const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: {
+    Proxy: { preferred: ['synthetic-node', 'spare'], fallback: [], returnToPreferred: true,
+      bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true } },
+  } } });
+  const saved = await f.save(initial, 0);
+  await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node' });
+  assert.equal(await f.action.automaticSwitch((await f.action.automaticSnapshot())!, 'Proxy', 'spare', 'failure-recovery'), true);
+  f.observe({ Proxy: 'spare' });
+  const before = await f.view(), old = (await f.action.automaticSnapshot(true))!;
+  const edited = withoutRevision(structuredClone(before.workspace));
+  edited.local.automatic!.Proxy.bandwidth!.hourMiB *= 2;
+  edited.local.automatic!.Proxy.bandwidth!.dayMiB *= 2;
+  edited.local.automatic!.Proxy.returnToPreferred = false;
+  const changed = await f.save(edited, saved.revision);
+  assert.equal((await f.view()).groups.find(g => g.name === 'Proxy')!.selected, 'spare');
+  assert.equal((await f.apply(changed, before.active)).active, before.active);
+  f.restart();
+  const fresh = (await f.action.automaticSnapshot(true))!;
+  assert.equal(fresh.groups[0].current, 'spare');
+  assert.notEqual(fresh.key, old.key);
+  assert.equal(await f.action.automaticSwitch(old, 'Proxy', 'synthetic-node', 'failure-recovery'), false);
+  const after = await f.view();
+  assert.equal(after.workspace.local.selections.Proxy, 'synthetic-node');
+  assert.equal(after.pending, false);
+  assert.equal((await f.call<{ events: unknown[] }>('/automatic/status')).events.length, 1);
+  // Removing the committed target must still produce a new, reviewable selection.
+  const removed = withoutRevision(structuredClone(after.workspace));
+  removed.local.automatic!.Proxy.preferred = ['synthetic-node'];
+  await f.save(removed, changed.revision);
+  assert.equal((await f.view()).groups.find(g => g.name === 'Proxy')!.selected, 'synthetic-node');
+  assert.equal((await f.view()).pending, true);
+});
+
 test('automatic switching rejects routing drafts and changed decision settings captured after its fresh snapshot', async t => {
   for (const change of ['rules', 'automatic'] as const) await t.test(change, async t => {
     const f = await fixture(t);
@@ -569,7 +606,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, aut
     restore: async () => { events.push('restore'); },
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }),
   };
-  const action = createManagementApplication({ stateDirectory: state, deployment: { ...deployment, ...deploymentOverrides }, runtime,
+  const createAction = () => createManagementApplication({ stateDirectory: state, deployment: { ...deployment, ...deploymentOverrides }, runtime,
     automaticGateway,
     onTiming: timing => { timings.push(timing); },
     allowedProbeOrigins: ['https://www.gstatic.com', 'https://cp.cloudflare.com'],
@@ -587,6 +624,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, aut
       if (text === undefined) throw new Error('Synthetic source missing');
       return { status: 'modified' as const, text };
     } } });
+  let action = createAction();
   async function call<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T> {
     const request = new Request(`https://management.example/api/cocoproxy${path}`, { method,
       headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -602,7 +640,8 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, aut
   const save = async (value: WorkspaceSettings, expectedRevision: number) => (await call<{ workspace: Workspace }>('/workspace', 'PUT', { settings: value, expectedRevision })).workspace;
   const apply = (workspace: Workspace, expectedActive: string | null) => call<{ active: string; workspaceRevision: number }>('/workspace/apply', 'POST', { expectedRevision: workspace.revision, expectedActive });
   const candidate = async (id: string) => JSON.parse(await readFile(await new FileTransactionStore(state).readCandidate(id), 'utf8')) as JsonObject;
-  return { state, events, bandwidthChecks, timings, call, view, save, apply, source, candidate, payloads, action, fail: () => { failActivation = true; },
+  return { state, events, bandwidthChecks, timings, call, view, save, apply, source, candidate, payloads, get action() { return action; },
+    restart: () => { action = createAction(); }, fail: () => { failActivation = true; },
     observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
 
