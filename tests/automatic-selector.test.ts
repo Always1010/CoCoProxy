@@ -138,12 +138,12 @@ test('slow switch uses confirmed conservative delay and preserves residence acro
 
 test('return checks back off 5, 10, 15, then 15 minutes and rotate at most two preferred nodes', async () => {
   const h = harness({ current: 'backup', preferred: ['one', 'two', 'three'], probe: node => node === 'backup' ? good(50) : bad() });
-  await h.at(0); await h.at(300_000); await h.at(899_999);
+  await h.at(0); await h.at(300_000); await h.at(300_001);
   assert.deepEqual(h.calls.filter(call => call.node !== 'backup').map(call => call.node), ['one', 'two']);
-  await h.at(900_000); await h.at(1_800_000); await h.at(2_700_000);
+  for (const at of [900_001, 1_800_002, 2_700_003]) { await h.at(at); await h.at(at + 1); }
   assert.deepEqual(h.calls.filter(call => call.node !== 'backup').map(call => [call.node, call.at]), [
-    ['one', 300_000], ['two', 300_000], ['three', 900_000], ['one', 900_000],
-    ['two', 1_800_000], ['three', 1_800_000], ['one', 2_700_000], ['two', 2_700_000],
+    ['one', 300_000], ['two', 300_001], ['three', 900_001], ['one', 900_002],
+    ['two', 1_800_002], ['three', 1_800_003], ['one', 2_700_003], ['two', 2_700_004],
   ]);
   await h.engine.close();
 });
@@ -243,11 +243,35 @@ test('rolling quota is global, concurrent workers stay at two, and queued groups
   } });
   h.snapshot!.groups.forEach((group, i) => { group.current = `node-${i}`; group.policy.preferred = [group.current]; });
   await h.at(0);
+  assert.equal(h.calls.length, 2);
+  for (let at = 1000; at <= 11_000; at += 1000) await h.at(at);
   assert.equal(h.calls.length, 24); assert.equal(maximum, 2);
   await h.at(59_999); assert.equal(h.calls.length, 24);
   await h.at(60_000);
+  for (let at = 61_000; at <= 71_000; at += 1000) await h.at(at);
   assert.ok(h.calls.some(call => call.node === 'node-29'));
   assert.equal(h.calls.length, 48);
+  await h.engine.close();
+});
+
+test('a slow batch yields before queued monitors and the next tick prioritizes an overdue failure confirmation', async () => {
+  let release!: () => void;
+  const h = harness({ names: ['fault', 'slow', 'queued-one', 'queued-two'], probe: async node => {
+    if (node === 'fault') return bad();
+    if (node === 'slow') await new Promise<void>(resolve => { release = resolve; });
+    return good();
+  } });
+  h.snapshot!.groups.forEach(group => { group.current = group.name; group.policy.preferred = [group.name, 'alternate']; });
+  const pending = h.at(0);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const duplicate = h.engine.tick();
+  assert.deepEqual(h.calls.map(call => call.node), ['fault', 'slow']);
+  h.setTime(3000); release(); await Promise.all([pending, duplicate]);
+  assert.equal(h.calls.length, 2); // No old-queue draining after the slow request completes.
+  await h.at(3000);
+  assert.deepEqual(h.calls.slice(2).map(call => [call.node, call.secondary]), [['fault', true], ['queued-one', false]]);
+  await h.at(3001);
+  assert.ok(h.calls.some(call => call.node === 'queued-two'));
   await h.engine.close();
 });
 
@@ -294,22 +318,22 @@ test('a committed group switch fences old in-flight and queued confirmations wit
     const engine = createAutomaticSelector({ now: () => time, snapshot: async () => snapshot,
       probe: async (s, node) => {
         calls.push({ node, at: time, generation: s.generation });
-        if (time === 35_000 && node === 'b-next') {
+        if (time === 35_001 && node === 'b-next') {
           await committed;
           if (result === 'conflict') throw new ManagementError('ACTIVE_CONFLICT', 409);
         }
-        return time >= 30_000 && time <= 35_000 && !node.endsWith('-next') ? bad() : good();
+        return time >= 30_000 && time <= 35_001 && !node.endsWith('-next') ? bad() : good();
       },
       switch: async (_s, group, node) => {
         changes.push(group); snapshot.groups.find(item => item.name === group)!.current = node;
         snapshot.generation = '2'; switched(); return true;
       } });
-    for (const at of [0, 30_000, 32_000, 33_000, 35_000]) { time = at; await engine.tick(); }
+    for (const at of [0, 1000, 30_000, 31_000, 32_000, 33_000, 33_001, 35_001]) { time = at; await engine.tick(); }
     assert.deepEqual(changes, ['a']);
-    assert.ok(!calls.some(call => call.at === 35_000 && call.node === 'c-next'));
+    assert.ok(!calls.some(call => call.at === 35_001 && call.node === 'c-next'));
     for (const at of [36_000, 38_000]) { time = at; await engine.tick(); }
     assert.deepEqual(changes, ['a']);
-    assert.equal(engine.status().groups[0].nextAt, 65_000);
+    assert.equal(engine.status().groups[0].nextAt, 65_001);
     assert.ok(engine.status().groups.slice(1).every(group => group.health === 'healthy' && group.phase === 'monitoring'));
     assert.ok(calls.filter(call => call.at === 36_000).every(call => call.generation === '2' && ['b', 'c'].includes(call.node)));
     await engine.close();
