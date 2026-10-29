@@ -14,6 +14,8 @@ import { canonicalJson, compileConfig } from '../packages/config/index.ts';
 import type { JsonObject } from '../packages/config/index.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
 import type { AutomaticGatewaySettings } from '../packages/gateway/profile.ts';
+import { createBandwidthTrace, type BandwidthRound } from '../packages/management/bandwidth-history.ts';
+import { DEFAULT_BANDWIDTH_SETTINGS } from '../packages/management/bandwidth-policy.ts';
 
 const origin = 'https://management.example';
 const username = 'synthetic-admin';
@@ -124,7 +126,8 @@ test('remembered browsers reauthenticate after expiry and restart; logout and de
   gateway = await makeGateway();
   assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, fourth))).status, 401);
 });
-async function fixture(t: test.TestContext, automaticGateway?: AutomaticGatewaySettings) {
+async function fixture(t: test.TestContext, automaticGateway?: AutomaticGatewaySettings,
+  automaticBandwidthHistory?: Parameters<typeof createManagementApplication>[0]['automaticBandwidthHistory']) {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-management-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const state = join(root, 'state');
@@ -134,7 +137,7 @@ async function fixture(t: test.TestContext, automaticGateway?: AutomaticGatewayS
     confirm: async () => { events.push('confirm'); return true; }, restore: async () => { events.push('restore'); },
     observe: async (generation: string) => ({ ready: true, generation, checkedAt: new Date().toISOString(), reason: null }) };
   const sourceClient = { fetch: async () => ({ status: 'modified' as const, text: JSON.stringify({ proxies: [{ name: 'synthetic-node', type: 'socks5', server: '192.0.2.10', port: 1080 }] }) }) };
-  const action = createManagementApplication({ stateDirectory: state, deployment, runtime, sourceClient, automaticGateway });
+  const action = createManagementApplication({ stateDirectory: state, deployment, runtime, sourceClient, automaticGateway, automaticBandwidthHistory });
   return { root, state, events, handler: createManagementHandler({ origin, credential }, action), setFailure: () => { fails = true; } };
 }
 
@@ -164,6 +167,48 @@ test('cookie session gates every action and rejects cross-origin, URL tokens and
   const logout = await handler(request('/api/session/logout', 'POST', {}, cookie));
   assert.match(logout.headers.get('set-cookie')!, /Max-Age=0$/);
   assert.equal((await handler(request('/api/cocoproxy/status', 'GET', undefined, cookie))).status, 401);
+});
+
+test('decision history queries pass the authenticated gateway without opening other queries or bypassing scope checks', async t => {
+  const scope = JSON.stringify(['local', []]);
+  let round!: BandwidthRound, reads = 0;
+  const trace = createBandwidthTrace(() => 1000, r => { round = r; });
+  trace.begin(scope, 'Proxy', 'synthetic-generation', 'synthetic-node', 'manual', DEFAULT_BANDWIDTH_SETTINGS, []);
+  trace.end('Proxy', 'current-sufficient');
+  const f = await fixture(t, undefined, async (requestedScope, group) => {
+    assert.equal(requestedScope, scope); assert.equal(group, 'Proxy'); reads++;
+    return { since: 1000, evicted: false, error: false, rounds: [round] };
+  });
+  const query = new URLSearchParams({ scope, revision: '0', group: 'Proxy' });
+  const path = '/api/cocoproxy/automatic/bandwidth/history?' + query;
+  const cookie = await login(f.handler);
+  const summary = await f.handler(request(path, 'GET', undefined, cookie));
+  assert.equal(summary.status, 200, await summary.clone().text());
+  assert.equal(summary.headers.get('cache-control'), 'no-store');
+  const body = await summary.json();
+  assert.equal(body.status.scope, scope); assert.equal(body.rounds[0].id, round.id); assert.equal(body.rounds[0].events, undefined);
+  assert.equal(body.detail, null);
+  const details = await f.handler(request(path + '&round=' + round.id, 'GET', undefined, cookie));
+  assert.equal(details.status, 200);
+  assert.equal((await details.json()).detail.events.at(-1).reason, 'current-sufficient');
+  assert.equal(reads, 2);
+  assert.equal((await f.handler(request(path))).status, 401);
+  assert.equal((await f.handler(request(path, 'GET', undefined, cookie, { origin: 'https://other.example' }))).status, 403);
+  assert.equal((await f.handler(request(path, 'GET', undefined, cookie, { 'sec-fetch-site': 'cross-site' }))).status, 403);
+  for (const changes of [{ scope: 'other-scheme' }, { revision: '1' }, { group: 'missing' }]) {
+    const changed = new URLSearchParams(query);
+    for (const [key, value] of Object.entries(changes)) changed.set(key, value!);
+    const response = await f.handler(request('/api/cocoproxy/automatic/bandwidth/history?' + changed, 'GET', undefined, cookie));
+    assert.equal(response.status, changes.group ? 400 : 409);
+  }
+  for (const invalid of [path + '&token=' + password, path + '&group=Proxy', path + '&scope=other',
+    path.replace('revision=0', 'revision=-1'), path.replace('&group=Proxy', ''),
+    path.replace('/bandwidth/history?', '/status?'), path.replace('/history?', '/%68istory?')]) {
+    const response = await f.handler(request(invalid, 'GET', undefined, cookie));
+    assert.equal(response.status, 400); assert.equal((await response.json()).error.code, 'INVALID_REQUEST');
+  }
+  assert.equal((await f.handler(request(path, 'POST', {}, cookie))).status, 400);
+  assert.equal(reads, 2); assert.deepEqual(f.events, []);
 });
 
 test('login limits attempts and concurrent password work, expiry is absolute and bad deployment origins fail closed', async () => {
