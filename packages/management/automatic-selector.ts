@@ -351,7 +351,7 @@ export function createAutomaticSelector(options: Options) {
     const s = snapshot;
     if (!s || now() < blockedUntil) return;
     const epoch = evidenceEpoch;
-    // One scheduling pass per tick bounds CPU work; the one-second driver advances new phases.
+    // Rebuild priorities every tick; one batch must not drain an old queue while new faults wait.
     const at = now(), jobs: Job[] = [];
     for (const g of groups.values()) jobs.push(...monitorJobs(s, g, at), ...searchJobs(s, g, at), ...returnJobs(s, g, at));
     for (const g of groups.values()) if (bandwidth.isMeasuring(g.name) && at >= (safetyAt.get(g.name) ?? 0)) {
@@ -394,11 +394,11 @@ export function createAutomaticSelector(options: Options) {
       shared.set(key, entries);
     }
     const queue = [...shared.values()];
-    for (let index = 0; index < queue.length && !closed && epoch === evidenceEpoch; index += 2) {
+    if (!closed && epoch === evidenceEpoch) {
       starts = starts.filter(start => start > now() - 60_000);
-      const allowance = Math.min(2, 24 - starts.length);
-      if (allowance <= 0 || now() < blockedUntil) break;
-      const batch = queue.slice(index, index + allowance);
+      const allowance = Math.max(0, Math.min(AUTO_INTERVALS.maxConcurrency, AUTO_INTERVALS.startsPerMinute - starts.length));
+      const batch = now() < blockedUntil ? [] : queue
+        .filter(entries => !entries.every(job => job.auxiliary) || starts.length < 18).slice(0, allowance);
       await Promise.all(batch.map(async entries => {
         if (epoch !== evidenceEpoch) return;
         const first = entries[0];
@@ -422,7 +422,6 @@ export function createAutomaticSelector(options: Options) {
             && job.group.policy.bandwidth?.enabled && sameTarget(job.target, activeTarget(s))) bandwidth.observeProbe(job.group.name, job.node, result);
         }
       }));
-      if (allowance < 2) break;
     }
     if (epoch !== evidenceEpoch) return;
     bandwidth.tick([...groups.values()].map(g => ({ name: g.name, degraded: g.slowCount >= 3,
