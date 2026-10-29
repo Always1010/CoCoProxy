@@ -9,6 +9,7 @@ import { migrateTrustedDeviceDocument, parseTrustedDeviceDocument } from '../man
 import { inspectUsageDatabase, inspectUsageFiles, USAGE_DATABASE } from '../management/usage.ts';
 import { parseAutomaticBindings } from '../management/automatic-bindings.ts';
 import { parseBandwidthLedger } from '../management/bandwidth-selector.ts';
+import { parseBandwidthHistory, BANDWIDTH_HISTORY_FILE, BANDWIDTH_HISTORY_LIMIT } from '../management/bandwidth-history.ts';
 import { parseAutomaticHistory, AUTOMATIC_HISTORY_FILE_LIMIT } from '../management/automatic-history.ts';
 import { parseWorkspaceDocument } from '../management/workspace.ts';
 import { parseSiteProbeState } from '../management/site-probes.ts';
@@ -27,6 +28,7 @@ const stores = {
   siteProbes: ['site-probes.json', 1048576], draft: ['draft.json', 4194304], automaticSelections: ['automatic-selections.json', 262144],
   automaticHistory: ['automatic-history.json', AUTOMATIC_HISTORY_FILE_LIMIT],
   automaticBandwidth: ['automatic-bandwidth.json', 1048576],
+  bandwidthHistory: [BANDWIDTH_HISTORY_FILE, BANDWIDTH_HISTORY_LIMIT],
   selection: ['selection.json', 4096],
 } as const;
 type Store = keyof typeof stores;
@@ -60,6 +62,7 @@ export function summarizePreservation(documents: Documents, sources: Record<stri
   validate('automaticSelections', documents.automaticSelections, parseAutomaticBindings);
   validate('automaticHistory', documents.automaticHistory, parseAutomaticHistory);
   validate('automaticBandwidth', documents.automaticBandwidth, parseBandwidthLedger);
+  validate('bandwidthHistory', documents.bandwidthHistory, parseBandwidthHistory);
   const selection = validate('selection', documents.selection, parseRuntimeSelection);
   const sourceSettings: unknown[] = [];
   for (const [id, bytes] of Object.entries(sources).sort(([a], [b]) => a.localeCompare(b))) {

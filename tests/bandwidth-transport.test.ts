@@ -40,6 +40,7 @@ test('download verification paces only target demand, counts warmup and rejects 
   };
   const full = await run(8 * 1048576);
   assert.equal(full.status, 'success'); assert.equal(full.mbps, 8);
+  assert.ok(full.sampleMs! >= 3000); assert.ok(full.warmupMs! >= 1000);
   const short = await run(2 * 1048576);
   assert.equal(short.status, 'insufficient'); assert.equal(short.mbps, null);
 });

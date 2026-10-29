@@ -30,6 +30,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
   allowedProbeOrigins?: readonly string[];
   automaticStatus?: () => unknown;
   automaticBandwidthCheck?: (group: string) => boolean;
+  automaticBandwidthHistory?: (scope: string, group: string) => Promise<import('./bandwidth-history.ts').BandwidthHistoryResult>;
   onTiming?: TimingObserver;
   automaticProbe?: (snapshot: AutoSnapshot, node: string, target: ProbeTarget) => Promise<ProbeResult> }) {
   // Compile before cloning so getters and non-JSON values cannot run here.
@@ -52,6 +53,7 @@ export function createManagementApplication(options: { stateDirectory: string; d
     observeSelections: options.observeSelections,
     allowedProbeOrigins: options.allowedProbeOrigins, automaticStatus: options.automaticStatus, automaticProbe: options.automaticProbe,
     automaticBandwidthCheck: options.automaticBandwidthCheck,
+    automaticBandwidthHistory: options.automaticBandwidthHistory,
     compile: (policy, nodeDnsPolicy) => compile({ schemaVersion: 1, deployment: nodeDnsPolicy ? {
       ...deployment, nodeNameserverPolicy: { ...nodeDnsPolicy, ...(deployment.nodeNameserverPolicy as JsonObject | undefined) },
     } : deployment, policy }),

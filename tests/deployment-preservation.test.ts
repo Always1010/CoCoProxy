@@ -47,12 +47,13 @@ async function fixture(t: test.TestContext) {
   await writeFile(join(root, 'automatic-selections.json'), JSON.stringify({ version: 1, scope: 'synthetic-scope',
     targets: { 'Example Select': { signature: 'a'.repeat(64), target: 'Example Proxy' } }, events: [] }), { mode: 0o600 });
   await writeFile(join(root, 'automatic-history.json'), JSON.stringify({ version: 1, scopes: [] }), { mode: 0o600 });
+  await writeFile(join(root, 'automatic-bandwidth-history.json'), JSON.stringify({ version: 1, since: now, evicted: false, rounds: [] }), { mode: 0o600 });
   let devices = await TrustedDeviceStore.load(root, credential, origin, () => now);
   const grant = await devices.issue('90days', 'synthetic-device');
   const project = async (selectedOrigin = origin, selectedCredential: AdminCredential = credential) => {
     const paths = { transaction: 'state.json', lifecycle: 'lifecycle.json', trustedDevices: 'auth/trusted-devices.json',
       workspace: 'workspace.json', siteProbes: 'site-probes.json', draft: 'draft.json', automaticSelections: 'automatic-selections.json',
-      automaticHistory: 'automatic-history.json', automaticBandwidth: 'automatic-bandwidth.json', selection: 'selection.json' };
+      automaticHistory: 'automatic-history.json', automaticBandwidth: 'automatic-bandwidth.json', bandwidthHistory: 'automatic-bandwidth-history.json', selection: 'selection.json' };
     const documents = {} as Parameters<typeof summarizePreservation>[0];
     for (const [id, path] of Object.entries(paths)) {
       try { documents[id as keyof typeof documents] = await readFile(join(root, path), 'utf8'); }
@@ -77,6 +78,8 @@ test('real stores project to secret-free preservation capsules and the coordinat
   assert.equal(find(compare(before, changed, true), 'known-state-files').status, 'fail');
   const lostHistory = structuredClone(after); lostHistory.files.automaticHistory = null;
   assert.equal(find(compare(before, lostHistory), 'automatic-switch-history').status, 'unknown');
+  const lostProcess = structuredClone(after); lostProcess.files.bandwidthHistory = null;
+  assert.equal(find(compare(before, lostProcess), 'bandwidth-decision-history').status, 'unknown');
   const added: Snapshot = structuredClone(after); added.directories.auth = { present: true, entries: 'new' };
   assert.equal(find(compare(before, added, true), 'state-directories').status, 'fail');
   assert.equal(compare(before, after).authentication.status, 'not-run');

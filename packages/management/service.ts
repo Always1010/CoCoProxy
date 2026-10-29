@@ -15,6 +15,7 @@ import { createManagementApplication } from './application.ts';
 import { createManagementGateway, exactRecord, managementOrigin, ManagementError } from './http.ts';
 import { createRuleTestHandler, type RoutingSnapshot } from './rule-test.ts';
 import { createAutomaticSelector } from './automatic-selector.ts';
+import { BandwidthHistoryStore } from './bandwidth-history.ts';
 import { readRuntimeLifecycle } from '../runtime/lifecycle.ts';
 import { SiteProbeStore } from './site-probes.ts';
 import type { TimingObserver } from '../diagnostics/operation-timing.ts';
@@ -122,6 +123,7 @@ export async function loadManagementGateway(path: string) {
         return addresses;
       } });
     let automatic: ReturnType<typeof createAutomaticSelector> | undefined;
+    const bandwidthHistory = new BandwidthHistoryStore(runtimeSettings.stateDirectory, run => store.exclusive(run));
     const onTiming: TimingObserver = timing => {
       // Keep healthy background samples quiet; all user switches and slow or
       // failed reconciliation retain sanitized phase durations in the journal.
@@ -133,6 +135,7 @@ export async function loadManagementGateway(path: string) {
       allowedProbeOrigins: controllerPolicy.allowedProbeOrigins as string[] | undefined,
       automaticStatus: () => automatic?.status() ?? { groups: [], events: [] },
       automaticBandwidthCheck: group => automatic?.requestBandwidthCheck(group) ?? false,
+      automaticBandwidthHistory: (scope, group) => bandwidthHistory.read(scope, group),
       automaticProbe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
       runtime, sourceClient, sourceDecoder: decodeSubscriptionProfile, automaticGateway: runtimeSettings.automaticGateway,
       observeSelections: async () => {
@@ -156,6 +159,7 @@ export async function loadManagementGateway(path: string) {
       probe: (snapshot, node, target) => controller.probeNode(snapshot.generation, node, target, snapshot.probes.timeoutMs),
       switch: (snapshot, group, node, reason) => action.automaticSwitch(snapshot, group, node, reason),
       bandwidth: {
+        trace: round => bandwidthHistory.record(round),
         busy: () => bandwidth?.busy() ?? true,
         measure: (snapshot, node, settings, signal, report) => bandwidth?.verify(node, snapshot.generation, settings, signal, report) ?? Promise.resolve(null),
         load: async () => {
@@ -203,6 +207,6 @@ export async function loadManagementGateway(path: string) {
       () => console.error('COCOPROXY_PERSISTENT_RECOVERY_UNAVAILABLE'), undefined, onTiming);
     return { ...gateway, controller, recoverStartup: () => recoverManagementStartup(runtimeSettings.stateDirectory, runtime),
       startLifecycle: async () => { const recovered = await lifecycle.start(); automatic!.start(); usage.start(); return recovered; },
-      closeLifecycle: async () => { try { await automatic!.close(); } finally { try { await bandwidth!.close(); } finally { try { await usage.close(); } finally { await lifecycle.close(); } } } } };
+      closeLifecycle: async () => { try { await automatic!.close(); } finally { try { await bandwidthHistory.close(); } finally { try { await bandwidth!.close(); } finally { try { await usage.close(); } finally { await lifecycle.close(); } } } } } };
   } catch { throw new ManagementError('MANAGEMENT_SETTINGS_INVALID', 503); }
 }
