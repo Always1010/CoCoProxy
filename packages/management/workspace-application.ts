@@ -215,6 +215,15 @@ export function createWorkspaceApplication(options: {
     const scope = scopeOf(workspace), policies = activePolicies(workspace);
     const signatures: Record<string, string> = Object.create(null);
     const nodes = asNodes(policy), groups = asGroups(policy);
+    // Decision settings invalidate evidence, not an otherwise unchanged committed
+    // exit. Reading the committed candidate also supports existing binding files.
+    let committed: JsonObject | undefined;
+    if (bindings?.scope === scope && !bindings.pendingEvent) {
+      const state = await store.status();
+      if (state.active && !state.transaction && !state.fault) {
+        committed = JSON.parse(await privateRead(await store.readCandidate(state.active))) as JsonObject;
+      }
+    }
     const choices = Object.fromEntries(groups.map(group => [String(group.name), Array.isArray(group.proxies) ? [...group.proxies] as string[] : []]));
     if (Object.keys(policies).length || workspace.autoProbes) checkProbePermission(workspace.autoProbes ?? DEFAULT_AUTO_PROBES);
     for (const [name, automatic] of Object.entries(policies)) {
@@ -227,7 +236,11 @@ export function createWorkspaceApplication(options: {
       }
       signatures[name] = hash({ automatic, nodes: pool.map(target => nodes.find(node => node.name === target)) });
       const binding = bindings?.scope === scope ? bindings.targets[name] : undefined;
-      const selected = binding?.signature === signatures[name] && pool.includes(binding.target) ? binding.target :
+      const committedGroup = committed && asGroups(committed).find(group => group.name === name && group.type === 'select');
+      const committedNode = binding && committed && asNodes(committed).find(node => node.name === binding.target);
+      const retained = binding && committedNode && Array.isArray(committedGroup?.proxies) && committedGroup.proxies[0] === binding.target &&
+        pool.includes(binding.target) && hash(committedNode) === hash(nodes.find(node => node.name === binding.target));
+      const selected = binding && pool.includes(binding.target) && (binding.signature === signatures[name] || retained) ? binding.target :
         pool.includes(String(group.proxies[0])) ? String(group.proxies[0]) : automatic.preferred[0];
       // Only concrete permitted candidates and REJECT are reachable in this group.
       group.proxies = [selected, ...pool.filter(target => target !== selected), 'REJECT'];
