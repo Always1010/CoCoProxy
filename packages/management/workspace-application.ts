@@ -228,7 +228,7 @@ export function createWorkspaceApplication(options: {
       bindingKey: hash(bindings), ...(Object.keys(nodeDnsPolicy).length ? { nodeDnsPolicy } : {}), ...(legacy ? { legacy } : {}) };
   }
 
-  async function apply(workspace: Workspace, expectedActive: unknown, automatic = false) {
+  async function apply(workspace: Workspace, expectedActive: unknown, automatic?: { group: string; target: string }) {
     if (!(expectedActive === null || (typeof expectedActive === 'string' && /^[a-f0-9]{64}$/.test(expectedActive)))) invalid();
     const plan = await build(workspace);
     const candidate = compile(plan);
@@ -238,7 +238,15 @@ export function createWorkspaceApplication(options: {
     const result = await manager.apply(candidate.id, expectedActive as string | null, async () => {
       try {
         if ((await load()).revision !== workspace.revision) invalid('WORKSPACE_CONFLICT');
-        if (automatic && (await readRuntimeLifecycle(options.stateDirectory)).paused) invalid('AUTO_PAUSED');
+        if (automatic) {
+          if ((await readRuntimeLifecycle(options.stateDirectory)).paused) invalid('AUTO_PAUSED');
+          if ((await store.status()).fault) invalid('AUTO_STATE_CONFLICT');
+          // Rebuilding after the binding write must not capture unrelated source
+          // or routing edits. Automatic apply may change only this selection.
+          const active = JSON.parse(await privateRead(await store.readCandidate(expectedActive as string))) as JsonObject;
+          const changes = selectionChanges(active, candidate.config);
+          if (!changes || changes.some(change => change.group !== automatic.group || change.name !== automatic.target)) invalid('AUTO_STATE_CONFLICT');
+        }
         if (Object.keys(plan.automatic.policies).length && hash(await readAutomaticBindings(options.stateDirectory)) !== plan.bindingKey) invalid('AUTO_STATE_CONFLICT');
         if (plan.legacy !== undefined && canonicalJson(await options.legacyPolicy()) !== plan.legacy) invalid('DRAFT_CONFLICT');
         for (const capture of plan.captures) {
@@ -380,7 +388,11 @@ export function createWorkspaceApplication(options: {
     let proposed: AutomaticBindings;
     await store.exclusive(async () => {
       if ((await readRuntimeLifecycle(options.stateDirectory)).paused) throw new TransactionError('AUTO_PAUSED');
-      if ((await load()).revision !== workspace.revision || (await store.status()).active !== snapshot.generation ||
+      const state = await store.status();
+      // The fresh snapshot predates this capture: neither a new routing draft
+      // nor changed automatic decision settings may become this switch's baseline.
+      if ((await load()).revision !== workspace.revision || state.active !== snapshot.generation || state.transaction || state.fault ||
+          plan.automatic.key !== snapshot.key || compile(plan).id !== snapshot.generation ||
           hash(await readAutomaticBindings(options.stateDirectory)) !== plan.bindingKey) throw new TransactionError('AUTO_STATE_CONFLICT');
       before = await readAutomaticBindings(options.stateDirectory);
       // Preserve a legacy scheme's history before its runtime binding is replaced.
@@ -394,7 +406,7 @@ export function createWorkspaceApplication(options: {
       await writeAutomaticBindings(options.stateDirectory, proposed);
     });
     try {
-      await apply(workspace, snapshot.generation, true);
+      await apply(workspace, snapshot.generation, { group: name, target });
     } catch {
       // Roll back this binding only. A newer editor/selection must never be overwritten.
       await store.exclusive(async () => {
