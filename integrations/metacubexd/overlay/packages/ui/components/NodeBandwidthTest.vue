@@ -119,7 +119,7 @@ defineExpose({ open })
       <button v-if="uncertain || error" type="button" class="btn btn-ghost btn-sm min-h-11 min-w-28" :disabled="loading || sending" @click="refresh(true)"><IconRefresh :size="16" :class="{ 'animate-spin': loading }" aria-hidden="true" /><span>{{ loading ? t('coco.anLoading') : t('coco.anReadStatus') }}</span></button>
       <button v-if="task?.running && task.owned" type="button" class="btn btn-warning btn-sm min-h-11" :disabled="loading || sending || uncertain || task.phase === 'cancelling'" @click="cancel"><IconX :size="16" aria-hidden="true" /><span>{{ task.phase === 'cancelling' ? t('coco.anCancelling') : t('coco.anCancelTest') }}</span></button>
       <button v-else-if="!task?.running" type="button" class="btn btn-primary btn-sm min-h-11" :disabled="!canStart || !selected || !nodes.includes(selected)" @click="start(selected)"><IconPlayerPlay :size="16" aria-hidden="true" /><span>{{ sending ? t('coco.anStarting') : task ? t('coco.anTestAgain') : t('coco.anStartTest') }}</span></button>
-      <button v-if="!locked" type="button" class="btn btn-ghost btn-sm min-h-11 min-w-11" :title="t('coco.anCloseDialog')" :aria-label="t('coco.anCloseDialog')" @click="dialog?.close()"><IconX :size="16" aria-hidden="true" /><span>{{ t('coco.anClose') }}</span></button>
+      <button v-if="!locked" type="button" class="btn btn-ghost btn-sm min-h-11 min-w-11" :title="t('coco.anCloseDialog')" :aria-label="t('coco.anCloseDialog')" @click="dialog?.close()"><IconX :size="16" aria-hidden="true" /></button>
     </template>
   </Modal>
 </template>
