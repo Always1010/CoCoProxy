@@ -17,7 +17,7 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a'):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -102,7 +102,8 @@ class RemoteDeploymentTests(unittest.TestCase):
             if '--operation' in args:
                 operation = args[args.index('--operation') + 1]
                 if operation == 'prepare':
-                    return json.dumps(preparation_report or {'readiness': 'prepared-not-applied', 'review': {'configurationChanged': False}}).encode()
+                    return json.dumps(preparation_report or {'readiness': 'prepared-not-applied', 'review': {'configurationChanged': False},
+                        'runtimePreservation': {'eligible': preserve_runtime}}).encode()
                 if operation == 'inspect':
                     return json.dumps({'installed': True, 'release': 'matches-receipt', 'receipt': {'status': 'complete', 'manifestSha256': 'b' * 64},
                         'files': [{'status': 'matches-receipt'}], 'lock': {'present': False}}).encode()
@@ -114,7 +115,8 @@ class RemoteDeploymentTests(unittest.TestCase):
                 action = args[1]
                 if action == 'show':
                     if args[3].startswith('--property='):
-                        return ('ActiveState=' + ('active' if active[args[2]] else 'inactive') + '\nMainPID=42\nExecMainStartTimestampMonotonic=1234\nUnitFileState=' + enabled[args[2]]).encode()
+                        pid = '99' if runtime_changed and any('--apply' in event for event in events) else '42'
+                        return ('ActiveState=' + ('active' if active[args[2]] else 'inactive') + '\nMainPID=' + pid + '\nExecMainStartTimestampMonotonic=1234\nUnitFileState=' + enabled[args[2]]).encode()
                     return (('active' if active[args[2]] else 'inactive') if args[4] == 'ActiveState' else enabled[args[2]]).encode()
                 for unit in args[2:]:
                     if action in ['start', 'stop']:
@@ -141,11 +143,41 @@ class RemoteDeploymentTests(unittest.TestCase):
         stack.enter_context(patch.object(deploy, 'put', lambda path, data, mode=0o600: Path(path).write_bytes(data)))
         stack.enter_context(patch.object(deploy, 'stage_payload', lambda *_: (root / 'payload', manifest)))
         stack.enter_context(patch.object(deploy, 'run', run))
+        def health(_):
+            if health_failure:
+                raise RuntimeError('REMOTE_MANAGEMENT_NOT_READY')
+        stack.enter_context(patch.object(deploy, 'management_ready', health))
         stack.enter_context(patch.object(deploy.os, 'chown', lambda *_: None, create=True))
         stack.enter_context(patch.object(deploy.tempfile, 'TemporaryDirectory', lambda **kwargs: factory(prefix='scratch-', dir=root)))
         args = SimpleNamespace(payload=str(root), manifest_sha256='b' * 64, router_hook=str(hook), router_config=None,
             input=None, environment=None, admin_input=None, web_unit=None, preview=False)
         return temporary, stack, private, before, events, router, args
+
+    def test_compatible_default_and_management_updates_keep_the_pinned_runtime(self):
+        for component in [None, 'backend', 'management']:
+            with self.subTest(component=component):
+                temporary, stack, private, before, events, router, args = self.scenario(component=component, preserve_runtime=True)
+                with temporary, stack:
+                    deploy.main_locked(args)
+                    installed = json.loads((private / 'deployment.json').read_text())
+                    self.assertEqual(installed['runtime'], before['runtime'])
+                    self.assertTrue(any('--preserve-runtime' in event and '--apply' in event for event in events))
+                    self.assertFalse(any('runtime-maintenance-pause' in event or event[0].endswith('router-hook') for event in events))
+                    mutations = [event for event in events if event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable']]
+                    self.assertTrue(all(event[2:] == ['cocoproxy-management.service'] for event in mutations))
+                    self.assertTrue(router['enabled'])
+
+    def test_preserving_runtime_rejects_state_mutation_core_restart_and_unready_manager(self):
+        for options, error in [({'change_during_install': True}, 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED'),
+                               ({'runtime_changed': True}, 'REMOTE_FRONTEND_RUNTIME_CHANGED'),
+                               ({'health_failure': True}, 'REMOTE_MANAGEMENT_NOT_READY')]:
+            with self.subTest(error=error):
+                temporary, stack, private, before, events, router, args = self.scenario(preserve_runtime=True, **options)
+                with temporary, stack:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        deploy.main_locked(args)
+                    self.assertTrue(router['enabled'])
+                    self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'failed')
 
     def test_frontend_update_pins_runtime_and_never_enters_router_or_runtime_maintenance(self):
         temporary, stack, private, before, events, router, args = self.scenario(frontend=True)

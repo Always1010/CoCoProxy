@@ -4,9 +4,11 @@ import { inspectDeployment, recoverDeployment } from '../../packages/deployment/
 try {
   const args = process.argv.slice(2), values: Record<string, string> = {};
   let apply = false;
+  let preserveRuntime = false;
   for (let index = 0; index < args.length; index++) {
     const key = args[index];
     if (key === '--apply' && !apply) { apply = true; continue; }
+    if (key === '--preserve-runtime' && !preserveRuntime) { preserveRuntime = true; continue; }
     if (!['--payload', '--input', '--manifest-sha256', '--operation', '--reviewed-configuration-sha256', '--reviewed-recovery-sha256'].includes(key) || values[key] ||
       !args[index + 1] || args[index + 1].startsWith('--')) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
     values[key] = args[++index];
@@ -14,6 +16,7 @@ try {
   const operation = values['--operation'] ?? 'install';
   let result: unknown;
   if (operation === 'inspect' || operation === 'recover') {
+    if (preserveRuntime) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
     if (Object.keys(values).some(key => !['--operation', ...(operation === 'recover' ? ['--reviewed-recovery-sha256'] : [])].includes(key)) ||
       operation === 'inspect' && apply) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
     result = operation === 'inspect' ? await inspectDeployment() :
@@ -21,7 +24,7 @@ try {
   } else {
     if (!values['--payload'] || !values['--input'] || !values['--manifest-sha256'] || values['--reviewed-recovery-sha256'] ||
       operation === 'prepare' && (apply || values['--reviewed-configuration-sha256'])) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
-    const options = { payload: values['--payload'], input: values['--input'], manifestSha256: values['--manifest-sha256'] };
+    const options = { payload: values['--payload'], input: values['--input'], manifestSha256: values['--manifest-sha256'], preserveRuntime };
     result = operation === 'prepare' ? await prepareUpgrade(options) : await deployRelease({ ...options,
       operation: operation as InstallOptions['operation'], reviewedConfigurationSha256: values['--reviewed-configuration-sha256'], apply });
   }
