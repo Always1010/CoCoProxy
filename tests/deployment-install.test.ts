@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, compatibleOwnedFiles, configurationReviewDigest, deployRelease,
-  parseDeploymentLock, prepareUpgrade, releaseTarget, validateReceipt, verifyRelease, assertFrontendFiles, assertComponentReuse, type Receipt } from '../packages/deployment/install.ts';
+  parseDeploymentLock, prepareUpgrade, stageUpgrade, preparedReleaseIdentity, assertPreparedReleaseIdentity, releaseTarget, validateReceipt, verifyRelease, assertFrontendFiles, assertComponentReuse, type Receipt } from '../packages/deployment/install.ts';
 import { assertDeploymentStateCompatibility } from '../packages/deployment/install.ts';
 import { inspectStateCompatibility, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/compatibility.ts';
@@ -16,6 +16,17 @@ import { assessRuntimePreservation } from '../packages/deployment/runtime-preser
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
+
+test('prepared releases bind the previous installation, target, exact input and runtime preservation mode', () => {
+  const identity = preparedReleaseIdentity('a'.repeat(64), 'b'.repeat(64), Buffer.from('input'), true);
+  assert.doesNotThrow(() => assertPreparedReleaseIdentity(structuredClone(identity), identity));
+  for (const changed of [preparedReleaseIdentity('c'.repeat(64), 'b'.repeat(64), Buffer.from('input'), true),
+    preparedReleaseIdentity('a'.repeat(64), 'c'.repeat(64), Buffer.from('input'), true),
+    preparedReleaseIdentity('a'.repeat(64), 'b'.repeat(64), Buffer.from('changed input'), true),
+    preparedReleaseIdentity('a'.repeat(64), 'b'.repeat(64), Buffer.from('input'), false), null, { ...identity, foreign: true }]) {
+    assert.throws(() => assertPreparedReleaseIdentity(changed, identity), code('INSTALL_PREPARED_RELEASE_CHANGED'));
+  }
+});
 
 test('runtime preservation permits management changes but rejects boot, runtime, dependency and state contract changes', () => {
   const paths = ['bin/mihomo', 'source/apps/runtime/launch-core.ts', 'source/packages/runtime/settings.ts',
@@ -203,6 +214,7 @@ test('deployment target is explicit, versioned by manifest, and cannot replace s
 });
 
 test('unsupported host never creates installation storage even when apply is requested', { skip: process.platform === 'linux' }, async () => {
+  await assert.rejects(stageUpgrade({ payload: '/missing', input: '/missing', manifestSha256: '0'.repeat(64) }), code('INSTALL_LINUX_ROOT_REQUIRED'));
   await assert.rejects(deployRelease({ payload: '/missing', input: '/missing', manifestSha256: '0'.repeat(64),
     operation: 'install', apply: true }), code('INSTALL_LINUX_ROOT_REQUIRED'));
   await assert.rejects(prepareUpgrade({ payload: '/missing', input: '/missing', manifestSha256: '0'.repeat(64) }), code('INSTALL_LINUX_ROOT_REQUIRED'));
