@@ -669,6 +669,7 @@
       "title": "决策过程 · {group}",
       "back": "返回轮次列表",
       "updated": "页面更新：{time}",
+      "readDelayed": "更新稍有延迟，保留上次记录并自动重试",
       "unknown": "暂无记录",
       "points": "{value} 分",
       "disabled": "带宽辅助决策当前未启用，已保留的过程仍可查看",

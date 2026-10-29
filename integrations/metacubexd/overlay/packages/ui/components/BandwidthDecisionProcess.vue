@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { IconArrowLeft, IconBrandSpeedtest, IconChevronRight, IconRefresh, IconRoute } from '@tabler/icons-vue'
-import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
+import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import { processReason, processSampleLoss } from '~/utils/bandwidth-process'
 import type { ProcessComparison, ProcessResponse } from '~/utils/bandwidth-process'
 
@@ -16,11 +16,13 @@ const loading = ref(false)
 const checking = ref(false)
 const updatedAt = ref<number | null>(null)
 const error = useLocalizedMessage()
+const delayed = ref(false)
 const feedback = useLocalizedMessage()
 let timer: ReturnType<typeof setTimeout> | undefined
 let session = 0, requestId = 0, disposed = false
 let reading = false
 let controller: AbortController | undefined
+let lockedSince: number | null = null
 const scope = computed(() => {
   const workspace = view.value?.workspace
   return workspace ? JSON.stringify([workspace.mode, workspace.mode === 'subscription' ? workspace.subscriptionId : workspace.sourceIds]) : ''
@@ -60,6 +62,7 @@ async function refresh(background = true) {
   if (selectedId.value) query.set('round', selectedId.value)
   reading = true
   loading.value = !background || !data.value
+  if (!background) { lockedSince = null; delayed.value = false }
   try {
     const result = await api.request<ProcessResponse>('/api/cocoproxy/automatic/bandwidth/history?' + query, { signal: controller.signal })
     if (!visible.value || id !== requestId || expectedScope !== scope.value) return
@@ -67,9 +70,14 @@ async function refresh(background = true) {
       error.value = () => t('coco.anThePlanOrSettingsChangedClose'); return
     }
     if (JSON.stringify(result) !== JSON.stringify(data.value)) data.value = result
-    updatedAt.value = Date.now(); error.value = ''
+    updatedAt.value = Date.now(); error.value = ''; delayed.value = false; lockedSince = null
   } catch (cause) {
-    if (visible.value && id === requestId) error.value = () => cocoproxyErrorMessage(cause, t)
+    if (visible.value && id === requestId) {
+      if (background && data.value && cause instanceof CoCoProxyError && cause.code === 'STORE_LOCKED') {
+        lockedSince ??= Date.now(); delayed.value = true
+        if (Date.now() - lockedSince >= 15000) error.value = () => cocoproxyErrorMessage(cause, t)
+      } else { delayed.value = false; lockedSince = null; error.value = () => cocoproxyErrorMessage(cause, t) }
+    }
   } finally { if (id === requestId) { reading = false; loading.value = false } }
 }
 async function poll(currentSession: number) {
@@ -77,7 +85,7 @@ async function poll(currentSession: number) {
   if (visible.value && !disposed && currentSession === session) timer = setTimeout(() => { void poll(currentSession) }, 5000)
 }
 function open() {
-  close(); data.value = undefined; selectedId.value = null; updatedAt.value = null; error.value = ''; feedback.value = ''
+  close(); data.value = undefined; selectedId.value = null; updatedAt.value = null; error.value = ''; feedback.value = ''; delayed.value = false; lockedSince = null
   visible.value = true; dialog.value?.open(); void poll(session)
 }
 function close() {
@@ -117,6 +125,7 @@ defineExpose({ open })
       <div class="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <button v-if="selectedId" type="button" class="btn btn-ghost min-h-11" @click="choose(null)"><IconArrowLeft :size="16" aria-hidden="true" /><span>{{ t('coco.process.back') }}</span></button>
         <span class="text-xs tabular-nums text-base-content/60">{{ t('coco.process.updated', { time: time(updatedAt) }) }}</span>
+        <span v-if="delayed" role="status" class="text-xs text-base-content/60">{{ t('coco.process.readDelayed') }}</span>
         <button type="button" class="btn btn-ghost min-h-11 min-w-28 shrink-0" :disabled="loading || checking" @click="refresh(false)"><IconRefresh :size="16" :class="{ 'animate-spin': loading }" aria-hidden="true" /><span>{{ loading ? t('coco.anRefreshing') : t('coco.anRefresh') }}</span></button>
       </div>
       <p v-if="error" role="alert" class="mb-3 shrink-0 text-sm text-warning">{{ t('coco.anUpdateFailedPreviouslyDisplayedRecordsAre', { value: error }) }}</p>
