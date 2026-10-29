@@ -24,6 +24,8 @@ class RemoteDeploymentTests(unittest.TestCase):
             (['python3', '/private/helper.py'], b'{"ok":false,"code":"AUTOMATIC_GATEWAY_HOST_GUARD_REJECTED"}', b'private detail',
              'AUTOMATIC_GATEWAY_HOST_GUARD_REJECTED', {}),
             (['python3', '/private/helper.py'], b'{"ok":false,"code":"private detail"}', b'private detail', 'REMOTE_STEP_FAILED', {}),
+            (['node', '/private/installer.ts'], b'', b'(node:123) ExperimentalWarning: synthetic warning\nINSTALL_SERVICES_MUST_BE_STOPPED\n',
+             'INSTALL_SERVICES_MUST_BE_STOPPED', {}),
         ]
         for args, stdout, stderr, code, fields in cases:
             with self.subTest(code=code), patch.object(deploy.subprocess, 'run', return_value=SimpleNamespace(
