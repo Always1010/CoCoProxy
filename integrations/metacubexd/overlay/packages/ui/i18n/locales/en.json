@@ -1478,7 +1478,7 @@
     "anEvidenceWasNotCollectedWithinThe": "Evidence was not collected within the time limit",
     "anConfigurationOrRunGenerationChangedOld": "Configuration or run generation changed; old evidence is invalid",
     "anStateChangedBeforeSwitchingNoSwitch": "State changed before switching; no switch applied",
-    "anBudgetLedgerIsUnavailableAutomaticDownloads": "Budget ledger is unavailable; automatic downloads stopped",
+    "anBudgetLedgerIsUnavailableAutomaticDownloads": "Budget ledger is temporarily unavailable; automatic downloads paused and will retry",
     "anScreeningCandidateLatencyWithLightweightChecks": "Screening candidate latency with lightweight checks",
     "anReusingExistingEvidenceWaitingForThe": "Reusing existing evidence; waiting for the next valid sample",
     "anContinuousSearchReachedItsTrafficOr": "Continuous search reached its traffic or time limit; yielding resources and retaining progress",

@@ -160,6 +160,7 @@ export async function loadManagementGateway(path: string) {
       switch: (snapshot, group, node, reason) => action.automaticSwitch(snapshot, group, node, reason),
       bandwidth: {
         trace: round => bandwidthHistory.record(round),
+        storageDiagnostic: ({ event: transition, ...detail }) => console.info(JSON.stringify({ event: 'COCOPROXY_BANDWIDTH_STORAGE_DIAGNOSTIC', transition, ...detail })),
         busy: () => bandwidth?.busy() ?? true,
         measure: (snapshot, node, settings, signal, report) => bandwidth?.verify(node, snapshot.generation, settings, signal, report) ?? Promise.resolve(null),
         load: async () => {

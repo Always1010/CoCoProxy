@@ -1478,7 +1478,7 @@
     "anEvidenceWasNotCollectedWithinThe": "未在时限内收齐证据",
     "anConfigurationOrRunGenerationChangedOld": "配置或运行代次变化，旧证据失效",
     "anStateChangedBeforeSwitchingNoSwitch": "切换前状态已变化，未执行",
-    "anBudgetLedgerIsUnavailableAutomaticDownloads": "预算账本不可用，已停止自动下载",
+    "anBudgetLedgerIsUnavailableAutomaticDownloads": "预算账本暂不可用，已暂停自动下载，将自动重试",
     "anScreeningCandidateLatencyWithLightweightChecks": "正在轻量筛选候选延迟",
     "anReusingExistingEvidenceWaitingForThe": "复用已有证据，等待下一次有效采样",
     "anContinuousSearchReachedItsTrafficOr": "连续搜索额度或时间已到，暂时让出资源并保留进度",

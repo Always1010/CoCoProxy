@@ -9,6 +9,8 @@ const MiB = 1048576, HOUR = 3600000, DAY = 24 * HOUR, PROBE_FRESH = 30000, UNKNO
 const ACTIVE_CANDIDATES = 3;
 export type BandwidthLedger = { version: 1; charges: { at: number; bytes: number }[];
   switches: { at: number; scope: string; group: string; from: string; to: string }[] };
+type StorageFault = { operation: 'load' | 'save'; code: string; since: number; at: number; count: number; nextAt: number };
+export type BandwidthStorageDiagnostic = StorageFault & { event: 'failure' | 'recovered' };
 export function parseBandwidthLedger(input: unknown): BandwidthLedger {
   const value = input as BandwidthLedger;
   const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
@@ -44,10 +46,12 @@ export function createBandwidthSelector(options: {
   load?: () => Promise<BandwidthLedger>;
   save?: (value: BandwidthLedger) => Promise<void>;
   trace?: (round: BandwidthRound) => void;
+  storageDiagnostic?: (event: BandwidthStorageDiagnostic) => void;
 }) {
   const trace = createBandwidthTrace(options.now, options.trace);
-  let snapshot: AutoSnapshot | null = null, closed = false, loaded = false, storageFailed = false, fairCursor = 0;
-  let flight: { abort: AbortController; done: Promise<void>; pool?: Pool; node?: Node; kind: 'load' | 'probe' | 'download' | 'select'; startedAt?: number; used?: number; sampleInterrupted?: boolean } | undefined;
+  let snapshot: AutoSnapshot | null = null, closed = false, loaded = false, fairCursor = 0;
+  let storageFault: StorageFault | null = null, storageLoggedAt = 0;
+  let flight: { abort: AbortController; done: Promise<void>; pool?: Pool; node?: Node; kind: 'load' | 'save' | 'probe' | 'download' | 'select'; startedAt?: number; used?: number; sampleInterrupted?: boolean } | undefined;
   let ledger: BandwidthLedger = { version: 1, charges: [], switches: [] };
   let previous: { at: number; snapshot: UsageSnapshot } | undefined;
   let pressure: { group: string; baseline?: number; count: number } | undefined;
@@ -102,17 +106,36 @@ export function createBandwidthSelector(options: {
     return events.find(t => ledger.charges.filter(c => c.at > t - HOUR).reduce((n, c) => n + c.bytes, 0) + bytes <= b.hourLimit - (urgent ? 0 : b.hourReserve)
       && ledger.charges.filter(c => c.at > t - DAY).reduce((n, c) => n + c.bytes, 0) + bytes <= b.dayLimit - (urgent ? 0 : b.dayReserve)) ?? null;
   }
+  function storageDiagnostic(event: BandwidthStorageDiagnostic['event'], fault: StorageFault) {
+    try { options.storageDiagnostic?.({ ...fault, event }); } catch { /* Diagnostics cannot affect accounting. */ }
+  }
+  function storageFailure(operation: StorageFault['operation'], error: unknown) {
+    const raw = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    const code = typeof raw === 'string' && ['STORE_LOCKED', 'STORE_IO', 'UNSAFE_STORE', 'STORE_LIMIT', 'STORE_CORRUPT'].includes(raw) ? raw
+      : error instanceof SyntaxError || error instanceof Error && error.message === 'BANDWIDTH_LEDGER_INVALID' ? 'BANDWIDTH_LEDGER_INVALID' : 'STORE_IO';
+    const at = options.now(), previous = storageFault, count = (previous?.count ?? 0) + 1;
+    storageFault = { operation, code, since: previous?.since ?? at, at, count,
+      nextAt: at + Math.min(60000, (code === 'STORE_LOCKED' ? 1000 : 30000) * 2 ** Math.min(count - 1, 6)) };
+    if (!previous || previous.code !== code || at - storageLoggedAt >= 60000) {
+      storageDiagnostic('failure', storageFault); storageLoggedAt = at;
+    }
+  }
+  function storageRecovered() {
+    if (!storageFault) return;
+    storageDiagnostic('recovered', { ...storageFault, at: options.now() }); storageFault = null;
+    for (const p of pools.values()) if (p.reason === 'storage-unavailable') note(p, 'observing', 'waiting-traffic');
+  }
   async function store() {
-    try { await options.save?.(structuredClone(ledger)); }
-    catch { storageFailed = true; throw new Error('BANDWIDTH_LEDGER_UNAVAILABLE'); }
+    try { await options.save?.(structuredClone(ledger)); storageRecovered(); }
+    catch (error) { storageFailure('save', error); throw new Error('BANDWIDTH_LEDGER_UNAVAILABLE'); }
   }
   function launch(kind: NonNullable<typeof flight>['kind'], run: (signal: AbortSignal) => Promise<void>, pool?: Pool, node?: Node) {
     const job: NonNullable<typeof flight> = { abort: new AbortController(), done: Promise.resolve(), kind, pool, node, startedAt: options.now(), used: 0 };
     flight = job;
     job.done = run(job.abort.signal).catch(() => {
       if (pool && pools.get(pool.name) === pool) {
-        if (node && !storageFailed) unknown(pool, node, 'sample-unknown');
-        note(pool, 'waiting', storageFailed ? 'storage-unavailable' : 'sample-unknown', options.now() + UNKNOWN_WAIT);
+        if (node && !storageFault) unknown(pool, node, 'sample-unknown');
+        note(pool, 'waiting', storageFault ? 'storage-unavailable' : 'sample-unknown', storageFault?.nextAt ?? options.now() + UNKNOWN_WAIT);
       }
     }).finally(() => {
       if (pool) pool.testingNode = null;
@@ -323,7 +346,9 @@ export function createBandwidthSelector(options: {
   }
   async function measure(p: Pool, n: Node, s: BandwidthSettings, snap: AutoSnapshot, signal: AbortSignal) {
     const charge = { at: options.now(), bytes: s.taskMiB * MiB };
-    ledger.charges.push(charge); await store(); // Durable maximum before any network I/O.
+    ledger.charges.push(charge);
+    try { await store(); } // Durable maximum before any network I/O.
+    catch (error) { charge.bytes = 0; throw error; } // No transfer started; settle this reservation on recovery.
     let used = 0;
     pressure = { group: p.name, count: 0 };
     try {
@@ -332,7 +357,12 @@ export function createBandwidthSelector(options: {
         if (Number.isFinite(bytes) && bytes >= 0) used = Math.min(charge.bytes, Math.max(used, bytes));
         if (flight?.pool === p && flight.node === n) flight.used = used;
       });
-    } finally { pressure = undefined; charge.bytes = used; p.spent += used; await store(); }
+    } finally {
+      pressure = undefined; charge.bytes = used; p.spent += used;
+      // Retain the measured result and pending settlement. The scheduler blocks all
+      // further bandwidth work until this exact in-memory ledger is saved.
+      await store().catch(() => {});
+    }
   }
   function request(name: string, _node?: string, reason: Trigger = 'latency') {
     const p = pools.get(name);
@@ -377,11 +407,15 @@ export function createBandwidthSelector(options: {
       }
     }
     if (flight) return;
-    if (storageFailed) { for (const p of pools.values()) note(p, 'waiting', 'storage-unavailable'); return; }
+    if (storageFault) {
+      for (const p of pools.values()) { begin(p); note(p, 'waiting', 'storage-unavailable', storageFault.nextAt); }
+      if (at < storageFault.nextAt) return;
+      if (loaded) { launch('save', async () => { await store(); }); return; }
+    }
     if (!loaded) {
       if (pools.size) launch('load', async () => {
-        try { ledger = parseBandwidthLedger(await options.load?.() ?? ledger); loaded = true; prune(); }
-        catch { storageFailed = true; }
+        try { ledger = parseBandwidthLedger(await options.load?.() ?? ledger); loaded = true; prune(); storageRecovered(); }
+        catch (error) { storageFailure('load', error); }
       });
       return;
     }
@@ -508,7 +542,8 @@ export function createBandwidthSelector(options: {
         values(selectedNode, s); selectedNode.reason = 'evidence-ready'; selectedNode.nextAt = 0;
         selectedNode.state = selectedNode.samples.length >= s.confirmRounds ? 'verified' : 'confirming';
         if (selectedNode.name !== p.current) p.candidateDownloads = wasExploration && p.candidateDownloads >= 2 ? 0 : p.candidateDownloads + 1;
-        note(p, 'confirming', 'waiting-sample', sampleDue(selectedNode, s));
+        if (storageFault) note(p, 'waiting', 'storage-unavailable', storageFault.nextAt);
+        else note(p, 'confirming', 'waiting-sample', sampleDue(selectedNode, s));
       }, p, node);
       fairCursor = (index + 1) % names.length; return;
     }
@@ -556,6 +591,7 @@ export function createBandwidthSelector(options: {
       return { phase: p.phase, reason: p.reason, candidate: p.candidate, testingNode: p.testingNode,
         observation: observation(p, s),
         round: p.candidate ? values(p.nodes.get(p.candidate)!, s).length : 0, nextAt: p.nextAt, decision: p.decision,
+        storage: storageFault ? { ...storageFault } : null,
         ...budget(), searchBytes: p.spent, searchLimit: s.searchMiB * MiB, urgent: urgent(p, s),
         pool: [...p.nodes.values()].map(n => { const samples = values(n, s); return { name: n.name, preferred: n.preferred, current: n.name === p.current,
           state: n.state, reason: n.reason, samples: samples.length, delayMs: n.probe?.delay ?? null,

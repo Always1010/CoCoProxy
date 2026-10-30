@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBandwidthSelector, parseBandwidthLedger, type BandwidthLedger } from '../packages/management/bandwidth-selector.ts';
+import { createBandwidthSelector, parseBandwidthLedger, type BandwidthLedger, type BandwidthStorageDiagnostic } from '../packages/management/bandwidth-selector.ts';
 import { DEFAULT_BANDWIDTH_SETTINGS, parseBandwidthSettings, type BandwidthSettings } from '../packages/management/bandwidth-policy.ts';
 import { DEFAULT_AUTO_PROBES } from '../packages/management/automatic-policy.ts';
 import type { AutoSnapshot } from '../packages/management/automatic-selector.ts';
@@ -8,8 +8,10 @@ import { parseBandwidthHistory, type BandwidthRound } from '../packages/manageme
 
 function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateMbps?: number; currentMbps?: number;
   preferred?: string[]; fallback?: string[]; rates?: Record<string, number[]>; delays?: Record<string, number>;
-  settings?: Partial<BandwidthSettings>; bytes?: number; ledger?: BandwidthLedger; blocked?: boolean; storageFails?: boolean } = {}) {
-  let now = 0, total = 0, loads = 0;
+  settings?: Partial<BandwidthSettings>; bytes?: number; ledger?: BandwidthLedger; blocked?: boolean; storageFails?: boolean;
+  load?: () => Promise<BandwidthLedger>; save?: (value: BandwidthLedger, attempt: number) => Promise<void> } = {}) {
+  let now = 0, total = 0, loads = 0, saves = 0;
+  const diagnostics: BandwidthStorageDiagnostic[] = [];
   const measures: string[] = [], switches: string[] = [], saved: BandwidthLedger[] = [], probes: string[] = [];
   const starts: { node: string; at: number }[] = [];
   const traces = new Map<string, BandwidthRound>();
@@ -19,8 +21,9 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
       bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, ...options.settings, enabled: options.enabled ?? true, observeOnly: options.observeOnly ?? false } } }] };
   const engine = createBandwidthSelector({ now: () => now,
     trace: round => traces.set(round.id, round),
-    load: async () => { loads++; return options.ledger ?? { version: 1, charges: [], switches: [] }; },
-    save: async value => { if (options.storageFails) throw new Error('synthetic ledger failure'); saved.push(structuredClone(value)); },
+    storageDiagnostic: event => diagnostics.push(event),
+    load: async () => { loads++; return options.load ? options.load() : options.ledger ?? { version: 1, charges: [], switches: [] }; },
+    save: async value => { saves++; if (options.storageFails) throw new Error('synthetic ledger failure'); await options.save?.(value, saves); saved.push(structuredClone(value)); },
     probe: async (_s, node) => { probes.push(node); return { ok: true, delay: options.delays?.[node] ?? (node === 'a' ? 80 : 150) }; },
     select: async (_s, _g, node) => { switches.push(node); snapshot.groups[0].current = node; snapshot.generation = String(Number(snapshot.generation) + 1); return true; },
     measure: async (_s, node, _settings, signal, report) => {
@@ -32,7 +35,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
       return signal.aborted || mbps === -1 ? null : { delayMs: 999, mbps, bytes: options.bytes ?? 1000000 };
     } });
   engine.update(snapshot);
-  return { engine, snapshot, measures, starts, switches, saved, probes, traces, get loads() { return loads; }, get now() { return now; },
+  return { engine, snapshot, measures, starts, switches, saved, probes, traces, diagnostics, get loads() { return loads; }, get saves() { return saves; }, get now() { return now; },
     async step(bytes = 0, ready = true) {
       now += 1000; total += bytes;
       engine.update(snapshot);
@@ -144,6 +147,69 @@ test('reserves protect degradation work, search yield preserves the pool and led
   assert.ok(yielded.engine.status('media')!.pool.some(n => n.name === 'c'));
   assert.ok(['search-yield', 'budget-exhausted'].includes(yielded.engine.status('media')!.reason));
   assert.ok(yielded.measures.length <= 4); await yielded.engine.close();
+});
+
+test('a contended settlement retains evidence and retries accounting before any more transfers', async () => {
+  let locked = true;
+  const f = fixture({ settings: { confirmRounds: 3, roundIntervalSeconds: 60, searchMiB: 48 }, save: async (_value, attempt) => {
+    if (attempt > 1 && locked) throw Object.assign(new Error('synthetic-private-details'), { code: 'STORE_LOCKED' });
+  } });
+  f.engine.requestCheck('media');
+  while (!f.engine.status('media')?.storage && f.now < 30000) await f.step();
+  assert.equal(f.measures.length, 1);
+  assert.equal(f.saved.at(-1)!.charges[0].bytes, 8 * 1048576);
+  const sample = [...f.traces.values()][0].events.find(e => e.kind === 'sample')!;
+  assert.equal(sample.sample!.valid, true); assert.equal(sample.sample!.bytes, 1000000);
+  assert.equal(f.engine.status('media')!.pool.find(n => n.current)!.samples, 1);
+  assert.equal(f.engine.status('media')!.storage!.code, 'STORE_LOCKED');
+  for (let i = 0; i < 10; i++) await f.step();
+  assert.equal(f.measures.length, 1); assert.deepEqual(f.switches, []);
+  assert.ok(f.saves < 8); assert.equal(f.diagnostics.length, 1);
+  // A target change ends the visible round but cannot discard pending accounting.
+  f.engine.invalidateProbeTarget(); await f.step();
+  assert.equal([...f.traces.values()].at(-1)!.reason, 'storage-unavailable');
+  locked = false;
+  const nextAt = f.engine.status('media')!.storage!.nextAt;
+  while (f.now < nextAt) await f.step();
+  assert.equal(f.engine.status('media')!.storage, null);
+  assert.equal(f.measures.length, 1);
+  assert.equal(f.saved.at(-1)!.charges[0].bytes, 1000000);
+  assert.deepEqual(f.diagnostics.map(d => d.event), ['failure', 'recovered']);
+  assert.doesNotMatch(JSON.stringify(f.diagnostics), /synthetic-private-details/);
+  // The target reset discarded evidence after spending traffic, so the existing
+  // search-budget protection may yield before collecting a complete new pair.
+  for (let i = 0; i < 480 && !f.switches.length; i++) await f.step();
+  assert.ok(f.measures.length > 1); assert.deepEqual(f.switches, ['b']);
+  await f.engine.close();
+});
+
+test('failed reservations start no transfer and corrupt loads never replace the existing ledger', async () => {
+  let locked = true;
+  const f = fixture({ save: async () => { if (locked) throw { code: 'STORE_LOCKED' }; } });
+  f.engine.requestCheck('media');
+  while (!f.engine.status('media')?.storage && f.now < 30000) await f.step();
+  assert.deepEqual(f.measures, []);
+  locked = false; await f.step();
+  assert.equal(f.engine.status('media')!.storage, null);
+  assert.equal(f.saved.at(-1)!.charges[0].bytes, 0); // No traffic was sent, even if the failed write reached disk.
+  for (let i = 0; i < 150; i++) await f.step();
+  assert.deepEqual(f.switches, ['b']); await f.engine.close();
+
+  let valid = false;
+  const persisted: BandwidthLedger = { version: 1, charges: [{ at: 0, bytes: DEFAULT_BANDWIDTH_SETTINGS.hourMiB * 1048576 }], switches: [] };
+  const unreadable = fixture({ load: async () => valid ? structuredClone(persisted) : parseBandwidthLedger({ version: 9 }) });
+  unreadable.engine.requestCheck('media');
+  for (let i = 0; i < 30; i++) await unreadable.step();
+  assert.equal(unreadable.loads, 1); assert.equal(unreadable.saves, 0); assert.deepEqual(unreadable.measures, []);
+  assert.equal(unreadable.engine.status('media')!.storage!.code, 'BANDWIDTH_LEDGER_INVALID');
+  await unreadable.step(); assert.equal(unreadable.loads, 2);
+  valid = true;
+  for (let i = 0; i < 120 && unreadable.engine.status('media')!.storage; i++) await unreadable.step();
+  assert.equal(unreadable.engine.status('media')!.storage, null);
+  await unreadable.step();
+  assert.equal(unreadable.engine.status('media')!.reason, 'budget-exhausted');
+  assert.equal(unreadable.saves, 0); assert.deepEqual(unreadable.measures, []);
+  await unreadable.engine.close();
 });
 
 test('busy traffic aborts verification as unknown without condemning other candidates', async () => {
