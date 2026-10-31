@@ -18,6 +18,7 @@ import { privateRead } from '../storage/private-files.ts';
 import { SiteProbeStore, siteScope } from './site-probes.ts';
 import { AutomaticHistoryStore, retainAutomaticEvents } from './automatic-history.ts';
 import { measurePhase } from '../diagnostics/operation-timing.ts';
+import { setTimeout as delay } from 'node:timers/promises';
 
 type Plan = { workspace: Workspace; policy: JsonObject; nodeDnsPolicy?: JsonObject; captures: { id: string; revision: number; digest: string }[]; legacy?: string;
   automatic: { scope: string; key: string; signatures: Record<string, string>; policies: Record<string, AutoGroupPolicy>; choices: Record<string, string[]> }; bindingKey: string };
@@ -288,13 +289,26 @@ export function createWorkspaceApplication(options: {
 
   async function apply(workspace: Workspace, expectedActive: unknown, automatic?: { group: string; target: string }, configuration = false) {
     if (!(expectedActive === null || (typeof expectedActive === 'string' && /^[a-f0-9]{64}$/.test(expectedActive)))) invalid();
-    if (configuration) await recoverConfigurationEvents(workspace);
+    const whenUnlocked = async <T>(operation: () => Promise<T>): Promise<T> => {
+      const deadline = performance.now() + 2000;
+      for (;;) {
+        try { return await operation(); }
+        catch (cause) {
+          // Explicit applies can wait for background readers that briefly hold
+          // the writer lock. Never replay validation/activation failures or
+          // refresh the caller's captured revision, sources or active generation.
+          if (!configuration || !(cause instanceof TransactionError) || cause.code !== 'STORE_LOCKED' || performance.now() >= deadline) throw cause;
+          await delay(50);
+        }
+      }
+    };
+    if (configuration) await whenUnlocked(() => recoverConfigurationEvents(workspace));
     const plan = await build(workspace);
     const candidate = compile(plan);
     // Bind the UI's exact settings and snapshots before staging; never recapture
     // an unrelated editor's latest settings as though the caller approved them.
-    await store.stage(candidate);
-    const result = await manager.apply(candidate.id, expectedActive as string | null, async () => {
+    await whenUnlocked(() => store.stage(candidate));
+    const result = await whenUnlocked(() => manager.apply(candidate.id, expectedActive as string | null, async () => {
       try {
         if ((await load()).revision !== workspace.revision) invalid('WORKSPACE_CONFLICT');
         if (automatic) {
@@ -337,7 +351,7 @@ export function createWorkspaceApplication(options: {
       } catch (cause) {
         throw new TransactionError(cause instanceof WorkspaceError || cause instanceof SubscriptionError ? cause.code : 'WORKSPACE_UNAVAILABLE');
       }
-    });
+    }));
     if (configuration) await recoverConfigurationEvents(workspace).catch(() => { /* Keep the durable journal; a confirmed apply must not be replayed. */ });
     return { ...result, active: candidate.id, workspaceRevision: workspace.revision };
   }
@@ -414,10 +428,17 @@ export function createWorkspaceApplication(options: {
     }
     let plan = await build(workspace);
     if (automaticChanging) return suspendSnapshot('switching');
-    if (compile(plan).id !== state.active) {
+    const candidate = compile(plan);
+    if (candidate.id !== state.active) {
       // A crash can happen after the private binding is written but before the
       // configuration transaction commits. Repair only selection differences
       // belonging to automatic groups; real pending user edits stay pending.
+      const active = JSON.parse(await privateRead(await store.readCandidate(state.active))) as JsonObject;
+      const differences = selectionChanges(active, candidate.config);
+      // Pool/rule edits cannot be repaired by restoring an automatic selection.
+      // Keep these polling reads out of the writer lock; recheck repairable
+      // differences under the lock before changing any binding below.
+      if (!differences?.length || differences.some(change => !plan.automatic.policies[change.group])) return suspendSnapshot('pending');
       await store.exclusive(async () => {
         if (automaticChanging) return;
         const settled = await store.status();
@@ -425,7 +446,7 @@ export function createWorkspaceApplication(options: {
         const currentPlan = await build(workspace);
         const active = JSON.parse(await privateRead(await store.readCandidate(state.active!))) as JsonObject;
         const differences = selectionChanges(active, compile(currentPlan).config);
-        if (!differences || differences.some(change => !currentPlan.automatic.policies[change.group])) return;
+        if (!differences?.length || differences.some(change => !currentPlan.automatic.policies[change.group])) return;
         const observed = await options.observeSelections!();
         if (observed.generation !== state.active) return;
         const bindings = await readAutomaticBindings(options.stateDirectory);

@@ -194,6 +194,84 @@ test('automatic selections preserve manual intent, use confirmed transactions, p
   assert.equal((await f.view()).pending, true);
 });
 
+test('pending automatic pool edits suspend without competing for the writer lock', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }] });
+  const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: {
+    Proxy: { preferred: ['synthetic-node'], fallback: ['spare', 'outside'], returnToPreferred: true },
+  } } });
+  const saved = await f.save(initial, 0), active = await f.apply(saved, null);
+  f.observe({ Proxy: 'synthetic-node' });
+  const events = [...f.events];
+  let revision = saved.revision;
+  for (const fallback of [[], ['outside', 'spare']]) {
+    const edited = structuredClone(initial);
+    edited.local.automatic!.Proxy.fallback = fallback;
+    revision = (await f.save(edited, revision)).revision;
+    await new FileTransactionStore(f.state).exclusive(async () => {
+      for (let i = 0; i < 2; i++) {
+        assert.equal(await f.action.automaticSnapshot(true), null);
+        assert.equal(f.action.automaticSuspensionReason(), 'pending');
+      }
+    });
+  }
+  const after = await f.view();
+  assert.equal(after.active, active.active);
+  assert.equal(after.pending, true);
+  assert.deepEqual(f.events, events);
+});
+
+test('explicit configuration apply waits for brief contention and rechecks edits without replaying activation', async t => {
+  await t.test('persistent contention remains bounded', async t => {
+    const f = await fixture(t);
+    await f.source('pool', { proxies: [node] });
+    const saved = await f.save(settings({ sourceIds: ['pool'] }), 0);
+    await new FileTransactionStore(f.state).exclusive(async () => {
+      await assert.rejects(f.apply(saved, null), { code: 'STORE_LOCKED' });
+    });
+    assert.deepEqual(f.events, []);
+    assert.equal((await f.view()).active, null);
+  });
+  for (const conflict of [false, true]) await t.test(conflict ? 'concurrent edit' : 'brief background lock', async t => {
+    const f = await fixture(t);
+    await f.source('pool', { proxies: [node] });
+    const initial = settings({ sourceIds: ['pool'] });
+    const saved = await f.save(initial, 0);
+    const stage = FileTransactionStore.prototype.stage;
+    let holder: Promise<void> | undefined;
+    FileTransactionStore.prototype.stage = async function(candidate) {
+      const result = await stage.call(this, candidate);
+      if (this.root !== f.state) return result;
+      let entered!: () => void;
+      const enteredLock = new Promise<void>(resolve => { entered = resolve; });
+      holder = new FileTransactionStore(f.state).exclusive(async () => {
+        entered();
+        await new Promise(resolve => setTimeout(resolve, 100));
+        if (conflict) await writeFile(join(f.state, 'workspace.json'), JSON.stringify({
+          version: 1, revision: saved.revision + 1, settings: { ...initial, runMode: 'direct' },
+        }), { mode: 0o600 });
+      });
+      await enteredLock;
+      return result;
+    };
+    try {
+      if (conflict) {
+        await assert.rejects(f.apply(saved, null), { code: 'WORKSPACE_CONFLICT' });
+        assert.deepEqual(f.events, []);
+        assert.equal((await f.view()).active, null);
+      } else {
+        const applied = await f.apply(saved, null);
+        assert.equal((await f.view()).active, applied.active);
+        assert.equal((await f.view()).pending, false);
+        assert.deepEqual(f.events, ['validate', 'activate', 'confirm']);
+      }
+    } finally {
+      FileTransactionStore.prototype.stage = stage;
+      await holder;
+    }
+  });
+});
+
 test('decision setting edits retain the committed automatic exit and invalidate old decisions across restart', async t => {
   const f = await fixture(t);
   await f.source('pool', { proxies: [node, { ...node, name: 'spare' }] });
