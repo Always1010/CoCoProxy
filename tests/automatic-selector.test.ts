@@ -251,9 +251,9 @@ test('return checks back off 5, 10, 15, then 15 minutes and rotate at most two p
   await h.engine.close();
 });
 
-test('return accepts slower preferred only after stable +30/+60 second evidence; early relapse postpones another return', async () => {
+test('profitable preferred return requires stable +30/+60 second evidence; early relapse postpones another return', async () => {
   let failPreferred = false;
-  const h = harness({ current: 'backup', preferred: ['primary'], probe: node => node === 'backup' ? good(50) : failPreferred ? bad() : good(900) });
+  const h = harness({ current: 'backup', preferred: ['primary'], probe: node => node === 'backup' ? good(900) : failPreferred ? bad() : good(100) });
   await h.at(0); await h.at(300_000); await h.at(329_999); assert.equal(h.switches.length, 0);
   await h.at(330_000); await h.at(360_000);
   assert.equal(h.switches[0].node, 'primary');
@@ -271,7 +271,7 @@ test('return accepts slower preferred only after stable +30/+60 second evidence;
 
 test('soft relapse after a preferred return respects minimum residence and escalates the repeated return penalty', async () => {
   let slowPreferred = false;
-  const h = harness({ current: 'backup', preferred: ['primary'], probe: node => good(node === 'backup' ? 50 : slowPreferred ? 2000 : 900) });
+  const h = harness({ current: 'backup', preferred: ['primary'], probe: node => good(node === 'backup' ? 900 : slowPreferred ? 2000 : 100) });
   await h.at(0); await h.at(300_000); await h.at(330_000); await h.at(360_000);
   slowPreferred = true;
   await h.at(390_000); await h.at(420_000); await h.at(450_000); await h.at(450_001);
@@ -496,16 +496,17 @@ test('a failing primary target changes the global active target and recovers thr
   await h.engine.close();
 });
 
-test('turning off bandwidth enhancement immediately restores the original latency-only switching path', async () => {
-  const h = harness({ bandwidth: true, fallback: [], probe: node => good(node === 'primary' ? 2000 : 1000) });
-  await h.at(0); await h.at(30000); await h.at(60000);
-  assert.equal(h.switches.length, 0);
-  assert.ok(h.engine.status().groups[0].bandwidth);
-  h.snapshot!.groups[0].policy.bandwidth!.enabled = false;
-  await h.at(60001); await h.at(90001); await h.at(120001); await h.at(120002); await h.at(122002);
-  assert.deepEqual(h.switches.map(s => s.reason), ['faster-candidate']);
-  assert.equal(h.engine.status().groups[0].bandwidth, undefined);
-  await h.engine.close();
+test('bandwidth enhancement cannot block confirmed latency rescue or justify an unprofitable preferred return', async () => {
+  for (const bandwidth of [false, true]) {
+    const h = harness({ bandwidth, fallback: [], probe: node => good(node === 'primary' ? 2000 : 1000) });
+    await h.at(0); await h.at(30000); await h.at(60000); await h.at(60001); await h.at(62001);
+    assert.deepEqual(h.switches.map(s => s.reason), ['faster-candidate']);
+    await h.engine.close();
+    const stable = harness({ bandwidth, current: 'backup', preferred: ['primary'], probe: node => good(node === 'backup' ? 50 : 900) });
+    await stable.at(0); await stable.at(300000); await stable.at(330000); await stable.at(360000);
+    assert.deepEqual(stable.switches, []);
+    await stable.engine.close();
+  }
 });
 
 test('enhanced switch probes promptly and recovers a failing new node without discarding its individual penalty', async () => {
