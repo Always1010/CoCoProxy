@@ -72,6 +72,7 @@ export function processSampleLoss(sample: ProcessSample, settings: BandwidthSett
 
 // Reuse the existing explanations so the overview and process never disagree on a reason.
 const existingReasons: Record<string, string> = {
+  'measurement-path-unavailable': 'coco.bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE',
   'waiting-traffic': 'coco.anWaitingForEvidenceOfSustainedSlow', 'waiting-idle': 'coco.anWaitingForIdleTrafficOrA',
   'budget-exhausted': 'coco.anAutomaticCheckBudgetIsInsufficientKeeping', 'measurement-unavailable': 'coco.anDownloadValidationServiceIsUnavailableNode',
   collecting: 'coco.anCollectingValidSamplesForTheCurrent', 'current-sufficient': 'coco.anCurrentLatencyIsNormalAndThroughput',

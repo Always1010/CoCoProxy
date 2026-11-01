@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import type { Duplex } from 'node:stream';
 import type { JsonObject } from '../packages/config/index.ts';
-import { BandwidthByteBudget, bandwidthBodyRequest, buildBandwidthConfig, runBandwidthTransfer, runDownloadVerification } from '../packages/management/bandwidth-transport.ts';
+import { BandwidthByteBudget, bandwidthBodyRequest, buildBandwidthConfig, checkBandwidthEgress, runBandwidthTransfer, runDownloadVerification } from '../packages/management/bandwidth-transport.ts';
 import { validateWithMihomo } from '../packages/mihomo/validator.ts';
 
 const source = (): JsonObject => ({ proxies: [
@@ -45,7 +45,7 @@ test('download verification paces only target demand, counts warmup and rejects 
   assert.equal(short.status, 'insufficient'); assert.equal(short.mbps, null);
 });
 
-test('isolated config retains exactly the selected leaf and resolvers without live controls or privileged marks', () => {
+test('isolated config preserves egress and refuses routes unavailable to the executed child', () => {
   const original = source(), before = structuredClone(original);
   const config = buildBandwidthConfig(original, 'Chosen,with punctuation', 23456);
   assert.deepEqual(original, before);
@@ -56,9 +56,13 @@ test('isolated config retains exactly the selected leaf and resolvers without li
   assert.deepEqual(config.proxies, [{ ...(original.proxies as JsonObject[])[0], name: 'BANDWIDTH-TARGET' }]);
   assert.equal(config['proxy-groups'], undefined); assert.equal(config['external-controller'], undefined);
   assert.equal(config.secret, undefined); assert.equal(config['mixed-port'], undefined);
-  assert.equal(config['interface-name'], undefined); assert.equal(config['routing-mark'], undefined);
+  assert.equal(config['interface-name'], 'test-egress'); assert.equal(config['routing-mark'], 123);
+  assert.throws(() => checkBandwidthEgress(config, 'linux', 'CapAmb:\t00000000\n'), { code: 'BANDWIDTH_PATH_UNAVAILABLE' });
+  assert.doesNotThrow(() => checkBandwidthEgress(config, 'linux', 'CapAmb:\t00003000\n'));
+  assert.doesNotThrow(() => checkBandwidthEgress(config, 'linux', 'CapBnd:\t00003000\n', true));
+  assert.throws(() => checkBandwidthEgress(config, 'win32', 'CapAmb:\t00003000\n'), { code: 'BANDWIDTH_PATH_UNAVAILABLE' });
   assert.deepEqual(config['rule-providers'], { 'dns-fixture': (original['rule-providers'] as JsonObject)['dns-fixture'] });
-  assert.deepEqual(config.dns, { enable: true, 'respect-rules': false, 'default-nameserver': ['192.0.2.53'], nameserver: ['https://resolver.example/dns-query'],
+  assert.deepEqual(config.dns, { enable: true, 'listen-routing-mark': 100, 'respect-rules': false, 'default-nameserver': ['192.0.2.53'], nameserver: ['https://resolver.example/dns-query'],
     'proxy-server-nameserver': ['192.0.2.53'],
     'nameserver-policy': { 'rule-set:dns-fixture': ['192.0.2.53#DIRECT'] },
     'proxy-server-nameserver-policy': { 'chosen.example': ['9.9.9.9'] } });
@@ -149,9 +153,11 @@ s.write('HTTP/1.1 200 Connection established\\r\\n\\r\\n');
 if(process.argv[3]==='tls-failure')setTimeout(()=>s.end('HTTP/1.1 200 not TLS\\r\\n\\r\\n'),10);
 });}).listen(c.port,'127.0.0.1');`);
   const keep = join(root, 'keep.txt'); await writeFile(keep, 'keep');
+  const unbound = source(); delete unbound['interface-name']; delete unbound['routing-mark'];
+  delete (unbound.dns as JsonObject)['listen-routing-mark'];
   for (const mode of ['invalid-config', 'cancel', 'tls-failure', 'timeout']) {
     const controller = new AbortController(); let child: ChildProcess | undefined, configPath = '', seenLatency = false;
-    const result = runBandwidthTransfer({ config: source(), node: 'Chosen,with punctuation', binaryPath: process.execPath,
+    const result = runBandwidthTransfer({ config: unbound, node: 'Chosen,with punctuation', binaryPath: process.execPath,
       stateDirectory: root, signal: controller.signal, limits: { durationMs: 100, maxBytes: 1_000_000, timeoutMs: mode === 'timeout' ? 600 : 4000 },
       report: update => { if (update.phase === 'latency') { seenLatency = true; if (mode === 'cancel') setTimeout(() => controller.abort(), 25); } },
     }, { start: (binary, args) => {

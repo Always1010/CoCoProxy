@@ -35,6 +35,7 @@ const reasonLabels = computed<Record<string, string>>(() => ({
   BANDWIDTH_TIMEOUT: t('coco.anTestTimeLimitReached'), BANDWIDTH_LIMIT: t('coco.anTrafficLimitReached'), BANDWIDTH_BYTE_LIMIT: t('coco.anTrafficLimitReached'), BANDWIDTH_SAMPLE_INSUFFICIENT: t('coco.anInsufficientValidSamples'),
   BANDWIDTH_UNAVAILABLE: t('coco.anNodeBandwidthTestingIsTemporarilyUnavailable'), BANDWIDTH_CANCELLED: t('coco.anTestCancelled2'),
   BANDWIDTH_CONFIG_INVALID: t('coco.anTemporaryTestConfigurationValidationFailedNo'),
+  BANDWIDTH_PATH_UNAVAILABLE: t('coco.bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE'),
 }))
 const reason = computed(() => task.value?.reason ? reasonLabels.value[task.value.reason] ?? t('coco.anTheTestCouldNotFullyComplete') : '')
 

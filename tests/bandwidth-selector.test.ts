@@ -222,6 +222,26 @@ test('busy traffic aborts verification as unknown without condemning other candi
   await f.engine.close();
 });
 
+test('unavailable measurement egress pauses the pool without repeated charges or claiming recovery', async () => {
+  let now = 0, attempts = 0;
+  const engine = createBandwidthSelector({ now: () => now,
+    probe: async () => ({ ok: true, delay: 100 }), select: async () => { throw new Error('must not switch'); },
+    measure: async () => { attempts++; throw Object.assign(new Error('private details'), { code: 'BANDWIDTH_PATH_UNAVAILABLE' }); } });
+  engine.update({ key: 'synthetic', generation: '1', probes: DEFAULT_AUTO_PROBES,
+    groups: [{ name: 'media', current: 'a', policy: { preferred: ['a', 'b'], fallback: [], returnToPreferred: false,
+      bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true } } }] });
+  engine.requestCheck('media');
+  for (now = 1000; now < 180000; now += 1000) {
+    engine.observe({ epoch: 'synthetic', download: 0, upload: 0, connections: [] });
+    engine.tick([{ name: 'media', ready: true }]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  assert.equal(attempts, 1);
+  assert.equal(engine.status('media')!.reason, 'measurement-path-unavailable');
+  assert.equal(engine.status('media')!.hourBytes, 0);
+  await engine.close();
+});
+
 test('fresh latency deterioration or incumbent recovery invalidates an otherwise worthwhile switch', async () => {
   for (const recovery of [false, true]) {
     const f = fixture({ currentMbps: recovery ? 8 : 5, delays: { a: recovery ? 500 : 80, b: 100 } });

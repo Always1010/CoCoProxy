@@ -33,7 +33,7 @@ type Pool = { name: string; current: string; nodes: Map<string, Node>; active: s
   started: number | null; spent: number; candidateDownloads: number;
   lastSwitch: { at: number; from: string; to: string } | null;
   phase: string; reason: string; candidate: string | null; testingNode: string | null; nextAt: number | null;
-  decision: ReturnType<typeof bandwidthDecision> };
+  decision: ReturnType<typeof bandwidthDecision>; pathUnavailable?: boolean };
 
 /** Low-priority, single-flight pool: a node's failed comparison never cools down its group. */
 export function createBandwidthSelector(options: {
@@ -132,8 +132,12 @@ export function createBandwidthSelector(options: {
   function launch(kind: NonNullable<typeof flight>['kind'], run: (signal: AbortSignal) => Promise<void>, pool?: Pool, node?: Node) {
     const job: NonNullable<typeof flight> = { abort: new AbortController(), done: Promise.resolve(), kind, pool, node, startedAt: options.now(), used: 0 };
     flight = job;
-    job.done = run(job.abort.signal).catch(() => {
+    job.done = run(job.abort.signal).catch(error => {
       if (pool && pools.get(pool.name) === pool) {
+        if (error && typeof error === 'object' && error.code === 'BANDWIDTH_PATH_UNAVAILABLE') {
+          pool.pathUnavailable = true; clearEvidence(pool);
+          note(pool, 'waiting', 'measurement-path-unavailable'); return;
+        }
         if (node && !storageFault) unknown(pool, node, 'sample-unknown');
         note(pool, 'waiting', storageFault ? 'storage-unavailable' : 'sample-unknown', storageFault?.nextAt ?? options.now() + UNKNOWN_WAIT);
       }
@@ -367,6 +371,7 @@ export function createBandwidthSelector(options: {
   function request(name: string, _node?: string, reason: Trigger = 'latency') {
     const p = pools.get(name);
     if (!p || closed) return false;
+    if (reason === 'manual') p.pathUnavailable = false;
     if (reason === 'latency') { p.urgentUntil = options.now() + 90000; p.positiveUntil = 0; }
     const previousTrigger = p.trigger;
     if (!p.trigger || reason === 'manual' || reason === 'latency') p.trigger = reason;
@@ -422,6 +427,7 @@ export function createBandwidthSelector(options: {
     const names = [...pools.keys()];
     for (let i = 0; i < names.length; i++) {
       const index = (fairCursor + i) % names.length, p = pools.get(names[index])!, s = settingsFor(p)!;
+      if (p.pathUnavailable) { note(p, 'waiting', 'measurement-path-unavailable'); continue; }
       if (!options.measure) { note(p, 'waiting', 'measurement-unavailable'); continue; }
       if (!p.trigger && suspect(p, s)) p.trigger = 'traffic';
       if (!p.trigger) continue;

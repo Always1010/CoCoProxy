@@ -1076,6 +1076,7 @@
     "bandwidthErrorBANDWIDTH_BUSY": "已有节点带宽测试正在运行，已读取当前任务。",
     "bandwidthErrorBANDWIDTH_NOT_OWNER": "此任务由另一个浏览器发起，仅可查看进度。",
     "bandwidthErrorBANDWIDTH_UNAVAILABLE": "节点带宽测试暂不可用，请确认核心已就绪。",
+    "bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE": "无法保证检测与业务使用相同出口，带宽检测已暂停；延迟自动选择不受影响。",
     "bandwidthErrorBANDWIDTH_NODE_INVALID": "请选择当前策略组中的具体代理节点。",
     "bandwidthErrorBANDWIDTH_NODE_CONFLICT": "节点或生效配置已变化，请刷新工作区后重试。",
     "bandwidthErrorBANDWIDTH_CLIENT_INVALID": "浏览器任务标识无效，请重新打开此页面。",

@@ -30,6 +30,7 @@ const phases = computed<Record<string, string>>(() => ({
   'failure-confirmation': t('coco.anRecheckingTheCurrentNode'), 'return-confirmation': t('coco.anConfirmingPreferredNodeRecovery'), backup: t('coco.anUsingFallback'), monitoring: t('coco.anMonitoringTheCurrentNode'),
 }))
 const reasons = computed<Record<string, string>>(() => ({
+  'measurement-path-unavailable': t('coco.bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE'),
   'waiting-traffic': t('coco.anWaitingForEvidenceOfSustainedSlow'), 'waiting-idle': t('coco.anWaitingForIdleTrafficOrA'), 'budget-exhausted': t('coco.anAutomaticCheckBudgetIsInsufficientKeeping'),
   'measurement-unavailable': t('coco.anDownloadValidationServiceIsUnavailableNode'), collecting: t('coco.anCollectingValidSamplesForTheCurrent'), 'current-sufficient': t('coco.anCurrentLatencyIsNormalAndThroughput'),
   'no-candidate': t('coco.anNoComparableCandidates'), 'candidate-unavailable': t('coco.anTheCandidateFailedTheLightweightCheck'), 'sample-unknown': t('coco.anSamplesAreInvalidOrInsufficientThe'),

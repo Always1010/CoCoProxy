@@ -38,6 +38,19 @@ test('automatic download verification shares the manual task slot until abort cl
   await service.close();
 });
 
+test('unavailable production egress stays explicit for automatic and manual tests', async () => {
+  const service = createBandwidthService({ snapshot: async () => target, isCurrent: async () => true,
+    transfer: async () => { throw Object.assign(new Error('private details'), { code: 'BANDWIDTH_PATH_UNAVAILABLE' }); } });
+  await assert.rejects(service.verify('node-b', generation, DEFAULT_BANDWIDTH_SETTINGS, new AbortController().signal, () => {}), { code: 'BANDWIDTH_PATH_UNAVAILABLE' });
+  assert.equal(service.busy(), false);
+  await service.fetch(request('POST', { node: 'node-b', expectedActive: generation }), principal);
+  await nextTurn();
+  const status = await service.fetch(request(), principal);
+  assert.equal(status.task?.reason, 'BANDWIDTH_PATH_UNAVAILABLE');
+  assert.equal(status.task?.download.mbps, null);
+  await service.close();
+});
+
 test('bandwidth task reserves globally before snapshot awaits and binds cancellation to the authenticated browser', async t => {
   const snapshot = deferred(), entered = deferred(), cleanup = deferred();
   let aborted = false;

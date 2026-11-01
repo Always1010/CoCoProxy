@@ -1076,6 +1076,7 @@
     "bandwidthErrorBANDWIDTH_BUSY": "A node bandwidth test is already running. The current task has been loaded.",
     "bandwidthErrorBANDWIDTH_NOT_OWNER": "Another browser started this task. You can only view its progress.",
     "bandwidthErrorBANDWIDTH_UNAVAILABLE": "Node bandwidth testing is temporarily unavailable. Confirm that the core is ready.",
+    "bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE": "The test cannot use the same egress as business traffic. Bandwidth testing is paused; latency-based automatic selection is unaffected.",
     "bandwidthErrorBANDWIDTH_NODE_INVALID": "Select an individual proxy node in the current policy group.",
     "bandwidthErrorBANDWIDTH_NODE_CONFLICT": "The node or active configuration has changed. Refresh the workspace and retry.",
     "bandwidthErrorBANDWIDTH_CLIENT_INVALID": "Invalid browser task ID. Reopen this page.",

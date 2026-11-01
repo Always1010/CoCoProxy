@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { Agent, request } from 'node:https';
 import { connect, createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
@@ -29,7 +29,7 @@ export function buildBandwidthConfig(config: JsonObject, node: string, port: num
       leaf['dialer-proxy'] !== undefined || leaf.dialer !== undefined || !Number.isInteger(port) || port < 1024 || port > 65535) throw failure();
   const dns: JsonObject = {};
   if (object(config.dns)) for (const [key, value] of Object.entries(config.dns)) {
-    if (key !== 'listen' && key !== 'listen-routing-mark') dns[key] = structuredClone(value);
+    if (key !== 'listen') dns[key] = structuredClone(value);
   }
   if (Object.keys(dns).length) dns['respect-rules'] = false;
   // DNS policies are still parsed with respect-rules disabled. Carry only their
@@ -49,10 +49,26 @@ export function buildBandwidthConfig(config: JsonObject, node: string, port: num
   }
   return { port, 'allow-lan': false, 'bind-address': '127.0.0.1', mode: 'rule', 'log-level': 'silent', ipv6: config.ipv6 === true,
     'geo-auto-update': false, profile: { 'store-selected': false, 'store-fake-ip': false }, tun: { enable: false },
-    // Native TUN excludes all local UIDs. The unprivileged manager uses host routes;
-    // copying the production SO_MARK would require capabilities its unit deliberately lacks.
+    // Preserve the production egress. A capability check below forbids falling back to host routes.
+    ...(config['interface-name'] === undefined ? {} : { 'interface-name': structuredClone(config['interface-name']) }),
+    ...(config['routing-mark'] === undefined ? {} : { 'routing-mark': structuredClone(config['routing-mark']) }),
     proxies: [{ ...structuredClone(leaf), name: 'BANDWIDTH-TARGET' }], rules: ['MATCH,BANDWIDTH-TARGET'],
     ...(Object.keys(providers).length ? { 'rule-providers': providers } : {}), ...(Object.keys(dns).length ? { dns } : {}) };
+}
+
+/** Executed children must inherit the capabilities needed by their configured socket options. */
+export function checkBandwidthEgress(config: JsonObject, platform: string, status: string, root = false): void {
+  const proxies = Array.isArray(config.proxies) ? config.proxies.filter(object) : [];
+  const sources = [config, ...proxies];
+  const marked = sources.some(c => Number(c['routing-mark'] ?? 0) !== 0)
+    || object(config.dns) && Number(config.dns['listen-routing-mark'] ?? 0) !== 0;
+  const bound = sources.some(c => typeof c['interface-name'] === 'string' && !!c['interface-name']);
+  if (!marked && !bound) return;
+  // NET_ADMIN handles SO_MARK on all supported Linux versions; NET_RAW handles device binding.
+  const capabilities = new RegExp(`^${root ? 'CapBnd' : 'CapAmb'}:\\s+([a-fA-F0-9]+)$`, 'm').exec(status);
+  const inherited = capabilities ? BigInt('0x' + capabilities[1]) : 0n;
+  if (platform !== 'linux' || marked && (inherited & 0x1000n) === 0n || bound && (inherited & 0x2000n) === 0n)
+    throw failure('BANDWIDTH_PATH_UNAVAILABLE');
 }
 
 /** Counts application body bytes, including probes and unacknowledged upload writes. */
@@ -230,6 +246,8 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
     emit({ phase: 'preparing' }); check();
     const port = await availablePort(); check();
     const config = buildBandwidthConfig(input.config, input.node, port);
+    checkBandwidthEgress(config, process.platform, process.platform === 'linux' ? await readFile('/proc/self/status', 'utf8') : '', process.getuid?.() === 0);
+    if (input.config['x-cocoproxy-host-proxy'] === true) throw failure('BANDWIDTH_PATH_UNAVAILABLE');
     const authentication = `task:${randomBytes(24).toString('hex')}`;
     config.authentication = [authentication];
     directory = await mkdtemp(join(input.stateDirectory, 'bandwidth-'));
@@ -304,11 +322,17 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
         }
       })();
       try {
-        while (!signal.aborted && bytes < limit) {
+        if (name === 'download') {
+          Object.assign(result, await runDownloadVerification({ warmupMs: 2000, minSampleMs: 3000,
+            durationMs: input.limits.durationMs, signal: lifetime.signal, budget, maxBytes: limit,
+            request: (size, sampleSignal, onBytes) => bandwidthBodyRequest({ agent: proxy!.agent, signal: sampleSignal, budget, method: 'GET', size, onBytes }),
+            report: total => progress(total - bytes) }));
+          failed = result.status === 'failed';
+        } else while (!signal.aborted && bytes < limit) {
           // Start small so slow links can complete a sample within the deadline.
           const size = Math.min(chunkSize, limit - bytes, budget.remaining - 131_072);
           if (size < 1024) { capped = true; break; }
-          const response = await bandwidthBodyRequest({ agent: proxy.agent, signal, budget, method: name === 'download' ? 'GET' : 'POST', size, onBytes: progress });
+          const response = await bandwidthBodyRequest({ agent: proxy.agent, signal, budget, method: 'POST', size, onBytes: progress });
           acknowledged += response.bytes;
           chunkSize = Math.max(16 * 1024, Math.min(2 * 1024 * 1024, Math.floor(response.bytes / Math.max(1, response.elapsedMs) * 500)));
         }
@@ -317,8 +341,10 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
       const elapsed = performance.now() - started;
       capped ||= bytes >= limit && elapsed < input.limits.durationMs;
       result.bytes = bytes;
-      result.status = lifetime.signal.aborted ? 'cancelled' : failed ? 'failed' : acknowledged < 1024 || elapsed < 500 ? 'insufficient' : 'success';
-      result.mbps = result.status === 'success' ? Math.round((name === 'download' ? bytes : acknowledged) * 8 / elapsed / 1000 * 100) / 100 : null;
+      if (name === 'upload') {
+        result.status = lifetime.signal.aborted ? 'cancelled' : failed ? 'failed' : acknowledged < 1024 || elapsed < 500 ? 'insufficient' : 'success';
+        result.mbps = result.status === 'success' ? Math.round(acknowledged * 8 / elapsed / 1000 * 100) / 100 : null;
+      }
       result.liveMbps = null;
       if (failed) reason = 'BANDWIDTH_UNAVAILABLE';
       else if (capped && reason !== 'BANDWIDTH_UNAVAILABLE') reason = 'BANDWIDTH_BYTE_LIMIT';
@@ -327,7 +353,7 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
     return { reason };
   } catch (error) {
     const code = timedOut ? 'BANDWIDTH_TIMEOUT' : input.signal.aborted ? 'BANDWIDTH_CANCELLED' :
-      error instanceof Error && 'code' in error && ['BANDWIDTH_BYTE_LIMIT', 'BANDWIDTH_CONFIG_INVALID'].includes(String(error.code))
+      error instanceof Error && 'code' in error && ['BANDWIDTH_BYTE_LIMIT', 'BANDWIDTH_CONFIG_INVALID', 'BANDWIDTH_PATH_UNAVAILABLE'].includes(String(error.code))
         ? String(error.code) : 'BANDWIDTH_UNAVAILABLE';
     throw failure(code);
   } finally {
@@ -340,10 +366,10 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
   }
 }
 
-/** Known offered load, one bounded request at a time. A paced result proves at most targetMbps. */
+/** Shared download window and warmup accounting; optional pacing proves at most targetMbps. */
 export async function runDownloadVerification(input: {
-  targetMbps: number; warmupMs: number; minSampleMs: number; durationMs: number; signal: AbortSignal;
-  budget: BandwidthByteBudget;
+  targetMbps?: number; warmupMs: number; minSampleMs: number; durationMs: number; signal: AbortSignal;
+  budget: BandwidthByteBudget; maxBytes?: number;
   request: (size: number, signal: AbortSignal, onBytes: (bytes: number) => void) => Promise<{ bytes: number; elapsedMs: number }>;
   report: (bytes: number) => void;
 }): Promise<BandwidthDirection> {
@@ -351,18 +377,20 @@ export async function runDownloadVerification(input: {
   const timer = setTimeout(() => phase.abort(), input.durationMs);
   const started = performance.now();
   let bytes = 0, sampleBytes = 0, sampleAt = 0, failed = false;
-  const offeredBytesPerMs = input.targetMbps * 125 * 1.25;
-  const chunk = Math.max(16384, Math.min(1048576, Math.floor(offeredBytesPerMs * 500)));
+  const offeredBytesPerMs = input.targetMbps === undefined ? null : input.targetMbps * 125 * 1.25;
+  let chunk = offeredBytesPerMs === null ? 16384 : Math.max(16384, Math.min(1048576, Math.floor(offeredBytesPerMs * 500)));
   try {
     while (!signal.aborted && input.budget.remaining > 131072) {
-      const size = Math.min(chunk, input.budget.remaining - 65536), slot = performance.now();
-      await input.request(size, signal, count => {
+      const size = Math.min(chunk, input.budget.remaining - 65536, (input.maxBytes ?? Infinity) - bytes), slot = performance.now();
+      if (size < 1024) break;
+      const response = await input.request(size, signal, count => {
         bytes += count;
         const at = performance.now();
         if (!sampleAt && at - started >= input.warmupMs) { sampleAt = at; sampleBytes = bytes; }
         input.report(bytes);
       });
-      await pause(Math.max(0, size / offeredBytesPerMs - (performance.now() - slot)), signal);
+      if (offeredBytesPerMs !== null) await pause(Math.max(0, size / offeredBytesPerMs - (performance.now() - slot)), signal);
+      else chunk = Math.max(16384, Math.min(1048576, Math.floor(response.bytes / Math.max(1, response.elapsedMs) * 500)));
     }
   } catch { failed = !signal.aborted; }
   finally { clearTimeout(timer); phase.abort(); }
@@ -370,5 +398,5 @@ export async function runDownloadVerification(input: {
   const status = input.signal.aborted ? 'cancelled' : failed ? 'failed'
     : elapsed < input.minSampleMs || bytes - sampleBytes < 1024 ? 'insufficient' : 'success';
   return { status, bytes, liveMbps: null, sampleMs: elapsed, warmupMs: sampleAt ? sampleAt - started : performance.now() - started,
-    mbps: status === 'success' ? Math.min(input.targetMbps, (bytes - sampleBytes) * 8 / elapsed / 1000) : null };
+    mbps: status === 'success' ? Math.min(input.targetMbps ?? Infinity, (bytes - sampleBytes) * 8 / elapsed / 1000) : null };
 }
