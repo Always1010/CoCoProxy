@@ -9,13 +9,14 @@ import { parseBandwidthHistory, type BandwidthRound } from '../packages/manageme
 function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateMbps?: number; currentMbps?: number;
   preferred?: string[]; fallback?: string[]; rates?: Record<string, number[]>; delays?: Record<string, number>;
   settings?: Partial<BandwidthSettings>; bytes?: number; ledger?: BandwidthLedger; blocked?: boolean; storageFails?: boolean;
-  load?: () => Promise<BandwidthLedger>; save?: (value: BandwidthLedger, attempt: number) => Promise<void> } = {}) {
+  measureSeconds?: number; load?: () => Promise<BandwidthLedger>; save?: (value: BandwidthLedger, attempt: number) => Promise<void> } = {}) {
   let now = 0, total = 0, loads = 0, saves = 0;
   const diagnostics: BandwidthStorageDiagnostic[] = [];
   const measures: string[] = [], switches: string[] = [], saved: BandwidthLedger[] = [], probes: string[] = [];
   const starts: { node: string; at: number }[] = [];
   const traces = new Map<string, BandwidthRound>();
   const counts = new Map<string, number>();
+  let completion: { at: number; resolve: () => void } | undefined;
   const snapshot: AutoSnapshot = { key: 'synthetic', scope: 'scope', generation: '1', probes: DEFAULT_AUTO_PROBES,
     groups: [{ name: 'media', current: 'a', policy: { preferred: options.preferred ?? ['a', 'b'], fallback: options.fallback ?? [], returnToPreferred: true,
       bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, ...options.settings, enabled: options.enabled ?? true, observeOnly: options.observeOnly ?? false } } }] };
@@ -28,6 +29,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
     select: async (_s, _g, node) => { switches.push(node); snapshot.groups[0].current = node; snapshot.generation = String(Number(snapshot.generation) + 1); return true; },
     measure: async (_s, node, _settings, signal, report) => {
       measures.push(node); starts.push({ node, at: now }); report(options.bytes ?? 1000000);
+      if (options.measureSeconds) await new Promise<void>(resolve => { completion = { at: now + options.measureSeconds! * 1000, resolve }; });
       if (options.blocked) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
       const count = counts.get(node) ?? 0; counts.set(node, count + 1);
       const rates = options.rates?.[node];
@@ -38,6 +40,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
   return { engine, snapshot, measures, starts, switches, saved, probes, traces, diagnostics, get loads() { return loads; }, get saves() { return saves; }, get now() { return now; },
     async step(bytes = 0, ready = true) {
       now += 1000; total += bytes;
+      if (completion && now >= completion.at) { const done = completion; completion = undefined; done.resolve(); await new Promise<void>(resolve => setImmediate(resolve)); }
       engine.update(snapshot);
       engine.observe({ epoch: 'one', download: total, upload: 0,
         connections: [{ id: 'one', outbound: 'a', download: total, upload: 0, sourceIP: '192.0.2.1', host: 'media.example', process: 'Unknown', inboundUser: 'Unknown' }] });
@@ -71,8 +74,47 @@ test('legacy opt-out performs no ledger or network work; sustained low traffic o
   await f.engine.close();
 });
 
+test('a bounded pair finishes real-duration downloads before evidence expires, including a slower fallback', async () => {
+  const f = fixture({ currentMbps: 3.8, candidateMbps: 6, preferred: ['a'], fallback: ['b'], delays: { a: 170, b: 322 },
+    measureSeconds: 11, settings: { targetMbps: 6, confirmRounds: 3, roundIntervalSeconds: 60, searchMiB: 48 } });
+  f.engine.requestCheck('media');
+  for (let i = 0; i < 180 && !f.switches.length; i++) await f.step();
+  assert.deepEqual(f.switches, ['b']);
+  assert.deepEqual(f.measures, ['a', 'b', 'a', 'b', 'a', 'b']);
+  assert.ok(f.now <= 160000);
+  await f.engine.close();
+});
+
+test('one healthy sample cannot end a traffic investigation and new sustained slow traffic overrides old positive evidence', async () => {
+  const f = fixture({ currentMbps: 8 });
+  for (let i = 0; i < 65; i++) await f.step(50000);
+  while (f.measures.length < 1) await f.step();
+  await f.step();
+  assert.notEqual([...f.traces.values()][0].reason, 'current-sufficient');
+  for (let i = 0; i < 60 && ![...f.traces.values()][0].endedAt; i++) await f.step();
+  assert.equal([...f.traces.values()][0].reason, 'current-sufficient');
+  assert.equal(f.measures.filter(n => n === 'a').length, 2);
+  for (let i = 0; i < 65; i++) await f.step(50000);
+  assert.ok(f.traces.size >= 2);
+  assert.equal([...f.traces.values()].at(-1)!.endedAt, null);
+  assert.ok(f.now < 900000);
+  await f.engine.close();
+});
+
+test('changing only the lightweight target rechecks latency without discarding fresh download evidence', async () => {
+  const f = fixture(); f.engine.requestCheck('media');
+  for (let i = 0; i < 90 && f.measures.length < 3; i++) await f.step();
+  assert.equal(f.measures.length, 3);
+  f.engine.invalidateProbeTarget();
+  f.engine.observeProbe('media', 'a', { ok: true, delay: 80 });
+  f.engine.observeProbe('media', 'b', { ok: true, delay: 150 });
+  for (let i = 0; i < 60 && !f.switches.length; i++) await f.step();
+  assert.deepEqual(f.switches, ['b']); assert.equal(f.measures.length, 4);
+  await f.engine.close();
+});
+
 test('uncertain candidate and observation mode keep the current selection; persisted budget survives restart', async () => {
-  for (const options of [{ candidateMbps: 5 }, { observeOnly: true }]) {
+  for (const options of [{ candidateMbps: 4.5 }, { observeOnly: true }]) {
     const f = fixture(options); f.engine.request('media', 'b');
     for (let i = 0; i < 150; i++) await f.step();
     assert.deepEqual(f.switches, []);

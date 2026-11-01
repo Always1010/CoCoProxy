@@ -291,6 +291,7 @@ export function createAutomaticSelector(options: Options) {
       if (at < candidate.due) return [];
       return [{ group: g, node: candidate.node, target: candidate.target, priority, run: async (result, end) => {
         if (g.search !== search) return;
+        if (search.kind === 'slow' && !sameTarget(candidate.target, activeTarget(s))) { finishSearch(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { candidate.due = retry; return; }
         if (healthy(result) && better(candidate.node, Math.max(candidate.delay, result.delay!), end)) {
@@ -322,6 +323,7 @@ export function createAutomaticSelector(options: Options) {
     return batch.nodes.filter(node => !batch.results.has(node)).map(node => ({ group: g, node, target: batch.target, priority,
       run: (result: ProbeResult, end: number) => {
         if (g.search !== search) return;
+        if (search.kind === 'slow' && !sameTarget(batch.target, activeTarget(s))) { finishSearch(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { search.due = retry; return; }
         batch.results.set(node, result);
@@ -351,6 +353,7 @@ export function createAutomaticSelector(options: Options) {
     if (candidate) {
       return [{ group: g, node: candidate.node, target: activeTarget(s), priority: 2, run: async (result, end) => {
         if (g.returning !== returning || g.search || g.secondaryAt !== null) return;
+        if (!sameTarget(returning.target, activeTarget(s))) { returnFailed(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { returning.due = retry; return; }
         candidate.delay = Math.max(candidate.delay, result.delay ?? Infinity);
@@ -364,6 +367,7 @@ export function createAutomaticSelector(options: Options) {
     return returning.nodes.filter(node => !returning.results.has(node)).map(node => ({ group: g, node, target: activeTarget(s), priority: 2,
       run: (result: ProbeResult, end: number) => {
         if (g.returning !== returning || g.search || g.secondaryAt !== null) return;
+        if (!sameTarget(returning.target, activeTarget(s))) { returnFailed(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { returning.due = retry; return; }
         returning.results.set(node, result);

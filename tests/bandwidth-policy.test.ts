@@ -36,12 +36,13 @@ test('conservative gain prices switching and uncertainty rather than rewarding b
   assert.ok(bandwidthDecision(current, samples(150, [12, 12]), defaults, at)?.worthwhile);
   assert.equal(bandwidthDecision(current, samples(900, [12, 12]), defaults, at)?.guard, false);
   assert.equal(bandwidthDecision(current, samples(50, [1, 12]), defaults, at)?.worthwhile, false);
-  const close = samples(80, [6, 6]), better = samples(150, [8, 8]);
+  const close = samples(180, [6.4, 6.4]), better = samples(150, [8, 8]);
   assert.equal(bandwidthDecision(close, better, defaults, at, 0, false, { unfamiliar: false })?.worthwhile, true);
   assert.equal(bandwidthDecision(close, better, defaults, at, 0, true)?.worthwhile, false);
   assert.equal(bandwidthDecision(close, better, defaults, at)?.worthwhile, false);
-  const preferred = bandwidthDecision(current, better, defaults, at, 0, false, { candidatePreferred: true, currentPreferred: true })!;
-  const fallback = bandwidthDecision(current, better, defaults, at, 0, false, { candidatePreferred: false, currentPreferred: true })!;
+  const adequate = samples(400, [8, 8]);
+  const preferred = bandwidthDecision(adequate, better, defaults, at, 0, false, { candidatePreferred: true, currentPreferred: true })!;
+  const fallback = bandwidthDecision(adequate, better, defaults, at, 0, false, { candidatePreferred: false, currentPreferred: true })!;
   assert.ok(fallback.rank > preferred.rank && fallback.threshold > preferred.threshold);
   assert.equal(bandwidthLoss(80, 8, defaults), bandwidthLoss(80, 100, defaults));
   assert.equal(bandwidthDecision(current, better, defaults, at + 61000), null);
@@ -52,6 +53,18 @@ test('conservative gain prices switching and uncertainty rather than rewarding b
   assert.equal(bandwidthSamples([{ at: 0, delayMs: 100, mbps: 8 }, { at: 150000, delayMs: 100, mbps: 8 }], defaults, 150000).length, 1);
   assert.equal(bandwidthSamples([{ at: 0, delayMs: 100, mbps: 8 }, { at: 20000, delayMs: 100, mbps: 8 }], defaults, 20000).length, 1);
   assert.equal(bandwidthSamples([{ at: 0, delayMs: 100, mbps: 8 }, { at: 30000, delayMs: 100, mbps: 0 }], defaults, at).length, 0);
+});
+
+test('confirmed shortage removes preference barriers while retaining measured gain, guards and switch costs', () => {
+  const settings = { ...defaults, targetMbps: 6 };
+  const samples = (delayMs: number, mbps: number) => [0, 30000].map(at => ({ at, delayMs, mbps }));
+  const preference = { currentPreferred: true, candidatePreferred: false };
+  const current = samples(170, 3.8), candidate = samples(322, 6);
+  assert.equal(bandwidthDecision(current, candidate, settings, 30000, 0, false, preference)?.worthwhile, true);
+  assert.equal(bandwidthDecision(current, candidate, { ...settings, switchCostSeconds: 120 }, 30000, 0, false, preference)?.worthwhile, false);
+  assert.equal(bandwidthDecision(current, samples(322, 3.9), settings, 30000, 0, false, preference)?.worthwhile, false);
+  assert.equal(bandwidthDecision(current, samples(900, 6), settings, 30000, 0, false, preference)?.guard, false);
+  assert.equal(bandwidthDecision(current.slice(1), candidate, settings, 30000), null);
 });
 
 test('maximum configured sampling interval allows bounded scheduling delay without reviving expired evidence', () => {

@@ -144,6 +144,10 @@ export function bandwidthInterval(samples: BandwidthSample[], settings: Bandwidt
     delay: Math.max(...values.map(s => s.delayMs)), mbps: Math.min(...values.map(s => s.mbps)) };
 }
 export type BandwidthPreference = { unfamiliar?: boolean; currentPreferred?: boolean; candidatePreferred?: boolean };
+export function bandwidthDegraded(samples: BandwidthSample[], settings: BandwidthSettings, at: number) {
+  const values = bandwidthSamples(samples, settings, at);
+  return values.length >= settings.confirmRounds && values.every(s => s.mbps < settings.targetMbps * settings.suspectRatio);
+}
 export function bandwidthThreshold(currentLow: number, settings: BandwidthSettings, recentSwitches = 0, reverse = false,
   preference: BandwidthPreference = {}) {
   const cost = (settings.switchCostSeconds + settings.recentCostSeconds * recentSwitches + (reverse ? settings.reverseCostSeconds : 0)) / settings.horizonSeconds
@@ -158,8 +162,11 @@ export function bandwidthDecision(current: BandwidthSample[], candidate: Bandwid
   at: number, recentSwitches = 0, reverse = false, preference: BandwidthPreference = {}) {
   const from = bandwidthInterval(current, settings, at), to = bandwidthInterval(candidate, settings, at);
   if (!from || !to) return null;
-  const uncertainty = preference.unfamiliar !== false ? settings.unfamiliarPenaltyMs / 1000 : 0;
-  const { cost, threshold } = bandwidthThreshold(from.low, settings, recentSwitches, reverse, preference);
+  const degraded = bandwidthDegraded(current, settings, at);
+  // Confirmed shortage changes the objective to recovery. Measured variation and switching costs still apply.
+  const uncertainty = !degraded && preference.unfamiliar !== false ? settings.unfamiliarPenaltyMs / 1000 : 0;
+  const { cost, threshold } = bandwidthThreshold(from.low, settings, recentSwitches, reverse,
+    degraded ? { ...preference, currentPreferred: false } : preference);
   const guard = bandwidthGuard(from, to, settings), gain = from.low - to.high - uncertainty;
   return { current: from, candidate: to, gain, cost, threshold, uncertainty, guard,
     rank: to.high + uncertainty + (preference.candidatePreferred === false ? settings.fallbackPenaltyMs / 1000 : 0),
