@@ -493,7 +493,10 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         managed.append('cocoproxy-web.service')
     preserved = ['cocoproxy-mihomo.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']
     def properties(unit, names):
-        return run([systemctl, 'show', unit, '--property=' + ','.join(names)]).decode().strip()
+        # systemd does not promise property output order across daemon-reload.
+        # Compare values, not a D-Bus serialization order.
+        return dict(line.split('=', 1) for line in run([systemctl, 'show', unit,
+            '--property=' + ','.join(names)]).decode().splitlines() if '=' in line)
     stable = {unit: properties(unit, ['ActiveState', 'MainPID', 'ExecMainStartTimestampMonotonic', 'UnitFileState']) for unit in preserved}
     network = regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None
     before = {}
@@ -519,7 +522,8 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
                  for unit, value in stable.items()), 'REMOTE_FRONTEND_RUNTIME_CHANGED')
         need((regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None) == network, 'REMOTE_NETWORK_RECEIPT_CHANGED')
     progress = {'status': 'running', 'phase': 'release-preinstall', 'manifestSha256': options.manifest_sha256,
-                'previousServices': before, 'components': components, 'deployment': 'preserve-runtime'}
+                'previousServices': before, 'components': components, 'deployment': 'preserve-runtime',
+                'previousRuntime': stable, 'previousNetworkSha256': hashlib.sha256(network).hexdigest() if network is not None else None}
     replace(journal, progress)
     try:
         preinstall_release(installer, common)
@@ -558,7 +562,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
             management_ready(candidate['management'])
         # The pinned launcher must still recognize the current committed state,
         # including after a future systemd crash restart. It is never repointed.
-        if 'ActiveState=active' in stable['cocoproxy-mihomo.service']:
+        if stable['cocoproxy-mihomo.service'].get('ActiveState') == 'active':
             status = json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
                 Path(candidate['runtime']['sourceDirectory']).parent / 'source/apps/cli/main.ts', 'runtime-status',
                 '--state-dir', candidate['runtime']['stateDirectory'], '--runtime-settings', candidate['runtime']['settingsPath']]))

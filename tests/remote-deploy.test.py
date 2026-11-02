@@ -34,7 +34,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                     deploy.run(args)
                 self.assertEqual(json.loads(output.getvalue()), {'phase': 'deployment-command', 'code': code, 'exitCode': 1, **fields})
 
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False, stage_failure=False, failure_at=None, rollback_failure=False, network_active=None):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False, stage_failure=False, failure_at=None, rollback_failure=False, network_active=None, reordered_properties=False):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -149,7 +149,11 @@ class RemoteDeploymentTests(unittest.TestCase):
                 if action == 'show':
                     if args[3].startswith('--property='):
                         pid = '99' if runtime_changed and any('upgrade' in event and '--apply' in event for event in events) else '42'
-                        return ('ActiveState=' + ('active' if active[args[2]] else 'inactive') + '\nMainPID=' + pid + '\nExecMainStartTimestampMonotonic=1234\nUnitFileState=' + enabled[args[2]]).encode()
+                        rows = ['ActiveState=' + ('active' if active[args[2]] else 'inactive'), 'MainPID=' + pid,
+                            'ExecMainStartTimestampMonotonic=1234', 'UnitFileState=' + enabled[args[2]]]
+                        if reordered_properties and any('upgrade' in event and '--apply' in event for event in events):
+                            rows.reverse()
+                        return '\n'.join(rows).encode()
                     return (('active' if active[args[2]] else 'inactive') if args[4] == 'ActiveState' else enabled[args[2]]).encode()
                 for unit in args[2:]:
                     if action in ['start', 'stop']:
@@ -194,7 +198,7 @@ class RemoteDeploymentTests(unittest.TestCase):
     def test_compatible_default_and_management_updates_keep_the_pinned_runtime(self):
         for component in [None, 'backend', 'management']:
             with self.subTest(component=component):
-                temporary, stack, private, before, events, router, args = self.scenario(component=component, preserve_runtime=True)
+                temporary, stack, private, before, events, router, args = self.scenario(component=component, preserve_runtime=True, reordered_properties=True)
                 with temporary, stack:
                     deploy.main_locked(args)
                     installed = json.loads((private / 'deployment.json').read_text())
