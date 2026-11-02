@@ -63,6 +63,31 @@ export function createFixtures(initial = 'normal') {
   }
   const proxies = () => Object.fromEntries([...groups().map(g => proxy(g.name)), ...nodes.map(proxy), proxy('DIRECT'), proxy('REJECT')].map(p => [p.name, p]));
   const siteView = () => ({ ...clone(sites), revision: siteRevision, workspaceRevision: revision, scope: 'preview', groups: groups().map(g => g.name) });
+  function usage(body) {
+    const entries = nodes.length ? [
+      { sourceIP: '192.0.2.20', host: 'video.example', outbound: nodes[0], chain: ['Streaming', 'Proxy', nodes[0]], rule: 'DomainSuffix', rulePayload: 'video.example', recorded: true, upload: 1024, download: 8e6 },
+      { sourceIP: '192.0.2.20', host: 'video.example', outbound: nodes[0], chain: ['Google', 'Proxy', nodes[0]], rule: 'Domain', rulePayload: 'video.example', recorded: true, upload: 2048, download: 2e6 },
+      { sourceIP: '192.0.2.20', host: 'api.example', outbound: 'DIRECT', recorded: false, upload: 512, download: 4e6 },
+      { sourceIP: '192.0.2.20', host: '198.51.100.8', outbound: 'DIRECT', chain: ['DIRECT'], rule: 'Match', rulePayload: '', recorded: true, upload: 256, download: 1e6 },
+    ] : [];
+    const found = entries.filter(row => Object.entries(body.filters ?? {}).every(([key, value]) => row[key] === value));
+    const grouped = new Map();
+    for (const entry of found) {
+      const key = body.dimension === 'route' ? JSON.stringify([entry.chain, entry.rule, entry.rulePayload, entry.outbound]) : entry[body.dimension];
+      if (key === undefined) continue;
+      const row = grouped.get(key) ?? { label: body.dimension === 'route' ? entry.outbound : key, upload: 0, download: 0, total: 0, count: 0,
+        ...(body.dimension === 'route' ? { key, chain: entry.chain, rule: entry.rule, rulePayload: entry.rulePayload, recorded: entry.recorded } : {}) };
+      row.upload += entry.upload; row.download += entry.download; row.total = row.upload + row.download; row.count++;
+      grouped.set(key, row);
+    }
+    const rows = [...grouped.values()].filter(row => row.label.toLowerCase().includes((body.search ?? '').toLowerCase()));
+    const field = body.sort ?? 'total', direction = body.order === 'asc' ? 1 : -1;
+    rows.sort((a, b) => direction * (field === 'label' ? a.label.localeCompare(b.label) : a[field] - b[field]));
+    const page = body.page ?? 0, pageSize = body.pageSize ?? 50;
+    return { rows: rows.slice(page * pageSize, (page + 1) * pageSize), totalRows: rows.length, page, pageSize, aliases: {}, resolution: 'minute', collecting: true,
+      status: { startedAt: body.startTime, lastSampleAt: Date.now(), lastCommittedAt: Date.now(), detailAvailableFrom: Date.now() - 30 * 86400000 },
+      ...(body.overview ? { summary: { upload: found.reduce((sum, row) => sum + row.upload, 0), download: found.reduce((sum, row) => sum + row.download, 0), sources: found.length ? 1 : 0, unattributed: 0 }, trend: [], gapCount: 0 } : {}) };
+  }
   function respond(method, rawPath, body = {}) {
     const path = new URL(rawPath, 'http://localhost').pathname;
     const ok = data => ({ status: 200, data: clone(data) });
@@ -76,6 +101,7 @@ export function createFixtures(initial = 'normal') {
     if (!loggedIn) return error('UNAUTHORIZED', 401);
     if (path === '/api/session' && method === 'GET') return ok({ authenticated: true, username: 'UI 预览', expiresAt: Date.now() + 86400000 });
     if (scenario === 'error' && ['/api/cocoproxy/workspace', '/api/clash/proxies', '/api/clash/version'].includes(path)) return error('MANAGEMENT_UNAVAILABLE', 503);
+    if (path === '/api/cocoproxy/usage/query' && method === 'POST') return scenario === 'error' ? error('USAGE_UNAVAILABLE', 503) : ok(usage(body));
     if (path === '/api/cocoproxy/workspace') {
       if (method === 'GET') return ok(view());
       if (method === 'PUT' && body.expectedRevision === revision && body.settings) {

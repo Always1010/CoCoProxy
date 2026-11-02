@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { IconArrowsExchange, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCpu, IconDevices, IconDownload, IconEdit, IconInfoCircle, IconListDetails, IconRefresh, IconSearch, IconSelector, IconSum, IconUpload, IconUser, IconWorld, IconX } from '@tabler/icons-vue'
+import { IconArrowsExchange, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCpu, IconDevices, IconDownload, IconEdit, IconInfoCircle, IconListDetails, IconRefresh, IconRoute, IconSearch, IconSelector, IconSum, IconUpload, IconUser, IconWorld, IconX } from '@tabler/icons-vue'
 import { onClickOutside, onKeyStroke } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { cocoproxyErrorMessage, useCoCoProxy } from '~/composables/useCoCoProxy'
 import { formatBytes } from '~/utils'
+import { usageTarget } from '~/utils/usage-rules'
 
 const { t, locale } = useI18n()
 useHead({ title: computed(() => t('coco.pzUsageCocoproxy')) })
@@ -49,6 +50,8 @@ const detailErrorSource = shallowRef<(() => string) | null>(null)
 const detailError = computed(() => detailErrorSource.value?.() ?? '')
 const noteErrorSource = shallowRef<(() => string) | null>(null)
 const noteError = computed(() => noteErrorSource.value?.() ?? '')
+const ruleDialog = ref<{ open: (host: string) => void }>()
+const ruleEditing = ref(false)
 const editing = ref(false)
 const noteIP = ref('')
 const note = ref('')
@@ -202,7 +205,7 @@ watch(editing, async (open) => {
 })
 onMounted(() => {
   void refresh()
-  timer = setInterval(() => { if (!document.hidden && !busy.value && !detailBusy.value && !expandedBusy.value && !editing.value) void refresh(true) }, 5000)
+  timer = setInterval(() => { if (!document.hidden && !busy.value && !detailBusy.value && !expandedBusy.value && !editing.value && !ruleEditing.value) void refresh(true) }, 5000)
 })
 onBeforeUnmount(() => {
   clearInterval(timer); overviewVersion++; detailVersion++
@@ -280,7 +283,7 @@ onBeforeUnmount(() => {
     </div>
     <section class="rounded-xl border border-base-content/10 bg-base-200/60">
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-base-content/10 p-4">
-        <h2 class="flex min-w-0 items-center gap-2 font-semibold"><IconListDetails :size="20" />{{ t('coco.pzUsageDetails') }}<span v-if="selected" class="truncate text-xs font-normal text-base-content/60">{{ display(selected) }}{{ view === 'sourceIP' && aliases[selected] ? `(${aliases[selected]})` : '' }}</span><span class="inline-flex shrink-0 items-center gap-1 text-xs font-normal text-base-content/60" :class="{ invisible: !detailBusy }" :aria-hidden="!detailBusy" role="status"><IconRefresh :size="12" :class="{ 'animate-spin': detailBusy }" />{{ t('coco.pzLoading2') }}</span></h2>
+        <h2 class="flex min-w-0 items-center gap-2 font-semibold"><IconListDetails :size="20" />{{ t('coco.pzUsageDetails') }}<span v-if="selected" class="truncate text-xs font-normal text-base-content/60">{{ display(selected) }}{{ view === 'sourceIP' && aliases[selected] ? `(${aliases[selected]})` : '' }}</span><span class="inline-flex shrink-0 items-center gap-1 text-xs font-normal text-base-content/60" :class="{ invisible: !detailBusy }" :aria-hidden="!detailBusy" role="status"><IconRefresh :size="12" :class="{ 'animate-spin': detailBusy }" />{{ t('coco.pzLoading2') }}</span><span v-if="view === 'host' && selected && usageTarget(selected)" class="tooltip tooltip-bottom shrink-0" :data-tip="t('coco.usageRuleAdd')"><button type="button" class="btn btn-ghost btn-xs" :title="t('coco.usageRuleAdd')" :aria-label="t('coco.usageRuleAddFor', { host: selected! })" @click="ruleDialog?.open(selected!)"><IconRoute :size="14" aria-hidden="true" /></button></span></h2>
         <label class="flex items-center gap-2 text-xs"><IconSearch :size="14" /><input v-model="detailSearch" type="search" class="input input-bordered input-sm" :aria-label="t('coco.pzSearchUsageDetails')" :placeholder="t('coco.pzSearchIpNoteOrHost')" /></label>
       </div>
       <p v-if="detailError" class="p-4 text-sm text-warning" role="alert">{{ detailError }}</p>
@@ -289,7 +292,7 @@ onBeforeUnmount(() => {
           <thead><tr><th v-for="column in [{ key: 'label', label: detailDimension === 'sourceIP' ? t('coco.pzSourceIp') : t('coco.pzHosts') }, { key: 'upload', label: t('coco.pzUpload') }, { key: 'download', label: t('coco.pzDownload') }, { key: 'total', label: t('coco.pzTotal') }]" :key="column.key"><button class="inline-flex items-center gap-1 whitespace-nowrap" type="button" :aria-label="t('coco.pzSortBy', { column: column.label })" @click="changeSort(column.key as Sort)">{{ column.label }}<IconSelector :size="14" /><span v-if="sort === column.key">{{ order === 'desc' ? '↓' : '↑' }}</span></button></th></tr></thead>
           <tbody>
             <template v-for="row in details?.rows ?? []" :key="row.label">
-              <tr class="hover:bg-base-content/5"><td class="max-w-[55vw] sm:max-w-none"><div class="flex items-center gap-2"><button type="button" class="inline-flex min-w-0 items-center gap-1 text-left" :aria-expanded="!!expanded[row.label]" @click="toggle(row)"><IconChevronDown v-if="!!expanded[row.label]" :size="14" class="shrink-0" /><IconChevronRight v-else :size="14" class="shrink-0" /><span class="truncate font-mono text-xs">{{ display(row.label) }}{{ detailDimension === 'sourceIP' && aliases[row.label] ? `(${aliases[row.label]})` : '' }}</span></button><button v-if="detailDimension === 'sourceIP' && isAddress(row.label)" type="button" class="btn btn-ghost btn-xs shrink-0" @click="editNote(row.label)"><IconEdit :size="12" />{{ t('coco.pzNote') }}</button></div></td><td class="whitespace-nowrap">{{ formatBytes(row.upload) }}</td><td class="whitespace-nowrap">{{ formatBytes(row.download) }}</td><td class="whitespace-nowrap font-bold text-primary">{{ formatBytes(row.total) }}</td></tr>
+              <tr class="hover:bg-base-content/5"><td class="max-w-[55vw] sm:max-w-none"><div class="flex items-center gap-2"><button type="button" class="inline-flex min-w-0 items-center gap-1 text-left" :aria-expanded="!!expanded[row.label]" @click="toggle(row)"><IconChevronDown v-if="!!expanded[row.label]" :size="14" class="shrink-0" /><IconChevronRight v-else :size="14" class="shrink-0" /><span class="truncate font-mono text-xs">{{ display(row.label) }}{{ detailDimension === 'sourceIP' && aliases[row.label] ? `(${aliases[row.label]})` : '' }}</span></button><button v-if="detailDimension === 'sourceIP' && isAddress(row.label)" type="button" class="btn btn-ghost btn-xs shrink-0" @click="editNote(row.label)"><IconEdit :size="12" />{{ t('coco.pzNote') }}</button><span v-if="detailDimension === 'host' && usageTarget(row.label)" class="tooltip tooltip-bottom shrink-0" :data-tip="t('coco.usageRuleAdd')"><button type="button" class="btn btn-ghost btn-xs" :title="t('coco.usageRuleAdd')" :aria-label="t('coco.usageRuleAddFor', { host: row.label })" @click="ruleDialog?.open(row.label)"><IconRoute :size="14" aria-hidden="true" /></button></span></div></td><td class="whitespace-nowrap">{{ formatBytes(row.upload) }}</td><td class="whitespace-nowrap">{{ formatBytes(row.download) }}</td><td class="whitespace-nowrap font-bold text-primary">{{ formatBytes(row.total) }}</td></tr>
               <tr v-if="expanded[row.label]"><td colspan="4" class="bg-base-content/5 p-4">
                 <p class="mb-2 flex items-center gap-2 text-xs text-base-content/60">{{ view === 'outbound' ? t('coco.pzSourceIp') : t('coco.usageRoute') }}<span :class="{ invisible: !expanded[row.label]!.busy }" :aria-hidden="!expanded[row.label]!.busy" role="status">{{ t('coco.pzLoading') }}</span></p>
                 <p v-if="expanded[row.label]!.error" class="mb-2 text-xs text-error" role="alert">{{ expanded[row.label]!.error?.() }}</p>
@@ -308,6 +311,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="flex items-center justify-between gap-2 border-t border-base-content/10 p-3 text-xs"><button type="button" class="btn btn-ghost btn-sm" :disabled="detailPage === 0 || detailBusy" @click="detailPage--; loadDetails()"><IconChevronLeft :size="14" />{{ t('coco.pzPrevious') }}</button><span>{{ detailPage + 1 }} / {{ Math.max(1, Math.ceil((details?.totalRows ?? 0) / pageSize)) }} · {{ t('coco.pzItemCount', { count: details?.totalRows ?? 0 }) }}</span><button type="button" class="btn btn-ghost btn-sm" :disabled="(detailPage + 1) * pageSize >= (details?.totalRows ?? 0) || detailBusy" @click="detailPage++; loadDetails()">{{ t('coco.pzNext') }}<IconChevronRight :size="14" /></button></div>
     </section>
+    <UsageRuleDialog ref="ruleDialog" @opened="ruleEditing = $event" />
     <dialog ref="noteDialog" class="m-auto w-[calc(100%-2rem)] max-w-sm rounded-xl border border-base-content/10 bg-base-200 p-5 text-base-content shadow-xl backdrop:bg-black/60" aria-labelledby="source-note-title" @cancel.prevent="!saving && (editing = false)">
       <form @submit.prevent="saveNote">
         <h2 id="source-note-title" class="font-semibold">{{ t('coco.pzEditSourceNote') }}</h2><p class="mt-3 break-all font-mono text-sm">{{ noteIP }}</p>

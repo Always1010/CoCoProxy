@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
 import test from 'node:test';
 import ts from '../tooling/node_modules/typescript/lib/typescript.js';
+import * as usageRules from '../integrations/metacubexd/overlay/packages/ui/utils/usage-rules.ts';
+import { customRuleTargets } from '../integrations/metacubexd/overlay/packages/ui/utils/group-rules.ts';
 
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/pages/traffic.vue', import.meta.url), 'utf8');
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
@@ -137,4 +139,87 @@ test('usage refresh failures retain matching results but never expose results fr
   assert.equal(ui.overview.value, null);
   assert.equal(ui.details.value, null);
   assert.equal(ui.error.value, '读取失败');
+});
+
+test('quick routing validates domains and exact IPs, normalizes networks and preserves unrelated rules', () => {
+  const { usageTarget, usageRuleDefault, usageRulePlan, usageRulePayload } = usageRules;
+  assert.deepEqual(usageRuleDefault(usageTarget('Video.Example.')!), { type: 'DOMAIN', payload: 'video.example' });
+  assert.deepEqual(usageRuleDefault(usageTarget('192.0.2.8')!), { type: 'IP-CIDR', payload: '192.0.2.8/32' });
+  assert.deepEqual(usageRuleDefault(usageTarget('[2001:db8::8]')!), { type: 'IP-CIDR6', payload: '2001:db8::8/128' });
+  assert.equal(usageRulePayload('IP-CIDR', '192.0.2.8/24'), '192.0.2.0/24');
+  assert.equal(usageRulePayload('IP-CIDR6', '2001:db8::8/64'), '2001:db8::/64');
+  for (const bad of ['Unknown', 'Unattributed', 'Inner', 'https://video.example', 'video.example:443', '127.1', '999.1.1.1', '0127.0.0.1', '0x7f000001', '::invalid', 'video.example,Proxy']) assert.equal(usageTarget(bad), null, bad);
+  for (const [type, payload] of [['IP-CIDR', '2001:db8::1/32'], ['IP-CIDR6', '192.0.2.1/32'], ['IP-CIDR', '192.0.2.1/33'], ['DOMAIN', '192.0.2.1']] as const) assert.equal(usageRulePayload(type, payload), null);
+  const rules = ['DOMAIN,unrelated.example,Other', 'DOMAIN,video.example,Domestic', 'DOMAIN,VIDEO.EXAMPLE,Stream'];
+  const result = usageRulePlan(rules, 'DOMAIN', 'Video.Example', 'Work')!;
+  assert.equal(result.conflicts.length, 2);
+  assert.deepEqual(result.rules, ['DOMAIN,video.example,Work', rules[0]]);
+  assert.equal(usageRulePlan(result.rules, 'DOMAIN', 'video.example', 'Work')!.duplicate, true);
+  assert.equal(usageRulePlan(['IP-CIDR,192.0.2.8/24,DIRECT,no-resolve'], 'IP-CIDR', '192.0.2.0/24', 'Work')!.conflicts.length, 1);
+});
+
+async function quickRuleDialog(initial: string[] = [], mode = 'local') {
+  const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/UsageRuleDialog.vue', import.meta.url), 'utf8');
+  const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
+    '\nglobalThis.ui = { panel, open, reread, submit, type, payload, target, replace, canSave, plan, needsRead, savedAttempt, error, feedback };';
+  const settings = { mode, subscriptionId: mode === 'subscription' ? 'profile-a' : null, sourceIds: ['source-a'], runMode: 'rule',
+    local: { selections: {}, rules: [...initial] }, subscriptionOverrides: { 'profile-a': { selections: {}, rules: [...initial] } } };
+  const view = { value: { workspace: { ...settings, revision: 1 }, pending: false,
+    groups: [{ name: 'Work', role: 'service' }, { name: 'Stream', role: 'service' }, { name: 'Shared', role: 'shared' }] } };
+  const overrides = () => mode === 'local' ? settings.local : settings.subscriptionOverrides['profile-a'];
+  let saves = 0, failApply = false, failRead = false;
+  const context: any = { ...uiTestContext, ...usageRules, customRuleTargets,
+    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    defineEmits: () => () => {}, defineExpose() {}, watch() {},
+    cocoproxyErrorMessage: () => '合成请求失败',
+    useWorkspace: () => ({ view, workspace: { get value() { return view.value.workspace; } }, overrides: { get value() { return overrides(); } }, busy: { value: false },
+      load: async () => { if (failRead) throw Error('read failed'); },
+      run: async (action: () => Promise<void>) => action(),
+      editOverrides: (draft: typeof settings) => mode === 'local' ? draft.local : draft.subscriptionOverrides['profile-a'],
+      save: async (edit: (draft: typeof settings) => void) => {
+        saves++; edit(settings); view.value.workspace.revision++;
+        if (failApply) { view.value.pending = true; throw Error('apply failed'); }
+        view.value.pending = false;
+      } }),
+  };
+  new Script(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText).runInNewContext(context);
+  context.ui.panel.value = { open() {}, close() {} };
+  return { ui: context.ui, settings, view, saves: () => saves, failApply(value: boolean) { failApply = value; }, failRead(value: boolean) { failRead = value; } };
+}
+
+test('quick routing requires explicit conflict replacement, scopes subscription overrides and blocks stale or unapplied settings', async () => {
+  const h = await quickRuleDialog(['DOMAIN,video.example,DIRECT'], 'subscription');
+  await h.ui.open('video.example'); h.ui.target.value = 'Work';
+  assert.equal(h.ui.canSave.value, false);
+  await h.ui.submit(); assert.equal(h.saves(), 0);
+  h.ui.replace.value = true; assert.equal(h.ui.canSave.value, true);
+  await h.ui.submit(); assert.equal(h.saves(), 1);
+  assert.deepEqual(Array.from(h.settings.subscriptionOverrides['profile-a'].rules), ['DOMAIN,video.example,Work']);
+  assert.deepEqual(h.settings.local.rules, ['DOMAIN,video.example,DIRECT']);
+  assert.match(h.ui.feedback.value, /已生效/);
+  assert.equal(h.ui.canSave.value, false);
+  const pending = await quickRuleDialog(); pending.view.value.pending = true;
+  await pending.ui.open('192.0.2.8'); pending.ui.target.value = 'Work';
+  assert.equal(pending.ui.canSave.value, false); await pending.ui.submit(); assert.equal(pending.saves(), 0);
+  const stale = await quickRuleDialog(); await stale.ui.open('video.example'); stale.ui.target.value = 'Work';
+  stale.view.value.workspace.revision++; await stale.ui.submit(); assert.equal(stale.saves(), 0);
+  const direct = await quickRuleDialog(); direct.view.value.workspace.runMode = 'direct';
+  await direct.ui.open('video.example'); direct.ui.target.value = 'Work'; await direct.ui.submit();
+  assert.match(direct.ui.feedback.value, /切回规则模式/);
+});
+
+test('quick routing distinguishes saved rules from activation and retries only its own verified revision', async () => {
+  const h = await quickRuleDialog(); await h.ui.open('2001:db8::8'); h.ui.target.value = 'Work'; h.failApply(true);
+  await h.ui.submit(); assert.equal(h.saves(), 1); assert.equal(h.ui.needsRead.value, true);
+  assert.match(h.ui.error.value, /已保存/); assert.equal(h.ui.feedback.value, '');
+  await h.ui.submit(true); assert.equal(h.saves(), 1);
+  h.failRead(true); await h.ui.reread(); assert.equal(h.ui.needsRead.value, true);
+  h.failRead(false); await h.ui.reread(); assert.equal(h.ui.needsRead.value, false);
+  h.failApply(false); await h.ui.submit(true); assert.equal(h.saves(), 2);
+  assert.match(h.ui.feedback.value, /已生效/);
+  assert.deepEqual(Array.from(h.settings.local.rules), ['IP-CIDR6,2001:db8::8/128,Work']);
+  const changed = await quickRuleDialog(); await changed.ui.open('video.example'); changed.ui.target.value = 'Work'; changed.failApply(true);
+  await changed.ui.submit(); await changed.ui.reread();
+  changed.view.value.workspace.revision++;
+  await changed.ui.submit(true); assert.equal(changed.saves(), 1); assert.equal(changed.ui.needsRead.value, true);
 });

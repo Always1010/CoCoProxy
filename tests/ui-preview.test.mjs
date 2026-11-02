@@ -21,6 +21,11 @@ test('preview selection uses real revision receipts and scenario reset discards 
   fixtures.respond('POST', '/api/__preview/scenario', { scenario: 'normal' });
   assert.deepEqual(fixtures.respond('GET', '/api/cocoproxy/workspace').data.workspace, before.workspace);
   assert.equal(fixtures.respond('POST', '/api/cocoproxy/unimplemented', {}).status, 501);
+  const usage = body => fixtures.respond('POST', '/api/cocoproxy/usage/query', { startTime: Date.now() - 86400000, endTime: Date.now(), ...body }).data;
+  assert.equal(usage({ dimension: 'host' }).rows.length, 3);
+  const paths = usage({ dimension: 'route', filters: { host: 'video.example' } }).rows;
+  assert.equal(paths.length, 2); assert.equal(paths[0].label, paths[1].label);
+  assert.notDeepEqual(paths[0].chain, paths[1].chain);
 });
 
 test('empty/error/timeout scenarios preserve authentication and expose the intended UI state', () => {
