@@ -8,7 +8,7 @@ import ts from '../tooling/node_modules/typescript/lib/typescript.js';
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/pages/traffic.vue', import.meta.url), 'utf8');
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
 const code = ts.transpileModule(script.replace(/^import .*$/gm, '') + `
-globalThis.ui = { refresh, select, toggle, view, selected, range, overview, details, expandedRows,
+globalThis.ui = { refresh, select, toggle, loadExpanded, changeSort, view, selected, range, overview, details, expanded,
   busy, refreshing, detailBusy, expandedBusy, error, detailError };
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 
@@ -43,14 +43,14 @@ test('usage background refresh retains displayed data and keeps refresh and deta
   const { ui, data, setReply } = harness();
   await ui.refresh();
   await ui.toggle(ui.details.value.rows[0]);
-  const overview = ui.overview.value, details = ui.details.value, children = ui.expandedRows.value, range = ui.range.value;
+  const overview = ui.overview.value, details = ui.details.value, children = ui.expanded.value['example.test'].rows, range = ui.range.value;
   let complete!: () => void;
   const pending = new Promise<void>(resolve => { complete = resolve; });
   const observed: { kind: string; busy: boolean; retained: boolean }[] = [];
   setReply(async body => {
     if (body.overview) await pending;
     else if (body.filters.host) {
-      observed.push({ kind: 'expanded', busy: ui.expandedBusy.value, retained: ui.expandedRows.value === children });
+      observed.push({ kind: 'expanded', busy: ui.expandedBusy.value, retained: ui.expanded.value['example.test'].rows === children });
     } else {
       observed.push({ kind: 'detail', busy: ui.detailBusy.value, retained: ui.details.value === details });
     }
@@ -65,8 +65,39 @@ test('usage background refresh retains displayed data and keeps refresh and deta
   await updating;
   assert.deepEqual(observed, [{ kind: 'detail', busy: false, retained: true }, { kind: 'expanded', busy: false, retained: true }]);
   assert.equal(ui.busy.value, false);
-  assert.notEqual(ui.overview.value, overview);
+  assert.equal(ui.overview.value, overview);
+  assert.equal(ui.details.value, details);
+  assert.equal(ui.expanded.value['example.test'].rows, children);
   assert.notEqual(ui.range.value, range);
+});
+
+test('usage expansions are independent and late responses cannot reopen a closed or replaced row', async () => {
+  const { ui, data, setReply } = harness();
+  await ui.refresh();
+  await ui.toggle({ label: 'first.example' });
+  await ui.toggle({ label: 'second.example' });
+  assert.deepEqual(Object.keys(ui.expanded.value), ['first.example', 'second.example']);
+  const second = ui.expanded.value['second.example'];
+  second.page = 1;
+  setReply(async body => {
+    if (body.filters?.host === 'first.example') throw new Error('synthetic row failure');
+    return data(body);
+  });
+  await ui.loadExpanded('first.example', true);
+  assert.match(ui.expanded.value['first.example'].error(), /显示上次数据/);
+  assert.equal(second.error, null);
+  assert.equal(second.page, 1);
+
+  let complete!: () => void;
+  setReply(async body => { await new Promise<void>(resolve => { complete = resolve; }); return data(body); });
+  const pending = ui.loadExpanded('first.example');
+  await ui.toggle({ label: 'first.example' });
+  complete(); await pending;
+  assert.equal(ui.expanded.value['first.example'], undefined);
+  assert.equal(ui.expanded.value['second.example'], second);
+  setReply(async body => data(body));
+  await ui.select('192.0.2.30');
+  assert.deepEqual(Object.keys(ui.expanded.value), []);
 });
 
 test('usage refresh failures retain matching results but never expose results from another query', async () => {

@@ -31,10 +31,9 @@ const overview = ref<Result | null>(null)
 const details = ref<Result | null>(null)
 const aliases = ref<Record<string, string>>({})
 const selected = ref<string | null>(null)
-const expanded = ref<string | null>(null)
-const expandedRows = ref<Row[]>([])
-const expandedPage = ref(0)
-const expandedTotal = ref(0)
+interface ExpandedRow { rows: Row[]; page: number; total: number; busy: boolean; error: (() => string) | null; key: string; version: number }
+const expanded = ref<Record<string, ExpandedRow>>({})
+const expandedBusy = computed(() => Object.values(expanded.value).some(row => row.busy))
 const rankPage = ref(0)
 const detailPage = ref(0)
 const rankSearch = ref('')
@@ -44,7 +43,6 @@ const order = ref<'asc' | 'desc'>('desc')
 const busy = ref(false)
 const refreshing = ref(false)
 const detailBusy = ref(false)
-const expandedBusy = ref(false)
 const errorSource = shallowRef<(() => string) | null>(null)
 const error = computed(() => errorSource.value?.() ?? '')
 const detailErrorSource = shallowRef<(() => string) | null>(null)
@@ -61,12 +59,17 @@ const infoContainer = ref<HTMLElement>()
 const infoButton = ref<HTMLButtonElement>()
 const infoClose = ref<HTMLButtonElement>()
 const pageSize = 50
-let overviewVersion = 0, detailVersion = 0, expandedVersion = 0
+let overviewVersion = 0, detailVersion = 0
 let controller: AbortController | undefined
 let detailController: AbortController | undefined
-let expandedController: AbortController | undefined
+const expandedControllers = new Map<string, AbortController>()
 let timer: ReturnType<typeof setInterval> | undefined
-let overviewKey = '', detailKey = '', expandedKey = ''
+let overviewKey = '', detailKey = ''
+const assignChanged = <T,>(current: T, next: T): T => JSON.stringify(current) === JSON.stringify(next) ? current : next
+function clearExpanded() {
+  for (const controller of expandedControllers.values()) controller.abort()
+  expandedControllers.clear(); expanded.value = {}
+}
 const current = computed(() => options.value.find(option => option.value === view.value)!)
 const detailDimension = computed<Dimension>(() => view.value === 'host' ? 'sourceIP' : 'host')
 const isAddress = (value: string | null) => !!value && !['Inner', 'Unattributed'].includes(value)
@@ -97,9 +100,9 @@ async function refresh(background = false) {
   busy.value = true; refreshing.value = !background
   const key = JSON.stringify([view.value, rangeDays.value, rangeDays.value === -1 ? [customStart.value, customEnd.value] : null, rankPage.value, rankSearch.value])
   if (key !== overviewKey) {
-    detailVersion++; expandedVersion++; detailController?.abort(); expandedController?.abort()
-    detailBusy.value = false; expandedBusy.value = false
-    overview.value = null; details.value = null; expanded.value = null; expandedRows.value = []; errorSource.value = null
+    detailVersion++; detailController?.abort(); clearExpanded()
+    detailBusy.value = false
+    overview.value = null; details.value = null; errorSource.value = null
     overviewKey = key
   }
   try {
@@ -109,9 +112,9 @@ async function refresh(background = false) {
     const nextRange = { startTime, endTime }
     const result = await query({ dimension: view.value, overview: true, page: rankPage.value, pageSize, search: rankSearch.value }, controller.signal, nextRange)
     if (version !== overviewVersion) return
-    range.value = nextRange; overview.value = result; aliases.value = result.aliases; errorSource.value = null
+    range.value = nextRange; overview.value = assignChanged(overview.value, result); aliases.value = assignChanged(aliases.value, result.aliases); errorSource.value = null
     if (selected.value === null || !result.rows.some(row => row.label === selected.value)) {
-      selected.value = result.rows[0]?.label ?? null; detailPage.value = 0; expanded.value = null; expandedRows.value = []
+      selected.value = result.rows[0]?.label ?? null; detailPage.value = 0; clearExpanded()
     }
     await loadDetails(background)
   } catch (cause) {
@@ -129,33 +132,43 @@ async function loadDetails(background = false) {
   try {
     const result = await query({ dimension: detailDimension.value, filters: filters(), sort: sort.value, order: order.value, search: detailSearch.value, page: detailPage.value, pageSize }, detailController.signal)
     if (version !== detailVersion) return
-    details.value = result; detailErrorSource.value = null
-    if (expanded.value) await loadExpanded(background)
+    details.value = assignChanged(details.value, result); detailErrorSource.value = null
+    const labels = result.rows.map(row => row.label).filter(label => expanded.value[label])
+    let next = 0
+    await Promise.all(Array.from({ length: Math.min(4, labels.length) }, async () => {
+      while (next < labels.length && version === detailVersion) await loadExpanded(labels[next++]!, background)
+    }))
   } catch (cause) { if (version === detailVersion) detailErrorSource.value = details.value ? () => t('coco.pzUpdateFailedShowingPreviousData') : () => cocoproxyErrorMessage(cause, t) }
   finally { if (version === detailVersion) detailBusy.value = false }
 }
 
 async function select(label: string) {
-  expandedVersion++; expandedController?.abort(); expandedBusy.value = false
-  selected.value = label; detailPage.value = 0; expanded.value = null; expandedRows.value = []
+  clearExpanded()
+  selected.value = label; detailPage.value = 0
   await loadDetails()
 }
-async function loadExpanded(background = false) {
-  const version = ++expandedVersion
-  expandedController?.abort(); expandedController = new AbortController()
-  if (!expanded.value) { expandedBusy.value = false; return }
-  const key = JSON.stringify([detailKey, expanded.value, expandedPage.value])
-  if (key !== expandedKey) { expandedRows.value = []; expandedTotal.value = 0; expandedKey = key }
-  expandedBusy.value = !background
+async function loadExpanded(label: string, background = false) {
+  const state = expanded.value[label]
+  if (!state) return
+  const version = ++state.version
+  expandedControllers.get(label)?.abort()
+  const controller = new AbortController(); expandedControllers.set(label, controller)
+  const key = JSON.stringify([view.value, selected.value, rangeDays.value, customStart.value, customEnd.value, label, state.page])
+  if (key !== state.key) { state.rows = []; state.total = 0; state.error = null; state.key = key }
+  state.busy = !background
   try {
-    const result = await query({ dimension: view.value === 'outbound' ? 'sourceIP' : 'outbound', filters: { ...filters(), [detailDimension.value]: expanded.value }, page: expandedPage.value, pageSize }, expandedController.signal)
-    if (version === expandedVersion) { expandedRows.value = result.rows; expandedTotal.value = result.totalRows }
-  } catch (cause) { if (version === expandedVersion) detailErrorSource.value = expandedRows.value.length ? () => t('coco.pzUpdateFailedShowingPreviousData') : () => cocoproxyErrorMessage(cause, t) }
-  finally { if (version === expandedVersion) expandedBusy.value = false }
+    const result = await query({ dimension: view.value === 'outbound' ? 'sourceIP' : 'outbound', filters: { ...filters(), [detailDimension.value]: label }, page: state.page, pageSize }, controller.signal)
+    if (expanded.value[label] === state && version === state.version) { state.rows = assignChanged(state.rows, result.rows); state.total = result.totalRows; state.error = null }
+  } catch (cause) {
+    if (expanded.value[label] === state && version === state.version) state.error = state.rows.length ? () => t('coco.pzUpdateFailedShowingPreviousData') : () => cocoproxyErrorMessage(cause, t)
+  } finally {
+    if (expanded.value[label] === state && version === state.version) { state.busy = false; expandedControllers.delete(label) }
+  }
 }
 async function toggle(row: Row) {
-  if (expanded.value === row.label) { expanded.value = null; expandedVersion++; expandedController?.abort(); expandedBusy.value = false; return }
-  expanded.value = row.label; expandedPage.value = 0; expandedRows.value = []; await loadExpanded()
+  if (expanded.value[row.label]) { expandedControllers.get(row.label)?.abort(); expandedControllers.delete(row.label); delete expanded.value[row.label]; return }
+  expanded.value[row.label] = { rows: [], page: 0, total: 0, busy: false, error: null, key: '', version: 0 }
+  await loadExpanded(row.label)
 }
 function changeSort(field: Sort) {
   order.value = sort.value === field && order.value === 'desc' ? 'asc' : 'desc'
@@ -175,8 +188,8 @@ async function saveNote() {
   finally { saving.value = false }
 }
 function reset() {
-  detailVersion++; expandedVersion++; detailController?.abort(); expandedController?.abort(); detailBusy.value = false; expandedBusy.value = false
-  selected.value = null; details.value = null; expanded.value = null; rankPage.value = 0; detailPage.value = 0
+  detailVersion++; detailController?.abort(); clearExpanded(); detailBusy.value = false
+  selected.value = null; details.value = null; rankPage.value = 0; detailPage.value = 0
   void refresh()
 }
 watch([view, rangeDays], reset)
@@ -192,8 +205,8 @@ onMounted(() => {
   timer = setInterval(() => { if (!document.hidden && !busy.value && !detailBusy.value && !expandedBusy.value && !editing.value) void refresh(true) }, 5000)
 })
 onBeforeUnmount(() => {
-  clearInterval(timer); overviewVersion++; detailVersion++; expandedVersion++
-  controller?.abort(); detailController?.abort(); expandedController?.abort()
+  clearInterval(timer); overviewVersion++; detailVersion++
+  controller?.abort(); detailController?.abort(); clearExpanded()
 })
 </script>
 
@@ -276,8 +289,14 @@ onBeforeUnmount(() => {
           <thead><tr><th v-for="column in [{ key: 'label', label: detailDimension === 'sourceIP' ? t('coco.pzSourceIp') : t('coco.pzHosts') }, { key: 'upload', label: t('coco.pzUpload') }, { key: 'download', label: t('coco.pzDownload') }, { key: 'total', label: t('coco.pzTotal') }]" :key="column.key"><button class="inline-flex items-center gap-1 whitespace-nowrap" type="button" :aria-label="t('coco.pzSortBy', { column: column.label })" @click="changeSort(column.key as Sort)">{{ column.label }}<IconSelector :size="14" /><span v-if="sort === column.key">{{ order === 'desc' ? '↓' : '↑' }}</span></button></th></tr></thead>
           <tbody>
             <template v-for="row in details?.rows ?? []" :key="row.label">
-              <tr class="hover:bg-base-content/5"><td class="max-w-[55vw] sm:max-w-none"><div class="flex items-center gap-2"><button type="button" class="inline-flex min-w-0 items-center gap-1 text-left" :aria-expanded="expanded === row.label" @click="toggle(row)"><IconChevronDown v-if="expanded === row.label" :size="14" class="shrink-0" /><IconChevronRight v-else :size="14" class="shrink-0" /><span class="truncate font-mono text-xs">{{ display(row.label) }}{{ detailDimension === 'sourceIP' && aliases[row.label] ? `(${aliases[row.label]})` : '' }}</span></button><button v-if="detailDimension === 'sourceIP' && isAddress(row.label)" type="button" class="btn btn-ghost btn-xs shrink-0" @click="editNote(row.label)"><IconEdit :size="12" />{{ t('coco.pzNote') }}</button></div></td><td class="whitespace-nowrap">{{ formatBytes(row.upload) }}</td><td class="whitespace-nowrap">{{ formatBytes(row.download) }}</td><td class="whitespace-nowrap font-bold text-primary">{{ formatBytes(row.total) }}</td></tr>
-              <tr v-if="expanded === row.label"><td colspan="4" class="bg-base-content/5 p-4"><p class="mb-2 flex items-center gap-2 text-xs text-base-content/60">{{ view === 'outbound' ? t('coco.pzSourceIp') : t('coco.pzOutbounds') }}<span :class="{ invisible: !expandedBusy }" :aria-hidden="!expandedBusy" role="status">{{ t('coco.pzLoading') }}</span></p><div v-for="child in expandedRows" :key="child.label" class="flex flex-wrap justify-between gap-2 py-1 text-xs"><span class="break-all">{{ display(child.label) }}{{ view === 'outbound' && aliases[child.label] ? `(${aliases[child.label]})` : '' }}</span><span>↑ {{ formatBytes(child.upload) }} · ↓ {{ formatBytes(child.download) }} · {{ formatBytes(child.total) }}</span></div><p v-if="!expandedBusy && !expandedRows.length" class="text-xs text-base-content/50">{{ t('coco.pzNoDetails') }}</p><div v-if="expandedTotal > pageSize" class="mt-2 flex justify-between"><button class="btn btn-ghost btn-xs" type="button" :disabled="expandedPage === 0 || expandedBusy" @click="expandedPage--; loadExpanded()"><IconChevronLeft :size="14" />{{ t('coco.pzPrevious') }}</button><button class="btn btn-ghost btn-xs" type="button" :disabled="(expandedPage + 1) * pageSize >= expandedTotal || expandedBusy" @click="expandedPage++; loadExpanded()">{{ t('coco.pzNext') }}<IconChevronRight :size="14" /></button></div></td></tr>
+              <tr class="hover:bg-base-content/5"><td class="max-w-[55vw] sm:max-w-none"><div class="flex items-center gap-2"><button type="button" class="inline-flex min-w-0 items-center gap-1 text-left" :aria-expanded="!!expanded[row.label]" @click="toggle(row)"><IconChevronDown v-if="!!expanded[row.label]" :size="14" class="shrink-0" /><IconChevronRight v-else :size="14" class="shrink-0" /><span class="truncate font-mono text-xs">{{ display(row.label) }}{{ detailDimension === 'sourceIP' && aliases[row.label] ? `(${aliases[row.label]})` : '' }}</span></button><button v-if="detailDimension === 'sourceIP' && isAddress(row.label)" type="button" class="btn btn-ghost btn-xs shrink-0" @click="editNote(row.label)"><IconEdit :size="12" />{{ t('coco.pzNote') }}</button></div></td><td class="whitespace-nowrap">{{ formatBytes(row.upload) }}</td><td class="whitespace-nowrap">{{ formatBytes(row.download) }}</td><td class="whitespace-nowrap font-bold text-primary">{{ formatBytes(row.total) }}</td></tr>
+              <tr v-if="expanded[row.label]"><td colspan="4" class="bg-base-content/5 p-4">
+                <p class="mb-2 flex items-center gap-2 text-xs text-base-content/60">{{ view === 'outbound' ? t('coco.pzSourceIp') : t('coco.pzOutbounds') }}<span :class="{ invisible: !expanded[row.label]!.busy }" :aria-hidden="!expanded[row.label]!.busy" role="status">{{ t('coco.pzLoading') }}</span></p>
+                <p v-if="expanded[row.label]!.error" class="mb-2 text-xs text-error" role="alert">{{ expanded[row.label]!.error?.() }}</p>
+                <div v-for="child in expanded[row.label]!.rows" :key="child.label" class="flex flex-wrap justify-between gap-2 py-1 text-xs"><span class="break-all">{{ display(child.label) }}{{ view === 'outbound' && aliases[child.label] ? `(${aliases[child.label]})` : '' }}</span><span>↑ {{ formatBytes(child.upload) }} · ↓ {{ formatBytes(child.download) }} · {{ formatBytes(child.total) }}</span></div>
+                <p v-if="!expanded[row.label]!.busy && !expanded[row.label]!.rows.length && !expanded[row.label]!.error" class="text-xs text-base-content/50">{{ t('coco.pzNoDetails') }}</p>
+                <div v-if="expanded[row.label]!.total > pageSize" class="mt-2 flex justify-between"><button class="btn btn-ghost btn-xs" type="button" :disabled="expanded[row.label]!.page === 0 || expanded[row.label]!.busy" @click="expanded[row.label]!.page--; loadExpanded(row.label)"><IconChevronLeft :size="14" />{{ t('coco.pzPrevious') }}</button><button class="btn btn-ghost btn-xs" type="button" :disabled="(expanded[row.label]!.page + 1) * pageSize >= expanded[row.label]!.total || expanded[row.label]!.busy" @click="expanded[row.label]!.page++; loadExpanded(row.label)">{{ t('coco.pzNext') }}<IconChevronRight :size="14" /></button></div>
+              </td></tr>
             </template>
             <tr v-if="!details?.rows.length && !detailBusy"><td colspan="4" class="py-8 text-center text-base-content/50">{{ overview?.resolution === 'day' ? t('coco.pzOnlyDailySourceSummariesAreRetainedForThisRange') : t('coco.pzNoUsageDetails') }}</td></tr>
           </tbody>
