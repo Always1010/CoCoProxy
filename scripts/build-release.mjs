@@ -30,7 +30,7 @@ const fail = code => { throw Object.assign(new Error(code), { code }); };
 export function buildFailureMessage(error) {
   const code = error.code?.startsWith('BUILD_') ? error.code : 'BUILD_FAILED';
   const guidance = {
-    BUILD_DEPLOY_FAILED: '构建与发行包核验已通过，部署阶段失败。请查看上方部署错误及服务名称；服务可能尚未恢复，需审核中断状态后处理。',
+    BUILD_DEPLOY_FAILED: '构建与发行包核验已通过，部署阶段失败。请查看上方 deployment-recovery：restored 表示已恢复旧版服务，not-needed 表示运行服务未变；其他结果须审核中断状态。失败不会被当作部署成功。',
     BUILD_FRONTEND_BASE_UPGRADE_REQUIRED: '旧安装缺少新版局部更新基线。核心一致时先用 --components management 更新一次；核心变化时使用全量构建部署。',
     BUILD_FRONTEND_BACKEND_CHANGED: '本次需要复用的非前端输入已变化，不能按 frontend 更新。',
     BUILD_FRONTEND_BASE_REQUIRED: '未找到可核验的管理服务基线；核对安装，或使用 --base-release 指定已有发行目录。',

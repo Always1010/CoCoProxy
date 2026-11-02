@@ -34,7 +34,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                     deploy.run(args)
                 self.assertEqual(json.loads(output.getvalue()), {'phase': 'deployment-command', 'code': code, 'exitCode': 1, **fields})
 
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False, stage_failure=False):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False, stage_failure=False, failure_at=None, rollback_failure=False, network_active=None):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -70,13 +70,24 @@ class RemoteDeploymentTests(unittest.TestCase):
             manifest['componentUpdate'] = {'schemaVersion': 1, 'components': component, 'baseManifestSha256': component_base * 64, 'reusedInputSha256': 'f' * 64}
         events = []
         active = {'cocoproxy-management.service': True, 'cocoproxy-mihomo.service': core_active,
-            'cocoproxy-gateway-network.service': core_active, 'cocoproxy-gateway-guard.service': True}
+            'cocoproxy-gateway-network.service': core_active if network_active is None else network_active, 'cocoproxy-gateway-guard.service': True}
         enabled = {key: 'enabled' if 'management' in key or 'guard' in key else 'static' for key in active}
         router = {'enabled': router_enabled}
 
-        def run(args, timeout=120):
+        injected = set()
+        def inject(phase):
+            if failure_at == phase and phase not in injected:
+                injected.add(phase)
+                raise RuntimeError('REMOTE_SYNTHETIC_PHASE_FAILURE')
+        def run(args, timeout=120, input=None):
             args = [str(item) for item in args]
             events.append(args)
+            if any(item.replace('\\', '/').endswith('/apps/deployment/rollback.ts') for item in args):
+                if rollback_failure:
+                    raise RuntimeError('INSTALL_ROLLBACK_SYNTHETIC_FAILURE')
+                context = json.loads(input)
+                self.assertEqual(context['previousInput'], before)
+                return json.dumps({'restored': True, 'manifestSha256': context['previousReceipt']['manifestSha256'], 'usageCompatibility': 'supported'}).encode()
             if any(item.replace('\\', '/').endswith('/apps/deployment/preservation.ts') for item in args):
                 hashed = lambda path: hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
                 return json.dumps({'schemaVersion': 1, 'observedAt': 1000, 'identity': {'credential': hashed(credential), 'epoch': 'synthetic-epoch'},
@@ -98,6 +109,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                     return json.dumps({'schemaVersion': 1, 'compatible': True} if adapter_report is ... else adapter_report).encode()
                 if args[1] != 'status':
                     router['enabled'] = args[1] == 'enable'
+                    inject('router-' + args[1])
                 return json.dumps(router).encode()
             if 'runtime-maintenance-pause' in args:
                 marker = state / 'lifecycle.json'
@@ -149,6 +161,10 @@ class RemoteDeploymentTests(unittest.TestCase):
                                 raise RuntimeError('RUNTIME_LIFECYCLE_PAUSED')
                             active['cocoproxy-gateway-network.service'] = True
                         active[unit] = action == 'start'
+                        if unit == 'cocoproxy-management.service':
+                            inject('management-' + action)
+                        if unit == 'cocoproxy-mihomo.service':
+                            inject('core-' + action)
                     elif action in ['enable', 'disable']:
                         enabled[unit] = 'enabled' if action == 'enable' else 'disabled'
             return b'{"core":{"ready":true}}'
@@ -164,8 +180,9 @@ class RemoteDeploymentTests(unittest.TestCase):
         stack.enter_context(patch.object(deploy, 'put', lambda path, data, mode=0o600: Path(path).write_bytes(data)))
         stack.enter_context(patch.object(deploy, 'stage_payload', lambda *_: (root / 'payload', manifest)))
         stack.enter_context(patch.object(deploy, 'run', run))
+        stack.enter_context(patch.object(deploy, 'lifecycle_marker_identity', lambda _: 'd' * 64))
         def health(_):
-            if health_failure:
+            if health_failure and _['serverEntry'] != before['management']['serverEntry']:
                 raise RuntimeError('REMOTE_MANAGEMENT_NOT_READY')
         stack.enter_context(patch.object(deploy, 'management_ready', health))
         stack.enter_context(patch.object(deploy.os, 'chown', lambda *_: None, create=True))
@@ -198,7 +215,8 @@ class RemoteDeploymentTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, error):
                         deploy.main_locked(args)
                     self.assertTrue(router['enabled'])
-                    self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'failed')
+                    journal = json.loads((private / 'remote-last.json').read_text())
+                    self.assertEqual(journal['status'], 'recovered' if options.get('health_failure') else 'failed')
 
     def test_preinstallation_failure_never_pauses_runtime_or_mutates_services_and_router(self):
         for preserve in [False, True]:
@@ -363,18 +381,58 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertEqual(journal['preservation']['status'], 'fail')
             self.assertEqual(journal['status'], 'failed')
 
-    def test_failed_install_keeps_router_disabled_and_blocks_blind_retry(self):
+    def test_failed_install_restores_previous_version_services_and_allows_reviewed_new_attempt(self):
         temporary, stack, private, before, events, router, args = self.scenario(True)
         with temporary, stack:
             with self.assertRaisesRegex(RuntimeError, 'INSTALL_SYNTHETIC_FAILURE'):
                 deploy.main_locked(args)
-            self.assertFalse(router['enabled'])
-            self.assertFalse(any('runtime-maintenance-restore' in command for command in events))
+            self.assertTrue(router['enabled'])
+            self.assertTrue(any('runtime-maintenance-restore' in command for command in events))
             failed = json.loads((private / 'remote-last.json').read_text())
-            self.assertEqual(failed['status'], 'failed')
+            self.assertEqual(failed['status'], 'recovered')
+            self.assertEqual(failed['failure']['code'], 'INSTALL_SYNTHETIC_FAILURE')
+            self.assertEqual(failed['recovery']['status'], 'restored')
+            self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
             self.assertEqual(failed['maintenanceRestore']['previous'], {'present': True, 'enabled': True, 'paused': False})
+            with self.assertRaisesRegex(RuntimeError, 'INSTALL_SYNTHETIC_FAILURE'):
+                deploy.main_locked(args)
+
+    def test_failures_during_maintenance_startup_and_router_restore_recover_original_intent(self):
+        for phase in ['router-disable', 'management-stop', 'core-start', 'router-enable']:
+            with self.subTest(phase=phase):
+                temporary, stack, private, before, events, router, args = self.scenario(failure_at=phase)
+                with temporary, stack:
+                    with self.assertRaisesRegex(RuntimeError, 'REMOTE_SYNTHETIC_PHASE_FAILURE'):
+                        deploy.main_locked(args)
+                    result = json.loads((private / 'remote-last.json').read_text())
+                    self.assertEqual(result['status'], 'recovered', result.get('recovery'))
+                    self.assertTrue(router['enabled'])
+                    self.assertEqual(json.loads((Path(before['runtime']['stateDirectory']) / 'lifecycle.json').read_text()),
+                        {'schemaVersion': 1, 'enabled': True, 'paused': False})
+
+    def test_rollback_failure_preserves_original_error_and_blocks_retry(self):
+        temporary, stack, private, _, events, router, args = self.scenario(fail_apply=True, rollback_failure=True)
+        with temporary, stack:
+            with self.assertRaisesRegex(RuntimeError, '^INSTALL_SYNTHETIC_FAILURE$'):
+                deploy.main_locked(args)
+            result = json.loads((private / 'remote-last.json').read_text())
+            self.assertEqual(result['status'], 'failed')
+            self.assertEqual(result['recovery']['code'], 'INSTALL_ROLLBACK_SYNTHETIC_FAILURE')
+            self.assertFalse(router['enabled'])
             with self.assertRaisesRegex(RuntimeError, 'REMOTE_PREVIOUS_DEPLOYMENT_REQUIRES_REVIEW'):
                 deploy.main_locked(args)
+
+    def test_rollback_preserves_disabled_router_and_inactive_core_with_active_network(self):
+        temporary, stack, private, _, events, router, args = self.scenario(fail_apply=True, core_active=False,
+            router_enabled=False, network_active=True, lifecycle={'schemaVersion': 1, 'enabled': False, 'paused': False})
+        with temporary, stack:
+            with self.assertRaisesRegex(RuntimeError, 'INSTALL_SYNTHETIC_FAILURE'):
+                deploy.main_locked(args)
+            result = json.loads((private / 'remote-last.json').read_text())
+            self.assertEqual(result['status'], 'recovered', result.get('recovery'))
+            self.assertFalse(router['enabled'])
+            self.assertIn(['/usr/bin/systemctl', 'start', 'cocoproxy-gateway-network.service'], events)
+            self.assertNotIn(['/usr/bin/systemctl', 'start', 'cocoproxy-mihomo.service'], events)
 
     def test_upgrade_restores_missing_and_disabled_lifecycle_intent_exactly(self):
         for lifecycle, active in [(None, True), ({'schemaVersion': 1, 'enabled': False, 'paused': False}, True),

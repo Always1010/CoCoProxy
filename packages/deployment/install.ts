@@ -760,4 +760,5 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
 export { info as deploymentPathInfo, trusted as assertRootPath, regular as readRegularDeploymentFile,
   privateFile as assertPrivateDeploymentFile, checkOwned as assertOwnedDeploymentFiles,
   executable as assertDeploymentExecutable, stopped as assertDeploymentStopped,
-  run as runDeploymentTool, atomic as writeAtomicDeploymentFile };
+  run as runDeploymentTool, atomic as writeAtomicDeploymentFile,
+  networkClear as assertDeploymentNetworkClear, deploymentStateHost, writeExclusive as writeExclusiveDeploymentFile };

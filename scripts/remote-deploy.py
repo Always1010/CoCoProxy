@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -178,8 +179,8 @@ def replace(path, value):
         Path(temporary).unlink(missing_ok=True)
 
 
-def run(args, timeout=120):
-    result = subprocess.run([str(arg) for arg in args], capture_output=True, timeout=timeout)
+def run(args, timeout=120, input=None):
+    result = subprocess.run([str(arg) for arg in args], capture_output=True, timeout=timeout, input=input)
     if result.returncode:
         errors = result.stderr.decode(errors='replace').splitlines()
         # Node may prepend runtime warnings to an installer's fixed error code.
@@ -216,6 +217,167 @@ def new_input(previous, manifest_sha, core_sha, frontend=False):
         runtime.update(sourceDirectory=str(release / 'source'), binaryPath=str(release / 'bin/mihomo'), binarySha256=core_sha)
     value['management']['serverEntry'] = str(release / 'server/.output/server/index.mjs')
     return value
+
+
+def restore_unit_intent(systemctl, before):
+    """Restore both active and inactive intentions; never enable static units."""
+    order = ['cocoproxy-gateway-guard.service', 'cocoproxy-gateway-network.service',
+             'cocoproxy-management.service', 'cocoproxy-web.service', 'cocoproxy-mihomo.service']
+    def value(unit, prop):
+        return run([systemctl, 'show', unit, '-p', prop, '--value']).decode().strip()
+    for unit in reversed(order):
+        if unit in before and not before[unit]['active'] and value(unit, 'ActiveState') != 'inactive':
+            run([systemctl, 'stop', unit])
+    for unit, prior in before.items():
+        enabled = prior.get('enableState', prior.get('enabled'))
+        if value(unit, 'UnitFileState') != enabled:
+            need(enabled in ['enabled', 'disabled'], 'REMOTE_ROLLBACK_ENABLE_STATE_CHANGED')
+            run([systemctl, 'enable' if enabled == 'enabled' else 'disable', unit])
+    for unit in order:
+        if unit in before and before[unit]['active']:
+            run([systemctl, 'start', unit])
+    for unit, prior in before.items():
+        need(value(unit, 'ActiveState') == ('active' if prior['active'] else 'inactive') and
+             value(unit, 'UnitFileState') == prior.get('enableState', prior.get('enabled')), 'REMOTE_ROLLBACK_SERVICE_NOT_RESTORED')
+
+
+def lifecycle_marker_identity(path):
+    before = Path(path).stat()
+    data = regular(path)
+    after = Path(path).stat()
+    identity = lambda info: ':'.join(str(value) for value in [info.st_dev, info.st_ino, info.st_ctime_ns,
+        info.st_mtime_ns, info.st_size, info.st_uid, info.st_mode])
+    need(identity(before) == identity(after), 'REMOTE_ROLLBACK_RUNTIME_INTENT_CHANGED')
+    return hashlib.sha256(identity(after).encode() + b'\0' + data).hexdigest()
+
+
+def rollback_update(context):
+    """Undo this live upgrade only; private state is never copied or downgraded."""
+    c = context
+    runtime, management = c['old']['runtime'], c['old']['management']
+    node, service, systemctl = c['node'], c['service'], c['systemctl']
+    def json_run(args, **kwargs):
+        return json.loads(run(args, **kwargs))
+    if c.get('check_runtime'):
+        c['check_runtime']()
+    gateway = bool(runtime.get('automaticGateway')) and not c['preserve_runtime']
+    token = None
+    if not c['preserve_runtime']:
+        marker = Path(runtime['stateDirectory']) / 'lifecycle.json'
+        observed = json.loads(regular(marker)) if marker.exists() else {'enabled': False, 'paused': False}
+        need(observed['enabled'] == c['intent']['enabled'], 'REMOTE_ROLLBACK_RUNTIME_INTENT_CHANGED')
+        previous_token = c.get('maintenance_token')
+        if previous_token and not c.get('intent_restored'):
+            need(marker.exists() and observed['paused'] is True and lifecycle_marker_identity(marker) == previous_token['pausedSha256'],
+                'REMOTE_ROLLBACK_RUNTIME_INTENT_CHANGED')
+        else:
+            need(marker.exists() == c['intent']['present'] and observed['paused'] == c['intent']['paused'], 'REMOTE_ROLLBACK_RUNTIME_INTENT_CHANGED')
+        paused = json_run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
+            c['payload'] / 'source/apps/cli/main.ts', 'runtime-maintenance-pause', '--state-dir', runtime['stateDirectory']])
+        token = paused['maintenanceRestore']
+        need(token['previous']['enabled'] == c['intent']['enabled'], 'REMOTE_ROLLBACK_RUNTIME_INTENT_CHANGED')
+        # Fresh marker identity, original intention: a previously consumed token
+        # must never be replayed after startup or router restoration fails.
+        token['previous'] = c['intent']
+    if gateway:
+        hook = c['router_command']
+        need(bool(hook), 'REMOTE_ROLLBACK_ROUTER_HOOK_REQUIRED')
+        json_run([*hook, 'disable'], timeout=300)
+        need(json_run([*hook, 'status']).get('enabled') is False, 'REMOTE_ROLLBACK_ROUTER_NOT_DISABLED')
+    for unit in ['cocoproxy-web.service', 'cocoproxy-management.service', 'cocoproxy-mihomo.service',
+                 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']:
+        if unit in c['units']:
+            run([systemctl, 'stop', unit])
+    for unit in c['units']:
+        if run([systemctl, 'show', unit, '-p', 'UnitFileState', '--value']).decode().strip() == 'enabled':
+            run([systemctl, 'disable', unit])
+    if gateway:
+        network = json.loads(regular(NETWORK_RECEIPT, True)) if NETWORK_RECEIPT.exists() else None
+        need(network is None or network.get('status') in ['complete', 'removed'], 'REMOTE_ROLLBACK_NETWORK_RECEIPT_UNVERIFIED')
+        if network and network.get('status') == 'complete':
+            current = json.loads(regular(RECEIPT, True))
+            need(current['manifestSha256'] in [c['receipt']['manifestSha256'], c['manifest_sha']], 'REMOTE_ROLLBACK_RECEIPT_CHANGED')
+            owner = Path(c['receipt']['release']) if current['manifestSha256'] == c['receipt']['manifestSha256'] else c['payload']
+            host = owner / 'source/apps/gateway/host_proxy.py'
+            settings = Path(runtime['settingsPath']).parent / 'gateway-network.json'
+            if host.is_file():
+                run(['python3', '-I', host, '--early-network', settings, '--state', runtime['stateDirectory'],
+                     '--uid', str(runtime['serviceUid']), '--retire'])
+            run(['python3', '-I', owner / 'source/apps/gateway/network.py', 'remove', '--settings', settings])
+    if c['baseline'] is not None:
+        checked = compare_preservation(c['baseline'], c['snapshot']())
+        need(checked['status'] == 'pass', 'REMOTE_ROLLBACK_PRIVATE_STATE_REQUIRES_REVIEW')
+    restored = {'usageCompatibility': 'supported'}
+    if c['files_attempted']:
+        restored = json_run([node, '--experimental-strip-types', c['payload'] / 'source/apps/deployment/rollback.ts'],
+            input=json.dumps({'previousInput': c['old'], 'previousReceipt': c['receipt'],
+                'manifestSha256': c['manifest_sha'], 'preserveRuntime': c['preserve_runtime']}).encode(), timeout=180)
+        need(restored.get('restored') is True and restored.get('manifestSha256') == c['receipt']['manifestSha256'], 'REMOTE_ROLLBACK_FILES_UNVERIFIED')
+    # Only coordinator-owned input files changed by this invocation are restored.
+    for path, original in c['inputs'].items():
+        current = json.loads(regular(path, True)) if Path(path).exists() else None
+        need(current == original or current == c['written_inputs'].get(path, original), 'REMOTE_ROLLBACK_COORDINATOR_INPUT_CHANGED')
+        if original is not None:
+            replace(path, original)
+        elif Path(path).exists():
+            Path(path).unlink()
+    if token is not None:
+        c['temporary'].chmod(0o711)
+        token_path = c['temporary'] / 'rollback-runtime-restore.json'
+        put(token_path, (json.dumps(token) + '\n').encode())
+        os.chown(token_path, runtime['serviceUid'], 0); os.chmod(token_path, 0o600)
+        json_run(['runuser', '-u', service, '--', node, '--experimental-strip-types', c['payload'] / 'source/apps/cli/main.ts',
+                  'runtime-maintenance-restore', '--state-dir', runtime['stateDirectory'], '--input', token_path])
+    restore_unit_intent(systemctl, c['units'])
+    if c['units']['cocoproxy-management.service']['active']:
+        management_ready(management)
+    if not c['preserve_runtime']:
+        lifecycle_path = Path(runtime['stateDirectory']) / 'lifecycle.json'
+        need(lifecycle_path.exists() == c['intent']['present'], 'REMOTE_ROLLBACK_LIFECYCLE_NOT_RESTORED')
+        if lifecycle_path.exists():
+            need(json.loads(regular(lifecycle_path)) == {'schemaVersion': 1, 'enabled': c['intent']['enabled'],
+                 'paused': c['intent']['paused']}, 'REMOTE_ROLLBACK_LIFECYCLE_NOT_RESTORED')
+        if c['units'].get('cocoproxy-mihomo.service', {}).get('active') or c['router_enabled']:
+            for _ in range(30):
+                status = json_run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
+                    Path(runtime['sourceDirectory']) / 'apps/cli/main.ts', 'runtime-status', '--state-dir', runtime['stateDirectory'],
+                    '--runtime-settings', runtime['settingsPath']])
+                if (status.get('core') or {}).get('ready') is True:
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError('REMOTE_ROLLBACK_CORE_NOT_READY')
+        if gateway:
+            if c['router_enabled']:
+                json_run([*c['router_command'], 'enable'], timeout=300)
+            need(json_run([*c['router_command'], 'status']).get('enabled') is c['router_enabled'], 'REMOTE_ROLLBACK_ROUTER_NOT_RESTORED')
+    elif c.get('check_runtime'):
+        c['check_runtime']()
+    return {'status': 'restored', 'previousVersion': c['receipt']['manifestSha256'],
+            'usageCompatibility': restored['usageCompatibility'], 'privateState': 'preserved-in-place',
+            'scope': 'previous-program-services-and-network-intent; incompatible-usage-reader-may-be-degraded'}
+
+
+def finish_failed_upgrade(journal, progress, clock, cause, recovery=None):
+    failure = {'phase': progress['phase'], 'code': str(cause) if isinstance(cause, RuntimeError) and
+        re.fullmatch('[A-Z][A-Z0-9_]+', str(cause)) else 'REMOTE_DEPLOYMENT_FAILED'}
+    result = {'status': 'not-needed', 'services': 'unchanged'}
+    if recovery is False:
+        result = {'status': 'not-available', 'code': 'REMOTE_FIRST_INSTALL_NO_PREVIOUS_VERSION'}
+    elif recovery is not None:
+        try:
+            if fcntl is not None:
+                for name in ['SIGINT', 'SIGTERM', 'SIGHUP']:
+                    signal.signal(getattr(signal, name), signal.SIG_IGN)
+            result = rollback_update(recovery)
+        except Exception as error:
+            result = {'status': 'failed', 'code': str(error) if isinstance(error, RuntimeError) and
+                re.fullmatch('[A-Z][A-Z0-9_]+', str(error)) else 'REMOTE_ROLLBACK_FAILED'}
+    recovered = result['status'] in ['restored', 'not-needed']
+    replace(journal, {**progress, 'status': 'recovered' if recovered else 'failed', 'failure': failure,
+        'phase': 'previous-version-restored' if result['status'] == 'restored' else 'services-unchanged' if recovered else 'manual-review-required',
+        'recovery': result, 'timings': clock.report()})
+    print(json.dumps({'phase': 'deployment-recovery', 'originalError': failure['code'], **result}), file=sys.stderr)
 
 
 def payload_manifest(raw, manifest_sha):
@@ -344,6 +506,18 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         print(json.dumps({'prepared': True, 'apply': False, 'components': components, 'commit': manifest['commit'],
                           'deployment': 'preserve-runtime', 'services': managed, 'preservedServices': preserved}))
         return
+    original_input = json.loads(regular(input_path, True))
+    baseline = None
+    maintenance_started = False
+    files_attempted = False
+    written_inputs = {}
+    def preservation(frozen=False):
+        return json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
+            payload / 'source/apps/deployment/preservation.ts', '--management-settings', candidate['management']['settingsPath'], *(['--frozen'] if frozen else [])]))
+    def check_runtime():
+        need(all(properties(unit, ['ActiveState', 'MainPID', 'ExecMainStartTimestampMonotonic', 'UnitFileState']) == value
+                 for unit, value in stable.items()), 'REMOTE_FRONTEND_RUNTIME_CHANGED')
+        need((regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None) == network, 'REMOTE_NETWORK_RECEIPT_CHANGED')
     progress = {'status': 'running', 'phase': 'release-preinstall', 'manifestSha256': options.manifest_sha256,
                 'previousServices': before, 'components': components, 'deployment': 'preserve-runtime'}
     replace(journal, progress)
@@ -354,6 +528,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         replace(journal, progress)
         clock.mark('management-maintenance-started')
         progress['phase'] = 'management-maintenance'
+        maintenance_started = True
         progress['timings'] = clock.report()
         replace(journal, progress)
         for unit in reversed(managed):
@@ -361,18 +536,17 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         enabled_units = [unit for unit, value in before.items() if value['enabled'] == 'enabled']
         if enabled_units:
             run([systemctl, 'disable', *enabled_units])
-        def preservation(frozen=False):
-            return json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
-                payload / 'source/apps/deployment/preservation.ts', '--management-settings', candidate['management']['settingsPath'], *(['--frozen'] if frozen else [])]))
         baseline = preservation(True)
         need(baseline.get('ready') is True, 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
         # Apply repeats the complete read-only preflight before any live write;
         # an extra dry-run here would duplicate it inside the outage window.
+        files_attempted = True
         run(installer + ['--operation', 'upgrade', *common, '--apply'])
         progress['phase'] = 'frontend-files-installed'
         replace(journal, progress)
         frozen = compare_preservation(baseline, preservation(True), frozen=True)
         need(frozen['status'] == 'pass', 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
+        written_inputs[input_path] = candidate
         replace(input_path, candidate)
         inspect_complete(options.manifest_sha256)
         if enabled_units:
@@ -403,8 +577,13 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         replace(journal, {**progress, 'status': 'complete', 'phase': 'verified', 'preservation': preserved_state, 'timings': clock.report()})
         print(json.dumps({'installed': True, 'updated': True, 'components': components, 'commit': manifest['commit'],
                           'manifestSha256': options.manifest_sha256, 'runtimePreserved': True, 'preservation': preserved_state, 'timings': clock.report()}))
-    except Exception:
-        replace(journal, {**progress, 'status': 'failed', 'lastCompletedPhase': progress['phase'], 'phase': 'manual-review-required', 'timings': clock.report()})
+    except Exception as cause:
+        recovery = {'payload': payload, 'node': node, 'service': service, 'systemctl': systemctl, 'old': original_input,
+            'receipt': receipt, 'manifest_sha': options.manifest_sha256, 'units': before, 'preserve_runtime': True,
+            'baseline': baseline, 'snapshot': preservation, 'files_attempted': files_attempted,
+            'temporary': next_path.parent, 'inputs': {input_path: original_input}, 'written_inputs': written_inputs,
+            'check_runtime': check_runtime} if maintenance_started else None
+        finish_failed_upgrade(journal, progress, clock, cause, recovery)
         raise
 
 
@@ -428,6 +607,12 @@ def main(argv=None):
         os.close(lock)
         raise RuntimeError('REMOTE_DEPLOYMENT_BUSY')
     try:
+        def interrupted(_signum, _frame):
+            for name in ['SIGINT', 'SIGTERM', 'SIGHUP']:
+                signal.signal(getattr(signal, name), signal.SIG_IGN)
+            raise RuntimeError('REMOTE_DEPLOYMENT_INTERRUPTED')
+        for name in ['SIGINT', 'SIGTERM', 'SIGHUP']:
+            signal.signal(getattr(signal, name), interrupted)
         return main_locked(options)
     finally:
         os.close(lock)
@@ -437,7 +622,7 @@ def main_locked(options):
     clock = DeploymentClock()
     journal = PRIVATE / 'remote-last.json'
     if journal.exists():
-        need(json.loads(regular(journal, True))['status'] == 'complete', 'REMOTE_PREVIOUS_DEPLOYMENT_REQUIRES_REVIEW')
+        need(json.loads(regular(journal, True))['status'] in ['complete', 'recovered'], 'REMOTE_PREVIOUS_DEPLOYMENT_REQUIRES_REVIEW')
     payload, manifest = stage_payload(Path(options.payload), options.manifest_sha256)
     clock.mark('transport-payload-staged')
     frontend = 'frontendUpdate' in manifest
@@ -608,11 +793,20 @@ def main_locked(options):
             progress.update(phase=phase, timings=clock.report(), **facts)
             replace(journal, progress)
         record_phase('preinstall')
+        maintenance_started = False
+        intent_restored = False
+        files_attempted = False
+        written_inputs = {}
+        originals = {input_path: json.loads(regular(input_path, True)) if input_path.exists() else None,
+            PRIVATE / 'remote.json': profile if (PRIVATE / 'remote.json').exists() else None}
+        if router_bytes:
+            originals[PRIVATE / 'router-ssh.json'] = json.loads(regular(PRIVATE / 'router-ssh.json', True)) if (PRIVATE / 'router-ssh.json').exists() else None
         try:
             if installed:
                 preinstall_release(installer, common)
                 record_phase('release-preinstalled')
                 record_phase('maintenance-started')
+                maintenance_started = True
                 # The new public CLI can drain the shared transaction without parsing
                 # old core settings, and returns an exact, fingerprint-bound intent token.
                 paused = maintenance('runtime-maintenance-pause')
@@ -657,11 +851,15 @@ def main_locked(options):
                 need(before_preservation.get('ready') is True, 'REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED'
                     if before_preservation.get('runtime', {}).get('coherent') is False else 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
             operation = 'upgrade' if installed else 'install'
+            files_attempted = True
             run(installer + ['--operation', operation, *common, '--apply'])
             record_phase('files-installed')
+            written_inputs[input_path] = candidate
             replace(input_path, candidate)
-            replace(PRIVATE / 'remote.json', {**profile, **({'routerHook': hook} if hook else {}), **({'webUnit': web_unit} if web_unit else {})})
+            written_inputs[PRIVATE / 'remote.json'] = {**profile, **({'routerHook': hook} if hook else {}), **({'webUnit': web_unit} if web_unit else {})}
+            replace(PRIVATE / 'remote.json', written_inputs[PRIVATE / 'remote.json'])
             if router_bytes:
+                written_inputs[PRIVATE / 'router-ssh.json'] = json.loads(router_bytes)
                 replace(PRIVATE / 'router-ssh.json', json.loads(router_bytes))
             if not installed:
                 put(management['credentialPath'], regular(initial_credential, True))
@@ -674,6 +872,7 @@ def main_locked(options):
                 record_phase('installed-state-verified', preservation=frozen)
                 need(frozen['status'] == 'pass', 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
                 restored = maintenance('runtime-maintenance-restore', token_path)
+                intent_restored = True
                 need(restored.get('lifecycle') == {'schemaVersion': 1, 'enabled': previous_intent['enabled'], 'paused': previous_intent['paused']} and
                      (Path(runtime['stateDirectory']) / 'lifecycle.json').exists() == previous_intent['present'], 'REMOTE_RUNTIME_INTENT_NOT_RESTORED')
                 record_phase('runtime-intent-restored')
@@ -719,9 +918,15 @@ def main_locked(options):
             print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256, 'components': components,
                 'preservation': preservation, 'routerRestored': bool(router_enabled), 'initialConfigurationRequired': not installed,
                 'deployment': 'full-maintenance', 'runtimePreservation': preparation.get('runtimePreservation'), 'timings': clock.report()}))
-        except Exception:
-            progress.update(status='failed', lastCompletedPhase=progress['phase'], phase='manual-review-required', timings=clock.report())
-            replace(journal, progress)
+        except Exception as cause:
+            recovery = {'payload': payload, 'node': node, 'service': service, 'systemctl': systemctl, 'old': old,
+                'receipt': receipt, 'manifest_sha': options.manifest_sha256, 'units': before_units, 'preserve_runtime': False,
+                'baseline': before_preservation, 'snapshot': snapshot_preservation, 'files_attempted': files_attempted,
+                'temporary': temporary, 'inputs': originals, 'written_inputs': written_inputs,
+                'router_command': router_command, 'router_enabled': router_enabled, 'intent': progress.get('previousLifecycle'),
+                'maintenance_token': progress.get('maintenanceRestore'), 'intent_restored': intent_restored}
+            finish_failed_upgrade(journal, progress, clock, cause, recovery if installed and maintenance_started else
+                False if not installed and files_attempted else None)
             raise
 
 
