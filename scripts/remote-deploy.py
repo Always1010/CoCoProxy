@@ -518,8 +518,13 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         return json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
             payload / 'source/apps/deployment/preservation.ts', '--management-settings', candidate['management']['settingsPath'], *(['--frozen'] if frozen else [])]))
     def check_runtime():
-        need(all(properties(unit, ['ActiveState', 'MainPID', 'ExecMainStartTimestampMonotonic', 'UnitFileState']) == value
-                 for unit, value in stable.items()), 'REMOTE_FRONTEND_RUNTIME_CHANGED')
+        observed = {unit: properties(unit, ['ActiveState', 'MainPID', 'ExecMainStartTimestampMonotonic', 'UnitFileState']) for unit in preserved}
+        changes = {unit: sorted(key for key in set(stable[unit]) | set(observed[unit]) if stable[unit].get(key) != observed[unit].get(key))
+            for unit in preserved if stable[unit] != observed[unit]}
+        if changes:
+            progress['runtimeDifference'] = {'observed': observed, 'fields': changes}
+            print(json.dumps({'phase': 'runtime-preservation', 'changedFields': changes}), file=sys.stderr)
+            raise RuntimeError('REMOTE_FRONTEND_RUNTIME_CHANGED')
         need((regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None) == network, 'REMOTE_NETWORK_RECEIPT_CHANGED')
     progress = {'status': 'running', 'phase': 'release-preinstall', 'manifestSha256': options.manifest_sha256,
                 'previousServices': before, 'components': components, 'deployment': 'preserve-runtime',
@@ -572,9 +577,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
             enabled = run([systemctl, 'show', unit, '-p', 'UnitFileState', '--value']).decode().strip()
             need(active == ('active' if before[unit]['active'] else 'inactive') and enabled == before[unit]['enabled'],
                  'REMOTE_SERVICE_NOT_RESTORED')
-        need(all(properties(unit, ['ActiveState', 'MainPID', 'ExecMainStartTimestampMonotonic', 'UnitFileState']) == value
-                 for unit, value in stable.items()), 'REMOTE_FRONTEND_RUNTIME_CHANGED')
-        need((regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None) == network, 'REMOTE_NETWORK_RECEIPT_CHANGED')
+        check_runtime()
         preserved_state = compare_preservation(baseline, preservation())
         need(preserved_state['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
         clock.mark('management-restored-verified')
