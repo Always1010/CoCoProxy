@@ -8,7 +8,7 @@ import { InstallError, validateReceipt, compatibleOwnedFiles, releaseTarget, ver
   assertDeploymentLifecycle, assertDeploymentNetworkClear, assertDeploymentAccount, assertDeploymentExecutable,
   readRegularDeploymentFile, deploymentPathInfo, deploymentProcessIdentity, parseDeploymentLock,
   writeAtomicDeploymentFile, writeExclusiveDeploymentFile, runDeploymentTool, deploymentStateHost,
-  type Receipt, type Owned, type DeploymentLock } from './install.ts';
+  assertReleasePaths, type Receipt, type Owned, type DeploymentLock } from './install.ts';
 import { deploymentOwnerGone } from './maintenance.ts';
 import type { DeploymentPlan } from './plan.ts';
 
@@ -60,11 +60,7 @@ async function verifiedRelease(receipt: Receipt) {
   await assertRootPath(receipt.release);
   await assertRootPath(receipt.release + '/manifest.json');
   const release = await verifyRelease(receipt.release, receipt.manifestSha256);
-  for (const entry of release.files) {
-    const path = receipt.release + '/' + entry.path;
-    await assertRootPath(path);
-    require(((await lstat(path)).mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_RELEASE_PERMISSIONS_CHANGED');
-  }
+  await assertReleasePaths(receipt.release, release.files);
   await verifyRuntimeRelease(receipt);
   return release;
 }

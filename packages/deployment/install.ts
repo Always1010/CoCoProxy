@@ -10,7 +10,7 @@ import { parseRuntimeSettings } from '../runtime/settings.ts';
 import { verifyManagedWeb } from '../setup/https.ts';
 import { inspectServiceAccount, validServiceAccountRequest } from './service-account.ts';
 import { assertRootControlledPath, assertTrustedExecutable, assertServiceAncestors, assertPlannedDeploymentDirectory, assertPrivatePath,
-  PathEvidenceError, type PathEvidenceHost } from './path-evidence.ts';
+  PathEvidenceError, withPathEvidence, type PathEvidenceHost } from './path-evidence.ts';
 import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, networkReceiptRemoved, NetworkObservationError } from './network-evidence.ts';
 import { validateBuildInputs, validateComponentUpdate, validateFrontendUpdate } from './update-scope.mjs';
 import { inspectUsageDatabase } from '../management/usage.ts';
@@ -262,10 +262,17 @@ export async function verifyRelease(payload: string, expected: string): Promise<
   }
   await walk(payload);
   require(found.size === value.files.length + 1, 'INSTALL_PAYLOAD_MISSING');
-  for (const entry of value.files as Entry[]) {
-    require(found.has(entry.path), 'INSTALL_PAYLOAD_MISSING');
-    const bytes = await regular(payload + '/' + entry.path, 256 * 1024 * 1024);
-    require(bytes.length === entry.size && digest(bytes) === entry.sha256, 'INSTALL_PAYLOAD_HASH_MISMATCH');
+  const files = value.files as Entry[];
+  for (let index = 0; index < files.length;) {
+    const batch = [files[index++]];
+    // Two small reads overlap filesystem latency; large entries stay exclusive.
+    if (batch[0].size <= 16 * 1024 * 1024 && files[index]?.size <= 16 * 1024 * 1024) batch.push(files[index++]);
+    const results = await Promise.allSettled(batch.map(async entry => {
+      require(found.has(entry.path), 'INSTALL_PAYLOAD_MISSING');
+      const bytes = await regular(payload + '/' + entry.path, 256 * 1024 * 1024);
+      require(bytes.length === entry.size && digest(bytes) === entry.sha256, 'INSTALL_PAYLOAD_HASH_MISMATCH');
+    }));
+    for (const result of results) if (result.status === 'rejected') throw result.reason;
   }
   const core = value.files.find((entry: Entry) => entry.path === 'bin/mihomo');
   require(core && core.sha256 === value.components?.mihomo?.binarySha256 &&
@@ -314,7 +321,8 @@ export function assertComponentReuse(previous: Awaited<ReturnType<typeof verifyR
 const pathHost: PathEvidenceHost = { resolve: realpath, info: async path => {
   const stat = await info(path);
   return stat ? { directory: stat.isDirectory(), file: stat.isFile(), link: stat.isSymbolicLink(),
-    uid: stat.uid, mode: stat.mode, nlink: stat.nlink } : null;
+    uid: stat.uid, mode: stat.mode, nlink: stat.nlink,
+    identity: JSON.stringify([stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs]) } : null;
 } };
 async function pathCheck(action: () => Promise<unknown>) {
   try { await action(); } catch (error) {
@@ -342,6 +350,17 @@ async function privateFile(path: string, uid: number) {
   await pathCheck(() => assertPrivatePath(path, uid, pathHost));
 }
 async function serviceAncestors(path: string) { await pathCheck(() => assertServiceAncestors(path, pathHost)); }
+export async function assertReleasePaths(root: string, files: Entry[], modes = true, serviceAccess = false) {
+  await pathCheck(() => withPathEvidence(pathHost, async host => {
+    await assertRootControlledPath(root + '/manifest.json', host);
+    for (const entry of files) {
+      const path = root + '/' + entry.path;
+      await assertRootControlledPath(path, host);
+      if (modes) require(((await host.info(path))!.mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_RELEASE_PERMISSIONS_CHANGED');
+      if (serviceAccess) await assertServiceAncestors(path, host);
+    }
+  }));
+}
 async function stopped(systemctl: string, units: string[], allowReload = false) {
   for (const unit of units) {
     const value = await run(systemctl, ['show', unit, '--property=ActiveState,MainPID,ControlPID,DropInPaths,NeedDaemonReload,FragmentPath']);
@@ -419,10 +438,7 @@ export async function verifyRuntimeRelease(receipt: Receipt) {
   const runtime = posix.join(posix.dirname(receipt.release), receipt.runtimeManifestSha256);
   await trusted(runtime);
   const release = await verifyRelease(runtime, receipt.runtimeManifestSha256);
-  for (const entry of release.files) {
-    await trusted(runtime + '/' + entry.path);
-    require(((await lstat(runtime + '/' + entry.path)).mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_RELEASE_PERMISSIONS_CHANGED');
-  }
+  await assertReleasePaths(runtime, release.files);
 }
 async function checkOwned(files: Owned[]) {
   for (const file of files) {
@@ -465,12 +481,15 @@ export function assertPreparedReleaseIdentity(value: unknown, expected: ReturnTy
 async function copyRelease(payload: string, target: string, release: Awaited<ReturnType<typeof verifyRelease>>, manifestSha256: string) {
   await mkdir(target, { mode: 0o755 });
   await chmod(target, 0o755); await chown(target, 0, 0);
+  const directories = new Set([target]);
   for (const entry of release.files) {
     const path = target + '/' + entry.path;
-    await mkdir(posix.dirname(path), { recursive: true, mode: 0o755 });
-    // The coordinator's private umask must not hide a newly copied runtime.
-    let directory = posix.dirname(path);
-    while (directory !== target) { await chmod(directory, 0o755); await chown(directory, 0, 0); directory = posix.dirname(directory); }
+    const missing = []; let directory = posix.dirname(path);
+    while (!directories.has(directory)) { missing.push(directory); directory = posix.dirname(directory); }
+    // Create each directory once, with explicit permissions despite a private umask.
+    for (const parent of missing.reverse()) {
+      await mkdir(parent, { mode: 0o755 }); await chmod(parent, 0o755); await chown(parent, 0, 0); directories.add(parent);
+    }
     await writeExclusive(path, await regular(payload + '/' + entry.path, 256 * 1024 * 1024), parseInt(entry.mode, 8));
   }
   await writeExclusive(target + '/manifest.json', await regular(payload + '/manifest.json'), 0o644);
@@ -490,8 +509,7 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
   const preserveRuntime = frontend || Boolean(options.preserveRuntime);
   require(!release.frontendUpdate || ['upgrade', 'uninstall'].includes(options.operation), 'INSTALL_FRONTEND_EXISTING_INSTALL_REQUIRED');
   require(!release.componentUpdate || ['upgrade', 'uninstall'].includes(options.operation), 'INSTALL_COMPONENT_EXISTING_INSTALL_REQUIRED');
-  await trusted(payload + '/manifest.json');
-  for (const entry of release.files) await trusted(payload + '/' + entry.path);
+  await assertReleasePaths(payload, release.files, false);
   const inputBytes = await regular(inputPath, 128 * 1024);
   const input = JSON.parse(inputBytes.toString());
   const plan = renderDeploymentPlan(input), target = releaseTarget(input, options.manifestSha256);
@@ -547,10 +565,10 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
     const verified = await verifyRelease(target, options.manifestSha256);
     await trusted(target + '/manifest.json');
     require(((await lstat(target + '/manifest.json')).mode & 0o7777) === 0o644, 'INSTALL_PREPARED_RELEASE_CHANGED');
-    for (const entry of verified.files) {
-      await trusted(target + '/' + entry.path);
-      require(((await lstat(target + '/' + entry.path)).mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_PREPARED_RELEASE_CHANGED');
-      await serviceAncestors(target + '/' + entry.path);
+    try { await assertReleasePaths(target, verified.files, true, true); }
+    catch (error) {
+      if (error instanceof InstallError && error.code === 'INSTALL_RELEASE_PERMISSIONS_CHANGED') throw new InstallError('INSTALL_PREPARED_RELEASE_CHANGED');
+      throw error;
     }
   }
   if (await info(RECEIPT)) {
@@ -587,11 +605,7 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
     } else if (!preserveRuntime && options.operation !== 'uninstall') {
       require(posix.dirname(input.runtime.sourceDirectory) === target, 'INSTALL_RELEASE_LAYOUT_REQUIRED');
     }
-    for (const entry of oldRelease.files) {
-      const path = previous.release + '/' + entry.path;
-      await trusted(path);
-      require(((await lstat(path)).mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_RELEASE_PERMISSIONS_CHANGED');
-    }
+    await assertReleasePaths(previous.release, oldRelease.files);
   }
   require(options.operation === 'install' ? !previous : previous, 'INSTALL_OPERATION_RECEIPT_REQUIRED');
   for (const directory of plan.directories) {

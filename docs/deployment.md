@@ -126,6 +126,8 @@ node source/scripts/deploy-ssh.mjs 192.0.2.2
 
 构建入口逐阶段输出 `phase:build-timing`，记录源码核验、上游准备、类型检查、UI／Server 编译、装配、发行核验及部署的 `durationMs` 与累计 `elapsedMs`，失败步骤也会输出计时；最终回执包含 `timings`。其范围包含可选部署，但不包含源码同步及最终临时目录清理。源码与 Git 提交的字节对应关系仅在本次构建进程内复用；构建前后仍重新读取两份源码的文件集合、字节摘要、执行位及 Git 快照身份，不跨次缓存。
 
+发行路径核验在单次检查内复用共同父目录信息，接受结果前重新读取路径身份、权限等元数据；不跨 prepare、stage、apply、inspect 或恢复阶段复用。发行摘要仍逐文件核验，小文件最多两个并发读取，大于 16 MiB 的文件独占读取。预装配时每个新目录只创建和设置权限一次，之后仍按原流程核验发行内容。
+
 prepare 拒绝先输出 `phase:"prepare"` 的脱敏摘要和原因码，再返回 `REMOTE_UPGRADE_NOT_READY_OR_CONFIGURATION_CHANGED`，此时未暂停或停服。网络回执只有完整拥有状态才调用旧 helper；从未启用或已经退役不重复删除，回执不完整或中途变化均停止。
 
 保留核验分三个时点：

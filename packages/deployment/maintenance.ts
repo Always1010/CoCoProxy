@@ -6,7 +6,7 @@ import { posix } from 'node:path';
 import { assertDeploymentAccount, assertDeploymentExecutable, assertDeploymentStopped, assertDeploymentLifecycle, assertOwnedDeploymentFiles,
   assertPrivateDeploymentFile, assertRootPath, deploymentPathInfo, deploymentProcessIdentity, InstallError,
   parseDeploymentLock, readRegularDeploymentFile, runDeploymentTool, validateReceipt, verifyRelease,
-  writeAtomicDeploymentFile, releaseTarget, verifyRuntimeRelease, type DeploymentLock, type Receipt } from './install.ts';
+  writeAtomicDeploymentFile, releaseTarget, verifyRuntimeRelease, assertReleasePaths, type DeploymentLock, type Receipt } from './install.ts';
 import { renderDeploymentPlan } from './plan.ts';
 
 const STORE = '/var/lib/cocoproxy-deployment';
@@ -70,11 +70,7 @@ async function releaseEvidence(receipt: Receipt) {
   await assertRootPath(receipt.release);
   await assertRootPath(receipt.release + '/manifest.json');
   const release = await verifyRelease(receipt.release, receipt.manifestSha256);
-  for (const entry of release.files) {
-    const path = receipt.release + '/' + entry.path;
-    await assertRootPath(path);
-    require(((await lstat(path)).mode & 0o7777) === parseInt(entry.mode, 8), 'INSTALL_RELEASE_PERMISSIONS_CHANGED');
-  }
+  await assertReleasePaths(receipt.release, release.files);
 }
 /** Shared lifecycle proof. Private input is returned only to trusted in-process callers. */
 export async function loadInstalledDeployment(inputPath: string) {

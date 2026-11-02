@@ -13,9 +13,31 @@ import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/compatibi
 import { assessRecoveryCredential, assertFinalizableReceipt, deploymentOwnerGone, inspectDeployment, recoverDeployment } from '../packages/deployment/maintenance.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 import { assessRuntimePreservation } from '../packages/deployment/runtime-preservation.ts';
+import { withPathEvidence, assertRootControlledPath, type PathEvidenceHost, type PathStat } from '../packages/deployment/path-evidence.ts';
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
+
+test('release path evidence shares ancestors only within one check and refuses changes before acceptance', async () => {
+  const calls = new Map<string, number>();
+  const directory: PathStat = { directory: true, file: false, link: false, uid: 0, mode: 0o755, nlink: 1, identity: 'original' };
+  let parent = { ...directory };
+  const host: PathEvidenceHost = { resolve: async path => path, info: async path => {
+    calls.set(path, (calls.get(path) ?? 0) + 1);
+    return { ...(path === '/opt/sample' ? parent : directory) };
+  } };
+  await withPathEvidence(host, async scoped => {
+    await assertRootControlledPath('/opt/sample/first', scoped);
+    await assertRootControlledPath('/opt/sample/second', scoped);
+  });
+  assert.equal(calls.get('/opt'), 2); assert.equal(calls.get('/opt/sample'), 2);
+  await assert.rejects(withPathEvidence(host, async scoped => {
+    await assertRootControlledPath('/opt/sample/first', scoped);
+    parent = { ...parent, identity: 'replaced' };
+  }), code('INSTALL_RELEASE_PATH_CHANGED'));
+  parent = { ...parent, mode: 0o777 };
+  await assert.rejects(withPathEvidence(host, scoped => assertRootControlledPath('/opt/sample/first', scoped)), code('INSTALL_ROOT_OWNERSHIP_REQUIRED'));
+});
 
 test('prepared releases bind the previous installation, target, exact input and runtime preservation mode', () => {
   const identity = preparedReleaseIdentity('a'.repeat(64), 'b'.repeat(64), Buffer.from('input'), true);

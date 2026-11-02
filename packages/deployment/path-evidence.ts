@@ -1,6 +1,6 @@
 import { posix } from 'node:path';
 
-export interface PathStat { directory: boolean; file: boolean; link: boolean; uid: number; mode: number; nlink: number }
+export interface PathStat { directory: boolean; file: boolean; link: boolean; uid: number; mode: number; nlink: number; identity?: string }
 export interface PathEvidenceHost { info(path: string): Promise<PathStat | null>; resolve(path: string): Promise<string> }
 export class PathEvidenceError extends Error {
   readonly code: string;
@@ -10,6 +10,22 @@ function need(value: unknown, code: string): asserts value { if (!value) throw n
 function absolute(path: string) {
   need(typeof path === 'string' && path.startsWith('/') && posix.normalize(path) === path && path !== '/' &&
     !/[\x00-\x20\x7f]/.test(path) && !path.split('/').includes('.local'), 'INSTALL_PATH_INVALID');
+}
+/** Reuse common ancestors only inside one check; detect changes before accepting it. */
+export async function withPathEvidence<T>(host: PathEvidenceHost, action: (scoped: PathEvidenceHost) => Promise<T>): Promise<T> {
+  const observed = new Map<string, PathStat | null>();
+  const scoped: PathEvidenceHost = { resolve: path => host.resolve(path), info: async path => {
+    if (!observed.has(path)) observed.set(path, await host.info(path));
+    return observed.get(path)!;
+  } };
+  const result = await action(scoped);
+  for (const [path, before] of observed) {
+    const after = await host.info(path);
+    const signature = (stat: PathStat | null) => stat === null ? null :
+      [stat.directory, stat.file, stat.link, stat.uid, stat.mode, stat.nlink, stat.identity];
+    need(JSON.stringify(signature(before)) === JSON.stringify(signature(after)), 'INSTALL_RELEASE_PATH_CHANGED');
+  }
+  return result;
 }
 /** Same read-only ownership rules used by final installation. Missing leaves are explicit. */
 export async function assertRootControlledPath(path: string, host: PathEvidenceHost, leafMissing = false) {
