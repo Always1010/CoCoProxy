@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { canonicalJson, compileConfig } from '../packages/config/index.ts';
 import { FileTransactionStore } from '../packages/transaction/index.ts';
 import { createAdminCredential, type AdminCredential } from '../packages/management/auth.ts';
@@ -26,7 +27,7 @@ const settings: RuntimeSettings = { schemaVersion: 1, stateDirectory: '/syntheti
 type Snapshot = ReturnType<typeof summarizePreservation> & { directories: Record<string, unknown> };
 function compare(before: Snapshot, after: Snapshot, frozen = false): any {
   const code = 'import importlib.util,json,sys; s=importlib.util.spec_from_file_location("coordinator",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); d=json.load(sys.stdin); print(json.dumps(m.compare_preservation(d["before"],d["after"],d["frozen"])))';
-  const result = spawnSync('python', ['-B', '-c', code, fileURLToPath(new URL('../scripts/remote-deploy.py', import.meta.url))],
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-B', '-c', code, fileURLToPath(new URL('../scripts/remote-deploy.py', import.meta.url))],
     { input: JSON.stringify({ before, after, frozen }), encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
 }
@@ -85,12 +86,22 @@ test('real stores project to secret-free preservation capsules and the coordinat
   assert.equal(compare(before, after).authentication.status, 'not-run');
 });
 
-test('SQLite preservation covers stopped bytes, live identity and aliases without copying source addresses or domains', async t => {
+test('SQLite preservation covers stopped bytes, schema migration, live identity and aliases without copying private rows', async t => {
   const f = await fixture(t);
   let now = 2_000_000_000_000;
   let usage = await UsageStore.open(f.root, () => now);
   const frame = (download: number) => parseUsageSnapshot({ uploadTotal: 0, downloadTotal: download, connections: [] }, 'synthetic-core');
   usage.ingest(frame(0)); now += 5000; usage.ingest(frame(100)); usage.setAlias('192.0.2.20', '合成备注'); usage.close();
+  const db = new DatabaseSync(join(f.root, 'usage.sqlite'));
+  db.exec(`BEGIN; ALTER TABLE minute_usage RENAME TO v2_minute_usage;
+    CREATE TABLE minute_usage(at INTEGER NOT NULL, sourceIP TEXT NOT NULL, host TEXT NOT NULL, outbound TEXT NOT NULL, process TEXT NOT NULL, inboundUser TEXT NOT NULL, upload INTEGER NOT NULL, download INTEGER NOT NULL,
+      PRIMARY KEY(at,sourceIP,host,outbound,process,inboundUser));
+    INSERT INTO minute_usage SELECT at,sourceIP,host,outbound,process,inboundUser,upload,download FROM v2_minute_usage;
+    DROP TABLE v2_minute_usage;
+    CREATE INDEX minute_source_time ON minute_usage(sourceIP,at);
+    CREATE INDEX minute_host_time ON minute_usage(host,at);
+    CREATE INDEX minute_outbound_time ON minute_usage(outbound,at);
+    PRAGMA user_version=1; COMMIT;`); db.close();
   const project = async (frozen = true) => {
     const snapshot = await f.project(), accounting = await captureUsagePreservation(f.root, frozen);
     snapshot.files.usage = accounting.files;
@@ -102,7 +113,12 @@ test('SQLite preservation covers stopped bytes, live identity and aliases withou
   assert.equal(compare(before, await project(), true).status, 'pass');
   assert.doesNotMatch(JSON.stringify(before), /192\.0\.2\.20|合成备注/);
   usage = await UsageStore.open(f.root, () => now); now += 5000; usage.ingest(frame(200)); usage.close();
-  assert.equal(find(compare(before, await project(false)), 'usage-history').status, 'pass');
+  const after = await project(false);
+  assert.equal(before.usage!.schemaVersion, 1); assert.equal(after.usage!.schemaVersion, 2);
+  assert.equal(find(compare(before, after), 'usage-history').status, 'pass');
+  for (const change of [{ identity: 'different' }, { aliasDigest: 'different' }, { schemaVersion: 3 }])
+    assert.equal(find(compare(before, { ...after, usage: { ...after.usage, ...change } } as typeof after), 'usage-history').status, 'unknown');
+  assert.equal(find(compare(after, before), 'usage-history').status, 'unknown', 'undeclared downgrades are not preservation');
   assert.equal(find(compare(before, await project(), true), 'known-state-files').status, 'fail');
   usage = await UsageStore.open(f.root, () => now); usage.setAlias('192.0.2.20', ''); usage.close();
   assert.equal(find(compare(before, await project(false)), 'usage-history').status, 'unknown');

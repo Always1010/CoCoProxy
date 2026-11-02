@@ -83,8 +83,16 @@ def compare_preservation(before, after, frozen=False):
         check('bandwidth-decision-history', not (before['files'].get('bandwidthHistory') is not None and after['files'].get('bandwidthHistory') is None),
             'private-decision-history-reader-only-records-may-expire-or-grow', absent=before['files'].get('bandwidthHistory') is None)
         usage_before, usage_after = before.get('usage'), after.get('usage')
-        check('usage-history', usage_before is None or usage_after is not None and usage_before == usage_after,
-            'sqlite-integrity-and-database-identity-with-stable-ip-notes-records-may-expire-or-grow', absent=usage_before is None)
+        # The schema-2 runtime migrates schema 1 in place. Only this declared
+        # forward migration may change the version; identity/notes/other fields
+        # must still match and the actual reader must have passed above.
+        usage_matches = usage_before == usage_after
+        if isinstance(usage_before, dict) and isinstance(usage_after, dict):
+            usage_matches = usage_matches or (type(usage_before.get('schemaVersion')) is int and
+                type(usage_after.get('schemaVersion')) is int and usage_before['schemaVersion'] == 1 and
+                usage_after['schemaVersion'] == 2 and {**usage_before, 'schemaVersion': 2} == usage_after)
+        check('usage-history', usage_before is None or usage_after is not None and usage_matches,
+            'sqlite-integrity-and-stable-database-identity-ip-notes-with-supported-schema-1-to-2-migration', absent=usage_before is None)
         check('runtime-selection', after['runtime']['coherent'] and not (before['runtime']['active'] is not None and after['runtime']['active'] is None),
             'current-committed-active-selection-and-recompiled-candidate-not-process-identity-or-same-dynamic-target', absent=before['runtime']['active'] is None)
     required = [item['status'] for item in checks]
