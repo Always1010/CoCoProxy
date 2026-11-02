@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { UsageStore, parseUsageSnapshot, createUsageService, inspectUsageDatabase, USAGE_DETAIL_RETENTION, USAGE_DAILY_RETENTION, USAGE_DATABASE } from '../packages/management/usage.ts';
 import { createManagementGateway } from '../packages/management/http.ts';
 import { createAdminCredential } from '../packages/management/auth.ts';
@@ -56,6 +57,63 @@ test('source aliases remain IP annotations, search and pagination are server-sid
     assert.throws(() => f.store.query(query(undefined, undefined, extra)));
   await f.restart(); assert.equal(f.store.aliases()['192.0.2.20'], '客厅设备');
   f.store.setAlias('192.0.2.20', ' '); assert.equal(f.store.aliases()['192.0.2.20'], undefined);
+});
+
+test('observed policy paths split identical exits without changing totals, including direct and missing evidence', async t => {
+  const f = await fixture(t);
+  const sample = (factor: number) => parseUsageSnapshot({ uploadTotal: factor * 10, downloadTotal: factor * 100,
+    connections: [
+      { id: 'a', upload: factor, download: factor * 10, chains: ['node-a', 'Proxy', 'Work'], rule: 'Domain', rulePayload: 'video.example' },
+      { id: 'b', upload: factor * 2, download: factor * 20, chains: ['node-a', 'Proxy', 'Stream'], rule: 'DomainSuffix', rulePayload: 'example' },
+      { id: 'c', upload: factor * 3, download: factor * 30, chains: ['DIRECT', 'Domestic'], rule: 'IPCIDR', rulePayload: '192.0.2.0/24' },
+      { id: 'd', upload: factor * 4, download: factor * 40, chains: [] },
+    ].map(row => ({ ...row, metadata: { host: 'video.example', sourceIP: '192.0.2.20' } })) }, 'synthetic-core');
+  f.store.ingest(sample(0)); f.advance(1000); f.store.ingest(sample(1)); f.store.flush();
+  const routes = () => f.store.query(query(undefined, undefined, { dimension: 'route', filters: { host: 'video.example' } })) as any;
+  const result = routes();
+  assert.equal(result.totalRows, 4); assert.equal(result.summary.download, 100);
+  const paths = result.rows.filter((row: any) => row.label === 'node-a');
+  assert.equal(paths.length, 2); assert.notEqual(paths[0].key, paths[1].key);
+  assert.deepEqual(paths.map((row: any) => row.chain).sort(), [['Stream', 'Proxy', 'node-a'], ['Work', 'Proxy', 'node-a']]);
+  const direct = result.rows.find((row: any) => row.label === 'DIRECT');
+  assert.deepEqual(direct.chain, ['Domestic', 'DIRECT']); assert.equal(direct.rule, 'IPCIDR');
+  const unknown = result.rows.find((row: any) => row.label === 'Unknown');
+  assert.equal(unknown.recorded, false); assert.equal(unknown.chain, undefined);
+  const page = f.store.query(query(undefined, undefined, { dimension: 'route', pageSize: 1, page: 1 })) as any;
+  assert.equal(page.rows.length, 1); assert.equal(page.totalRows, 4);
+  const exits = f.store.query(query(undefined, undefined, { dimension: 'outbound' })) as any;
+  assert.equal(exits.rows.find((row: any) => row.label === 'node-a').download, 30);
+  await f.restart(); assert.deepEqual(routes().rows, result.rows);
+  f.advance(1000); f.store.ingest(sample(2)); f.store.flush();
+  assert.equal(routes().summary.download, 200);
+});
+
+test('schema 1 migrates transactionally with old paths unknown, retaining counters, checkpoint, aliases and identity', async t => {
+  const f = await fixture(t);
+  f.store.ingest(frame(0, 0)); f.advance(1000); f.store.ingest(frame(10, 100)); f.store.flush();
+  f.store.setAlias('192.0.2.20', '合成设备'); f.store.close();
+  // The exact legacy table contract, without any path column.
+  const db = new DatabaseSync(join(f.root, USAGE_DATABASE));
+  db.exec(`BEGIN; ALTER TABLE minute_usage RENAME TO new_minute_usage;
+    CREATE TABLE minute_usage(at INTEGER NOT NULL, sourceIP TEXT NOT NULL, host TEXT NOT NULL, outbound TEXT NOT NULL, process TEXT NOT NULL, inboundUser TEXT NOT NULL, upload INTEGER NOT NULL, download INTEGER NOT NULL,
+      PRIMARY KEY(at,sourceIP,host,outbound,process,inboundUser));
+    INSERT INTO minute_usage SELECT at,sourceIP,host,outbound,process,inboundUser,upload,download FROM new_minute_usage;
+    DROP TABLE new_minute_usage;
+    CREATE INDEX minute_source_time ON minute_usage(sourceIP,at);
+    CREATE INDEX minute_host_time ON minute_usage(host,at);
+    CREATE INDEX minute_outbound_time ON minute_usage(outbound,at);
+    PRAGMA user_version=1; COMMIT;`); db.close();
+  const before = (await inspectUsageDatabase(f.root))!;
+  assert.equal(before.schemaVersion, 1); // Inspection must not migrate.
+  await f.restart();
+  const old = f.store.query(query(undefined, undefined, { dimension: 'route' })) as any;
+  assert.equal(old.rows[0].recorded, false); assert.equal(old.rows[0].label, 'DIRECT');
+  f.advance(1000); f.store.ingest(frame(15, 150)); f.store.flush();
+  const after = (await inspectUsageDatabase(f.root))!;
+  assert.equal(after.schemaVersion, 2); assert.equal(after.identity, before.identity); assert.equal(after.aliasDigest, before.aliasDigest);
+  assert.equal(after.download, 150); assert.equal(after.dailyDownload, 150);
+  assert.equal((f.store.query(query()) as any).status.startedAt, start);
+  await f.restart(); assert.equal((await inspectUsageDatabase(f.root))!.download, 150);
 });
 
 test('expired domain details are unavailable while daily source totals and aliases survive retention', async t => {

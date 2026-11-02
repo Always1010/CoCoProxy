@@ -101,7 +101,9 @@ npm run test:management
 
 私有状态目录的 `usage.sqlite` 使用 Node 内置 SQLite，WAL 与 FULL 同步模式；约每五秒把分钟汇总、每日源 IP 汇总、缺口和采集检查点在同一事务提交，正常关闭等待采集并排空。异常退出最多损失未提交窗口中已无法从核心恢复的明细。已提交检查点支持管理进程重启后按差值继续；数据库损坏、版本不支持或权限不安全时拒绝统计访问并保留文件，不自动重建。分钟明细保留 30 天，每日源 IP 汇总保留 365 天，按小时清理，备注不随用量过期。
 
-`GET /api/cocoproxy/usage/status` 返回采集与保留范围；`POST /api/cocoproxy/usage/query` 接收 `{startTime,endTime,dimension,filters?,sort?,order?,search?,page?,pageSize?,overview?}`。所有接口仍要求管理认证，写入与 POST 查询要求同源 Origin。维度只允许 sourceIP/host/outbound/process/inboundUser，时间跨度最多 365 天，分页最多 200 项；SQL 标识符固定许可、值使用绑定参数。超过明细期限仅支持按 IP 的每日汇总，其他维度返回 `USAGE_DETAIL_EXPIRED`，不能把过期明细解释为零用量。
+`GET /api/cocoproxy/usage/status` 返回采集与保留范围；`POST /api/cocoproxy/usage/query` 接收 `{startTime,endTime,dimension,filters?,sort?,order?,search?,page?,pageSize?,overview?}`。所有接口仍要求管理认证，写入与 POST 查询要求同源 Origin。维度只允许 sourceIP/host/outbound/process/inboundUser/route，时间跨度最多 365 天，分页最多 200 项；SQL 标识符固定许可、值使用绑定参数。超过明细期限仅支持按 IP 的每日汇总，其他维度返回 `USAGE_DETAIL_EXPIRED`，不能把过期明细解释为零用量。
+
+用量库 schema 2 保存当时的代理链路与命中规则类型、内容，`route` 查询按链路、规则及最终出口分组，返回稳定 `key`、从策略到出口排列的 `chain`、`rule`、`rulePayload` 和 `recorded`。不读取当前策略选择反推历史；缺失链路时出口为 Unknown。schema 1 在首次正常打开时事务迁移，保留计数、检查点、备注和库身份，旧路径保持未记录；只读部署检查接受两版且不执行迁移，schema 2 不能由旧版程序读取。
 
 `PUT /api/cocoproxy/usage/alias` 接收 `{sourceIP,label}`，给规范化 IP 添加最多 40 字备注，空白备注删除。备注可重名，历史查询使用当前备注，不改变分组或历史字节，不关联登录授权、NAT 后设备或物理身份。不会导入浏览器 IndexedDB 中可能互相重叠的历史。用量与域名属于私有数据，不写入源码、通用日志或默认可提交输出。
 

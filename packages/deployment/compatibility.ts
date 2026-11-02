@@ -32,6 +32,7 @@ export function assessStateSchema(store: StateStore, observedVersion: unknown, d
   if (!contract || contract.schemaVersion !== 1 || !contract.stateSchemas || !Object.hasOwn(contract.stateSchemas, store)) return 'not-declared' as const;
   // v2 deliberately reads and migrates the legacy grant document without revoking tokens.
   if (store === 'trustedDevices' && observedVersion === 1 && contract.stateSchemas.trustedDevices === 2) return 'supported-version' as const;
+  if (store === 'usage' && observedVersion === 1 && contract.stateSchemas.usage === 2) return 'supported-version' as const;
   return contract.stateSchemas[store] === observedVersion ? 'supported-version' as const : 'unsupported-version' as const;
 }
 export type CompatibilityStatus = 'supported' | 'unsupported' | 'unknown';

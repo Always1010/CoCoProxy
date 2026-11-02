@@ -9,7 +9,7 @@ const { t, locale } = useI18n()
 useHead({ title: computed(() => t('coco.pzUsageCocoproxy')) })
 type Dimension = 'sourceIP' | 'host' | 'outbound' | 'process' | 'inboundUser'
 type Sort = 'label' | 'upload' | 'download' | 'total'
-interface Row { label: string; upload: number; download: number; total: number; count: number }
+interface Row { label: string; upload: number; download: number; total: number; count: number; key?: string; chain?: string[]; rule?: string; rulePayload?: string; recorded?: boolean }
 interface Result {
   rows: Row[]; totalRows: number; aliases: Record<string, string>; resolution: 'minute' | 'day'
   summary?: { upload: number; download: number; unattributed: number; sources: number }
@@ -32,7 +32,7 @@ const details = ref<Result | null>(null)
 const aliases = ref<Record<string, string>>({})
 const selected = ref<string | null>(null)
 interface ExpandedRow { rows: Row[]; page: number; total: number; busy: boolean; error: (() => string) | null; key: string; version: number }
-const expanded = ref<Record<string, ExpandedRow>>({})
+const expanded = ref<Record<string, ExpandedRow>>(Object.create(null))
 const expandedBusy = computed(() => Object.values(expanded.value).some(row => row.busy))
 const rankPage = ref(0)
 const detailPage = ref(0)
@@ -68,7 +68,7 @@ let overviewKey = '', detailKey = ''
 const assignChanged = <T,>(current: T, next: T): T => JSON.stringify(current) === JSON.stringify(next) ? current : next
 function clearExpanded() {
   for (const controller of expandedControllers.values()) controller.abort()
-  expandedControllers.clear(); expanded.value = {}
+  expandedControllers.clear(); expanded.value = Object.create(null)
 }
 const current = computed(() => options.value.find(option => option.value === view.value)!)
 const detailDimension = computed<Dimension>(() => view.value === 'host' ? 'sourceIP' : 'host')
@@ -157,7 +157,7 @@ async function loadExpanded(label: string, background = false) {
   if (key !== state.key) { state.rows = []; state.total = 0; state.error = null; state.key = key }
   state.busy = !background
   try {
-    const result = await query({ dimension: view.value === 'outbound' ? 'sourceIP' : 'outbound', filters: { ...filters(), [detailDimension.value]: label }, page: state.page, pageSize }, controller.signal)
+    const result = await query({ dimension: view.value === 'outbound' ? 'sourceIP' : 'route', filters: { ...filters(), [detailDimension.value]: label }, page: state.page, pageSize }, controller.signal)
     if (expanded.value[label] === state && version === state.version) { state.rows = assignChanged(state.rows, result.rows); state.total = result.totalRows; state.error = null }
   } catch (cause) {
     if (expanded.value[label] === state && version === state.version) state.error = state.rows.length ? () => t('coco.pzUpdateFailedShowingPreviousData') : () => cocoproxyErrorMessage(cause, t)
@@ -291,9 +291,13 @@ onBeforeUnmount(() => {
             <template v-for="row in details?.rows ?? []" :key="row.label">
               <tr class="hover:bg-base-content/5"><td class="max-w-[55vw] sm:max-w-none"><div class="flex items-center gap-2"><button type="button" class="inline-flex min-w-0 items-center gap-1 text-left" :aria-expanded="!!expanded[row.label]" @click="toggle(row)"><IconChevronDown v-if="!!expanded[row.label]" :size="14" class="shrink-0" /><IconChevronRight v-else :size="14" class="shrink-0" /><span class="truncate font-mono text-xs">{{ display(row.label) }}{{ detailDimension === 'sourceIP' && aliases[row.label] ? `(${aliases[row.label]})` : '' }}</span></button><button v-if="detailDimension === 'sourceIP' && isAddress(row.label)" type="button" class="btn btn-ghost btn-xs shrink-0" @click="editNote(row.label)"><IconEdit :size="12" />{{ t('coco.pzNote') }}</button></div></td><td class="whitespace-nowrap">{{ formatBytes(row.upload) }}</td><td class="whitespace-nowrap">{{ formatBytes(row.download) }}</td><td class="whitespace-nowrap font-bold text-primary">{{ formatBytes(row.total) }}</td></tr>
               <tr v-if="expanded[row.label]"><td colspan="4" class="bg-base-content/5 p-4">
-                <p class="mb-2 flex items-center gap-2 text-xs text-base-content/60">{{ view === 'outbound' ? t('coco.pzSourceIp') : t('coco.pzOutbounds') }}<span :class="{ invisible: !expanded[row.label]!.busy }" :aria-hidden="!expanded[row.label]!.busy" role="status">{{ t('coco.pzLoading') }}</span></p>
+                <p class="mb-2 flex items-center gap-2 text-xs text-base-content/60">{{ view === 'outbound' ? t('coco.pzSourceIp') : t('coco.usageRoute') }}<span :class="{ invisible: !expanded[row.label]!.busy }" :aria-hidden="!expanded[row.label]!.busy" role="status">{{ t('coco.pzLoading') }}</span></p>
                 <p v-if="expanded[row.label]!.error" class="mb-2 text-xs text-error" role="alert">{{ expanded[row.label]!.error?.() }}</p>
-                <div v-for="child in expanded[row.label]!.rows" :key="child.label" class="flex flex-wrap justify-between gap-2 py-1 text-xs"><span class="break-all">{{ display(child.label) }}{{ view === 'outbound' && aliases[child.label] ? `(${aliases[child.label]})` : '' }}</span><span>↑ {{ formatBytes(child.upload) }} · ↓ {{ formatBytes(child.download) }} · {{ formatBytes(child.total) }}</span></div>
+                <div v-for="child in expanded[row.label]!.rows" :key="child.key ?? child.label" class="border-b border-base-content/10 py-2 text-xs last:border-0">
+                  <div class="flex flex-wrap justify-between gap-2"><span class="break-all">{{ child.chain?.length ? child.chain.join(' → ') : display(child.label) }}{{ view === 'outbound' && aliases[child.label] ? `(${aliases[child.label]})` : '' }}</span><span class="whitespace-nowrap">↑ {{ formatBytes(child.upload) }} · ↓ {{ formatBytes(child.download) }} · {{ formatBytes(child.total) }}</span></div>
+                  <p v-if="view !== 'outbound' && !child.recorded" class="mt-1 text-base-content/50">{{ t('coco.usageRouteUnrecorded') }}</p>
+                  <details v-if="child.rule" class="mt-1 text-base-content/60"><summary class="cursor-pointer">{{ t('coco.usageMatchedRule') }}</summary><p class="mt-1 break-all font-mono">{{ child.rule }}{{ child.rulePayload ? `,${child.rulePayload}` : '' }}</p></details>
+                </div>
                 <p v-if="!expanded[row.label]!.busy && !expanded[row.label]!.rows.length && !expanded[row.label]!.error" class="text-xs text-base-content/50">{{ t('coco.pzNoDetails') }}</p>
                 <div v-if="expanded[row.label]!.total > pageSize" class="mt-2 flex justify-between"><button class="btn btn-ghost btn-xs" type="button" :disabled="expanded[row.label]!.page === 0 || expanded[row.label]!.busy" @click="expanded[row.label]!.page--; loadExpanded(row.label)"><IconChevronLeft :size="14" />{{ t('coco.pzPrevious') }}</button><button class="btn btn-ghost btn-xs" type="button" :disabled="(expanded[row.label]!.page + 1) * pageSize >= expanded[row.label]!.total || expanded[row.label]!.busy" @click="expanded[row.label]!.page++; loadExpanded(row.label)">{{ t('coco.pzNext') }}<IconChevronRight :size="14" /></button></div>
               </td></tr>

@@ -653,6 +653,9 @@
   "quality": "Quality",
   "sortDefault": "Default",
   "coco": {
+    "usageRoute": "Routing path (policy groups → final exit)",
+    "usageRouteUnrecorded": "Policy path not recorded. The known exit is retained; historical paths cannot be recovered.",
+    "usageMatchedRule": "View the rule matched at the time",
     "process": {
       "trace": {
         "chooseRound": "Select a recorded round",

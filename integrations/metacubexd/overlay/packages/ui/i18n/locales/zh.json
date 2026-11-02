@@ -653,6 +653,9 @@
   "quality": "质量",
   "sortDefault": "默认",
   "coco": {
+    "usageRoute": "分流路径（策略组 → 最终出口）",
+    "usageRouteUnrecorded": "策略路径未记录，保留已知出口；旧历史无法补录。",
+    "usageMatchedRule": "查看当时命中的规则",
     "process": {
       "trace": {
         "chooseRound": "选择一轮记录",

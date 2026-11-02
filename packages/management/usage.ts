@@ -8,14 +8,15 @@ import { ManagementError, exactRecord, readJsonBody } from './http.ts';
 import { normalizeIP } from './request-address.ts';
 
 export const USAGE_DATABASE = 'usage.sqlite';
-export const USAGE_SCHEMA = 1;
+export const USAGE_SCHEMA = 2;
 const APPLICATION_ID = 0x43435055;
 const DAY = 86_400_000, MINUTE = 60_000;
 export const USAGE_DETAIL_RETENTION = 30 * DAY, USAGE_DAILY_RETENTION = 365 * DAY;
-const dimensions = ['sourceIP', 'host', 'outbound', 'process', 'inboundUser'] as const;
+const dimensions = ['sourceIP', 'host', 'outbound', 'process', 'inboundUser', 'route'] as const;
 export type UsageDimension = typeof dimensions[number];
 type Counters = { upload: number; download: number };
-export type UsageConnection = Counters & { id: string; sourceIP: string; host: string; outbound: string; process: string; inboundUser: string };
+type UsageRoute = { chain: string[]; rule: string; rulePayload: string };
+export type UsageConnection = Counters & { id: string; sourceIP: string; host: string; outbound: string; process: string; inboundUser: string; route?: UsageRoute };
 export type UsageSnapshot = Counters & { epoch: string; connections: UsageConnection[] };
 type Checkpoint = Counters & { epoch: string; at: number; connections: Record<string, Counters> };
 type Entry = UsageConnection & { at: number };
@@ -30,13 +31,17 @@ export function parseUsageSnapshot(value: unknown, epoch: string): UsageSnapshot
   if (!snapshot || !integer(snapshot.uploadTotal) || !integer(snapshot.downloadTotal) || !Array.isArray(snapshot.connections) || snapshot.connections.length > 10_000 || !text(epoch)) fail('USAGE_SAMPLE_INVALID');
   const ids = new Set<string>();
   const connections = snapshot.connections.map((input: unknown): UsageConnection => {
-    const row = input as { id?: unknown; upload?: unknown; download?: unknown; metadata?: Record<string, unknown>; chains?: unknown[] };
+    const row = input as { id?: unknown; upload?: unknown; download?: unknown; metadata?: Record<string, unknown>; chains?: unknown; rule?: unknown; rulePayload?: unknown };
     if (!row || !text(row.id, 160) || ids.has(row.id) || !integer(row.upload) || !integer(row.download) || !row.metadata || typeof row.metadata !== 'object') fail('USAGE_SAMPLE_INVALID');
     ids.add(row.id);
     const field = (value: unknown, fallback: string) => text(value) ? value : fallback;
+    // Mihomo v1.19.33 appends each enclosing group after its selected adapter.
+    // Store the observed path in policy-to-exit order; never infer it from today's selections.
+    const chains = Array.isArray(row.chains) && row.chains.length > 0 && row.chains.length <= 32 && row.chains.every(item => text(item)) ? row.chains as string[] : null;
+    const route = chains ? { chain: [...chains].reverse(), rule: text(row.rule, 128) ? row.rule : '', rulePayload: text(row.rulePayload, 2048) ? row.rulePayload : '' } : undefined;
     return { id: row.id, upload: row.upload, download: row.download, sourceIP: normalizeIP(row.metadata.sourceIP) ?? 'Inner',
-      host: field(row.metadata.host, field(row.metadata.destinationIP, 'Unknown')), outbound: field(row.chains?.[0], 'DIRECT'),
-      process: field(row.metadata.process, 'Unknown'), inboundUser: field(row.metadata.inboundUser, 'Unknown') };
+      host: field(row.metadata.host, field(row.metadata.destinationIP, 'Unknown')), outbound: chains?.[0] ?? 'Unknown',
+      process: field(row.metadata.process, 'Unknown'), inboundUser: field(row.metadata.inboundUser, 'Unknown'), ...(route ? { route } : {}) };
   });
   return { epoch, upload: snapshot.uploadTotal, download: snapshot.downloadTotal, connections };
 }
@@ -68,10 +73,29 @@ export async function inspectUsageFiles(directory: string, owner = process.geteu
   return present;
 }
 
-function validateDatabase(db: DatabaseSync): void {
-  if (db.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID || db.prepare('PRAGMA user_version').get()?.user_version !== USAGE_SCHEMA) fail('USAGE_SCHEMA_UNSUPPORTED');
+function validateDatabase(db: DatabaseSync): number {
+  const version = Number(db.prepare('PRAGMA user_version').get()?.user_version);
+  if (db.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID || ![1, USAGE_SCHEMA].includes(version)) fail('USAGE_SCHEMA_UNSUPPORTED');
   if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') fail();
   for (const table of ['metadata', 'minute_usage', 'daily_usage', 'source_aliases', 'gaps']) db.prepare(`SELECT * FROM ${table} LIMIT 0`).all();
+  db.prepare(`SELECT at,sourceIP,host,outbound,process,inboundUser,upload,download${version === 2 ? ',route' : ''} FROM minute_usage LIMIT 0`).all();
+  return version;
+}
+
+/** Preserve the original aggregates/checkpoint/identity; old paths remain explicitly unrecorded. */
+function migrateDatabase(db: DatabaseSync, version: number): void {
+  if (version !== 1) return;
+  db.exec(`BEGIN IMMEDIATE;
+    ALTER TABLE minute_usage RENAME TO legacy_minute_usage;
+    CREATE TABLE minute_usage(at INTEGER NOT NULL, sourceIP TEXT NOT NULL, host TEXT NOT NULL, outbound TEXT NOT NULL, process TEXT NOT NULL, inboundUser TEXT NOT NULL, route TEXT NOT NULL, upload INTEGER NOT NULL, download INTEGER NOT NULL,
+      PRIMARY KEY(at,sourceIP,host,outbound,process,inboundUser,route));
+    INSERT INTO minute_usage SELECT at,sourceIP,host,outbound,process,inboundUser,'',upload,download FROM legacy_minute_usage;
+    DROP TABLE legacy_minute_usage;
+    CREATE INDEX minute_source_time ON minute_usage(sourceIP,at);
+    CREATE INDEX minute_host_time ON minute_usage(host,at);
+    CREATE INDEX minute_outbound_time ON minute_usage(outbound,at);
+    PRAGMA user_version=${USAGE_SCHEMA};
+    COMMIT;`);
 }
 
 /** Single management process owns this connection and its bounded in-memory batch. */
@@ -104,8 +128,8 @@ export class UsageStore {
         db.exec(`BEGIN IMMEDIATE;
           PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${USAGE_SCHEMA};
           CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-          CREATE TABLE minute_usage(at INTEGER NOT NULL, sourceIP TEXT NOT NULL, host TEXT NOT NULL, outbound TEXT NOT NULL, process TEXT NOT NULL, inboundUser TEXT NOT NULL, upload INTEGER NOT NULL, download INTEGER NOT NULL,
-            PRIMARY KEY(at,sourceIP,host,outbound,process,inboundUser));
+          CREATE TABLE minute_usage(at INTEGER NOT NULL, sourceIP TEXT NOT NULL, host TEXT NOT NULL, outbound TEXT NOT NULL, process TEXT NOT NULL, inboundUser TEXT NOT NULL, route TEXT NOT NULL, upload INTEGER NOT NULL, download INTEGER NOT NULL,
+            PRIMARY KEY(at,sourceIP,host,outbound,process,inboundUser,route));
           CREATE INDEX minute_source_time ON minute_usage(sourceIP,at);
           CREATE INDEX minute_host_time ON minute_usage(host,at);
           CREATE INDEX minute_outbound_time ON minute_usage(outbound,at);
@@ -116,9 +140,10 @@ export class UsageStore {
         db.prepare('INSERT INTO metadata VALUES(?,?)').run('identity', randomUUID());
         db.exec('COMMIT');
       }
-      validateDatabase(db);
+      const schemaVersion = validateDatabase(db);
       // FULL commits preserve the last completed batch across power loss; no unsafe speed pragmas.
       db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000;');
+      migrateDatabase(db, schemaVersion);
       return new UsageStore(db, now);
     } catch { db.close(); fail(); }
   }
@@ -135,7 +160,7 @@ export class UsageStore {
   private add(at: number, connection: UsageConnection, upload: number, download: number) {
     if (!upload && !download) return;
     const row = { ...connection, at: Math.floor(at / MINUTE) * MINUTE, upload, download };
-    const key = JSON.stringify([row.at, row.sourceIP, row.host, row.outbound, row.process, row.inboundUser]);
+    const key = JSON.stringify([row.at, row.sourceIP, row.host, row.outbound, row.process, row.inboundUser, row.route]);
     const old = this.entries.get(key);
     if (old) { old.upload += upload; old.download += download; } else this.entries.set(key, row);
   }
@@ -171,10 +196,10 @@ export class UsageStore {
     if (!this.checkpoint) return;
     try {
       this.db.exec('BEGIN IMMEDIATE');
-      const minute = this.db.prepare(`INSERT INTO minute_usage VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(at,sourceIP,host,outbound,process,inboundUser) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download`);
+      const minute = this.db.prepare(`INSERT INTO minute_usage VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(at,sourceIP,host,outbound,process,inboundUser,route) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download`);
       const daily = this.db.prepare(`INSERT INTO daily_usage VALUES(?,?,?,?) ON CONFLICT(at,sourceIP) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download`);
       for (const row of this.entries.values()) {
-        minute.run(row.at, row.sourceIP, row.host, row.outbound, row.process, row.inboundUser, row.upload, row.download);
+        minute.run(row.at, row.sourceIP, row.host, row.outbound, row.process, row.inboundUser, row.route ? JSON.stringify(row.route) : '', row.upload, row.download);
         daily.run(Math.floor(row.at / DAY) * DAY, row.sourceIP, row.upload, row.download);
       }
       const gap = this.db.prepare('INSERT OR IGNORE INTO gaps VALUES(?,?,?)');
@@ -233,9 +258,15 @@ export class UsageStore {
     for (const [key, field] of Object.entries(filters)) { where.push(`u.${key}=?`); params.push(field as string); }
     if (search) { where.push(`(instr(lower(u.${dimension}),lower(?))>0${dimension === 'sourceIP' ? " OR instr(lower(coalesce(a.label,'')),lower(?))>0" : ''})`); params.push(search); if (dimension === 'sourceIP') params.push(search); }
     const base = `FROM ${table} u LEFT JOIN source_aliases a ON a.sourceIP=u.sourceIP WHERE ${where.join(' AND ')}`;
-    const group = `SELECT u.${dimension} AS label, sum(u.upload) AS upload, sum(u.download) AS download, sum(u.upload+u.download) AS total, count(*) AS count ${base} GROUP BY u.${dimension}`;
+    const route = dimension === 'route';
+    const group = `SELECT u.${route ? 'outbound' : dimension} AS label, ${route ? 'u.route AS route,' : ''} sum(u.upload) AS upload, sum(u.download) AS download, sum(u.upload+u.download) AS total, count(*) AS count ${base} GROUP BY ${route ? 'u.route,u.outbound' : `u.${dimension}`}`;
     const totalRows = Number(this.db.prepare(`SELECT count(*) AS n FROM (${group})`).get(...params)?.n);
-    const rows = this.db.prepare(`${group} ORDER BY ${sort} ${order},label ASC LIMIT ? OFFSET ?`).all(...params, size as number, (page as number) * (size as number)).map(row => ({ ...row, kind: dimension }));
+    const rows = this.db.prepare(`${group} ORDER BY ${sort} ${order},label ASC${route ? ',route ASC' : ''} LIMIT ? OFFSET ?`).all(...params, size as number, (page as number) * (size as number)).map(row => {
+      if (!route) return { ...row, kind: dimension };
+      const { route: stored, ...counters } = row;
+      const path = stored ? JSON.parse(String(stored)) as UsageRoute : null;
+      return { ...counters, kind: dimension, key: createHash('sha256').update(JSON.stringify([row.label, stored])).digest('hex'), ...path, recorded: !!path };
+    });
     const result = { rows, totalRows, page, pageSize: size, resolution: daily ? 'day' : 'minute', aliases: this.aliases(), status: this.status() };
     if (!value.overview) return result;
     const summary = this.db.prepare(`SELECT coalesce(sum(u.upload),0) AS upload, coalesce(sum(u.download),0) AS download, coalesce(sum(CASE WHEN u.sourceIP='Unattributed' THEN u.upload+u.download ELSE 0 END),0) AS unattributed, count(DISTINCT CASE WHEN u.sourceIP NOT IN ('Unattributed','Inner') THEN u.sourceIP END) AS sources ${base}`).get(...params);
@@ -310,7 +341,7 @@ export async function inspectUsageDatabase(directory: string, owner = process.ge
   if (wal) { try { await lstat(path + '-shm'); } catch { fail(); } }
   const db = new DatabaseSync(wal ? path : pathToFileURL(path).href + '?immutable=1', { readOnly: true });
   try {
-    validateDatabase(db);
+    const schemaVersion = validateDatabase(db);
     const metadata = db.prepare("SELECT value FROM metadata WHERE key='checkpoint'").get()?.value;
     if (typeof metadata === 'string') parseCheckpoint(metadata);
     const detail = db.prepare('SELECT count(*) AS detailRows, coalesce(sum(upload),0) AS upload, coalesce(sum(download),0) AS download FROM minute_usage').get()!;
@@ -318,7 +349,7 @@ export async function inspectUsageDatabase(directory: string, owner = process.ge
     const identity = db.prepare("SELECT value FROM metadata WHERE key='identity'").get()?.value;
     if (typeof identity !== 'string' || !/^[a-f0-9-]{36}$/.test(identity)) fail();
     const aliasDigest = createHash('sha256').update(JSON.stringify(db.prepare('SELECT sourceIP,label FROM source_aliases ORDER BY sourceIP').all())).digest('hex');
-    return { schemaVersion: USAGE_SCHEMA, integrity: 'ok' as const, identity: createHash('sha256').update(identity).digest('hex'), aliasDigest,
+    return { schemaVersion, integrity: 'ok' as const, identity: createHash('sha256').update(identity).digest('hex'), aliasDigest,
       detailRows: Number(detail.detailRows), upload: Number(detail.upload), download: Number(detail.download),
       dailyRows: Number(daily.dailyRows), dailyUpload: Number(daily.dailyUpload), dailyDownload: Number(daily.dailyDownload),
       aliases: Number(db.prepare('SELECT count(*) AS n FROM source_aliases').get()?.n) };

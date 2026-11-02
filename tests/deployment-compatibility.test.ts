@@ -24,6 +24,9 @@ test('state compatibility refuses newer or unknown schemas without guessing a da
   assert.equal(assessStateSchema('trustedDevices', 2, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('trustedDevices', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('trustedDevices', 3, DEPLOYMENT_STATE_COMPATIBILITY), 'unsupported-version');
+  assert.equal(assessStateSchema('usage', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
+  assert.equal(assessStateSchema('usage', 2, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
+  assert.equal(assessStateSchema('usage', 2, { schemaVersion: 1, stateSchemas: { usage: 1 } }), 'unsupported-version');
   assert.equal(assessStateSchema('transaction', 1, undefined), 'not-declared');
   assert.equal(assessStateSchema('workspace', 1, { schemaVersion: 1, stateSchemas: {} }), 'not-declared');
   for (const value of [undefined, null, '1', 0, -1, 1.5]) {
@@ -80,7 +83,7 @@ test('upgrade inspects the real SQLite reader, rejects undeclared targets and bl
   assert.equal(result.findings.find(item => item.store === 'usage')?.contentCompatibility.status, 'supported');
   const undeclared = await inspectStateCompatibility(host, { schemaVersion: 1, stateSchemas: {}, contentReaders: {} });
   assert.equal(undeclared.findings.find(item => item.store === 'usage')?.contentCompatibility.status, 'unknown');
-  const db = new DatabaseSync(join(directory, USAGE_DATABASE)); db.exec('PRAGMA user_version=2'); db.close();
+  const db = new DatabaseSync(join(directory, USAGE_DATABASE)); db.exec('PRAGMA user_version=3'); db.close();
   const incompatible = await inspectStateCompatibility(host, DEPLOYMENT_STATE_COMPATIBILITY);
   assert.equal(incompatible.findings.find(item => item.store === 'usage')?.contentCompatibility.status, 'unsupported');
 });
