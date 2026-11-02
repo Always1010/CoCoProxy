@@ -32,18 +32,38 @@ class DeploymentClock:
     def __init__(self):
         self.started = time.monotonic()
         self.phases = []
+        self.candidate_verification = []
 
     def mark(self, phase):
         self.phases.append({'phase': phase, 'elapsedMs': round((time.monotonic() - self.started) * 1000)})
 
     def report(self):
         return {'elapsedMs': round((time.monotonic() - self.started) * 1000), 'phases': list(self.phases),
+                'candidateVerification': list(self.candidate_verification),
                 'scope': 'coordinator-not-client-outage'}
+
+    def candidates(self, phase, result):
+        stats = result.get('candidateVerification')
+        if isinstance(stats, dict) and all(type(stats.get(key)) is int and stats[key] >= 0 for key in ['recompiled', 'reused', 'durationMs']):
+            self.candidate_verification.append({'phase': phase, **{key: stats[key] for key in ['recompiled', 'reused', 'durationMs']}})
+
+
+def installer_result(args):
+    result = json.loads(run(args))
+    evidence = result.pop('candidateEvidence', None)
+    if evidence is not None:
+        need('--candidate-evidence' in args and isinstance(evidence, dict) and set(evidence) == {'schemaVersion', 'binding', 'verified'} and evidence.get('schemaVersion') == 1 and
+             isinstance(evidence.get('binding'), str) and re.fullmatch('[a-f0-9]{64}', evidence['binding']) and isinstance(evidence.get('verified'), list) and
+             len(evidence['verified']) <= 4096 and all(isinstance(item, str) and re.fullmatch('[a-f0-9]{64}', item) for item in evidence['verified']),
+             'REMOTE_CANDIDATE_EVIDENCE_INVALID')
+        replace(Path(args[args.index('--candidate-evidence') + 1]), evidence)
+    return result
 
 
 def preinstall_release(installer, common):
-    result = json.loads(run(installer + ['--operation', 'stage', *common, '--apply']))
+    result = installer_result(installer + ['--operation', 'stage', *common, '--apply'])
     need(result.get('staged') is True and result.get('liveSettingsChanged') is False, 'REMOTE_RELEASE_NOT_PREINSTALLED')
+    return result
 
 
 def compare_preservation(before, after, frozen=False):
@@ -531,7 +551,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
                 'previousRuntime': stable, 'previousNetworkSha256': hashlib.sha256(network).hexdigest() if network is not None else None}
     replace(journal, progress)
     try:
-        preinstall_release(installer, common)
+        clock.candidates('stage', preinstall_release(installer, common))
         clock.mark('release-preinstalled')
         progress['timings'] = clock.report()
         replace(journal, progress)
@@ -551,7 +571,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         # Apply repeats the complete read-only preflight before any live write;
         # an extra dry-run here would duplicate it inside the outage window.
         files_attempted = True
-        run(installer + ['--operation', 'upgrade', *common, '--apply'])
+        clock.candidates('apply', installer_result(installer + ['--operation', 'upgrade', *common, '--apply']))
         clock.mark('management-files-installed')
         progress['phase'] = 'frontend-files-installed'
         replace(journal, progress)
@@ -695,6 +715,12 @@ def main_locked(options):
         systemctl = runtime['systemctlPath']
         service = management['serviceUser']
         common = ['--payload', payload, '--manifest-sha256', options.manifest_sha256, '--input', next_path]
+        if installed:
+            evidence_directory = temporary / 'candidate-evidence'
+            evidence_directory.mkdir(mode=0o700)
+            evidence_path = evidence_directory / 'verified.json'
+            replace(evidence_path, {'schemaVersion': 1, 'binding': None, 'verified': []})
+            common += ['--candidate-evidence', evidence_path]
         # Existing public installer verifies all payload, receipt, ownership,
         # state compatibility and unchanged configuration before maintenance.
         if installed and receipt['manifestSha256'] == options.manifest_sha256:
@@ -702,7 +728,8 @@ def main_locked(options):
             print(json.dumps({'installed': True, 'unchanged': True, 'commit': manifest['commit'],
                 'preservation': {'status': 'not-run', 'code': 'REMOTE_UNCHANGED_NO_PRESERVATION_WINDOW'}}))
             return
-        preparation = json.loads(run(installer + ['--operation', 'prepare' if installed else 'install', *common]))
+        preparation = installer_result(installer + ['--operation', 'prepare' if installed else 'install', *common])
+        clock.candidates('prepare', preparation)
         clock.mark('installation-preflight-complete')
         if installed:
             if preparation.get('readiness') != 'prepared-not-applied' or preparation.get('review', {}).get('configurationChanged') is not False:
@@ -730,7 +757,8 @@ def main_locked(options):
             candidate = new_input(old, options.manifest_sha256, runtime['binarySha256'], True)
             replace(next_path, candidate)
             common += ['--preserve-runtime']
-            pinned = json.loads(run(installer + ['--operation', 'prepare', *common]))
+            pinned = installer_result(installer + ['--operation', 'prepare', *common])
+            clock.candidates('prepare-preserve-runtime', pinned)
             clock.mark('runtime-preservation-preflight-complete')
             need(pinned.get('readiness') == 'prepared-not-applied' and pinned.get('review', {}).get('configurationChanged') is False,
                  'REMOTE_RUNTIME_PRESERVATION_NOT_READY')
@@ -818,7 +846,7 @@ def main_locked(options):
             originals[PRIVATE / 'router-ssh.json'] = json.loads(regular(PRIVATE / 'router-ssh.json', True)) if (PRIVATE / 'router-ssh.json').exists() else None
         try:
             if installed:
-                preinstall_release(installer, common)
+                clock.candidates('stage', preinstall_release(installer, common))
                 record_phase('release-preinstalled')
                 record_phase('maintenance-started')
                 maintenance_started = True
@@ -867,7 +895,7 @@ def main_locked(options):
                     if before_preservation.get('runtime', {}).get('coherent') is False else 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
             operation = 'upgrade' if installed else 'install'
             files_attempted = True
-            run(installer + ['--operation', operation, *common, '--apply'])
+            clock.candidates('apply', installer_result(installer + ['--operation', operation, *common, '--apply']))
             record_phase('files-installed')
             written_inputs[input_path] = candidate
             replace(input_path, candidate)

@@ -31,6 +31,22 @@ const aggregate = (checks: readonly { status: CompatibilityStatus }[]): Compatib
 const unavailableState = (): StateContentAssessment => ({ status: 'unknown', code: 'DEPLOYMENT_STATE_OBSERVATION_UNAVAILABLE',
   content: 'not-assessed', version: 'not-declared', scope: 'current-reader-content-and-declared-format' });
 
+export interface CandidateEvidence { binding: string | null; verified: Set<string> }
+/** Evidence contains digests only. The installer requires a root-private transaction file. */
+export function parseCandidateEvidence(value: unknown): CandidateEvidence {
+  const input = value as { schemaVersion?: unknown; binding?: unknown; verified?: unknown };
+  const hash = (item: unknown): item is string => typeof item === 'string' && /^[a-f0-9]{64}$/.test(item);
+  if (!input || Object.keys(input).sort().join(',') !== 'binding,schemaVersion,verified' || input.schemaVersion !== 1 ||
+      !(input.binding === null || hash(input.binding)) || !Array.isArray(input.verified) || input.verified.length > 4096 ||
+      !input.verified.every(hash) || new Set(input.verified).size !== input.verified.length || input.binding === null && input.verified.length) {
+    throw new Error('INSTALL_CANDIDATE_EVIDENCE_INVALID');
+  }
+  return { binding: input.binding, verified: new Set(input.verified) };
+}
+export function candidateEvidenceBinding(manifestSha256: string, runtime: RuntimeSettings): string {
+  return createHash('sha256').update(canonicalJson({ manifestSha256, runtime } as unknown as JsonObject)).digest('hex');
+}
+
 /** Missing nested parents are allowed; existing ancestors must still pass the installer's root trust predicate. */
 export async function stateDirectoryExists(path: string, host: {
   info(path: string): Promise<{ isDirectory(): boolean } | null>; rootPath(path: string): Promise<void>;
@@ -135,9 +151,15 @@ function referencedCandidates(observations: StateObservation[]): { references: S
 }
 
 export async function createUpgradeAssessment(context: UpgradeAssessmentContext, host: UpgradeStateHost,
-  inspectedState?: Awaited<ReturnType<typeof inspectStateCompatibility>>) {
+  inspectedState?: Awaited<ReturnType<typeof inspectStateCompatibility>>,
+  memo?: { manifestSha256: string; evidence: CandidateEvidence }) {
   const state = inspectedState ?? await inspectStateCompatibility(host, context.targetDeclaration);
   const { observations } = state, references = referencedCandidates(observations);
+  const started = performance.now(); let recompiled = 0, reused = 0;
+  if (memo) {
+    const binding = candidateEvidenceBinding(memo.manifestSha256, context.targetRuntime);
+    if (memo.evidence.binding !== binding) { memo.evidence.verified.clear(); memo.evidence.binding = binding; }
+  }
   const historyChecks: CompatibilityCheck[] = [];
   const found = new Set<string>(); let enumerationComplete = true;
   try {
@@ -155,9 +177,13 @@ export async function createUpgradeAssessment(context: UpgradeAssessmentContext,
         historyChecks.push(unavailable); continue;
       }
       try {
-        const config = parseStoredCandidate(bytes, generation);
+        // Always re-read through the private host and hash current bytes. A hit
+        // proves exactly these canonical bytes were compiled for this target.
+        const cached = memo?.evidence.verified.has(generation) && createHash('sha256').update(bytes).digest('hex') === generation;
+        const config = cached ? undefined : parseStoredCandidate(bytes, generation);
         try {
-          recompileRuntimeCandidate(config, context.targetRuntime, generation);
+          if (cached) reused++;
+          else { recompiled++; recompileRuntimeCandidate(config!, context.targetRuntime, generation); memo?.evidence.verified.add(generation); }
           historyChecks.push(check(declared(context.targetDeclaration, 'candidateReader') ? 'supported' : 'unknown',
             declared(context.targetDeclaration, 'candidateReader') ? 'UPGRADE_CANDIDATE_FORMAT_SUPPORTED' : 'UPGRADE_CANDIDATE_READER_NOT_DECLARED',
             'historical-candidate-format', '候选摘要、规范字节和运行重编译一致；核心语法尚未执行。'));
@@ -168,6 +194,7 @@ export async function createUpgradeAssessment(context: UpgradeAssessmentContext,
       }
     }
   } catch { enumerationComplete = false; }
+  if (memo) for (const id of memo.evidence.verified) if (!found.has(id)) memo.evidence.verified.delete(id);
   if (!enumerationComplete || references.uncertain) {
     const unknown = check('unknown', 'UPGRADE_HISTORY_OBSERVATION_UNAVAILABLE', 'historical-candidate-inventory', '历史候选或运行引用未取得完整观察证据。');
     historyChecks.push(unknown);
@@ -232,6 +259,7 @@ export async function createUpgradeAssessment(context: UpgradeAssessmentContext,
     '静态配置、回执头和未执行的动态归属验证单独列出。', [], networkChecks);
   const stateFormats = stateCheck(observations);
   return { schemaVersion: 1, readOnly: true, scope: 'observed-upgrade-compatibility-no-automatic-migration',
+    candidateVerification: { recompiled, reused, durationMs: Math.round(performance.now() - started) },
     assessments: { state: stateFormats, configuration, historyCandidates: history, network, identity },
     stateCompatibility: state.findings, automaticProgramRollback: false,
     readiness: aggregate([stateFormats, configuration, history, network, identity]) };

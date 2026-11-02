@@ -5,7 +5,7 @@ import { posix, resolve } from 'node:path';
 import { arch, machine, platform } from 'node:os';
 import { execFile } from 'node:child_process';
 import { renderDeploymentPlan, type DeploymentPlan } from './plan.ts';
-import { createUpgradeAssessment, inspectStateCompatibility, stateDirectoryExists, type UpgradeStateHost } from './upgrade-assessment.ts';
+import { createUpgradeAssessment, inspectStateCompatibility, stateDirectoryExists, parseCandidateEvidence, type CandidateEvidence, type UpgradeStateHost } from './upgrade-assessment.ts';
 import { parseRuntimeSettings } from '../runtime/settings.ts';
 import { verifyManagedWeb } from '../setup/https.ts';
 import { inspectServiceAccount, validServiceAccountRequest } from './service-account.ts';
@@ -29,7 +29,7 @@ export type Receipt = { schemaVersion: 1; status: 'pending' | 'complete' | 'unin
   manifestSha256: string; files: Owned[]; serviceUid: number; stateDirectory: string; credentialPath: string;
   runtimeManifestSha256?: string;
   transaction?: { id: string; operation: Operation } };
-export type InstallOptions = { payload: string; input: string; manifestSha256: string; operation: Operation; apply?: boolean; reviewedConfigurationSha256?: string; preserveRuntime?: boolean };
+export type InstallOptions = { payload: string; input: string; manifestSha256: string; operation: Operation; apply?: boolean; reviewedConfigurationSha256?: string; preserveRuntime?: boolean; candidateEvidence?: string };
 export type DeploymentLock = { schemaVersion: 1; id: string; pid: number; bootId: string; startTime: string };
 export function parseDeploymentLock(value: unknown): DeploymentLock {
   const lock = value as DeploymentLock;
@@ -651,6 +651,15 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
   const stateCompatibility = inspectedState?.findings ?? [];
   if (!preparing && options.operation === 'upgrade') assertDeploymentStateCompatibility(stateCompatibility);
   let compatibilityAssessment: Awaited<ReturnType<typeof createUpgradeAssessment>> | undefined;
+  let candidateEvidence: CandidateEvidence | undefined;
+  if (options.candidateEvidence !== undefined) {
+    require(options.operation === 'upgrade', 'INSTALL_CANDIDATE_EVIDENCE_UPGRADE_ONLY');
+    const path = absolute(options.candidateEvidence), parent = posix.dirname(path);
+    await trusted(parent); require(((await lstat(parent)).mode & 0o7777) === 0o700, 'INSTALL_CANDIDATE_EVIDENCE_PRIVATE_REQUIRED');
+    await privateFile(path, 0);
+    try { candidateEvidence = parseCandidateEvidence(JSON.parse((await regular(path, 1024 * 1024)).toString())); }
+    catch { throw new InstallError('INSTALL_CANDIDATE_EVIDENCE_INVALID'); }
+  }
   if (options.operation === 'upgrade') {
     const oldRuntime = parseRuntimeSettings(JSON.parse((await regular(input.runtime.settingsPath, 65536)).toString()));
     const newRuntime = parseRuntimeSettings(JSON.parse(plan.files.find(file => file.path === input.runtime.settingsPath)!.content));
@@ -674,7 +683,8 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
       }
     } catch { networkReceipt = { observation: 'unavailable' }; }
     compatibilityAssessment = await createUpgradeAssessment({ targetDeclaration: declaration, currentRuntime: oldRuntime, targetRuntime: newRuntime,
-      currentManagement: oldManagement, targetManagement: newManagement, credential, credentialObserved, networkReceipt }, stateHost, inspectedState);
+      currentManagement: oldManagement, targetManagement: newManagement, credential, credentialObserved, networkReceipt }, stateHost, inspectedState,
+      candidateEvidence ? { manifestSha256: options.manifestSha256, evidence: candidateEvidence } : undefined);
     if (!preparing) {
       require(compatibilityAssessment.assessments.historyCandidates.status !== 'unsupported', 'INSTALL_HISTORY_CANDIDATE_UNSUPPORTED');
       require(compatibilityAssessment.assessments.historyCandidates.status !== 'unknown', 'INSTALL_HISTORY_COMPATIBILITY_NOT_DECLARED');
@@ -689,6 +699,8 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
   if (!preparing && !preserveRuntime) await networkClear(input);
   // No mkdir, receipt, locks, temp files or helper execution before --apply.
   const preview = { operation: preparing ? 'prepare' : options.operation, apply: Boolean(options.apply), release: target,
+    ...(candidateEvidence ? { candidateEvidence: { schemaVersion: 1, binding: candidateEvidence.binding, verified: [...candidateEvidence.verified] } } : {}),
+    ...(compatibilityAssessment ? { candidateVerification: compatibilityAssessment.candidateVerification } : {}),
     files: plan.files.map(file => ({ path: file.path, mode: file.mode, owner: file.owner,
       action: options.operation === 'uninstall' ? file.sensitive ? 'preserve' : 'remove' : 'write' })),
     preserved: [input.runtime.stateDirectory, input.management.credentialPath, '/var/lib/cocoproxy-gateway-network'],

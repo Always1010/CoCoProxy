@@ -17,6 +17,19 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_candidate_evidence_is_private_scratch_and_is_removed_from_installer_results(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'verified.json'
+            evidence = {'schemaVersion': 1, 'binding': 'a' * 64, 'verified': ['b' * 64]}
+            args = ['node', 'synthetic-installer', '--candidate-evidence', path]
+            with patch.object(deploy, 'run', return_value=json.dumps({'prepared': True, 'candidateEvidence': evidence}).encode()):
+                self.assertEqual(deploy.installer_result(args), {'prepared': True})
+            self.assertEqual(json.loads(path.read_text()), evidence)
+            with patch.object(deploy, 'run', return_value=json.dumps({'candidateEvidence': {**evidence, 'private': 'synthetic'}}).encode()):
+                with self.assertRaisesRegex(RuntimeError, 'REMOTE_CANDIDATE_EVIDENCE_INVALID'):
+                    deploy.installer_result(args)
+            self.assertEqual(json.loads(path.read_text()), evidence)
+
     def test_command_failures_disclose_only_fixed_codes_and_known_service_actions(self):
         cases = [
             (['/usr/bin/systemctl', 'start', 'cocoproxy-gateway-guard.service'], b'', b'private systemd log',

@@ -11,7 +11,7 @@ import { compileConfig, canonicalJson } from '../packages/config/index.ts';
 import { parseStoredCandidate } from '../packages/transaction/index.ts';
 import { recompileRuntimeCandidate } from '../packages/runtime/settings.ts';
 import { initialWorkspace } from '../packages/management/workspace.ts';
-import { createUpgradeAssessment, inspectStateCompatibility, stateDirectoryExists, type UpgradeAssessmentContext, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
+import { createUpgradeAssessment, inspectStateCompatibility, stateDirectoryExists, parseCandidateEvidence, type UpgradeAssessmentContext, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
 import { parseRuntimeSettings } from '../packages/runtime/settings.ts';
 import { renderDeploymentPlan } from '../packages/deployment/plan.ts';
 
@@ -122,6 +122,28 @@ function upgradeFixture() {
     credential, credentialObserved: true, networkReceipt: { observation: 'absent' } };
   return { context, host, files, active, calls };
 }
+
+test('transaction candidate evidence reuses only matching bytes, source manifest and complete target settings', async () => {
+  const fixture = upgradeFixture();
+  const evidence = parseCandidateEvidence({ schemaVersion: 1, binding: null, verified: [] });
+  const memo = { manifestSha256: 'a'.repeat(64), evidence };
+  const assess = () => createUpgradeAssessment(fixture.context, fixture.host, undefined, memo);
+  assert.equal((await assess()).candidateVerification.recompiled, 2);
+  fixture.calls.length = 0;
+  const reused = await assess();
+  assert.equal(reused.candidateVerification.recompiled, 0); assert.equal(reused.candidateVerification.reused, 2);
+  assert.equal(fixture.calls.filter(path => path.startsWith('read:candidates/')).length, 2);
+  memo.manifestSha256 = 'b'.repeat(64);
+  assert.equal((await assess()).candidateVerification.recompiled, 2);
+  fixture.context.targetRuntime = { ...fixture.context.targetRuntime, binarySha256: 'c'.repeat(64) };
+  assert.equal((await assess()).candidateVerification.recompiled, 2);
+  fixture.files.set('candidates/' + fixture.active.id + '.json', 'invalid current bytes');
+  assert.equal((await assess()).assessments.historyCandidates.status, 'unsupported');
+  fixture.files.delete('candidates/' + fixture.active.id + '.json');
+  assert.ok((await assess()).assessments.historyCandidates.checks!.some(check => check.code === 'UPGRADE_REFERENCED_CANDIDATE_MISSING'));
+  assert.equal(evidence.verified.has(fixture.active.id), false);
+  assert.throws(() => parseCandidateEvidence({ schemaVersion: 1, binding: null, verified: ['a'.repeat(64)] }));
+});
 
 test('upgrade preparation checks observed formats and identity without running a core or disclosing private values', async () => {
   const fixture = upgradeFixture();

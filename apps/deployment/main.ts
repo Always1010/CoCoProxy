@@ -9,7 +9,7 @@ try {
     const key = args[index];
     if (key === '--apply' && !apply) { apply = true; continue; }
     if (key === '--preserve-runtime' && !preserveRuntime) { preserveRuntime = true; continue; }
-    if (!['--payload', '--input', '--manifest-sha256', '--operation', '--reviewed-configuration-sha256', '--reviewed-recovery-sha256'].includes(key) || values[key] ||
+    if (!['--payload', '--input', '--manifest-sha256', '--operation', '--reviewed-configuration-sha256', '--reviewed-recovery-sha256', '--candidate-evidence'].includes(key) || values[key] ||
       !args[index + 1] || args[index + 1].startsWith('--')) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
     values[key] = args[++index];
   }
@@ -25,7 +25,8 @@ try {
     if (!values['--payload'] || !values['--input'] || !values['--manifest-sha256'] || values['--reviewed-recovery-sha256'] ||
       operation === 'prepare' && (apply || values['--reviewed-configuration-sha256'])) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
     if (operation === 'stage' && (!apply || values['--reviewed-configuration-sha256'])) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
-    const options = { payload: values['--payload'], input: values['--input'], manifestSha256: values['--manifest-sha256'], preserveRuntime };
+    const options = { payload: values['--payload'], input: values['--input'], manifestSha256: values['--manifest-sha256'], preserveRuntime,
+      candidateEvidence: values['--candidate-evidence'] };
     result = operation === 'prepare' ? await prepareUpgrade(options) : operation === 'stage' ? await stageUpgrade(options) : await deployRelease({ ...options,
       operation: operation as InstallOptions['operation'], reviewedConfigurationSha256: values['--reviewed-configuration-sha256'], apply });
   }
