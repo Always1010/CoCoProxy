@@ -246,6 +246,8 @@ prepare 只读验证新旧发布、收据、文件、身份、工具和输入，
 
 compatibilityAssessment 分列 state、configuration、historyCandidates、network、identity 的状态、原因和条件。状态/候选复用完整 reader，目标 manifest 的 stateSchemas、contentReaders、configurationReader、candidateReader 须与源码契约吻合，不仅凭同版本号推导兼容。坏内容为 unsupported，缺少/未知 reader 或无法可信读取为 unknown；候选核验规范字节、摘要、引用及目标设置重编译，不运行目标核心；网络只比静态绑定与回执状态，不证明实时资源归属；身份变化的合法失效与损坏分开报告。
 
+运行中的保留快照仍逐项核对读取前后的状态；若明确检测到这次读取期间有后台原子写入，最多重新读取五次，持续变化仍拒绝。权限、损坏、身份等错误不自动重试；停服安装窗口的冻结快照也不重试或放宽字节一致性。
+
 原 stateCompatibility 和 `readiness:"prepared-not-applied"` 保留兼容语义，只表示必需静态格式可继续准备，仍须看 readinessScope 和完整五维结论，不表示动态网络可用或可立即安装。坏内容、reader 缺少/未知及观察失败分别用 `DEPLOYMENT_STATE_CONTENT_INVALID` / `DEPLOYMENT_STATE_JSON_INVALID`、`DEPLOYMENT_STATE_CONTENT_READER_NOT_DECLARED` / `DEPLOYMENT_STATE_CONTENT_READER_UNKNOWN`、`DEPLOYMENT_STATE_OBSERVATION_UNAVAILABLE` 表达。远程入口只接受原有配置未变化路径。
 
 ### 失败升级的自动恢复

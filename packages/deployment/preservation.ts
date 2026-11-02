@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { open, readdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { isAbsolute, join } from 'node:path';
 import { canonicalJson, type JsonObject } from '../config/index.ts';
 import { privateRead, inspectPrivateDirectory } from '../storage/private-files.ts';
@@ -38,7 +39,18 @@ export class PreservationError extends Error {
   readonly code: string;
   constructor(code = 'REMOTE_PRESERVATION_SNAPSHOT_UNAVAILABLE') { super(code); this.code = code; }
 }
-function need(value: unknown): asserts value { if (!value) throw new PreservationError(); }
+function need(value: unknown, code?: string): asserts value { if (!value) throw new PreservationError(code); }
+
+/** A live writer may complete during the multi-file read. Retry that conflict only, with a fixed bound. */
+export async function readConsistentPreservation<T>(read: () => Promise<T>, frozen: boolean): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await read(); }
+    catch (error) {
+      if (frozen || !(error instanceof PreservationError) || error.code !== 'REMOTE_PRESERVATION_SNAPSHOT_CHANGED' || attempt >= 4) throw error;
+      await delay(50);
+    }
+  }
+}
 
 /** No state values leave this projection: only fixed roles, digests and expiry metadata. */
 export function summarizePreservation(documents: Documents, sources: Record<string, string>, candidate: string | null,
@@ -125,6 +137,10 @@ export async function captureUsagePreservation(directory: string, frozen = true)
 
 /** Service-UID-only file reads; no store initialization, locks, service objects or network. */
 export async function capturePreservation(managementSettingsPath: string, frozen = false) {
+  return readConsistentPreservation(() => capturePreservationOnce(managementSettingsPath, frozen), frozen);
+}
+
+async function capturePreservationOnce(managementSettingsPath: string, frozen: boolean) {
   need(isAbsolute(managementSettingsPath));
   const managementBytes = await privateRead(managementSettingsPath, 65536);
   const management = JSON.parse(managementBytes);
@@ -181,12 +197,12 @@ export async function capturePreservation(managementSettingsPath: string, frozen
   snapshot.files.candidates = hash(candidates);
   snapshot.files.administrator = digest(credentialBytes);
   // A snapshot spans several atomic readers. Reject concurrent changes instead of mixing generations.
-  for (const [role, [path, maximum]] of Object.entries(stores)) need(await optional(join(settings.stateDirectory, path), maximum) === documents[role as Store]);
+  for (const [role, [path, maximum]] of Object.entries(stores)) need(await optional(join(settings.stateDirectory, path), maximum) === documents[role as Store], 'REMOTE_PRESERVATION_SNAPSHOT_CHANGED');
   for (const [id, bytes] of Object.entries(sources)) need(await privateRead(join(settings.stateDirectory, 'subscriptions', id + '.json'), 4194304) === bytes);
   for (const [name, checksum] of candidates) need(digest(await privateRead(join(settings.stateDirectory, 'candidates', name))) === checksum);
   for (const [role, name] of Object.entries(directoryRoles)) {
     const path = join(settings.stateDirectory, name);
-    try { need(directories[role].present && hash((await readdir(path)).sort()) === directories[role].entries); }
+    try { need(directories[role].present && hash((await readdir(path)).sort()) === directories[role].entries, 'REMOTE_PRESERVATION_SNAPSHOT_CHANGED'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || directories[role].present) throw error; }
   }
   // Credential replacement during the reads revokes the captured binding.

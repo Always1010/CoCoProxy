@@ -14,7 +14,7 @@ import { TrustedDeviceStore } from '../packages/management/trusted-devices.ts';
 import { createManagementGateway } from '../packages/management/http.ts';
 import { WorkspaceStore, initialWorkspace } from '../packages/management/workspace.ts';
 import { SubscriptionStore } from '../packages/subscriptions/index.ts';
-import { capturePreservation, captureUsagePreservation, summarizePreservation } from '../packages/deployment/preservation.ts';
+import { capturePreservation, captureUsagePreservation, summarizePreservation, readConsistentPreservation, PreservationError } from '../packages/deployment/preservation.ts';
 import { UsageStore, parseUsageSnapshot } from '../packages/management/usage.ts';
 import type { RuntimeSettings } from '../packages/runtime/types.ts';
 
@@ -32,6 +32,22 @@ function compare(before: Snapshot, after: Snapshot, frozen = false): any {
   assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
 }
 const find = (result: any, id: string) => result.checks.find((item: any) => item.id === id);
+
+test('live preservation retries only bounded concurrent-write conflicts and frozen checks never retry', async () => {
+  let calls = 0;
+  const value = { stable: true };
+  assert.equal(await readConsistentPreservation(async () => {
+    if (++calls < 3) throw new PreservationError('REMOTE_PRESERVATION_SNAPSHOT_CHANGED');
+    return value;
+  }, false), value);
+  assert.equal(calls, 3);
+  for (const [frozen, code, expected] of [[true, 'REMOTE_PRESERVATION_SNAPSHOT_CHANGED', 1],
+    [false, 'REMOTE_PRESERVATION_SNAPSHOT_UNAVAILABLE', 1], [false, 'REMOTE_PRESERVATION_SNAPSHOT_CHANGED', 5]] as const) {
+    calls = 0;
+    await assert.rejects(readConsistentPreservation(async () => { calls++; throw new PreservationError(code); }, frozen), { code });
+    assert.equal(calls, expected);
+  }
+});
 
 async function fixture(t: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-preservation-')); t.after(() => rm(root, { recursive: true, force: true }));
