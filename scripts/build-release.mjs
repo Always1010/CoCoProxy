@@ -154,31 +154,61 @@ async function selection(root, expected, exemptions = new Map()) {
   await canonical(root); await walk();
   if (seen.size !== wanted.size) fail('BUILD_SOURCE_CHANGED');
 }
-async function snapshot(config, execute) {
+async function snapshot(config, execute, previousProof) {
   const git = (args, options = {}) => execute('git', ['-C', config.snapshot, ...args], { capture: true, ...options });
   if (resolve((await git(['rev-parse', '--show-toplevel'])).trim()) !== config.snapshot
     || (await git(['status', '--porcelain=v1', '--untracked-files=all'])).length
     || (await git(['rev-parse', 'HEAD'])).trim() !== config.expected.commit) fail('BUILD_SNAPSHOT_CHANGED');
-  const tree = new Map((await git(['ls-tree', '-rz', '--full-tree', 'HEAD'])).split('\0').filter(Boolean).map(line => {
+  const rawTree = await git(['ls-tree', '-rz', '--full-tree', 'HEAD']);
+  const proof = hash(JSON.stringify([config.source, config.snapshot, config.expected, rawTree]));
+  // This proof lives only in one build invocation. Both source trees are still
+  // read and hashed on every pass, and the Git tree/status are checked above.
+  if (previousProof !== undefined) {
+    if (previousProof !== proof) fail('BUILD_SNAPSHOT_CHANGED');
+    return proof;
+  }
+  const tree = new Map(rawTree.split('\0').filter(Boolean).map(line => {
     const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line);
     if (!match) fail('BUILD_SNAPSHOT_INVALID');
     return [match[3], { mode: match[1], oid: match[2] }];
   }));
   if (tree.size !== config.expected.files.length) fail('BUILD_SNAPSHOT_CHANGED');
-  for (const [path, , , executable] of config.expected.files) {
+  for (const [path, size, sha256, executable] of config.expected.files) {
     const entry = tree.get(path);
     if (!entry || entry.mode !== (executable ? '100755' : '100644')) fail('BUILD_SNAPSHOT_CHANGED');
     // Ask Git to apply the snapshot's clean rules, including reviewed CRLF normalization.
-    const oid = (await git(['hash-object', '--path', path, '--stdin'], { input: await regular(join(config.source, path)) })).trim();
+    const bytes = await regular(join(config.source, path));
+    if (bytes.length !== size || hash(bytes) !== sha256) fail('BUILD_SOURCE_CHANGED');
+    const oid = (await git(['hash-object', '--path', path, '--stdin'], { input: bytes })).trim();
     if (oid !== entry.oid) fail('BUILD_SNAPSHOT_CHANGED');
   }
+  return proof;
 }
-export async function verifyBuildInputs(config, execute = executeBuildCommand, workName) {
+async function verifyInputs(config, execute, workName, proof) {
   const exemptions = new Map([['node_modules', config.runtimeDependencies], ['tooling/node_modules', config.toolingDependencies]]);
   if (workName) exemptions.set(workName, null);
   await selection(config.mirror, config.expected);
   await selection(config.source, config.expected, exemptions);
-  await snapshot(config, execute);
+  return snapshot(config, execute, proof);
+}
+export async function verifyBuildInputs(config, execute = executeBuildCommand, workName) {
+  await verifyInputs(config, execute, workName);
+}
+
+class BuildClock {
+  started = performance.now();
+  phases = [];
+  async measure(step, action) {
+    const started = performance.now(); let status = 'complete';
+    try { return await action(); }
+    catch (error) { status = 'failed'; throw error; }
+    finally {
+      const phase = { step, status, durationMs: Math.round(performance.now() - started), elapsedMs: Math.round(performance.now() - this.started) };
+      this.phases.push(phase);
+      process.stderr.write(`${JSON.stringify({ phase: 'build-timing', ...phase })}\n`);
+    }
+  }
+  report() { return { elapsedMs: Math.round(performance.now() - this.started), phases: [...this.phases], scope: 'build-coordinator-not-client-outage' }; }
 }
 async function dependencyLink(target, existing) {
   const info = await stat(target);
@@ -260,10 +290,15 @@ export async function componentBaseline(config, baseRelease, execute, components
 
 /** The CLI holds the shared workspace lock for this entire operation. Injection is for synthetic orchestration tests. */
 export async function runBuildRelease(config, { deploy = false, execute = executeBuildCommand, components = 'all', baseRelease, preview = false } = {}) {
+  const clock = new BuildClock();
+  let proof;
+  const checkInputs = workName => { return clock.measure(workName ? 'source-recheck' : 'source-verification', async () => {
+    proof = await verifyInputs(config, execute, workName, proof);
+  }); };
   parseComponents(components);
   await validateBuildConfig(config);
-  await verifyBuildInputs(config, execute);
-  const baseline = components !== 'all' ? await componentBaseline(config, baseRelease, execute, components) : undefined;
+  await checkInputs();
+  const baseline = components !== 'all' ? await clock.measure('component-baseline', () => componentBaseline(config, baseRelease, execute, components)) : undefined;
   const { frontendUpdate, componentUpdate, inputComparison } = baseline ?? {};
   if (preview) return { preview: true, components, commit: config.expected.commit,
     build: components === 'frontend' ? ['frontend', 'server-public-assets'] : components === 'backend' ? ['backend', 'release'] : components === 'core' ? ['reviewed-core', 'release'] : ['frontend', 'backend', 'release'],
@@ -296,41 +331,41 @@ export async function runBuildRelease(config, { deploy = false, execute = execut
       serverDir = join(work, 'server-output');
       await cp(join(baseline.baseRelease, 'server/.output'), serverDir, { recursive: true });
     } else {
-      await command('tar', ['-xzf', config.upstreamArchive, '--strip-components=1', '-C', upstream]);
-      await node(['scripts/verify-git-tree.mjs', '--directory', upstream, '--manifest', join(config.source, 'integrations/metacubexd/source-tree.json')]);
+      await clock.measure('upstream-extract', () => command('tar', ['-xzf', config.upstreamArchive, '--strip-components=1', '-C', upstream]));
+      await clock.measure('upstream-verification', () => node(['scripts/verify-git-tree.mjs', '--directory', upstream, '--manifest', join(config.source, 'integrations/metacubexd/source-tree.json')]));
       if (hash(await regular(join(upstream, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_UPSTREAM_LOCK_CHANGED');
-      await node(['scripts/apply-metacubexd-overlay.mjs', '--directory', upstream]);
+      await clock.measure('upstream-overlay', () => node(['scripts/apply-metacubexd-overlay.mjs', '--directory', upstream]));
       for (const path of ['node_modules', 'packages/ui/node_modules', 'packages/agent/node_modules', 'packages/config-editor/node_modules', 'apps/server/node_modules']) {
         const existing = join(config.upstreamDependencies, path);
         if (!(await lstat(existing)).isDirectory()) fail('BUILD_DEPENDENCY_MISSING');
         await dependencyLink(join(upstream, path), existing);
       }
-      if (components !== 'frontend') await command('npm', ['run', 'typecheck']);
+      if (components !== 'frontend') await clock.measure('source-typecheck', () => command('npm', ['run', 'typecheck']));
       if (components === 'backend') await cp(join(baseline.baseRelease, 'server/.output/public'), env.UI_DIST, { recursive: true });
       else {
-        await pnpm(['--filter', '@metacubexd/ui', 'generate']);
-        await node(['scripts/typecheck-metacubexd-ui.mjs', '--directory', upstream]);
+        await clock.measure('ui-generate', () => pnpm(['--filter', '@metacubexd/ui', 'generate']));
+        await clock.measure('ui-typecheck', () => node(['scripts/typecheck-metacubexd-ui.mjs', '--directory', upstream]));
       }
-      await pnpm(['--filter', '@metacubexd/server', 'build']);
+      await clock.measure('server-build', () => pnpm(['--filter', '@metacubexd/server', 'build']));
       if (hash(await regular(join(upstream, 'pnpm-lock.yaml'))) !== management.lockfileSha256
         || hash(await regular(join(config.upstreamDependencies, 'pnpm-lock.yaml'))) !== management.lockfileSha256) fail('BUILD_UPSTREAM_LOCK_CHANGED');
       serverDir = join(upstream, 'apps/server/.output');
     }
-    await verifyBuildInputs(config, execute, workName);
-    const receipt = JSON.parse(await node([join(config.snapshot, 'scripts/stage-explicit-release.mjs'), '--source-dir', config.snapshot,
+    await checkInputs(workName);
+    const receipt = JSON.parse(await clock.measure('release-stage', () => node([join(config.snapshot, 'scripts/stage-explicit-release.mjs'), '--source-dir', config.snapshot,
       '--server-dir', serverDir, '--runtime-dependencies', config.runtimeDependencies,
       '--core', components === 'management' ? join(baseline.baseRelease, 'bin/mihomo') : config.core, '--output', output,
       ...(frontendUpdate ? ['--frontend-update', JSON.stringify(frontendUpdate)] : []),
-      ...(componentUpdate ? ['--component-update', JSON.stringify(componentUpdate)] : [])], { capture: true }));
-    const result = await verifyBuiltRelease(output, receipt, config.expected.commit);
-    await verifyBuildInputs(config, execute, workName);
+      ...(componentUpdate ? ['--component-update', JSON.stringify(componentUpdate)] : [])], { capture: true })));
+    const result = await clock.measure('release-verification', () => verifyBuiltRelease(output, receipt, config.expected.commit));
+    await checkInputs(workName);
     if (deploy) {
       try {
-        await command('sudo', [process.execPath, join(output, 'source/scripts/deploy-ssh.mjs'), '--local', '--payload', output,
-          '--manifest-sha256', result.manifestSha256]);
+        await clock.measure('deployment', () => command('sudo', [process.execPath, join(output, 'source/scripts/deploy-ssh.mjs'), '--local', '--payload', output,
+          '--manifest-sha256', result.manifestSha256]));
       } catch { fail('BUILD_DEPLOY_FAILED'); }
     }
-    return { ...result, deployed: deploy };
+    return { ...result, deployed: deploy, timings: clock.report() };
   } finally { await rm(work, { recursive: true, force: true }); }
 }
 

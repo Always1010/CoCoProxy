@@ -63,6 +63,8 @@ async function fixture(t, failure) {
       const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, commit, ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}), files: [{ path, size: Buffer.byteLength(bytes), sha256: sha256(bytes), mode: '0644' }] }));
       await write(join(stagedOutput, 'manifest.json'), manifest, 0o600);
       if (failure === 'payload-drift') await write(join(stagedOutput, path), 'altered payload');
+      if (failure === 'source-drift-late') await write(join(config.source, 'package.json'), '[]\n');
+      if (failure === 'snapshot-drift-late') await write(join(config.snapshot, 'package.json'), '[]\n');
       return JSON.stringify({ staged: true, commit, manifestSha256: sha256(manifest), fileCount: 1 });
     }
     return '';
@@ -211,6 +213,15 @@ test('changed payload cannot deploy even when a previous release exists', async 
   assert.equal(state.commands.some(({ command }) => command === 'sudo'), false);
 });
 
+test('reused source proof still rejects source and snapshot changes after staging', async t => {
+  for (const failure of ['source-drift-late', 'snapshot-drift-late']) await t.test(failure, async t => {
+    const state = await fixture(t, failure);
+    await assert.rejects(runBuildRelease(state.config, { deploy: true, execute: state.execute }),
+      { code: failure === 'source-drift-late' ? 'BUILD_SOURCE_CHANGED' : 'BUILD_SNAPSHOT_CHANGED' });
+    assert.equal(state.commands.some(item => item.command === 'sudo'), false);
+  });
+});
+
 test('successful deployment passes only the current verified output and manifest digest', async t => {
   const originalUiDist = process.env.UI_DIST;
   process.env.UI_DIST = join(tmpdir(), 'synthetic-stale-ui');
@@ -219,6 +230,12 @@ test('successful deployment passes only the current verified output and manifest
   const result = await runBuildRelease(state.config, { deploy: true, execute: state.execute });
   assert.equal(result.output, state.output()); assert.equal(result.deployed, true);
   assert.equal(result.manifestSha256, sha256(await readFile(join(result.output, 'manifest.json'))));
+  assert.equal(state.commands.filter(item => item.command === 'git' && item.args.includes('hash-object')).length, state.config.expected.files.length);
+  for (const step of ['source-verification', 'ui-generate', 'ui-typecheck', 'server-build', 'release-stage', 'release-verification', 'deployment']) {
+    const phase = result.timings.phases.find(item => item.step === step);
+    assert.equal(phase?.status, 'complete'); assert.ok(phase.durationMs >= 0);
+  }
+  assert.equal(result.timings.phases.filter(item => item.step === 'source-recheck').length, 2);
   const deploy = state.commands.filter(({ command }) => command === 'sudo');
   assert.equal(deploy.length, 1);
   assert.deepEqual(deploy[0].args, [process.execPath, join(result.output, 'source/scripts/deploy-ssh.mjs'), '--local', '--payload', result.output, '--manifest-sha256', result.manifestSha256]);

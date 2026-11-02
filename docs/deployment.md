@@ -124,6 +124,8 @@ node source/scripts/deploy-ssh.mjs 192.0.2.2
 
 协调器输出及 `remote-last.json` 的 `timings` 使用单调时钟，记录载荷暂存、预装配完成、维护开始、核心就绪、交付恢复等累计毫秒数。比较相邻 `phases[].elapsedMs` 可定位耗时；`scope:coordinator-not-client-outage` 表示这些是流程时间，不能当作终端连续流量测得的断网时长。
 
+构建入口逐阶段输出 `phase:build-timing`，记录源码核验、上游准备、类型检查、UI／Server 编译、装配、发行核验及部署的 `durationMs` 与累计 `elapsedMs`，失败步骤也会输出计时；最终回执包含 `timings`。其范围包含可选部署，但不包含源码同步及最终临时目录清理。源码与 Git 提交的字节对应关系仅在本次构建进程内复用；构建前后仍重新读取两份源码的文件集合、字节摘要、执行位及 Git 快照身份，不跨次缓存。
+
 prepare 拒绝先输出 `phase:"prepare"` 的脱敏摘要和原因码，再返回 `REMOTE_UPGRADE_NOT_READY_OR_CONFIGURATION_CHANGED`，此时未暂停或停服。网络回执只有完整拥有状态才调用旧 helper；从未启用或已经退役不重复删除，回执不完整或中途变化均停止。
 
 保留核验分三个时点：

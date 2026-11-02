@@ -547,17 +547,21 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
             run([systemctl, 'disable', *enabled_units])
         baseline = preservation(True)
         need(baseline.get('ready') is True, 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
+        clock.mark('preservation-baseline-verified')
         # Apply repeats the complete read-only preflight before any live write;
         # an extra dry-run here would duplicate it inside the outage window.
         files_attempted = True
         run(installer + ['--operation', 'upgrade', *common, '--apply'])
+        clock.mark('management-files-installed')
         progress['phase'] = 'frontend-files-installed'
         replace(journal, progress)
         frozen = compare_preservation(baseline, preservation(True), frozen=True)
         need(frozen['status'] == 'pass', 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
+        clock.mark('preservation-install-window-verified')
         written_inputs[input_path] = candidate
         replace(input_path, candidate)
         inspect_complete(options.manifest_sha256)
+        clock.mark('installation-inspected')
         if enabled_units:
             run([systemctl, 'enable', *enabled_units])
         for unit in managed:
@@ -565,6 +569,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
                 run([systemctl, 'start', unit])
         if before['cocoproxy-management.service']['active']:
             management_ready(candidate['management'])
+        clock.mark('management-services-restored')
         # The pinned launcher must still recognize the current committed state,
         # including after a future systemd crash restart. It is never repointed.
         if stable['cocoproxy-mihomo.service'].get('ActiveState') == 'active':
@@ -578,6 +583,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
             need(active == ('active' if before[unit]['active'] else 'inactive') and enabled == before[unit]['enabled'],
                  'REMOTE_SERVICE_NOT_RESTORED')
         check_runtime()
+        clock.mark('preserved-runtime-verified')
         preserved_state = compare_preservation(baseline, preservation())
         need(preserved_state['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
         clock.mark('management-restored-verified')
@@ -697,6 +703,7 @@ def main_locked(options):
                 'preservation': {'status': 'not-run', 'code': 'REMOTE_UNCHANGED_NO_PRESERVATION_WINDOW'}}))
             return
         preparation = json.loads(run(installer + ['--operation', 'prepare' if installed else 'install', *common]))
+        clock.mark('installation-preflight-complete')
         if installed:
             if preparation.get('readiness') != 'prepared-not-applied' or preparation.get('review', {}).get('configurationChanged') is not False:
                 # Keep the existing diagnostics without disclosing private input or file paths.
@@ -724,6 +731,7 @@ def main_locked(options):
             replace(next_path, candidate)
             common += ['--preserve-runtime']
             pinned = json.loads(run(installer + ['--operation', 'prepare', *common]))
+            clock.mark('runtime-preservation-preflight-complete')
             need(pinned.get('readiness') == 'prepared-not-applied' and pinned.get('review', {}).get('configurationChanged') is False,
                  'REMOTE_RUNTIME_PRESERVATION_NOT_READY')
             return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
