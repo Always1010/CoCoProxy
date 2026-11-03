@@ -3,7 +3,7 @@ import { IconRefresh } from '@tabler/icons-vue'
 import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 const { t } = useI18n()
 defineProps<{ dirty?: boolean }>()
-const { view, workspace, busy, error, feedback, operation, run, load, save, editOverrides } = useWorkspace()
+const { view, workspace, busy, error, feedback, operation, run, load, save, applyPending, editOverrides } = useWorkspace()
 const profiles = computed(() => view.value?.sources.filter(source => source.kind === 'profile') ?? [])
 const visibleError = computed(() => error.value || (view.value?.error ? cocoproxyErrorMessage(new CoCoProxyError(view.value.error), t) : ''))
 
@@ -54,6 +54,6 @@ async function resetInvalidSelections() {
     </div>
     <div v-if="visibleError" role="alert" class="alert alert-error flex flex-wrap gap-2 py-2 text-sm"><span class="flex-1">{{ visibleError }}</span><button v-if="view?.invalidSelections?.length" class="btn btn-warning btn-sm" :disabled="busy" @click="resetInvalidSelections">{{ t('coco.pzResetInvalidSelections') }}</button></div>
     <div v-if="!busy && feedback && !visibleError" role="status" aria-live="polite" class="rounded-lg bg-success/10 px-3 py-2 text-sm text-success">{{ feedback }}</div>
-    <div v-if="!busy && view?.pending" class="flex items-center gap-2 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning"><span class="flex-1">{{ t('coco.pzTheseSettingsHaveNotTakenEffectThePreviousConfiguration') }}</span><button class="btn btn-ghost btn-sm" :title="t('coco.pzRetryUnappliedSettings')" :aria-label="t('coco.pzRetryUnappliedSettings')" :disabled="!!view.error" @click="run(() => save(() => {}))"><IconRefresh :size="16" />{{ t('coco.pzRetry') }}</button></div>
+    <div v-if="!busy && view?.pending" class="flex flex-wrap items-center gap-2 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning"><span class="min-w-0 flex-1">{{ t('coco.pzTheseSettingsHaveNotTakenEffectThePreviousConfiguration') }}</span><button class="btn btn-warning btn-sm" :title="t('coco.pzRetryUnappliedSettings')" :aria-label="t('coco.pzRetryUnappliedSettings')" :disabled="!!view.error || dirty" @click="run(applyPending)"><IconRefresh :size="16" />{{ t('coco.applyPendingSettings') }}</button></div>
   </div>
 </template>

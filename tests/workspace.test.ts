@@ -814,7 +814,7 @@ async function fixture(t: TestContext, deploymentOverrides: JsonObject = {}, aut
   const apply = (workspace: Workspace, expectedActive: string | null) => call<{ active: string; workspaceRevision: number }>('/workspace/apply', 'POST', { expectedRevision: workspace.revision, expectedActive });
   const candidate = async (id: string) => JSON.parse(await readFile(await new FileTransactionStore(state).readCandidate(id), 'utf8')) as JsonObject;
   return { state, events, bandwidthChecks, timings, call, view, save, apply, source, candidate, payloads, get action() { return action; },
-    restart: () => { action = createAction(); }, fail: () => { failActivation = true; },
+    restart: () => { action = createAction(); }, fail: (value = true) => { failActivation = value; },
     followSelections: () => { followSelections = true; },
     observe: (choices: Record<string, string>) => { observedChoices = choices; } };
 }
@@ -1063,6 +1063,71 @@ test('failed selection apply restores the active generation while keeping review
   assert.equal(view.groups.find(group => group.name === 'Proxy')!.selected, 'DIRECT');
   assert.equal(f.events.at(-1), 'restore');
   assert.equal((await new FileTransactionStore(f.state).status()).transaction, null);
+});
+
+for (const mode of ['local', 'subscription'] as const) {
+  test(`failed automatic takeover can select another node or return to the active node (${mode})`, async t => {
+    const f = await fixture(t);
+    const input = { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }],
+      'proxy-groups': [{ name: 'Proxy', type: 'select', proxies: ['synthetic-node', 'spare', 'outside'] }], rules: ['MATCH,Proxy'] };
+    await f.source('pool', input);
+    const policy = { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true };
+    const overrides = { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: { Proxy: policy } };
+    const saved = await f.save(settings({ mode, sourceIds: ['pool'], subscriptionId: mode === 'subscription' ? 'pool' : null,
+      local: structuredClone(overrides), subscriptionOverrides: { pool: structuredClone(overrides) } }), 0);
+    await f.apply(saved, null);
+    f.followSelections(); f.observe({ Proxy: 'synthetic-node' });
+    for (const returnToActive of [false, true]) {
+      const before = await f.view();
+      const target = returnToActive ? before.groups.find(group => group.name === 'Proxy')!.activeSelected : 'spare';
+      f.fail();
+      await assert.rejects(f.call('/workspace/select', 'POST', { expectedRevision: before.workspace.revision,
+        expectedActive: before.active, group: 'Proxy', name: 'outside' }), { code: 'ACTIVATION_FAILED' });
+      const pending = await f.view();
+      assert.equal(pending.pending, true);
+      f.fail(false);
+      const recovered = await f.call<{ view: View }>('/workspace/select', 'POST', { expectedRevision: pending.workspace.revision,
+        expectedActive: pending.active, group: 'Proxy', name: target });
+      assert.equal(recovered.view.pending, false);
+      assert.equal(recovered.view.groups.find(group => group.name === 'Proxy')!.activeSelected, target);
+      const edits = mode === 'local' ? recovered.view.workspace.local : recovered.view.workspace.subscriptionOverrides.pool;
+      assert.deepEqual(edits.automatic!.Proxy, { ...policy, enabled: false });
+    }
+    const before = await f.view();
+    const edited = withoutRevision(structuredClone(before.workspace));
+    const edits = mode === 'local' ? edited.local : edited.subscriptionOverrides.pool;
+    edits.rules.push('DOMAIN,pending.example,DIRECT');
+    const pending = await f.save(edited, before.workspace.revision);
+    const events = [...f.events];
+    await assert.rejects(f.call('/workspace/select', 'POST', { expectedRevision: pending.revision,
+      expectedActive: before.active, group: 'Proxy', name: 'outside' }), { code: 'WORKSPACE_PENDING' });
+    assert.deepEqual(f.events, events);
+    assert.equal((await f.view()).workspace.revision, pending.revision);
+  });
+}
+
+test('manual takeover tolerates an uncommitted automatic target without applying other pending edits', async t => {
+  const f = await fixture(t);
+  await f.source('pool', { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }] });
+  const saved = await f.save(settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [],
+    automatic: { Proxy: { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true } } } }), 0);
+  const active = await f.apply(saved, null);
+  f.followSelections(); f.observe({ Proxy: 'synthetic-node' });
+  assert.equal(await f.action.automaticSwitch((await f.action.automaticSnapshot())!, 'Proxy', 'spare', 'failure-recovery'), true);
+  const journalPath = join(f.state, 'automatic-selections.json');
+  const journal = JSON.parse(await readFile(journalPath, 'utf8'));
+  journal.targets.Proxy.target = 'synthetic-node';
+  journal.pendingEvent = { id: randomUUID(), at: Date.now(), group: 'Proxy', from: 'spare', to: 'synthetic-node',
+    reason: 'preferred-restored', signature: journal.targets.Proxy.signature, revision: saved.revision };
+  await writeFile(journalPath, JSON.stringify(journal), { mode: 0o600 });
+  const pending = await f.view();
+  assert.equal(pending.pending, true);
+  const result = await f.call<{ view: View }>('/workspace/select', 'POST', { expectedRevision: saved.revision,
+    expectedActive: pending.active, group: 'Proxy', name: 'outside' });
+  assert.equal(result.view.pending, false);
+  assert.equal(result.view.groups.find(group => group.name === 'Proxy')!.activeSelected, 'outside');
+  assert.notEqual(result.view.active, active.active);
+  assert.equal((await f.call<{ events: unknown[] }>('/automatic/status')).events.length, 1);
 });
 
 test('selection receipts require actual controller agreement even after the transaction commits', async t => {

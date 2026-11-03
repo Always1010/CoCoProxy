@@ -202,11 +202,28 @@ export function useWorkspace() {
     })
   }
 
+  async function applyPending() {
+    if (!view.value) throw new CoCoProxyError('WORKSPACE_UNAVAILABLE')
+    const { workspace, active } = view.value
+    operationKey.value = 'coco.applyingSettings'
+    try {
+      const result = await api.request<{ active: string }>('/api/cocoproxy/workspace/apply', {
+        method: 'POST', body: { expectedRevision: workspace.revision, expectedActive: active },
+      })
+      await load()
+      if (view.value.active !== result.active || view.value.pending) throw new CoCoProxyError('WORKSPACE_CONFLICT')
+      feedbackKey.value = 'coco.settingsSaved'
+    } catch (cause) {
+      try { await load() } catch { /* Preserve the original actionable error. */ }
+      throw cause
+    }
+  }
+
   function editOverrides(settings: WorkspaceSettings): WorkspaceOverrides {
     if (settings.mode === 'local') return settings.local
     const id = settings.mode === 'legacy' ? 'legacy' : settings.subscriptionId ?? ''
     return settings.subscriptionOverrides[id] ??= { selections: {}, rules: [] }
   }
 
-  return { api, view, workspace, overrides, busy, error, feedback, operation, load, run, save, select, editOverrides }
+  return { api, view, workspace, overrides, busy, error, feedback, operation, load, run, save, select, applyPending, editOverrides }
 }

@@ -206,7 +206,7 @@ function onScroll(event: Event) {
 
 async function selectNode(name: string) {
   const group = activeGroup.value
-  if (!group || busy.value || (group.now === name && !automaticEnabled.value)) return
+  if (!group || busy.value || (group.now === name && !automaticEnabled.value && !view.value?.pending)) return
   const top = nodeListEl.value?.scrollTop ?? 0
   const outerTop = props.scrollContainer?.scrollTop ?? 0
   try { await proxiesStore.selectProxyInGroup(group, name) }

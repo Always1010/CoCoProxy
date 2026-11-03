@@ -408,6 +408,65 @@ test('selection never replays an ambiguous write or reports an unconfirmed respo
   }
 });
 
+test('pending settings apply the displayed revision without rewriting settings or replaying a lost response', async () => {
+  for (const interrupted of [false, true]) {
+    let current = { workspace: { revision: 8 }, active: 'before', pending: true };
+    const states = new Map<string, { value: any }>([['cocoproxy-workspace', { value: current }]]);
+    const calls: string[] = [];
+    const exports: Record<string, any> = {};
+    const api = { generation: { value: 'before' }, request: async (path: string, options?: { method?: string; body?: unknown }) => {
+      calls.push(`${options?.method ?? 'GET'} ${path}`);
+      if (!options) return current;
+      assert.equal(path, '/api/cocoproxy/workspace/apply');
+      assert.equal(options.method, 'POST');
+      assert.deepEqual(JSON.parse(JSON.stringify(options.body)), { expectedRevision: 8, expectedActive: 'before' });
+      current = { ...current, active: 'after', pending: false };
+      if (interrupted) throw new CoCoProxyError('NETWORK_UNKNOWN');
+      return { active: 'after' };
+    } };
+    new Script(compiled).runInNewContext({ ...uiTestContext, exports,
+      require: () => ({ CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy: () => api }),
+      useState: (key: string, initial: () => unknown) => {
+        if (!states.has(key)) states.set(key, { value: initial() });
+        return states.get(key);
+      },
+      computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    });
+    const workspace = exports.useWorkspace();
+    await workspace.run(workspace.applyPending);
+    assert.deepEqual(calls, ['POST /api/cocoproxy/workspace/apply', 'GET /api/cocoproxy/workspace']);
+    assert.equal(workspace.view.value.pending, false);
+    assert.equal(workspace.view.value.workspace.revision, 8);
+    assert.equal(workspace.busy.value, false);
+    assert.equal(api.generation.value, 'after');
+    assert.equal(states.get('cocoproxy-workspace-error')!.value, interrupted ? 'NETWORK_UNKNOWN' : '');
+    assert.equal(states.get('cocoproxy-workspace-feedback')!.value, interrupted ? '' : 'coco.settingsSaved');
+  }
+});
+
+test('the active node remains selectable to recover a pending switch while retaining reading position', async () => {
+  const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/NativeProxyMasterDetail.vue', import.meta.url), 'utf8');
+  const script = component.match(/async function selectNode\(name: string\) \{[\s\S]*?\n\}/)![0] + '\nexport { selectNode };';
+  const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const exports: Record<string, any> = {}, calls: string[] = [], scrolls: number[] = [];
+  const view = { value: { pending: false } }, busy = { value: false }, automaticEnabled = { value: false };
+  const scroller = { scrollTop: 150, scrollTo: ({ top }: { top: number }) => scrolls.push(top) };
+  new Script(code).runInNewContext({ exports, view, busy, automaticEnabled,
+    activeGroup: { value: { name: 'Proxy', now: 'node-a' } }, activeName: { value: 'Proxy' },
+    nodeListEl: { value: scroller }, props: { scrollContainer: scroller }, nextTick: async () => {},
+    proxiesStore: { selectProxyInGroup: async (_group: unknown, name: string) => { calls.push(name); } },
+  });
+  await exports.selectNode('node-a');
+  assert.deepEqual(calls, []);
+  view.value.pending = true;
+  await exports.selectNode('node-a');
+  assert.deepEqual(calls, ['node-a']);
+  assert.deepEqual(scrolls, [150, 150]);
+  busy.value = true;
+  await exports.selectNode('node-a');
+  assert.deepEqual(calls, ['node-a']);
+});
+
 test('host proxy settings guard writes and distinguish saved settings from the active state after an apply failure', async () => {
   let settings: any = { mode: 'local', subscriptionId: null, sourceIds: [], runMode: 'rule', revision: 7,
     local: { selections: {}, rules: [] }, subscriptionOverrides: {} };

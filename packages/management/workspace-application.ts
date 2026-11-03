@@ -729,7 +729,20 @@ export function createWorkspaceApplication(options: {
       if (typeof body.group !== 'string' || typeof body.name !== 'string') invalid();
       if ((await store.status()).active !== body.expectedActive) invalid('ACTIVE_CONFLICT');
       const plan = await build(current);
-      if (compile(plan).id !== body.expectedActive) invalid('WORKSPACE_PENDING');
+      const candidate = compile(plan);
+      if (candidate.id !== body.expectedActive) {
+        if (!body.expectedActive) invalid('WORKSPACE_PENDING');
+        const active = JSON.parse(await privateRead(await store.readCandidate(body.expectedActive as string))) as JsonObject;
+        const activeGroup = asGroups(active).find(group => group.name === body.group);
+        const pendingGroup = asGroups(candidate.config).find(group => group.name === body.group);
+        // A failed takeover expands the automatic pool back to the manual
+        // choices. Let the user replace that pending choice, including returning
+        // to the active node, only when all other configuration is unchanged.
+        // This also covers the automatic journal's write-before-commit window.
+        const restored = { ...candidate.config, 'proxy-groups': asGroups(candidate.config).map(group =>
+          group.name === body.group ? { ...group, proxies: activeGroup?.proxies ?? [] } : group) };
+        if (activeGroup?.type !== 'select' || pendingGroup?.type !== 'select' || canonicalJson(restored) !== canonicalJson(active)) invalid('WORKSPACE_PENDING');
+      }
       const settings = await seedLegacyChoices(current, settingsOf(current), plan);
       const edits = current.mode === 'local' ? settings.local : settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] ?? emptyOverrides();
       const automatic = edits.automatic?.[body.group];
