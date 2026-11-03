@@ -78,6 +78,14 @@ test('administrator, current candidate, core and persistent intent are separate 
   assert.equal(paused.next.action.includes('pause-maintenance'), false);
 });
 
+test('persistence needs its configured socket active while management remains independently healthy', async () => {
+  const { host } = fixture();
+  host.units = async () => ({ active: true, enabled: true, bandwidthReady: false });
+  const result = await report(host);
+  assert.equal(by(result, 'management-service').status, 'pass');
+  assert.equal(by(result, 'persistence').status, 'not-run');
+});
+
 test('status CLI consumes private input, returns fixed observation errors off Linux and rejects mutations or arbitrary probes', async t => {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-first-status-')); t.after(() => rm(root, { recursive: true, force: true }));
   const inputPath = join(root, 'deployment.json'); await writeFile(inputPath, JSON.stringify(deployment), { mode: 0o600 });

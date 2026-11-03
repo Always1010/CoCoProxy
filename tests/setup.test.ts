@@ -28,7 +28,7 @@ test('setup derives matching release paths, DNS ports and a private random secre
   assert.equal(input.runtime.automaticGateway.prefixLength, 24);
   assert.match(input.management.deployment.controllerSecret, /^[a-f0-9]{64}$/);
   assert.notEqual(input.management.deployment.controllerSecret, second.management.deployment.controllerSecret);
-  assert.equal(renderDeploymentPlan(input).files.length, 8);
+  assert.equal(renderDeploymentPlan(input).files.length, 11);
   assert.equal(routerParameters(environment).dnsPort, input.management.deployment.dnsPort);
   assert.equal(routerParameters(environment).contract, 'cocoproxy-router-contract/v1');
 });
@@ -94,7 +94,7 @@ test('managed HTTPS is included in the same deployment plan and retained by upgr
   const environment = parseSetupEnvironment({ ...sample, https: { mode: 'managed',
     certificatePath: '/etc/cocoproxy/web/server.crt', privateKeyPath: '/etc/cocoproxy/web/server.key' } });
   const previous = createSetupDeployment(environment, release) as any;
-  assert.equal(renderDeploymentPlan(previous).files.length, 10);
+  assert.equal(renderDeploymentPlan(previous).files.length, 13);
   assert.equal(previous.web.nginxPath, '/usr/sbin/nginx');
   const retained = createSetupDeployment(parseSetupEnvironment(sample), release, previous) as any;
   assert.deepEqual(retained.web, previous.web);

@@ -108,6 +108,22 @@ export function compatibleOwnedFiles(previous: readonly Owned[], current: readon
   if (previous.some(old => !current.some(file => file.path === old.path && file.mode === old.mode &&
       file.owner === old.owner && file.sensitive === old.sensitive))) return false;
   const added = current.filter(file => !previous.some(old => old.path === file.path));
+  const workerAdded = added.filter(file => file.path === '/etc/systemd/system/cocoproxy-bandwidth.service' ||
+    file.path === '/etc/systemd/system/cocoproxy-bandwidth.socket' || posix.basename(file.path) === 'bandwidth-worker.json');
+  if (workerAdded.length) {
+    if (!upgrade || workerAdded.length !== 3 ||
+      !['/etc/systemd/system/cocoproxy-bandwidth.service', '/etc/systemd/system/cocoproxy-bandwidth.socket'].every(path => workerAdded.some(file => file.path === path)) ||
+      !workerAdded.every(file => file.owner === 'root' && file.mode === '0644' && !file.sensitive) ||
+      !workerAdded.some(file => posix.basename(file.path) === 'bandwidth-worker.json' && previous.some(old =>
+        old.sensitive && posix.dirname(old.path) === posix.dirname(file.path)))) return false;
+    return compatibleOwnedFiles(previous, current.filter(file => !workerAdded.includes(file)), upgrade);
+  }
+  // Existing worker ownership must remain exact, including when an older optional
+  // gateway/web migration is being applied to a receipt that already has it.
+  const worker = current.filter(file => file.path === '/etc/systemd/system/cocoproxy-bandwidth.service' ||
+    file.path === '/etc/systemd/system/cocoproxy-bandwidth.socket' || posix.basename(file.path) === 'bandwidth-worker.json');
+  if (worker.length && added.length) return compatibleOwnedFiles(previous.filter(file => !worker.some(item => item.path === file.path)),
+    current.filter(file => !worker.includes(file)), upgrade);
   return added.length === 0 && previous.length === current.length || upgrade && previous.length === 7 && current.length === 8 &&
     added.length === 1 && added[0].path === '/etc/systemd/system/cocoproxy-gateway-guard.service' &&
     added[0].owner === 'root' && added[0].mode === '0644' && added[0].sensitive === false &&
@@ -363,10 +379,11 @@ export async function assertReleasePaths(root: string, files: Entry[], modes = t
 }
 async function stopped(systemctl: string, units: string[], allowReload = false) {
   for (const unit of units) {
-    const value = await run(systemctl, ['show', unit, '--property=ActiveState,MainPID,ControlPID,DropInPaths,NeedDaemonReload,FragmentPath']);
+    const value = await run(systemctl, ['show', unit, '--property=ActiveState,MainPID,ControlPID,DropInPaths,NeedDaemonReload,FragmentPath,Job']);
     const properties = Object.fromEntries(value.trim().split('\n').map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)]; }));
-    require(['inactive', 'failed'].includes(properties.ActiveState) && properties.MainPID === '0' &&
-      properties.ControlPID === '0' && !properties.DropInPaths && (allowReload || properties.NeedDaemonReload === 'no') &&
+    require(['inactive', 'failed'].includes(properties.ActiveState) &&
+      (unit.endsWith('.socket') || properties.MainPID === '0' && properties.ControlPID === '0') &&
+      ['', '0'].includes(properties.Job) && !properties.DropInPaths && (allowReload || properties.NeedDaemonReload === 'no') &&
       (!properties.FragmentPath || properties.FragmentPath === '/etc/systemd/system/' + unit), 'INSTALL_SERVICES_MUST_BE_STOPPED');
     require(!(await info('/etc/systemd/system/' + unit + '.d')) && !(await info('/run/systemd/system/' + unit)) &&
       !(await info('/run/systemd/system/' + unit + '.d')), 'INSTALL_UNIT_OVERRIDE_CONFLICT');
@@ -545,7 +562,7 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
   require((await run(input.runtime.systemctlPath, ['show', 'polkit.service', '--property=LoadState', '--value'])).trim() === 'loaded',
     'INSTALL_POLKIT_REQUIRED');
   await assertDeploymentAccount(input.management.serviceUser, input.runtime.serviceUid);
-  const units = [...(preserveRuntime ? [] : ['cocoproxy-mihomo.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']), 'cocoproxy-management.service',
+  const units = ['cocoproxy-bandwidth.socket', 'cocoproxy-bandwidth.service', ...(preserveRuntime ? [] : ['cocoproxy-mihomo.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']), 'cocoproxy-management.service',
     ...(input.web ? ['cocoproxy-web.service'] : [])];
   await assertDeploymentLifecycle(input.runtime.stateDirectory, input.runtime.serviceUid, preparing || preserveRuntime);
   if (!preparing) await stopped(input.runtime.systemctlPath, units);
@@ -704,7 +721,7 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
     files: plan.files.map(file => ({ path: file.path, mode: file.mode, owner: file.owner,
       action: options.operation === 'uninstall' ? file.sensitive ? 'preserve' : 'remove' : 'write' })),
     preserved: [input.runtime.stateDirectory, input.management.credentialPath, '/var/lib/cocoproxy-gateway-network'],
-    services: preserveRuntime ? 'management and dependent HTTPS only; runtime and network preserved' : preparing ? 'running services allowed; apply still requires stopped and disabled units' : 'remain stopped and disabled',
+    services: preserveRuntime ? 'management, dependent HTTPS and bandwidth worker only; core runtime and network preserved' : preparing ? 'running services allowed; apply still requires stopped and disabled units' : 'remain stopped and disabled',
     ...(runtimePreservation ? { runtimePreservation } : {}),
     network: 'unchanged', configurationReviewed, ...(review ? { review } : {}),
     ...(preparing ? { readiness: [compatibilityAssessment!.assessments.state, compatibilityAssessment!.assessments.configuration,

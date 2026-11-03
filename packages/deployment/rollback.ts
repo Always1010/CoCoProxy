@@ -133,6 +133,7 @@ function nativeHost(): DeploymentRollbackHost {
     quiescent: async (prepared, current, preserveRuntime, afterReload = false) => {
       await assertDeploymentLifecycle(current.stateDirectory, current.serviceUid, preserveRuntime);
       const units = ['cocoproxy-management.service'];
+      if (current.files.some(file => file.path === '/etc/systemd/system/cocoproxy-bandwidth.socket')) units.unshift('cocoproxy-bandwidth.socket', 'cocoproxy-bandwidth.service');
       if (!preserveRuntime) {
         units.push('cocoproxy-mihomo.service');
         if (prepared.input.runtime.automaticGateway) units.push('cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service');

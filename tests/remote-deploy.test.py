@@ -17,6 +17,21 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_worker_activation_closes_before_maintenance_and_restores_socket_intent(self):
+        for preserve_runtime in [False, True]:
+            with self.subTest(preserve_runtime=preserve_runtime):
+                temporary, stack, private, before, events, router, args = self.scenario(
+                    bandwidth_worker=True, component='backend' if preserve_runtime else None, preserve_runtime=preserve_runtime)
+                with temporary, stack, contextlib.redirect_stdout(io.StringIO()):
+                    deploy.main_locked(args)
+                stop_socket = events.index(['/usr/bin/systemctl', 'stop', 'cocoproxy-bandwidth.socket'])
+                stop_worker = events.index(['/usr/bin/systemctl', 'stop', 'cocoproxy-bandwidth.service'])
+                stop_manager = events.index(['/usr/bin/systemctl', 'stop', 'cocoproxy-management.service'])
+                self.assertLess(stop_socket, stop_worker)
+                self.assertLess(stop_worker, stop_manager)
+                self.assertIn(['/usr/bin/systemctl', 'start', 'cocoproxy-bandwidth.socket'], events)
+                self.assertNotIn(['/usr/bin/systemctl', 'start', 'cocoproxy-bandwidth.service'], events)
+
     def test_candidate_evidence_is_private_scratch_and_is_removed_from_installer_results(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / 'verified.json'
@@ -47,7 +62,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                     deploy.run(args)
                 self.assertEqual(json.loads(output.getvalue()), {'phase': 'deployment-command', 'code': code, 'exitCode': 1, **fields})
 
-    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False, stage_failure=False, failure_at=None, rollback_failure=False, network_active=None, reordered_properties=False):
+    def scenario(self, fail_apply=False, lifecycle=..., core_active=True, router_enabled=True, edit_during_stop=False, network_receipt='complete', change_during_install=False, adapter_report=..., preparation_report=None, frontend=False, frontend_base='a', component=None, component_base='a', preserve_runtime=False, health_failure=False, runtime_changed=False, stage_failure=False, failure_at=None, rollback_failure=False, network_active=None, reordered_properties=False, bandwidth_worker=False):
         factory = tempfile.TemporaryDirectory
         temporary = factory(prefix='cocoproxy-coordinator-test-')
         root = Path(temporary.name)
@@ -75,7 +90,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                 'serverEntry': '/old/server', 'deployment': {'controllerSecret': 'synthetic secret'}}}
         (private / 'deployment.json').write_text(json.dumps(before))
         receipt = root / 'receipt.json'
-        receipt.write_text(json.dumps({'status': 'complete', 'release': '/old/release', 'manifestSha256': 'a' * 64, 'files': []}))
+        receipt.write_text(json.dumps({'status': 'complete', 'release': '/old/release', 'manifestSha256': 'a' * 64, 'files': ([{'path': '/etc/systemd/system/cocoproxy-bandwidth.' + suffix} for suffix in ['socket', 'service']] if bandwidth_worker else [])}))
         manifest = {'commit': 'e' * 40, 'files': [{'path': 'bin/mihomo', 'sha256': 'c' * 64}]}
         if frontend:
             manifest['frontendUpdate'] = {'schemaVersion': 2, 'baseManifestSha256': frontend_base * 64, 'backendInputSha256': 'f' * 64}
@@ -85,6 +100,9 @@ class RemoteDeploymentTests(unittest.TestCase):
         active = {'cocoproxy-management.service': True, 'cocoproxy-mihomo.service': core_active,
             'cocoproxy-gateway-network.service': core_active if network_active is None else network_active, 'cocoproxy-gateway-guard.service': True}
         enabled = {key: 'enabled' if 'management' in key or 'guard' in key else 'static' for key in active}
+        if bandwidth_worker:
+            active.update({'cocoproxy-bandwidth.socket': True, 'cocoproxy-bandwidth.service': False})
+            enabled.update({'cocoproxy-bandwidth.socket': 'enabled', 'cocoproxy-bandwidth.service': 'static'})
         router = {'enabled': router_enabled}
 
         injected = set()

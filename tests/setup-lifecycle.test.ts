@@ -48,6 +48,20 @@ test('initialization never overwrites an existing credential; manager-only start
   assert.throws(() => planSetupLifecycle({ action: 'start-management' }, { ...context, credentialExists: false }), code('SETUP_ADMIN_INITIALIZATION_REQUIRED'));
 });
 
+test('worker maintenance closes activation before draining and persistence restores socket only after runtime resume', () => {
+  const worker = { ...context, bandwidthWorker: true, bandwidthEnabled: true };
+  const pause = planSetupLifecycle({ action: 'pause-maintenance' }, worker);
+  assert.deepEqual(pause.map(step => step.id), ['stop-bandwidth-socket', 'runtime-pause', 'stop-bandwidth-worker', 'disable-bandwidth-socket']);
+  const stop = planSetupLifecycle({ action: 'stop-maintenance', routerDisabled: true }, worker);
+  assert.deepEqual(stop.slice(0, 4), pause);
+  const resume = planSetupLifecycle({ action: 'resume-persistence', terminalPathVerified: true }, worker);
+  assert.deepEqual(resume.slice(-3).map(step => step.id), ['runtime-resume', 'enable-bandwidth-socket', 'start-bandwidth-socket']);
+  assert.equal(planSetupLifecycle({ action: 'start-management' }, worker).some(step => step.id === 'start-bandwidth-socket'), false);
+  assert.equal(planSetupLifecycle({ action: 'start-management' }, { ...worker, lifecycle: { enabled: false, paused: false } }).at(-1)!.id, 'start-bandwidth-socket');
+  assert.equal(planSetupLifecycle({ action: 'resume-persistence', terminalPathVerified: true }, { ...worker, bandwidthEnabled: false })
+    .some(step => step.id === 'start-bandwidth-socket' || step.id === 'enable-bandwidth-socket'), false);
+});
+
 test('interrupted steps keep durable intent and never run network removal after stopped-proof failure', async () => {
   const plan = planSetupLifecycle({ action: 'stop-maintenance', routerDisabled: true }, context);
   const events: string[] = [];

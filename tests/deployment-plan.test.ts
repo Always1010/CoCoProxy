@@ -40,9 +40,9 @@ test('optional managed HTTPS adds only owned config and unit with private indepe
   const value = { ...old, web: { schemaVersion: 1, nginxPath: '/usr/sbin/nginx',
     certificatePath: '/etc/cocoproxy/tls/server.crt', privateKeyPath: '/etc/cocoproxy/tls/server.key' } };
   const base = renderDeploymentPlan(old), plan = renderDeploymentPlan(value);
-  assert.equal(plan.files.length, 10);
-  assert.deepEqual(plan.files.slice(0, 8), base.files);
-  assert.deepEqual(plan.files.slice(8).map(file => file.path), ['/etc/cocoproxy/web/nginx.conf', '/etc/systemd/system/cocoproxy-web.service']);
+  assert.equal(plan.files.length, 13);
+  assert.deepEqual(plan.files.slice(0, 11), base.files);
+  assert.deepEqual(plan.files.slice(11).map(file => file.path), ['/etc/cocoproxy/web/nginx.conf', '/etc/systemd/system/cocoproxy-web.service']);
   assert.equal(plan.directories.length, new Set(plan.directories.map(d => d.path)).size);
   const unit = plan.files.find(f => f.path.endsWith('/cocoproxy-web.service'))!.content;
   assert.match(unit, /^User=12345$/m);
@@ -58,7 +58,7 @@ test('optional managed HTTPS adds only owned config and unit with private indepe
     assert.ok(plan.directories.some(d => d.path === '/var/lib/cocoproxy-web-' + name && d.mode === '0700' && d.owner === 12345));
   }
   assert.ok(!plan.files.some(f => f.path === value.web.privateKeyPath || f.path === value.web.certificatePath));
-  assert.equal(renderDeploymentPlan(input()).files.length, 5);
+  assert.equal(renderDeploymentPlan(input()).files.length, 8);
   assert.throws(() => renderDeploymentPlan({ ...value, management: { ...value.management, origin: 'https://gateway.example' } }), DeploymentPlanError);
   assert.throws(() => renderDeploymentPlan({ ...value, runtime: { ...value.runtime, stateDirectory: '/var/lib/cocoproxy-web-client' } }), DeploymentPlanError);
   assert.throws(() => renderDeploymentPlan({ ...value, web: { ...value.web, privateKeyPath: value.runtime.settingsPath } }), DeploymentPlanError);
@@ -85,7 +85,7 @@ test('installed systemd parser accepts both generated unit definitions', {
   for (const value of [input(), automaticInput()]) {
     const directory = await mkdtemp(join(root, 'profile-'));
     const units: string[] = [];
-    for (const file of renderDeploymentPlan(value).files.filter(file => file.path.endsWith('.service'))) {
+    for (const file of renderDeploymentPlan(value).files.filter(file => /\.(?:service|socket)$/.test(file.path))) {
       const path = join(directory, basename(file.path));
       await writeFile(path, file.content, { mode: 0o600 }); units.push(path);
     }
@@ -97,7 +97,7 @@ test('installed systemd parser accepts both generated unit definitions', {
 
 test('native deployment adds early protection and network prerequisites without management network capabilities', () => {
   const plan = renderDeploymentPlan(automaticInput());
-  assert.equal(plan.files.length, 8);
+  assert.equal(plan.files.length, 11);
   const core = plan.files.find(file => file.path.endsWith('/cocoproxy-mihomo.service'))!;
   const manager = plan.files.find(file => file.path.endsWith('/cocoproxy-management.service'))!;
   const network = plan.files.find(file => file.path.endsWith('/cocoproxy-gateway-network.service'))!;
@@ -128,7 +128,7 @@ test('deployment proposal shares the private runtime identity and pins core byte
   const plan = renderDeploymentPlan(value);
   assert.deepEqual(renderDeploymentPlan(value), plan);
   assert.equal(plan.sensitive, true);
-  assert.equal(plan.files.length, 5);
+  assert.equal(plan.files.length, 8);
   const find = (path: string) => plan.files.find(file => file.path === path)!;
   const core = find(value.runtime.unitPath);
   const runtime = JSON.parse(find(value.runtime.settingsPath).content);
@@ -174,7 +174,7 @@ test('generated polkit code grants exactly start/stop for one account and one un
   for (const verb of [undefined, '', 'restart', 'reload', 'try-restart', 'reload-or-restart', 'enable', 'start\n']) {
     assert.equal(check('cocoproxy', action, 'cocoproxy-mihomo.service', verb), 'no');
   }
-  for (const unit of [undefined, 'other.service', 'cocoproxy-management.service', 'cocoproxy-mihomo@x.service']) {
+  for (const unit of [undefined, 'other.service', 'cocoproxy-management.service', 'cocoproxy-mihomo@x.service', 'cocoproxy-bandwidth.service', 'cocoproxy-bandwidth.socket']) {
     assert.equal(check('cocoproxy', action, unit, 'start'), 'no');
   }
   for (const user of ['root', 'other', '12345']) assert.equal(check(user, action, 'cocoproxy-mihomo.service', 'start'), undefined);
@@ -182,6 +182,33 @@ test('generated polkit code grants exactly start/stop for one account and one un
   assert.equal(check('cocoproxy', 'org.freedesktop.systemd1.reload-daemon'), undefined);
   assert.equal(check('cocoproxy', 'org.freedesktop.policykit.exec'), undefined);
   assert.doesNotMatch(code, /polkit\.spawn|AUTH_ADMIN|YES_KEEP|sudo/);
+});
+
+test('bandwidth worker is separately owned, bounded and collision checked without widening management permissions', () => {
+  for (const value of [input(), automaticInput()]) {
+    const plan = renderDeploymentPlan(value);
+    const files = plan.files.filter(file => file.path.includes('bandwidth'));
+    assert.equal(files.length, 3);
+    for (const file of files) {
+      assert.equal(file.owner, 'root'); assert.equal(file.mode, '0644'); assert.equal(file.sensitive, false);
+      assert.doesNotMatch(file.content, /SYNTHETIC_CONTROLLER_SECRET/);
+    }
+    const service = files.find(file => file.path.endsWith('.service'))!.content;
+    const socket = files.find(file => file.path.endsWith('.socket'))!.content;
+    assert.match(service, /^User=12345$/m); assert.match(service, /^RuntimeMaxSec=45$/m);
+    assert.match(service, /^PrivateTmp=true$/m); assert.match(service, /^ReadOnlyPaths="\/var\/lib\/cocoproxy"$/m);
+    assert.doesNotMatch(service, /ReadWritePaths|StateDirectory=/);
+    assert.match(socket, /^ListenStream=\/run\/cocoproxy-bandwidth.sock$/m);
+    assert.match(socket, /^SocketMode=0600$/m);
+    const settings = JSON.parse(files.find(file => file.path.endsWith('.json'))!.content);
+    assert.equal(settings.enabled, true); assert.equal(settings.runtime.serviceUid, 12345);
+    for (const file of files) {
+      const collision = input(); collision.management.settingsPath = file.path;
+      assert.throws(() => renderDeploymentPlan(collision), DeploymentPlanError);
+    }
+  }
+  const disabled = input(); Object.assign(disabled.management, { controllerPolicy: { allowedProbeOrigins: [] } });
+  assert.equal(JSON.parse(renderDeploymentPlan(disabled).files.find(file => file.path.endsWith('/bandwidth-worker.json'))!.content).enabled, false);
 });
 
 test('native reconciliation grants only fixed network start/reload without broader unit control', () => {
@@ -228,6 +255,8 @@ test('deployment rejects root, overlapping trust boundaries and paths hidden by 
   change('management', 'credentialPath', input().management.settingsPath);
   change('management', 'serverEntry', '/var/lib/cocoproxy/server/index.mjs');
   change('runtime', 'sourceDirectory', '/var/lib/cocoproxy/source');
+  change('runtime', 'stateDirectory', '/run/cocoproxy-bandwidth.sock');
+  change('management', 'settingsPath', '/run/cocoproxy-bandwidth.sock');
   change('runtime', 'stateDirectory', '/opt/cocoproxy');
   change('runtime', 'stateDirectory', '/var/lib');
   change('runtime', 'nodePath', input().management.serverEntry + '/node');

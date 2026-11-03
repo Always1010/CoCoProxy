@@ -24,6 +24,7 @@ function need(value: unknown, code: string): asserts value { if (!value) throw n
 export type LifecycleStep = { id: string; kind: 'command' | 'credential' | 'verify-stopped'; binary?: string; args?: string[] };
 export type LifecycleContext = { runtime: { nodePath: string; systemctlPath: string; sourceDirectory: string; stateDirectory: string; settingsPath: string };
   serviceUser: string; gateway: boolean; managedWeb: boolean; credentialExists: boolean; networkReceipt: 'absent' | 'complete' | 'removed';
+  bandwidthWorker?: boolean; bandwidthEnabled?: boolean;
   lifecycle: { enabled: boolean; paused: boolean } };
 
 /** Fixed operations only. Router/terminal flags record operator evidence, not a network probe. */
@@ -42,6 +43,7 @@ export function planSetupLifecycle(options: Pick<SetupLifecycleOptions, 'action'
     need(!context.lifecycle.enabled || context.lifecycle.paused, 'SETUP_LIFECYCLE_PAUSE_REQUIRED');
     need(context.credentialExists, 'SETUP_ADMIN_INITIALIZATION_REQUIRED');
     systemctl('start-management', 'start', management);
+    if (context.bandwidthEnabled && !context.lifecycle.paused) systemctl('start-bandwidth-socket', 'start', ['cocoproxy-bandwidth.socket']);
   } else if (options.action === 'enable-persistence' || options.action === 'resume-persistence') {
     need(options.terminalPathVerified === true, 'SETUP_TERMINAL_PATH_CONFIRMATION_REQUIRED');
     need(context.credentialExists, 'SETUP_ADMIN_INITIALIZATION_REQUIRED');
@@ -50,8 +52,17 @@ export function planSetupLifecycle(options: Pick<SetupLifecycleOptions, 'action'
     systemctl('enable-management', 'enable', [...(context.gateway ? ['cocoproxy-gateway-guard.service'] : []), ...management]);
     systemctl('start-management', 'start', management);
     runtime(options.action === 'enable-persistence' ? 'runtime-enable' : 'runtime-resume');
+    if (context.bandwidthEnabled) {
+      systemctl('enable-bandwidth-socket', 'enable', ['cocoproxy-bandwidth.socket']);
+      systemctl('start-bandwidth-socket', 'start', ['cocoproxy-bandwidth.socket']);
+    }
   } else {
+    if (context.bandwidthWorker) systemctl('stop-bandwidth-socket', 'stop', ['cocoproxy-bandwidth.socket']);
     runtime('runtime-pause');
+    if (context.bandwidthWorker) {
+      systemctl('stop-bandwidth-worker', 'stop', ['cocoproxy-bandwidth.service']);
+      systemctl('disable-bandwidth-socket', 'disable', ['cocoproxy-bandwidth.socket']);
+    }
     if (options.action === 'stop-maintenance') {
       need(!context.gateway || options.routerDisabled === true, 'SETUP_ROUTER_DISABLED_CONFIRMATION_REQUIRED');
       const stopped = [...(context.managedWeb ? ['cocoproxy-web.service'] : []), 'cocoproxy-management.service', 'cocoproxy-mihomo.service',
@@ -77,11 +88,11 @@ export async function executeSetupLifecycleSteps(steps: readonly LifecycleStep[]
 type Journal = { schemaVersion: 1; id: string; baseSha256: string; action: SetupLifecycleAction; status: 'pending' | 'complete';
   completed: string[]; pendingStep: string | null; credentialSha256?: string };
 const actionSteps: Record<SetupLifecycleAction, readonly string[]> = {
-  initialize: ['create-credential'], 'start-management': ['start-management'],
-  'enable-persistence': ['start-early-guard', 'enable-management', 'start-management', 'runtime-enable'],
-  'resume-persistence': ['start-early-guard', 'enable-management', 'start-management', 'runtime-resume'],
-  'pause-maintenance': ['runtime-pause'],
-  'stop-maintenance': ['runtime-pause', 'stop-services', 'disable-services', 'verify-stopped', 'remove-owned-network'],
+  initialize: ['create-credential'], 'start-management': ['start-management', 'start-bandwidth-socket'],
+  'enable-persistence': ['start-early-guard', 'enable-management', 'start-management', 'runtime-enable', 'enable-bandwidth-socket', 'start-bandwidth-socket'],
+  'resume-persistence': ['start-early-guard', 'enable-management', 'start-management', 'runtime-resume', 'enable-bandwidth-socket', 'start-bandwidth-socket'],
+  'pause-maintenance': ['stop-bandwidth-socket', 'runtime-pause', 'stop-bandwidth-worker', 'disable-bandwidth-socket'],
+  'stop-maintenance': ['stop-bandwidth-socket', 'runtime-pause', 'stop-bandwidth-worker', 'disable-bandwidth-socket', 'stop-services', 'disable-services', 'verify-stopped', 'remove-owned-network'],
 };
 function parseJournal(value: unknown): Journal {
   const j = value as Journal;
@@ -176,11 +187,13 @@ export async function runSetupLifecycle(options: SetupLifecycleOptions) {
     }
   }
   const context: LifecycleContext = { runtime: input.runtime, serviceUser: input.management.serviceUser,
-    gateway: Boolean(input.runtime.automaticGateway), managedWeb: Boolean(input.web), credentialExists, networkReceipt, lifecycle };
+    gateway: Boolean(input.runtime.automaticGateway), managedWeb: Boolean(input.web), credentialExists, networkReceipt, lifecycle,
+    bandwidthWorker: receipt.files.some(file => file.path === '/etc/systemd/system/cocoproxy-bandwidth.socket'),
+    bandwidthEnabled: input.management.controllerPolicy === undefined || input.management.controllerPolicy.allowedProbeOrigins.length !== 0 };
   // Re-observe and replay fixed idempotent steps after an interruption. A prior
   // completed marker is never evidence that services remained stopped afterwards.
   const steps = planSetupLifecycle(options, context);
-  const units = receipt.files.filter(file => file.path.startsWith('/etc/systemd/system/') && file.path.endsWith('.service')).map(file => posix.basename(file.path));
+  const units = receipt.files.filter(file => file.path.startsWith('/etc/systemd/system/') && /\.(?:service|socket)$/.test(file.path)).map(file => posix.basename(file.path));
   await unitPreflight(input.runtime.systemctlPath, units);
   if (steps.some(step => step.binary === '/usr/sbin/runuser')) await assertDeploymentExecutable('/usr/sbin/runuser');
   if (steps.some(step => step.binary === '/usr/bin/python3')) await assertDeploymentExecutable('/usr/bin/python3');

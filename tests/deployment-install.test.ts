@@ -151,7 +151,7 @@ test('upgrade apply refuses invalid complete content, unknown readers and missin
 
 test('upgrade adds only the early guard to a verified previous seven-file gateway receipt', async () => {
   const input = JSON.parse(await readFile(new URL('../examples/automatic-gateway-deployment.json', import.meta.url), 'utf8'));
-  const current = renderDeploymentPlan(input).files.map(({ content, ...file }) => ({ ...file, sha256: digest(content) }));
+  const current = renderDeploymentPlan(input).files.filter(file => !file.path.includes('bandwidth')).map(({ content, ...file }) => ({ ...file, sha256: digest(content) }));
   const previous = current.filter(file => !file.path.endsWith('/cocoproxy-gateway-guard.service'));
   assert.equal(previous.length, 7);
   assert.equal(compatibleOwnedFiles(previous, current, true), true);
@@ -168,6 +168,22 @@ test('upgrade adds only the early guard to a verified previous seven-file gatewa
   assert.equal(compatibleOwnedFiles(current, managedWeb.map(file => file.path.endsWith('nginx.conf') ? { ...file, owner: 12345 } : file), true), false);
   assert.equal(compatibleOwnedFiles(managedWeb, current, true), false);
 });
+test('worker upgrade adopts exactly the fixed three new files and rejects partial or writable ownership', async () => {
+  const input = JSON.parse(await readFile(new URL('../examples/automatic-gateway-deployment.json', import.meta.url), 'utf8'));
+  const current = renderDeploymentPlan(input).files.map(({ content, ...file }) => ({ ...file, sha256: digest(content) }));
+  const worker = current.filter(file => file.path.includes('bandwidth'));
+  const previous = current.filter(file => !worker.includes(file));
+  assert.equal(compatibleOwnedFiles(previous, current, true), true);
+  assert.equal(compatibleOwnedFiles(previous, current, false), false);
+  assert.equal(compatibleOwnedFiles(current, previous, true), false);
+  for (const file of worker) {
+    assert.equal(compatibleOwnedFiles(previous, current.filter(item => item !== file), true), false);
+    assert.equal(compatibleOwnedFiles(previous, current.map(item => item === file ? { ...item, owner: input.runtime.serviceUid } : item), true), false);
+  }
+  const otherSettings = current.map(file => file.path.endsWith('/bandwidth-worker.json') ? { ...file, path: '/etc/foreign/bandwidth-worker.json' } : file);
+  assert.equal(compatibleOwnedFiles(previous, otherSettings, true), false);
+});
+
 async function fixture(t: any) {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-install-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -227,7 +243,7 @@ test('deployment target is explicit, versioned by manifest, and cannot replace s
   input.runtime.binaryPath = target + '/bin/mihomo';
   input.management.serverEntry = target + '/server/.output/server/index.mjs';
   assert.equal(releaseTarget(input, hash), target);
-  assert.equal(renderDeploymentPlan(input).files.length, 5);
+  assert.equal(renderDeploymentPlan(input).files.length, 8);
   input.runtime.sourceDirectory = '/opt/source';
   assert.throws(() => releaseTarget(input, hash), code('INSTALL_RELEASE_LAYOUT_REQUIRED'));
   input.runtime.sourceDirectory = '/opt/cocoproxy/releases/' + hash + '/source';

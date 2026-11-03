@@ -3,6 +3,7 @@ import { types } from 'node:util';
 import { compileConfig } from '../config/index.ts';
 import type { JsonObject, JsonValue } from '../config/index.ts';
 import { renderRuntimePlan } from '../runtime/plan.ts';
+import { renderBandwidthWorkerPlan } from '../runtime/bandwidth-worker-plan.ts';
 import { HttpsSnapshotClient } from '../subscriptions/http.ts';
 import { DEFAULT_LATENCY_PROBE_ORIGIN } from '../management/controller.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
@@ -145,6 +146,7 @@ function render(input: unknown): DeploymentPlan {
   const unitPath = path(management.unitPath);
   const policyPath = path(management.policyPath);
   const networkSettingsPath = posix.join(posix.dirname(runtimeSettingsPath), 'gateway-network.json');
+  const bandwidthSettingsPath = posix.join(posix.dirname(runtimeSettingsPath), 'bandwidth-worker.json');
   const networkStateDirectory = '/var/lib/cocoproxy-gateway-network';
   const networkPlan = core.settings.automaticGateway ? renderAutomaticGatewayHostPlan({
     network: core.settings.automaticGateway, sourceDirectory, pythonPath: '/usr/bin/python3',
@@ -168,6 +170,8 @@ function render(input: unknown): DeploymentPlan {
 
   const controlledFiles = [binaryPath, systemctlPath, nodePath, runtimeSettingsPath, coreUnitPath,
     serverEntry, settingsPath, credentialPath, unitPath, policyPath,
+    bandwidthSettingsPath, '/etc/systemd/system/cocoproxy-bandwidth.service', '/etc/systemd/system/cocoproxy-bandwidth.socket', '/run/cocoproxy-bandwidth.sock',
+    posix.join(sourceDirectory, 'apps/runtime/bandwidth-worker.ts'),
     posix.join(sourceDirectory, 'apps/runtime/launch-core.ts'),
     ...(networkPlan ? [networkSettingsPath, '/etc/systemd/system/cocoproxy-gateway-network.service',
       posix.join(sourceDirectory, 'apps/gateway/network.py'), posix.join(sourceDirectory, 'apps/gateway/host_proxy.py'), '/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft',
@@ -189,7 +193,9 @@ function render(input: unknown): DeploymentPlan {
     if (controlledFiles.slice(index + 1).some(file => overlap(controlledFiles[index], file))) fail();
   }
   // Private settings may not replace or become children of the trusted source tree.
-  if ([runtimeSettingsPath, settingsPath, credentialPath, coreUnitPath, unitPath, policyPath].some(file => overlap(file, sourceDirectory))) fail();
+  if ([runtimeSettingsPath, bandwidthSettingsPath, settingsPath, credentialPath, coreUnitPath, unitPath, policyPath,
+    '/etc/systemd/system/cocoproxy-bandwidth.service', '/etc/systemd/system/cocoproxy-bandwidth.socket', '/run/cocoproxy-bandwidth.sock']
+    .some(file => overlap(file, sourceDirectory))) fail();
   // Never describe making a standard shared installation directory service-private.
   if (['/etc', '/usr', '/usr/local', '/opt', '/run', '/var', '/var/lib', '/var/cache', '/srv'].includes(stateDirectory)) fail();
 
@@ -212,6 +218,8 @@ function render(input: unknown): DeploymentPlan {
     ? { allowedProbeOrigins: [DEFAULT_LATENCY_PROBE_ORIGIN] }
     : record(management.controllerPolicy, ['allowedProbeOrigins']);
   origins(controllerPolicy.allowedProbeOrigins, 16);
+  const bandwidthPlan = renderBandwidthWorkerPlan({ runtime: core.settings, nodePath, sourceDirectory,
+    settingsPath: bandwidthSettingsPath, enabled: (controllerPolicy.allowedProbeOrigins as JsonValue[]).length !== 0 });
 
   const settings: JsonObject = { schemaVersion: 1, origin: managementOrigin, credentialPath,
     runtimeSettingsPath, deployment,
@@ -254,6 +262,9 @@ function render(input: unknown): DeploymentPlan {
     { path: unitPath, mode: '0644', owner: 'root', sensitive: false, content: managementUnit },
     { path: settingsPath, mode: '0600', owner: serviceUid, sensitive: true, content: settingsContent },
     { path: policyPath, mode: '0644', owner: 'root', sensitive: false, content: policy },
+    { path: '/etc/systemd/system/cocoproxy-bandwidth.service', mode: '0644', owner: 'root', sensitive: false, content: bandwidthPlan.serviceUnit },
+    { path: '/etc/systemd/system/cocoproxy-bandwidth.socket', mode: '0644', owner: 'root', sensitive: false, content: bandwidthPlan.socketUnit },
+    { path: bandwidthSettingsPath, mode: '0644', owner: 'root', sensitive: false, content: bandwidthPlan.settingsContent },
     ...(networkPlan ? [
       { path: '/etc/systemd/system/cocoproxy-gateway-guard.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.earlyUnit },
       { path: '/etc/systemd/system/cocoproxy-gateway-network.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.unit },
@@ -271,6 +282,7 @@ function render(input: unknown): DeploymentPlan {
         .map(parent => ({ path: parent, mode: '0755' as const, owner: 'root' as const })),
       ...(webPlan?.directories ?? [])],
     requirements: [
+      '带宽测量由固定 Unix socket 激活的非 root worker 执行；管理服务保持空 capabilities。worker 设置为 root:0644 无密钥配置，和固定 service/socket 一起纳入收据；维护暂停须先停 socket，再停 worker，恢复仅按既有持久意图处理。',
       ...(webPlan ? ['托管 HTTPS 只引用既有匹配 SAN 且未过期的证书及服务 UID 的 0600 单链接私钥；不会生成、复制或轮换证书、安装 nginx 或修改证书信任。配置与 unit 由同一部署收据管理；启动仍须显式执行。'] : []),
       ...(networkPlan ? [
         '自动网关模式另含 root 网络 oneshot：独立阻断规则、一张带 mark 的出口表和终端回程路由；Mihomo 独占自动接管资源。需要另行审阅并授权真实网络变更，不能按显式代理安装范围执行。',

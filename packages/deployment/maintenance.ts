@@ -12,7 +12,7 @@ import { renderDeploymentPlan } from './plan.ts';
 const STORE = '/var/lib/cocoproxy-deployment';
 const RECEIPT = STORE + '/receipt.json';
 const LOCK = STORE + '/install.lock';
-const baseUnits = ['cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service'];
+const baseUnits = ['cocoproxy-bandwidth.socket', 'cocoproxy-bandwidth.service', 'cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service'];
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 function require(value: unknown, code: string): asserts value { if (!value) throw new InstallError(code); }
 function rootHost() { require(platform() === 'linux' && process.getuid?.() === 0, 'INSTALL_LINUX_ROOT_REQUIRED'); }
@@ -200,7 +200,7 @@ export async function recoverDeployment(options: { apply?: boolean; reviewedReco
   require(!(await deploymentPathInfo(STORE + '/recovery.lock')), 'INSTALL_RECOVERY_PREVIOUS_ATTEMPT_INCOMPLETE');
   const previous = await readReceipt(), owner = await readLock();
   const frontend = previous.receipt.runtimeManifestSha256 !== undefined && previous.receipt.runtimeManifestSha256 !== previous.receipt.manifestSha256;
-  const units = [...(frontend ? ['cocoproxy-management.service'] : baseUnits), ...(previous.receipt.files.some(file => file.path === '/etc/systemd/system/cocoproxy-web.service') ? ['cocoproxy-web.service'] : [])];
+  const units = [...(frontend ? ['cocoproxy-bandwidth.socket', 'cocoproxy-bandwidth.service', 'cocoproxy-management.service'] : baseUnits), ...(previous.receipt.files.some(file => file.path === '/etc/systemd/system/cocoproxy-web.service') ? ['cocoproxy-web.service'] : [])];
   assertFinalizableReceipt(previous.receipt, owner.lock);
   require(deploymentOwnerGone(owner.lock, await deploymentProcessIdentity(owner.lock.pid)), 'INSTALL_RECOVERY_OWNER_ALIVE');
   await assertOwnedDeploymentFiles(previous.receipt.files);
@@ -213,7 +213,7 @@ export async function recoverDeployment(options: { apply?: boolean; reviewedReco
   const reviewedRecoverySha256 = digest(Buffer.concat([previous.bytes, Buffer.from('\n'), owner.bytes, Buffer.from('\n' + JSON.stringify(credential))]));
   const result = { operation: 'recover', apply: Boolean(options.apply), action: 'finalize-installed-files', reviewedRecoverySha256,
     receiptStatus: previous.receipt.status, credential: credential.status, administratorInitializationRequired: credential.status === 'initialization-required',
-    services: frontend ? 'management and dependent HTTPS remain stopped; runtime preserved' : 'remain stopped and disabled', state: 'preserved-in-place',
+    services: frontend ? 'management, dependent HTTPS and bandwidth worker remain stopped; core runtime preserved' : 'remain stopped and disabled', state: 'preserved-in-place',
     automaticProgramRollback: false, actions: ['systemd daemon-reload', 'mark receipt complete', 'remove matching abandoned install lock'] };
   if (!options.apply) return result;
   require(options.reviewedRecoverySha256 === reviewedRecoverySha256, 'INSTALL_RECOVERY_REVIEW_REQUIRED');

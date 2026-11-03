@@ -99,6 +99,19 @@ test('rollback failure retains transaction evidence and never marks the previous
   assert.ok(!f.events.some(event => event.startsWith('remove:') || event === 'reload'));
 });
 
+test('rollback to a release before workers removes only the three newly owned worker files', async () => {
+  const f = fixture();
+  const paths = ['/etc/systemd/system/cocoproxy-bandwidth.socket', '/etc/systemd/system/cocoproxy-bandwidth.service', '/etc/cocoproxy/bandwidth-worker.json'];
+  for (const path of paths) {
+    f.current().files.push({ path, owner: 'root', mode: '0644', sensitive: false, sha256: digest('new worker') });
+    f.disk.set(path, { content: 'new worker', uid: 0, mode: '0644' });
+  }
+  await rollbackDeployment(f.context, { host: f.host });
+  for (const path of paths) assert.equal(f.disk.has(path), false);
+  assert.deepEqual(f.receipt(), f.context.previousReceipt);
+  assert.ok(f.events.indexOf('remove:' + paths[0]) < f.events.indexOf('reload'));
+});
+
 test('rollback reports explicitly degraded usage without changing retained private database files', async () => {
   const f = fixture(); f.degraded();
   f.disk.set('/var/lib/sample/usage.sqlite', { content: 'synthetic schema 2 history', uid: 12345, mode: '0600' });

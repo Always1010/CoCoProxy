@@ -44,7 +44,7 @@ prepare 要求已有 `ip_forward=1`，不修改 sysctl、默认路由、系统 D
 npm run cli -- deployment-plan --input /absolute/private/deployment.json --output /absolute/private/plan.json
 ```
 
-原生计划包含四个 unit、服务 UID 的运行和管理设置、root 网络设置及既有精确 polkit 规则，共八个文件；另列出独立 root 回执目录。生成计划不会安装、启动、enable 或修改网络。实际部署须审阅 capability、接口／地址、mark／表／优先级冲突、转发前提和恢复路径，单独执行获准的安装步骤。持久运行须显式 enable 早期 guard、管理及网页入口，核心由管理恢复；旧七文件部署 receipt 的升级兼容由正式部署入口校验。只生成 `runtime-plan` 不会产生完整网络前置单元。
+原生计划包含核心、管理、早期 guard、网络四个 unit，服务 UID 的运行和管理设置、root 网络设置及既有精确 polkit 规则；另含独立同出口测速的 service、socket 和 root 控制的无凭据执行设置，共十一文件。另列出独立 root 回执目录。测速进程按需取得所需网络能力，管理进程仍无网络 capability；固定测速 socket 的启用／暂停跟随运行生命周期。生成计划不会安装、启动、enable 或修改网络。实际部署须审阅 capability、接口／地址、mark／表／优先级冲突、转发前提和恢复路径，单独执行获准的安装步骤。持久运行须显式 enable 早期 guard、管理及网页入口，核心由管理恢复；旧七文件部署及新增测速三文件的收据兼容由正式部署入口校验。只生成 `runtime-plan` 不会产生完整网络前置单元。
 
 网页工作区可导入订阅、保存和应用方案；候选捕获在应用流程内部执行，部署范围不能由浏览器修改。兼容草稿摘要只包含基础策略，原生候选额外包含可信网络设置，以最终候选 generation 为准。状态区分核心和待验收网关，不把单元 active 或配置成功表示为真实终端联网通过。
 

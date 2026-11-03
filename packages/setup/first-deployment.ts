@@ -23,7 +23,7 @@ export interface FirstDeploymentHost {
   load(path: string): Promise<Installed>;
   credential(installed: Installed): Promise<string | null>;
   runtime(installed: Installed, command: 'status' | 'runtime-status' | 'runtime-lifecycle-status'): Promise<any>;
-  units(installed: Installed): Promise<{ active: boolean; enabled: boolean }>;
+  units(installed: Installed): Promise<{ active: boolean; enabled: boolean; bandwidthReady?: boolean }>;
   unchanged(installed: Installed, inputPath: string, administratorSha256: string | null, state?: RuntimeStatus): Promise<boolean>;
 }
 export class FirstDeploymentError extends Error {
@@ -60,20 +60,22 @@ const nativeHost: FirstDeploymentHost = {
   },
   async units({ input }) {
     const units = ['cocoproxy-management.service', ...(input.web ? ['cocoproxy-web.service'] : []),
+      ...(input.management.controllerPolicy === undefined || input.management.controllerPolicy.allowedProbeOrigins.length !== 0 ? ['cocoproxy-bandwidth.socket'] : []),
       ...(input.runtime.automaticGateway ? ['cocoproxy-gateway-guard.service'] : [])];
-    let active = true, enabled = true;
+    let active = true, enabled = true, bandwidthReady = true;
     for (const unit of units) {
       const output = await runDeploymentTool(input.runtime.systemctlPath, ['show', unit, '--property=LoadState,FragmentPath,DropInPaths,NeedDaemonReload,Job,ActiveState']);
       assertSetupLifecycleUnit(output, unit);
       for (const path of ['/etc/systemd/system/' + unit + '.d', '/run/systemd/system/' + unit, '/run/systemd/system/' + unit + '.d']) {
         if (await deploymentPathInfo(path)) throw new Error('unit conflict');
       }
-      if (unit !== 'cocoproxy-gateway-guard.service') active &&= output.split('\n').includes('ActiveState=active');
+      if (!['cocoproxy-gateway-guard.service', 'cocoproxy-bandwidth.socket'].includes(unit)) active &&= output.split('\n').includes('ActiveState=active');
+      if (unit === 'cocoproxy-bandwidth.socket') bandwidthReady &&= output.split('\n').includes('ActiveState=active');
       const state = (await runDeploymentTool(input.runtime.systemctlPath, ['show', unit, '--property=UnitFileState', '--value'])).trim();
       if (!['enabled', 'disabled', 'enabled-runtime', 'static', 'indirect', 'masked', 'masked-runtime', 'linked', 'linked-runtime'].includes(state)) throw new Error('unit state unavailable');
       enabled &&= state === 'enabled';
     }
-    return { active, enabled };
+    return { active, enabled, bandwidthReady };
   },
   async unchanged(installed, inputPath, administratorSha256, previousState) {
     const observation = await nativeHost.inspect();
@@ -135,7 +137,7 @@ export async function createFirstDeploymentReport(deploymentInput: unknown, opti
         administratorSha256 ? '当前管理员凭据格式、私有权限和服务 UID 归属有效；这不证明可登录。' : '尚未初始化管理员凭据。', adminAction, 'installed-files');
     } catch { add('administrator', 'fail', 'SETUP_FIRST_ADMIN_INVALID', '管理员凭据格式或归属无效。', '审阅管理员文件归属及格式；initialize 不覆盖现有文件。', 'installed-files'); }
   } else unavailable('administrator', adminAction);
-  let units: { active: boolean; enabled: boolean } | undefined;
+  let units: { active: boolean; enabled: boolean; bandwidthReady?: boolean } | undefined;
   if (installed) {
     try {
       units = await host.units(installed);
@@ -168,13 +170,13 @@ export async function createFirstDeploymentReport(deploymentInput: unknown, opti
     try {
       const value = (await host.runtime(installed, 'runtime-lifecycle-status')).lifecycle;
       need(value && value.schemaVersion === 1 && typeof value.enabled === 'boolean' && typeof value.paused === 'boolean');
-      const ready = value.enabled && !value.paused && units?.enabled === true;
+      const ready = value.enabled && !value.paused && units?.enabled === true && units.bandwidthReady !== false;
       const managementStep = checks.find(check => check.id === 'management-service')!;
       managementStep.action = value.enabled && !value.paused
         ? '当前自动生命周期已启用且未暂停：先预览 pause-maintenance --input <私有部署输入>，审阅后显式实施；再预览 start-management 并按摘要实施，最终重新验收并显式 resume-persistence。'
         : '运行 start-management --input <私有部署输入> 预览；管理员初始化后审阅摘要并按相同动作显式 --apply，再次运行 status。';
       add('persistence', ready ? 'pass' : units ? 'not-run' : 'unknown', ready ? 'SETUP_FIRST_PERSISTENCE_ENABLED' : 'SETUP_FIRST_PERSISTENCE_REQUIRED',
-        ready ? '当前持久恢复意图已启用且未暂停，所需管理/HTTPS/guard unit 已设置开机启用；不证明冷启动或长期稳定性。' : '持久恢复意图或所需 unit 的开机启用尚未全部满足。',
+        ready ? '当前持久恢复意图已启用且未暂停，所需管理/HTTPS/guard/带宽 socket unit 已设置开机启用；不证明冷启动或长期稳定性。' : '持久恢复意图或所需 unit 的开机启用尚未全部满足。',
         '完成当前终端路径验收后，运行 enable-persistence --input <私有部署输入> --terminal-path-verified 预览；已启用且暂停时使用 resume-persistence，审阅摘要后实施。', 'service-state');
     } catch { unavailable('persistence', '检查私有 lifecycle 意图与 systemd unit 开机状态，禁止以旧 action journal 代替当前观察。'); }
     try {

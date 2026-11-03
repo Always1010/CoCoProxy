@@ -10,7 +10,7 @@
 
 `core` 更新复用基线完整 Server/UI，仅装配当前清单审核的核心。安装预检验证复用摘要、基线和全部 Server/UI 字节，首次安装或漂移时拒绝。部署沿用与全量更新相同的维护及恢复流程，`--preview` 同样显示 `full-maintenance`；核心及相关服务会按流程停止、安装和恢复。
 
-前端产物只适用于与其基线 manifest 完全匹配的已有安装；首次安装或基线不符时拒绝。协调器预检后仅停止管理服务及其 HTTPS 依赖，安装新管理载荷并恢复原启用/运行状态；不暂停核心生命周期、不调用路由器维护适配器、不停止核心或网络单元。管理页面会短暂不可用。最终核对核心 PID、启动时间、服务启用状态、网络收据与业务状态读取；这些检查不替代真实网页和终端访问验收。
+前端产物只适用于与其基线 manifest 完全匹配的已有安装；首次安装或基线不符时拒绝。协调器预检后停止管理服务、其 HTTPS 依赖和带宽 worker 入口，安装新管理载荷并恢复原启用/运行状态；不暂停核心生命周期、不调用路由器维护适配器、不停止核心或网络单元。先停带宽 socket 再停 worker，防止维护时再次激活；worker 进程允许正常空闲退出，socket 意图单独核对。管理页面会短暂不可用。最终核对核心 PID、启动时间、服务启用状态、网络收据与业务状态读取；这些检查不替代真实网页和终端访问验收。
 
 安装收据的 `release` 指向管理载荷，前端更新另用 `runtimeManifestSha256` 保留核心/网络原发行目录。检查安装时同时核验两份不可变载荷；不要清理仍被引用的旧发行目录。后续全量升级会重新统一路径。失败时协调器按下述自动恢复规则尝试恢复旧版管理侧；无法恢复时保留失败日志和安装锁，需按既有 inspect/recover 流程审阅。
 
@@ -176,7 +176,7 @@ status 分列安装、管理员、管理服务、配置、核心、持久运行�
 | `initialize` | 另给私有 `--admin-input`；只独占创建缺失凭据，已有合法凭据保留，损坏/归属错误须修复 |
 | `start-management` | 凭据已初始化，自动生命周期关闭或暂停；启动管理及收据内 HTTPS |
 | `enable-persistence` | `--terminal-path-verified` 确认实际终端验收；启动早期 guard、启用管理/HTTPS 并以服务身份 runtime-enable |
-| `pause-maintenance` | 持久暂停并等待事务排空，不操作路由器，也不代表现有核心已停 |
+| `pause-maintenance` | 先停带宽 socket，持久暂停并等待事务排空，再停 worker 并禁用 socket；不操作路由器，也不代表现有核心已停 |
 | `stop-maintenance` | 自动网关须 `--router-disabled` 确认交付已关；暂停、停用服务、核验 PID/Job，再用旧 helper 退役网络 |
 | `resume-persistence` | 此前已启用，`--terminal-path-verified` 确认路径；恢复持久运行和管理/HTTPS 开机启动 |
 
@@ -221,7 +221,9 @@ INPUT=/etc/cocoproxy-install/deployment-next.json
 "$PAYLOAD/cocoproxy" uninstall --payload "$PAYLOAD" --manifest-sha256 "$MANIFEST_SHA" --input "$INPUT"
 ```
 
-升级只接受 complete 收据、旧自有文件字节/权限/身份及旧 release 完整匹配。旧七文件网关仅允许受控追加原不存在的固定 guard unit，不能借此改其他文件。配置变化默认拒绝；迁移先 prepare 审阅，实施附 `--reviewed-configuration-sha256 <review.digest>`。摘要绑定新旧 manifest、新输入原字节及旧敏感配置，重新排版或输入/载荷变化须重审；服务身份、状态及凭据路径、文件集合、停服和无冲突约束仍适用。
+升级只接受 complete 收据、旧自有文件字节/权限/身份及旧 release 完整匹配。旧七文件网关允许受控追加原不存在的固定 guard unit；旧版收据还允许完整追加固定 `cocoproxy-bandwidth.service`、`cocoproxy-bandwidth.socket` 和 runtime 设置同目录的 `bandwidth-worker.json`，三者必须为 root:0644，目标已有文件、部分追加或未知文件均拒绝。worker 设置只含路径、摘要、网络约束和探测启用标记，不含 controller secret。配置变化默认拒绝；迁移先 prepare 审阅，实施附 `--reviewed-configuration-sha256 <review.digest>`。摘要绑定新旧 manifest、新输入原字节及旧敏感配置，重新排版或输入/载荷变化须重审；服务身份、状态及凭据路径、文件集合、停服和无冲突约束仍适用。
+
+带宽 worker 通过固定 Unix socket 由同一非 root 服务 UID 使用；原生网关所需网络 capabilities 仅授予独立 worker，管理进程仍无网络 capabilities。socket 的开机启用跟随已明确启用且未暂停的运行意图，空探测来源许可不启动入口。升级旧版首次引入 worker 时按原有运行意图恢复 socket；回滚到没有 worker 的旧版会先停 socket/worker 并禁用入口，再按收据移除本次新增三文件。卸载同样先停用并禁用 socket，删除匹配的三文件，保留原私有配置和业务状态。
 
 升级保留管理员、订阅、草稿、事务、生命周期及旧 release，不复制秘密。底层安装命令不自行恢复服务；公开部署协调器在本次进程仍持有已核验旧输入和收据时，按下节规则自动恢复失败升级。完成后更新 RELEASE/CLI，核对保留配置与新部署，恢复原服务意图；已启用时以服务身份 runtime-resume（首次才 runtime-enable），恢复早期 guard、管理及网页，最后恢复路由器交付并验收。卸载只删除仍匹配收据的自有文件，保留私有设置、状态、凭据与 release；独立 HTTPS 和路由器另行处理。
 
