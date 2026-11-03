@@ -57,6 +57,14 @@ npm run cli -- runtime-recover --state-dir /var/lib/cocoproxy --runtime-settings
 
 ## 操作边界与验证
 
+### 同出口测速执行服务
+
+`bandwidth-worker-plan.ts` 生成固定 `cocoproxy-bandwidth.service`、`.socket` 及不含凭据的 root:0644 执行设置。管理进程通过 `/run/cocoproxy-bandwidth.sock` 提交有界任务，socket 仅服务 UID 可读写；没有新增任意 systemd/polkit 控制权限。worker 沿用非 root 服务 UID，原生网关模式仅授予 NET_ADMIN/NET_RAW，保持主机网络命名空间以使用业务出口；不开 TUN、不修改路由。`PrivateTmp` 隔离其临时核心配置，持久状态目录在 unit 内只读，源码和执行设置由部署器控制。
+
+固定入口 `apps/runtime/bandwidth-worker.ts` 只接受匹配 LISTEN_PID/LISTEN_FDS 的 systemd socket FD 和固定设置参数，拒绝 root 或错误服务身份。每个服务实例仅接收一个任务，清理并返回终态后退出，未收到任务的实例短暂空闲后退出；systemd 的45秒上限、5秒停止上限和 control-group 清理覆盖整个临时核心。服务只接受版本化的节点／代次／模式标识，自行读取并重编译已提交配置，核验核心摘要及运行状态；自动任务另外读取启用组的参数，任务携带的工作区 revision 必须与读取值一致，避免新旧参数与预算混用。任务前后及执行中复核代次、选择和维护暂停，任何变化使结果作废。固定测速来源与 TLS 校验由现有传输实现控制。
+
+`tests/bandwidth-worker.test.ts` 覆盖 Unix socket 协议、拒绝配置／命令注入、单任务及取消清理、代次失效和错误脱敏。这些测试与普通类型检查不代替目标 systemd、实际网络能力和真实出口观察验收；安装变更通过部署收据、生命周期及回退流程执行。
+
 unit、systemctl 及路径祖先须受可信身份控制；unit 无 drop-in、无待重载，FragmentPath/User 匹配。设置和状态为服务身份私有。核心只可由 root 或服务 UID 持有且不可被组／其他用户写入，流式核验摘要并复核文件身份。管理身份只获固定核心 show/start/stop；原生网关额外仅获固定网络 unit 的 start/reload，不接受通用提权。
 
 systemctl 限时 15 秒、输出 16 KiB；客户端结束不代表 manager job 结束，适配器 stop 后最多两次核验，未收敛前不启动后继。controller `/version` 限时 1 秒、4 KiB；组回读为一次限时 1 秒、最大 16 MiB／6016 个代理的请求，均无重定向。热切换 PUT 最多四个并发，启动新批次的预算为 3 秒，当前批次最多再耗时 1 秒；失败等待本批请求全部结束才恢复，防止迟到写入覆盖恢复结果。确认目标 10 秒，但等待在途有界观察后总耗时可能更长；激活与恢复不通过 Promise.race 并行。

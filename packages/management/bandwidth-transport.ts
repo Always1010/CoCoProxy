@@ -13,7 +13,8 @@ export type BandwidthPhase = 'preparing' | 'latency' | 'download' | 'upload' | '
 export type BandwidthDirection = { status: 'pending' | 'running' | 'success' | 'insufficient' | 'failed' | 'cancelled'; mbps: number | null; liveMbps: number | null; bytes: number; sampleMs?: number; warmupMs?: number };
 export type BandwidthReport = { phase?: BandwidthPhase; bytesUsed?: number; download?: BandwidthDirection; upload?: BandwidthDirection;
   latency?: { idle: number | null; download: number | null; upload: number | null }; reason?: string };
-type TransferInput = { config: JsonObject; node: string; binaryPath: string; stateDirectory: string; signal: AbortSignal;
+export type TransferInput = { config: JsonObject; node: string; binaryPath: string; stateDirectory: string; signal: AbortSignal;
+  generation?: string; group?: string; workspaceRevision?: number;
   limits: { durationMs: number; maxBytes: number; timeoutMs: number }; report: (update: BandwidthReport) => void;
   verification?: { targetMbps: number; warmupMs: number; minSampleMs: number } };
 type TransportRuntime = { start: (binary: string, args: string[]) => ChildProcess };
@@ -247,7 +248,7 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
     const port = await availablePort(); check();
     const config = buildBandwidthConfig(input.config, input.node, port);
     checkBandwidthEgress(config, process.platform, process.platform === 'linux' ? await readFile('/proc/self/status', 'utf8') : '', process.getuid?.() === 0);
-    if (input.config['x-cocoproxy-host-proxy'] === true) throw failure('BANDWIDTH_PATH_UNAVAILABLE');
+    if (input.config['x-cocoproxy-host-proxy'] === true && (!config['routing-mark'] || !config['interface-name'])) throw failure('BANDWIDTH_PATH_UNAVAILABLE');
     const authentication = `task:${randomBytes(24).toString('hex')}`;
     config.authentication = [authentication];
     directory = await mkdtemp(join(input.stateDirectory, 'bandwidth-'));
