@@ -482,7 +482,7 @@ export function createWorkspaceApplication(options: {
       delete current.pendingEvent;
       await writeAutomaticBindings(options.stateDirectory, current);
     });
-    const value = { key: plan.automatic.key, scope: plan.automatic.scope, generation: state.active, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES,
+    const value = { key: plan.automatic.key, scope: plan.automatic.scope, generation: state.active, workspaceRevision: workspace.revision, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES,
       groups: Object.entries(plan.automatic.policies).map(([name, policy]) => ({ name, current: observed.selections[name], policy }))
         .filter(group => typeof group.current === 'string' && [...group.policy.preferred, ...group.policy.fallback].includes(group.current)) };
     snapshotCache = { revision: workspace.revision, generation: state.active, expires: Date.now() + 30_000, value };

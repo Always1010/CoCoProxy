@@ -5,7 +5,7 @@ import { ManagementError } from './http.ts';
 import { createAutomaticDiagnostics, type AutoDiagnostic, type AutoSuspensionReason } from './automatic-diagnostics.ts';
 
 export type AutoSnapshot = {
-  key: string; generation: string; probes: AutoProbeSettings; scope?: string;
+  key: string; generation: string; probes: AutoProbeSettings; scope?: string; workspaceRevision?: number;
   groups: { name: string; current: string; policy: AutoGroupPolicy }[];
 };
 export type ProbeResult = { ok: boolean; delay: number | null; retryAfterMs?: number };
@@ -43,7 +43,7 @@ type Options = {
   now?: () => number;
   suspensionReason?: () => AutoSuspensionReason;
   diagnostic?: (event: AutoDiagnostic) => void;
-  bandwidth?: Pick<Parameters<typeof createBandwidthSelector>[0], 'measure' | 'busy' | 'load' | 'save' | 'trace' | 'storageDiagnostic'>;
+  bandwidth?: Pick<Parameters<typeof createBandwidthSelector>[0], 'measure' | 'measurementKey' | 'busy' | 'load' | 'save' | 'trace' | 'storageDiagnostic'>;
 };
 
 /** All state advances through serialized ticks; deadlines never hold a worker or a timer open. */

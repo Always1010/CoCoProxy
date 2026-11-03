@@ -17,7 +17,7 @@ export type BandwidthTarget = { config: JsonObject; binaryPath: string; stateDir
 const pending = (): BandwidthDirection => ({ status: 'pending', mbps: null, liveMbps: null, bytes: 0 });
 const errorCodes = new Set(['ACTIVE_CONFLICT', 'CONTROLLER_UNAVAILABLE', 'BANDWIDTH_UNAVAILABLE', 'BANDWIDTH_NODE_INVALID',
   'BANDWIDTH_TIMEOUT', 'BANDWIDTH_LIMIT', 'BANDWIDTH_SAMPLE_INSUFFICIENT', 'BANDWIDTH_UPLOAD_FAILED',
-  'BANDWIDTH_DOWNLOAD_FAILED', 'BANDWIDTH_TLS_FAILED', 'BANDWIDTH_CORE_FAILED', 'BANDWIDTH_CONFIG_INVALID', 'BANDWIDTH_BYTE_LIMIT', 'BANDWIDTH_CANCELLED', 'BANDWIDTH_PATH_UNAVAILABLE']);
+  'BANDWIDTH_DOWNLOAD_FAILED', 'BANDWIDTH_TLS_FAILED', 'BANDWIDTH_CORE_FAILED', 'BANDWIDTH_CONFIG_INVALID', 'BANDWIDTH_BYTE_LIMIT', 'BANDWIDTH_CANCELLED', 'BANDWIDTH_PATH_UNAVAILABLE', 'BANDWIDTH_WORKER_UNAVAILABLE']);
 function failure(error: unknown): string {
   const value = error as { code?: unknown; message?: unknown } | null;
   for (const code of [value?.code, value?.message]) if (typeof code === 'string' && errorCodes.has(code)) return code;
@@ -30,6 +30,7 @@ export function createBandwidthService(options: {
   isCurrent: (generation: string) => Promise<boolean>;
   enabled?: boolean;
   transfer?: typeof runBandwidthTransfer;
+  availability?: () => Promise<{ available: boolean; reason: string | null }>;
 }) {
   let current: { task: BandwidthTask; owner: string; abort: AbortController; completion: Promise<void>; stopReason: string | null } | undefined;
   let stopped = false;
@@ -43,8 +44,10 @@ export function createBandwidthService(options: {
     const identity = principal.deviceId ?? request.headers.get('cookie') ?? '';
     return createHash('sha256').update(JSON.stringify([principal.username, identity, client])).digest('hex');
   }
-  function status(key: string | null) {
-    return { available: options.enabled !== false && !stopped, automaticRunning: !!automatic, limits: BANDWIDTH_LIMITS, server: BANDWIDTH_SERVER,
+  async function status(key: string | null) {
+    const worker = await options.availability?.();
+    return { available: options.enabled !== false && !stopped && worker?.available !== false,
+      unavailableReason: worker?.reason ?? null, automaticRunning: !!automatic, limits: BANDWIDTH_LIMITS, server: BANDWIDTH_SERVER,
       task: current ? structuredClone({ ...current.task, owned: key !== null && current.owner === key }) : null };
   }
   function stop(job: NonNullable<typeof current>, reason: string) {
@@ -80,7 +83,7 @@ export function createBandwidthService(options: {
     try {
       const target = await options.snapshot(task.node, task.generation, job.abort.signal);
       job.abort.signal.throwIfAborted();
-      const result = await transfer({ ...target, node: task.node, limits: BANDWIDTH_LIMITS, signal: job.abort.signal, report });
+      const result = await transfer({ ...target, node: task.node, generation: task.generation, limits: BANDWIDTH_LIMITS, signal: job.abort.signal, report });
       reason = result.reason;
       if (!job.stopReason && !await options.isCurrent(task.generation)) reason = 'ACTIVE_CONFLICT';
     } catch (error) { reason = failure(error); }
@@ -107,7 +110,7 @@ export function createBandwidthService(options: {
   return {
     busy: () => !!current?.task.running || !!automatic,
     async verify(node: string, generation: string, settings: BandwidthSettings, signal: AbortSignal,
-      reportBytes: (bytes: number) => void): Promise<{ mbps: number; delayMs: number; bytes: number; sampleMs?: number; warmupMs?: number } | null> {
+      reportBytes: (bytes: number) => void, group?: string, workspaceRevision?: number): Promise<{ mbps: number; delayMs: number; bytes: number; sampleMs?: number; warmupMs?: number } | null> {
       if (stopped || options.enabled === false || current?.task.running || automatic || signal.aborted) return null;
       const abort = new AbortController();
       const job = { abort, done: Promise.resolve<unknown>(undefined) };
@@ -118,7 +121,7 @@ export function createBandwidthService(options: {
         try {
           const target = await options.snapshot(node, generation, joined);
           joined.throwIfAborted();
-          const result = await transfer({ ...target, node, signal: joined,
+          const result = await transfer({ ...target, node, generation, group, workspaceRevision, signal: joined,
             limits: { durationMs: settings.durationSeconds * 1000, maxBytes: settings.taskMiB * 1048576, timeoutMs: settings.timeoutSeconds * 1000 },
             verification: { targetMbps: settings.targetMbps, warmupMs: settings.warmupSeconds * 1000, minSampleMs: settings.minSampleSeconds * 1000 },
             report: value => {
@@ -128,7 +131,7 @@ export function createBandwidthService(options: {
             } });
           return !result.reason && !joined.aborted && await options.isCurrent(generation) && mbps !== null && delayMs !== null
             ? { mbps, delayMs, bytes, sampleMs, warmupMs } : null;
-        } catch (error) { if (failure(error) === 'BANDWIDTH_PATH_UNAVAILABLE') throw error; return null; }
+        } catch (error) { if (['BANDWIDTH_PATH_UNAVAILABLE', 'BANDWIDTH_WORKER_UNAVAILABLE'].includes(failure(error))) throw error; return null; }
         finally { if (automatic === job) automatic = undefined; }
       };
       job.done = execute();
@@ -145,6 +148,7 @@ export function createBandwidthService(options: {
         if (typeof body.node !== 'string' || !body.node.trim() || body.node.length > 256 || /[\u0000-\u001f\u007f]/.test(body.node) ||
             typeof body.expectedActive !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedActive)) throw new ManagementError('INVALID_REQUEST');
         if (stopped || options.enabled === false) throw new ManagementError('BANDWIDTH_DISABLED', 503);
+        if ((await options.availability?.())?.available === false) throw new ManagementError('BANDWIDTH_WORKER_UNAVAILABLE', 503);
         if (current?.task.running || automatic) throw new ManagementError('BANDWIDTH_BUSY', 409);
         const now = Date.now();
         const job = { task: { id: randomUUID(), node: body.node, generation: body.expectedActive, phase: 'preparing', running: true, owned: false,

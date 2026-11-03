@@ -26,6 +26,7 @@ export interface BandwidthTask {
 }
 export interface BandwidthStatus {
   available?: boolean
+  unavailableReason?: string | null
   automaticRunning?: boolean
   limits: { durationMs: number; maxBytes: number; timeoutMs: number }
   server: { name: string; url: string }
@@ -49,6 +50,7 @@ const messages: Record<string, string> = {
   BANDWIDTH_NOT_OWNER: 'coco.bandwidthErrorBANDWIDTH_NOT_OWNER',
   BANDWIDTH_UNAVAILABLE: 'coco.bandwidthErrorBANDWIDTH_UNAVAILABLE',
   BANDWIDTH_PATH_UNAVAILABLE: 'coco.bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE',
+  BANDWIDTH_WORKER_UNAVAILABLE: 'coco.bandwidthErrorBANDWIDTH_WORKER_UNAVAILABLE',
   BANDWIDTH_NODE_INVALID: 'coco.bandwidthErrorBANDWIDTH_NODE_INVALID',
   BANDWIDTH_NODE_CONFLICT: 'coco.bandwidthErrorBANDWIDTH_NODE_CONFLICT',
   BANDWIDTH_CLIENT_INVALID: 'coco.bandwidthErrorBANDWIDTH_CLIENT_INVALID',

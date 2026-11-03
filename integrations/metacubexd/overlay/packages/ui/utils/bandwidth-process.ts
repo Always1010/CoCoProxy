@@ -56,6 +56,8 @@ export function processRelativeTime(at: number, start: number) {
 export function processAction(event: ProcessEvent) {
   if (event.kind !== 'state') return ['trigger', 'probe', 'sample', 'comparison', 'excluded', 'end'].includes(event.kind) ? event.kind : 'state'
   if (event.reason === 'screening-latency') return 'probe'
+  if (event.reason === 'preparing-measurement') return 'prepare'
+  if (['measurement-path-unavailable', 'measurement-worker-unavailable'].includes(event.reason)) return 'notStarted'
   if (event.reason === 'collecting') return 'sample'
   if (['bandwidth-improvement', 'preferred-restored', 'failure-recovery', 'faster-candidate'].includes(event.reason)) return 'switch'
   if (['configuration-changed', 'probe-target-changed', 'evidence-expired'].includes(event.reason)) return 'invalidate'
@@ -73,6 +75,8 @@ export function processSampleLoss(sample: ProcessSample, settings: BandwidthSett
 // Reuse the existing explanations so the overview and process never disagree on a reason.
 const existingReasons: Record<string, string> = {
   'measurement-path-unavailable': 'coco.bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE',
+  'measurement-worker-unavailable': 'coco.bandwidthErrorBANDWIDTH_WORKER_UNAVAILABLE',
+  'preparing-measurement': 'coco.bandwidthPreparingMeasurement',
   'waiting-traffic': 'coco.anWaitingForEvidenceOfSustainedSlow', 'waiting-idle': 'coco.anWaitingForIdleTrafficOrA',
   'budget-exhausted': 'coco.anAutomaticCheckBudgetIsInsufficientKeeping', 'measurement-unavailable': 'coco.anDownloadValidationServiceIsUnavailableNode',
   collecting: 'coco.anCollectingValidSamplesForTheCurrent', 'current-sufficient': 'coco.anCurrentLatencyIsNormalAndThroughput',

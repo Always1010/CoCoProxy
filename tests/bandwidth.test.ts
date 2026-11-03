@@ -51,6 +51,16 @@ test('unavailable production egress stays explicit for automatic and manual test
   await service.close();
 });
 
+test('missing worker disables manual start before creating a task or fetching a node configuration', async () => {
+  const service = createBandwidthService({ snapshot: async () => { throw new Error('must not read configuration'); }, isCurrent: async () => true,
+    availability: async () => ({ available: false, reason: 'BANDWIDTH_WORKER_UNAVAILABLE' }) });
+  const status = await service.fetch(request(), principal);
+  assert.equal(status.available, false); assert.equal(status.unavailableReason, 'BANDWIDTH_WORKER_UNAVAILABLE');
+  await assert.rejects(service.fetch(request('POST', { node: 'node-b', expectedActive: generation }), principal), { code: 'BANDWIDTH_WORKER_UNAVAILABLE' });
+  assert.equal((await service.fetch(request(), principal)).task, null);
+  await service.close();
+});
+
 test('bandwidth task reserves globally before snapshot awaits and binds cancellation to the authenticated browser', async t => {
   const snapshot = deferred(), entered = deferred(), cleanup = deferred();
   let aborted = false;

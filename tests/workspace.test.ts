@@ -131,6 +131,7 @@ test('automatic selections preserve manual intent, use confirmed transactions, p
   f.observe({ Proxy: 'synthetic-node' });
   const snapshot = await f.action.automaticSnapshot();
   assert.ok(snapshot);
+  assert.equal(snapshot.workspaceRevision, saved.revision);
   assert.equal(await f.action.automaticSwitch(snapshot, 'Proxy', 'outside', 'failure-recovery'), false);
   const attempts = await Promise.all([
     f.action.automaticSwitch(snapshot, 'Proxy', 'spare', 'failure-recovery'),
@@ -295,6 +296,8 @@ test('decision setting edits retain the committed automatic exit and invalidate 
   f.restart();
   const fresh = (await f.action.automaticSnapshot(true))!;
   assert.equal(fresh.groups[0].current, 'spare');
+  assert.equal(fresh.workspaceRevision, changed.revision);
+  assert.notEqual(fresh.workspaceRevision, old.workspaceRevision);
   assert.notEqual(fresh.key, old.key);
   assert.equal(await f.action.automaticSwitch(old, 'Proxy', 'synthetic-node', 'failure-recovery'), false);
   const after = await f.view();

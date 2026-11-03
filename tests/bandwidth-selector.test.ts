@@ -265,10 +265,15 @@ test('busy traffic aborts verification as unknown without condemning other candi
 });
 
 test('unavailable measurement egress pauses the pool without repeated charges or claiming recovery', async () => {
-  let now = 0, attempts = 0;
+  let now = 0, attempts = 0, key = 'missing', total = 0;
+  const traces = new Map<string, BandwidthRound>();
   const engine = createBandwidthSelector({ now: () => now,
-    probe: async () => ({ ok: true, delay: 100 }), select: async () => { throw new Error('must not switch'); },
-    measure: async () => { attempts++; throw Object.assign(new Error('private details'), { code: 'BANDWIDTH_PATH_UNAVAILABLE' }); } });
+    trace: round => traces.set(round.id, round), measurementKey: () => key,
+    probe: async () => ({ ok: true, delay: 100 }), select: async () => true,
+    measure: async (_s, node) => {
+      attempts++; if (key === 'missing') throw Object.assign(new Error('private details'), { code: 'BANDWIDTH_PATH_UNAVAILABLE' });
+      return { mbps: node === 'a' ? 2 : 8, delayMs: 100, bytes: 0 };
+    } });
   engine.update({ key: 'synthetic', generation: '1', probes: DEFAULT_AUTO_PROBES,
     groups: [{ name: 'media', current: 'a', policy: { preferred: ['a', 'b'], fallback: [], returnToPreferred: false,
       bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true } } }] });
@@ -281,6 +286,17 @@ test('unavailable measurement egress pauses the pool without repeated charges or
   assert.equal(attempts, 1);
   assert.equal(engine.status('media')!.reason, 'measurement-path-unavailable');
   assert.equal(engine.status('media')!.hourBytes, 0);
+  assert.ok([...traces.values()][0].endedAt);
+  assert.equal([...traces.values()][0].events.filter(e => e.kind === 'sample').length, 0);
+  key = 'installed';
+  for (let i = 0; i < 100; i++) {
+    now += 1000; total += 50000;
+    engine.observe({ epoch: 'synthetic', download: total, upload: 0,
+      connections: [{ id: 'one', outbound: 'a', download: total, upload: 0, sourceIP: '192.0.2.1', host: 'synthetic.example', process: 'Unknown', inboundUser: 'Unknown' }] });
+    engine.tick([{ name: 'media', ready: true }]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  assert.ok(attempts > 1);
   await engine.close();
 });
 

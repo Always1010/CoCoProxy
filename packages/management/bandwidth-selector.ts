@@ -33,13 +33,14 @@ type Pool = { name: string; current: string; nodes: Map<string, Node>; active: s
   started: number | null; spent: number; degradedMbps?: number;
   lastSwitch: { at: number; from: string; to: string } | null;
   phase: string; reason: string; candidate: string | null; testingNode: string | null; nextAt: number | null;
-  decision: ReturnType<typeof bandwidthDecision>; pathUnavailable?: boolean };
+  decision: ReturnType<typeof bandwidthDecision>; pathUnavailable?: boolean; blockedMeasurementKey?: string };
 
 /** Low-priority, single-flight pool: a node's failed comparison never cools down its group. */
 export function createBandwidthSelector(options: {
   now: () => number;
   measure?: (snapshot: AutoSnapshot, node: string, settings: BandwidthSettings, signal: AbortSignal,
-    bytes: (used: number) => void) => Promise<{ delayMs: number; mbps: number; bytes: number; sampleMs?: number; warmupMs?: number } | null>;
+    bytes: (used: number) => void, group: string) => Promise<{ delayMs: number; mbps: number; bytes: number; sampleMs?: number; warmupMs?: number } | null>;
+  measurementKey?: () => string;
   probe: (snapshot: AutoSnapshot, node: string, signal: AbortSignal) => Promise<ProbeResult>;
   select: (snapshot: AutoSnapshot, group: string, node: string) => Promise<boolean>;
   busy?: () => boolean;
@@ -134,9 +135,11 @@ export function createBandwidthSelector(options: {
     flight = job;
     job.done = run(job.abort.signal).catch(error => {
       if (pool && pools.get(pool.name) === pool) {
-        if (error && typeof error === 'object' && error.code === 'BANDWIDTH_PATH_UNAVAILABLE') {
+        if (error && typeof error === 'object' && ['BANDWIDTH_PATH_UNAVAILABLE', 'BANDWIDTH_WORKER_UNAVAILABLE'].includes(error.code)) {
           pool.pathUnavailable = true; clearEvidence(pool);
-          note(pool, 'waiting', 'measurement-path-unavailable'); return;
+          pool.blockedMeasurementKey = options.measurementKey?.();
+          const reason = error.code === 'BANDWIDTH_PATH_UNAVAILABLE' ? 'measurement-path-unavailable' : 'measurement-worker-unavailable';
+          note(pool, 'waiting', reason); trace.end(pool.name, reason); pool.trigger = null; pool.started = null; return;
         }
         if (node && !storageFault) unknown(pool, node, 'sample-unknown');
         note(pool, 'waiting', storageFault ? 'storage-unavailable' : 'sample-unknown', storageFault?.nextAt ?? options.now() + UNKNOWN_WAIT);
@@ -369,8 +372,11 @@ export function createBandwidthSelector(options: {
       if (signal.aborted) return null;
       return await options.measure!(snap, n.name, s, signal, bytes => {
         if (Number.isFinite(bytes) && bytes >= 0) used = Math.min(charge.bytes, Math.max(used, bytes));
-        if (flight?.pool === p && flight.node === n) flight.used = used;
-      });
+        if (flight?.pool === p && flight.node === n) {
+          if (used > 0 && !flight.used) note(p, 'testing', 'collecting');
+          flight.used = used;
+        }
+      }, p.name);
     } finally {
       pressure = undefined; charge.bytes = used; p.spent += used;
       // Retain the measured result and pending settlement. The scheduler blocks all
@@ -438,7 +444,8 @@ export function createBandwidthSelector(options: {
     const names = [...pools.keys()];
     for (let i = 0; i < names.length; i++) {
       const index = (fairCursor + i) % names.length, p = pools.get(names[index])!, s = settingsFor(p)!;
-      if (p.pathUnavailable) { note(p, 'waiting', 'measurement-path-unavailable'); continue; }
+      if (p.pathUnavailable && options.measurementKey && p.blockedMeasurementKey !== options.measurementKey()) p.pathUnavailable = false;
+      if (p.pathUnavailable) continue;
       if (!options.measure) { note(p, 'waiting', 'measurement-unavailable'); continue; }
       if (!p.trigger && suspect(p, s)) {
         p.trigger = 'traffic'; p.degradedMbps = undefined; p.positiveUntil = 0;
@@ -560,14 +567,20 @@ export function createBandwidthSelector(options: {
       const snap = structuredClone(snapshot), delayMs = node.probe.delay, selectedNode = node, startedAt = at;
       if (node.name !== p.current) p.candidate = node.name;
       p.testingNode = node.name;
-      note(p, 'testing', 'collecting');
+      note(p, 'testing', 'preparing-measurement');
       launch('download', async signal => {
         const before = p.spent, job = flight;
         let result: Awaited<ReturnType<typeof measure>> = null;
+        let notStarted = false;
         try { result = await measure(p, selectedNode, s, snap, signal); }
+        catch (error) {
+          notStarted = p.spent === before && ['BANDWIDTH_PATH_UNAVAILABLE', 'BANDWIDTH_WORKER_UNAVAILABLE']
+            .includes(String((error as { code?: unknown })?.code));
+          throw error;
+        }
         finally {
           const valid = !!result && !signal.aborted && alive(p, snap, signal) && Number.isFinite(result.mbps) && result.mbps > 0;
-          if (!job?.sampleInterrupted) trace.event(p.name, { kind: 'sample', reason: valid ? 'evidence-ready' : 'sample-unknown', node: selectedNode.name,
+          if (!notStarted && !job?.sampleInterrupted) trace.event(p.name, { kind: 'sample', reason: valid ? 'evidence-ready' : 'sample-unknown', node: selectedNode.name,
             sample: { startedAt, elapsedMs: options.now() - startedAt, delayMs,
               mbps: result && Number.isFinite(result.mbps) && result.mbps > 0 ? result.mbps : null,
               bytes: Math.max(0, p.spent - before), valid, ...(result?.sampleMs === undefined ? {} : { sampleMs: result.sampleMs }),

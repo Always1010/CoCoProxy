@@ -1,4 +1,4 @@
-import { isAbsolute, resolve, join } from 'node:path';
+import { isAbsolute, resolve, join, dirname } from 'node:path';
 import { isIP } from 'node:net';
 import { privateRead, atomicWrite } from '../storage/private-files.ts';
 import { loadRuntimeSettings, loadRuntimeCandidate, readSelection, verifyBinary } from '../runtime/settings.ts';
@@ -22,6 +22,7 @@ import type { TimingObserver } from '../diagnostics/operation-timing.ts';
 import { createUsageService, parseUsageSnapshot } from './usage.ts';
 import { createBandwidthService } from './bandwidth.ts';
 import { parseBandwidthLedger } from './bandwidth-selector.ts';
+import { createBandwidthWorkerClient } from './bandwidth-worker-client.ts';
 
 export function stripControllerMount(request: Request): Request {
   const url = new URL(request.url);
@@ -56,6 +57,7 @@ export async function loadManagementGateway(path: string) {
       sourceClient = new HttpsSnapshotClient(policy as unknown as HttpsClientOptions);
     }
     const runtime = new SystemdMihomoRuntime(runtimeSettings);
+    const bandwidthWorker = createBandwidthWorkerClient({ settingsPath: join(dirname(absolute(settings.runtimeSettingsPath)), 'bandwidth-worker.json') });
     const store = new FileTransactionStore(runtimeSettings.stateDirectory);
     // Older settings omitted controllerPolicy entirely. Give those deployments
     // the same safe HTTPS probe used by the dashboard. An explicitly configured
@@ -151,6 +153,7 @@ export async function loadManagementGateway(path: string) {
     let automaticPaused = false;
     automatic = createAutomaticSelector({
       snapshot: async () => {
+        await bandwidthWorker.availability();
         automaticPaused = (await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused;
         return automaticPaused ? null : action.automaticSnapshot();
       },
@@ -162,7 +165,8 @@ export async function loadManagementGateway(path: string) {
         trace: round => bandwidthHistory.record(round),
         storageDiagnostic: ({ event: transition, ...detail }) => console.info(JSON.stringify({ event: 'COCOPROXY_BANDWIDTH_STORAGE_DIAGNOSTIC', transition, ...detail })),
         busy: () => bandwidth?.busy() ?? true,
-        measure: (snapshot, node, settings, signal, report) => bandwidth?.verify(node, snapshot.generation, settings, signal, report) ?? Promise.resolve(null),
+        measurementKey: () => bandwidthWorker.state().key,
+        measure: (snapshot, node, settings, signal, report, group) => bandwidth?.verify(node, snapshot.generation, settings, signal, report, group, snapshot.workspaceRevision) ?? Promise.resolve(null),
         load: async () => {
           try { return parseBandwidthLedger(JSON.parse(await privateRead(join(runtimeSettings.stateDirectory, 'automatic-bandwidth.json'), 1048576))); }
           catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, charges: [], switches: [] }; throw error; }
@@ -183,6 +187,8 @@ export async function loadManagementGateway(path: string) {
       return parseUsageSnapshot(body, `${before.bootId}:${before.pid}:${before.startTime}`);
     } });
     bandwidth = createBandwidthService({
+      transfer: bandwidthWorker.transfer,
+      availability: bandwidthWorker.availability,
       enabled: (controllerPolicy.allowedProbeOrigins as string[] | undefined)?.length !== 0,
       isCurrent: async generation => await isCurrent(generation) && !(await readRuntimeLifecycle(runtimeSettings.stateDirectory)).paused &&
         (await runtime.observe(generation)).ready,
