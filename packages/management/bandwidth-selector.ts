@@ -193,7 +193,9 @@ export function createBandwidthSelector(options: {
         pools.set(g.name, p);
       }
       if (p.current !== g.current) { interrupt('selection-conflict'); trace.end(p.name, 'selection-conflict'); clearEvidence(p); p.current = g.current; p.trigger = null; }
-      for (const name of [...g.policy.preferred, ...g.policy.fallback]) if (!p.nodes.has(name)) p.nodes.set(name,
+      const permitted = new Set([g.current, ...g.policy.preferred, ...g.policy.fallback]);
+      for (const name of p.nodes.keys()) if (!permitted.has(name)) p.nodes.delete(name);
+      for (const name of permitted) if (!p.nodes.has(name)) p.nodes.set(name,
         { name, preferred: g.policy.preferred.includes(name), samples: [], probe: null, state: 'pending', reason: 'waiting-evidence',
           nextAt: 0, checkedAt: null, measuredAt: null, failures: 0, misses: 0, earlyFailures: 0, activeMs: 0, useSince: 0 });
     }

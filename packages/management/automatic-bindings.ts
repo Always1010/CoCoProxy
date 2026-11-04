@@ -7,10 +7,10 @@ export type AutomaticEvent = { id?: string; at: number; group: string; from: str
 export type AutomaticBindings = {
   version: 1;
   scope: string;
-  targets: Record<string, { signature: string; target: string }>;
+  targets: Record<string, { signature: string; target: string; selectionRevision?: number }>;
   events: AutomaticEvent[];
   pendingEvent?: AutomaticEvent & { id: string; signature: string; revision: number };
-  pendingConfiguration?: { scope: string; generation: string; events: (AutomaticEvent & { id: string; signature: string })[] };
+  pendingConfiguration?: { scope: string; generation: string; events: (AutomaticEvent & { id: string; signature: string; selectionRevision?: number })[] };
 };
 
 export function parseAutomaticBindings(input: unknown): AutomaticBindings {
@@ -20,7 +20,8 @@ export function parseAutomaticBindings(input: unknown): AutomaticBindings {
     if (!value || value.version !== 1 || typeof value.scope !== 'string' || value.scope.length > 16384 ||
         !value.targets || typeof value.targets !== 'object' || Array.isArray(value.targets) || Object.keys(value.targets).length > 100 ||
         Object.entries(value.targets).some(([key, target]) => !name(key) || ['__proto__', 'constructor', 'prototype'].includes(key) ||
-          !target || typeof target !== 'object' || !/^[a-f0-9]{64}$/.test(String((target as { signature?: unknown }).signature)) || !name((target as { target?: unknown }).target)) ||
+          !target || typeof target !== 'object' || !/^[a-f0-9]{64}$/.test(String((target as { signature?: unknown }).signature)) || !name((target as { target?: unknown }).target) ||
+          (target.selectionRevision !== undefined && (!Number.isSafeInteger(target.selectionRevision) || target.selectionRevision < 1))) ||
         !Array.isArray(value.events) || value.events.length > 50 || value.events.some((event: AutomaticEvent) => !event ||
           !Number.isFinite(event.at) || event.at < 0 || !name(event.group) || !name(event.from) || !name(event.to) || !name(event.reason))) {
       throw new Error();
@@ -31,7 +32,8 @@ export function parseAutomaticBindings(input: unknown): AutomaticBindings {
         !/^[a-f0-9]{64}$/.test(pending.generation) || !Array.isArray(pending.events) ||
         !pending.events.length || pending.events.length > 100 || new Set(pending.events.map(e => e?.group)).size !== pending.events.length ||
         pending.events.some(e => !e || !/^[a-f0-9-]{36}$/.test(e.id) || !Number.isSafeInteger(e.at) || e.at < 0 ||
-          !name(e.group) || !name(e.from) || !name(e.to) || e.from === e.to || e.reason !== 'configuration-change' || !/^[a-f0-9]{64}$/.test(e.signature)))) throw new Error();
+          !name(e.group) || !name(e.from) || !name(e.to) || e.from === e.to || e.reason !== 'configuration-change' || !/^[a-f0-9]{64}$/.test(e.signature) ||
+          (e.selectionRevision !== undefined && (!Number.isSafeInteger(e.selectionRevision) || e.selectionRevision < 1))))) throw new Error();
     if ([...value.events, ...(value.pendingEvent ? [value.pendingEvent] : []), ...(pending?.events ?? [])].some(e =>
       [e.fromPool, e.toPool].some(pool => pool !== undefined && pool !== 'preferred' && pool !== 'fallback'))) throw new Error();
     if (value.pendingEvent !== undefined) {

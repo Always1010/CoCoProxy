@@ -1714,7 +1714,7 @@
     "anSingleNodeTest": "单节点测试",
     "anNodeBandwidth": "节点带宽…",
     "anLocate": "定位",
-    "anSelectANodeToSwitchTo": "点击节点可切换为手动选择",
+    "anSelectANodeToSwitchTo": "点击节点可更换当前节点，自动选择继续运行",
     "anClearFilters": "清空筛选",
     "anMobileNavigation": "移动端导航",
     "anNavigateTo": "前往{name}",

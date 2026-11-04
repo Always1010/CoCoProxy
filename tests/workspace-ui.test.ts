@@ -317,7 +317,7 @@ test('subscription editor loads existing fields and current revision, preserves 
 });
 
 for (const mode of ['local', 'subscription', 'legacy'] as const) {
-  test(`manual selection accepts the server-confirmed takeover in one request (${mode})`, async () => {
+  test(`node selection accepts the server-confirmed switch without changing automatic policies (${mode})`, async () => {
     const automatic = {
       Stream: { preferred: ['node-a'], fallback: ['node-b'], returnToPreferred: true },
       Work: { preferred: ['node-c'], fallback: ['node-d'], returnToPreferred: false },
@@ -342,7 +342,7 @@ for (const mode of ['local', 'subscription', 'legacy'] as const) {
           assert.equal(options.body.expectedActive, 'before');
           settings = { ...structuredClone(settings), revision: 8 };
           const target = mode === 'local' ? settings.local : settings.subscriptionOverrides[mode === 'legacy' ? 'legacy' : 'sample'];
-          Object.assign(target.automatic.Stream, { enabled: false });
+          target.selections.Stream = options.body.name;
           active = 'after';
           return { active, view: { workspace: settings, active, pending: false, groups: [{ name: 'Stream', activeSelected: 'node-a' }] } };
         }
@@ -368,7 +368,7 @@ for (const mode of ['local', 'subscription', 'legacy'] as const) {
 
     const target = mode === 'local' ? settings.local : settings.subscriptionOverrides[mode === 'legacy' ? 'legacy' : 'sample'];
     assert.equal(target.selections.Stream, 'node-a');
-    assert.deepEqual(target.automatic.Stream, { ...automatic.Stream, enabled: false });
+    assert.deepEqual(target.automatic.Stream, automatic.Stream);
     assert.deepEqual(target.automatic.Work, automatic.Work);
     const untouched = mode === 'local' ? settings.subscriptionOverrides.sample : settings.local;
     assert.deepEqual(untouched.automatic, automatic);

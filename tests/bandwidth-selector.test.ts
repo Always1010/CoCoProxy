@@ -85,6 +85,19 @@ test('a bounded pair finishes real-duration downloads before evidence expires, i
   await f.engine.close();
 });
 
+test('a manual current node outside the pool participates in comparison without becoming a candidate', async () => {
+  const f = fixture({ preferred: ['b'] });
+  f.engine.requestCheck('media');
+  for (let i = 0; i < 180 && !f.switches.length; i++) await f.step();
+  assert.deepEqual(f.switches, ['b']);
+  assert.deepEqual(f.measures, ['a', 'b', 'a', 'b']);
+  await f.step();
+  assert.deepEqual(f.engine.status('media')?.pool?.map(n => n.name), ['b']);
+  assert.deepEqual(f.snapshot.groups[0].policy.preferred, ['b']);
+  assert.deepEqual(f.snapshot.groups[0].policy.fallback, []);
+  await f.engine.close();
+});
+
 test('one healthy sample cannot end a traffic investigation and new sustained slow traffic overrides old positive evidence', async () => {
   const f = fixture({ currentMbps: 8 });
   for (let i = 0; i < 65; i++) await f.step(50000);

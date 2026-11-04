@@ -235,16 +235,21 @@ export function createWorkspaceApplication(options: {
         if (repair) continue;
         invalid('AUTO_GROUP_INVALID');
       }
-      signatures[name] = hash({ automatic, nodes: pool.map(target => nodes.find(node => node.name === target)) });
+      const manual = editsOf(workspace).selections[name];
+      const selectionRevision = editsOf(workspace).selectionRevisions?.[name];
+      const permitted = [...new Set([...pool, ...(typeof manual === 'string' && group.proxies.includes(manual) ? [manual] : [])])];
+      signatures[name] = hash({ automatic, nodes: pool.map(target => nodes.find(node => node.name === target)),
+        selectionRevision: selectionRevision ?? 0, manualNode: nodes.find(node => node.name === manual) ?? null });
       const binding = bindings?.scope === scope ? bindings.targets[name] : undefined;
       const committedGroup = committed && asGroups(committed).find(group => group.name === name && group.type === 'select');
       const committedNode = binding && committed && asNodes(committed).find(node => node.name === binding.target);
       const retained = binding && committedNode && Array.isArray(committedGroup?.proxies) && committedGroup.proxies[0] === binding.target &&
-        pool.includes(binding.target) && hash(committedNode) === hash(nodes.find(node => node.name === binding.target));
-      const selected = binding && pool.includes(binding.target) && (binding.signature === signatures[name] || retained) ? binding.target :
-        pool.includes(String(group.proxies[0])) ? String(group.proxies[0]) : automatic.preferred[0];
-      // Only concrete permitted candidates and REJECT are reachable in this group.
-      group.proxies = [selected, ...pool.filter(target => target !== selected), 'REJECT'];
+        permitted.includes(binding.target) && (binding.selectionRevision ?? 0) === (selectionRevision ?? 0) &&
+        hash(committedNode) === hash(nodes.find(node => node.name === binding.target));
+      const selected = binding && permitted.includes(binding.target) && (binding.signature === signatures[name] || retained) ? binding.target :
+        permitted.includes(String(group.proxies[0])) ? String(group.proxies[0]) : automatic.preferred[0];
+      // A manual starting node remains reachable without entering the automatic pool.
+      group.proxies = [...new Set([selected, ...permitted.filter(target => target !== selected), 'REJECT'])];
     }
     return { workspace, policy, captures, automatic: { scope, signatures, policies, choices,
       key: hash({ scope, policies, signatures, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES, mode: workspace.runMode }) },
@@ -275,10 +280,10 @@ export function createWorkspaceApplication(options: {
           current.scope = pending.scope; current.targets = {}; current.events = [];
           delete current.pendingEvent;
         }
-        for (const { signature, ...event } of pending.events) {
+        for (const { signature, selectionRevision, ...event } of pending.events) {
           await history.append(current.scope, event);
           current.events = [...current.events.filter(e => e.id !== event.id), event].slice(-50);
-          current.targets[event.group] = { signature, target: event.to };
+          current.targets[event.group] = { signature, target: event.to, ...(selectionRevision ? { selectionRevision } : {}) };
         }
       }
       // Uncommitted/rolled-back targets never become successful history entries.
@@ -338,7 +343,9 @@ export function createWorkspaceApplication(options: {
                 !asNodes(previous).some(node => node.name === from) || !asNodes(candidate.config).some(node => node.name === to)) continue;
             events.push({ id: randomUUID(), at: Date.now(), group: name, from, to, reason: 'configuration-change',
               ...(policy.preferred.includes(from) ? { fromPool: 'preferred' as const } : policy.fallback.includes(from) ? { fromPool: 'fallback' as const } : {}),
-              toPool: policy.preferred.includes(to) ? 'preferred' : 'fallback', signature: plan.automatic.signatures[name] });
+              ...(policy.preferred.includes(to) ? { toPool: 'preferred' as const } : policy.fallback.includes(to) ? { toPool: 'fallback' as const } : {}),
+              signature: plan.automatic.signatures[name],
+              ...(editsOf(workspace).selectionRevisions?.[name] ? { selectionRevision: editsOf(workspace).selectionRevisions![name] } : {}) });
           }
           if (events.length) {
             const before = await readAutomaticBindings(options.stateDirectory);
@@ -435,6 +442,8 @@ export function createWorkspaceApplication(options: {
       // belonging to automatic groups; real pending user edits stay pending.
       const active = JSON.parse(await privateRead(await store.readCandidate(state.active))) as JsonObject;
       const differences = selectionChanges(active, candidate.config);
+      const pending = (await readAutomaticBindings(options.stateDirectory))?.pendingEvent;
+      if (!pending || pending.revision !== workspace.revision || pending.signature !== plan.automatic.signatures[pending.group]) return suspendSnapshot('pending');
       // Pool/rule edits cannot be repaired by restoring an automatic selection.
       // Keep these polling reads out of the writer lock; recheck repairable
       // differences under the lock before changing any binding below.
@@ -444,6 +453,8 @@ export function createWorkspaceApplication(options: {
         const settled = await store.status();
         if (settled.active !== state.active || settled.transaction || settled.fault || (await load()).revision !== workspace.revision) return;
         const currentPlan = await build(workspace);
+        const pending = (await readAutomaticBindings(options.stateDirectory))?.pendingEvent;
+        if (!pending || pending.revision !== workspace.revision || pending.signature !== currentPlan.automatic.signatures[pending.group]) return;
         const active = JSON.parse(await privateRead(await store.readCandidate(state.active!))) as JsonObject;
         const differences = selectionChanges(active, compile(currentPlan).config);
         if (!differences?.length || differences.some(change => !currentPlan.automatic.policies[change.group])) return;
@@ -457,8 +468,10 @@ export function createWorkspaceApplication(options: {
           const committed = asGroups(active).find(group => group.name === change.group)?.proxies;
           const selected = Array.isArray(committed) ? committed[0] : null;
           const policy = currentPlan.automatic.policies[change.group];
-          if (typeof selected !== 'string' || observed.selections[change.group] !== selected || ![...policy.preferred, ...policy.fallback].includes(selected)) return;
-          repaired.targets[change.group] = { signature: currentPlan.automatic.signatures[change.group], target: selected };
+          if (typeof selected !== 'string' || observed.selections[change.group] !== selected ||
+              ![...policy.preferred, ...policy.fallback, editsOf(workspace).selections[change.group]].includes(selected)) return;
+          repaired.targets[change.group] = { signature: currentPlan.automatic.signatures[change.group], target: selected,
+            ...(editsOf(workspace).selectionRevisions?.[change.group] ? { selectionRevision: editsOf(workspace).selectionRevisions![change.group] } : {}) };
         }
         delete repaired.pendingEvent;
         await writeAutomaticBindings(options.stateDirectory, repaired);
@@ -484,7 +497,8 @@ export function createWorkspaceApplication(options: {
     });
     const value = { key: plan.automatic.key, scope: plan.automatic.scope, generation: state.active, workspaceRevision: workspace.revision, probes: workspace.autoProbes ?? DEFAULT_AUTO_PROBES,
       groups: Object.entries(plan.automatic.policies).map(([name, policy]) => ({ name, current: observed.selections[name], policy }))
-        .filter(group => typeof group.current === 'string' && [...group.policy.preferred, ...group.policy.fallback].includes(group.current)) };
+        .filter(group => asNodes(plan.policy).some(node => node.name === group.current) &&
+          [...group.policy.preferred, ...group.policy.fallback, editsOf(workspace).selections[group.name]].includes(group.current)) };
     snapshotCache = { revision: workspace.revision, generation: state.active, expires: Date.now() + 30_000, value };
     return structuredClone(value);
   }
@@ -494,7 +508,7 @@ export function createWorkspaceApplication(options: {
     const live = await automaticSnapshot(true);
     const source = snapshot.groups.find(group => group.name === name);
     const group = live?.groups.find(group => group.name === name);
-    if (!live || !group || !source || live.key !== snapshot.key || live.generation !== snapshot.generation || group.current !== source.current ||
+    if (!live || !group || !source || live.key !== snapshot.key || live.generation !== snapshot.generation || live.workspaceRevision !== snapshot.workspaceRevision || group.current !== source.current ||
         ![...group.policy.preferred, ...group.policy.fallback].includes(target) || target === source.current || automaticChanging) return false;
     automaticChanging = true;
     try {
@@ -513,9 +527,11 @@ export function createWorkspaceApplication(options: {
       // Preserve a legacy scheme's history before its runtime binding is replaced.
       if (before && before.scope !== plan.automatic.scope) await history.write(await history.read());
       proposed = before?.scope === plan.automatic.scope ? structuredClone(before) : { version: 1, scope: plan.automatic.scope, targets: {}, events: [] };
-      proposed.targets[name] = { signature: plan.automatic.signatures[name], target };
+      proposed.targets[name] = { signature: plan.automatic.signatures[name], target,
+        ...(editsOf(workspace).selectionRevisions?.[name] ? { selectionRevision: editsOf(workspace).selectionRevisions![name] } : {}) };
       proposed.pendingEvent = { id: randomUUID(), at: Date.now(), group: name, from: source.current, to: target,
-        fromPool: group.policy.preferred.includes(source.current) ? 'preferred' : 'fallback',
+        ...(group.policy.preferred.includes(source.current) ? { fromPool: 'preferred' as const } :
+          group.policy.fallback.includes(source.current) ? { fromPool: 'fallback' as const } : {}),
         toPool: group.policy.preferred.includes(target) ? 'preferred' : 'fallback',
         reason: /^[a-z_-]{1,80}$/i.test(reason) ? reason : 'automatic', signature: plan.automatic.signatures[name], revision: workspace.revision };
       await writeAutomaticBindings(options.stateDirectory, proposed);
@@ -745,13 +761,12 @@ export function createWorkspaceApplication(options: {
       }
       const settings = await seedLegacyChoices(current, settingsOf(current), plan);
       const edits = current.mode === 'local' ? settings.local : settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] ?? emptyOverrides();
-      const automatic = edits.automatic?.[body.group];
-      if (automatic) edits.automatic![body.group] = { ...automatic, enabled: false };
       if (current.mode !== 'local') settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] = edits;
-      const group = asGroups((await build({ ...settings, revision: current.revision })).policy).find(group => group.name === body.group);
-      if (!group || !Array.isArray(group.proxies) || !group.proxies.includes(body.name)) invalid('GROUP_SELECTION_CONFLICT');
+      const group = asGroups(plan.policy).find(group => group.name === body.group);
+      if (!group || !plan.automatic.choices[body.group]?.includes(body.name)) invalid('GROUP_SELECTION_CONFLICT');
       if (group.type !== 'select') invalid('GROUP_SELECTION_UNSUPPORTED');
       edits.selections[body.group] = body.name;
+      (edits.selectionRevisions ??= {})[body.group] = current.revision + 1;
       if (current.mode !== 'local') settings.subscriptionOverrides[current.mode === 'legacy' ? 'legacy' : current.subscriptionId!] = edits;
       const next = { ...settings, revision: current.revision + 1 };
       compile(await build(next));

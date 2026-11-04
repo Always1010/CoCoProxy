@@ -112,12 +112,12 @@ test('automatic policy validates bounded disjoint nodes and safe HTTPS probe set
   }
 });
 
-test('healthy monitoring measures only unique current nodes every 30 seconds and coalesces shared results', async () => {
-  const h = harness({ names: ['one', 'two'] });
+test('healthy monitoring includes manual outside nodes, measures only unique currents every 30 seconds and coalesces results', async () => {
+  const h = harness({ names: ['one', 'two'], current: 'outside' });
   await h.at(0); await h.at(29_999);
-  assert.deepEqual(h.calls.map(call => call.node), ['primary']);
+  assert.deepEqual(h.calls.map(call => call.node), ['outside']);
   await h.at(30_000);
-  assert.deepEqual(h.calls.map(call => call.node), ['primary', 'primary']);
+  assert.deepEqual(h.calls.map(call => call.node), ['outside', 'outside']);
   assert.equal(h.switches.length, 0);
   assert.ok(h.engine.status().groups.every(group => group.phase === 'monitoring'));
   await h.engine.close();
@@ -196,16 +196,16 @@ test('normal node failures and generation conflicts are distinct from probe serv
   await engine.close();
 });
 
-test('failure requires delayed secondary evidence; candidates confirm in preferred order and stop before fallback', async () => {
+test('outside node failure requires delayed secondary evidence; candidates confirm in preferred order and stop before fallback', async () => {
   let firstCalls = 0;
-  const h = harness({ preferred: ['primary', 'first', 'second'], probe: node => {
-    if (node === 'primary') throw new Error('ACTIVE_CONFLICT'); // A matching message alone is still a real failure.
+  const h = harness({ current: 'outside', preferred: ['first', 'second'], probe: node => {
+    if (node === 'outside') throw new Error('ACTIVE_CONFLICT'); // A matching message alone is still a real failure.
     return node === 'first' && ++firstCalls > 1 ? bad() : good();
   } });
   await h.at(0); await h.at(1999);
   assert.equal(h.calls.length, 1);
   await h.at(2000); await h.at(2001);
-  assert.deepEqual(h.calls.map(call => [call.node, call.secondary]), [['primary', false], ['primary', true], ['first', false], ['second', false]]);
+  assert.deepEqual(h.calls.map(call => [call.node, call.secondary]), [['outside', false], ['outside', true], ['first', false], ['second', false]]);
   await h.at(4000); assert.equal(h.switches.length, 0);
   await h.at(4001); await h.at(6001);
   assert.deepEqual(h.switches.map(item => item.node), ['second']);

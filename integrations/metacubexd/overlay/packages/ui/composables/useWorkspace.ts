@@ -67,6 +67,7 @@ export interface AutomaticStatus {
 
 export interface WorkspaceOverrides {
   selections: Record<string, string>
+  selectionRevisions?: Record<string, number>
   rules: string[]
   automatic?: Record<string, AutoGroupPolicy>
   sharedGroups?: string[]

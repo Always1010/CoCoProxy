@@ -1714,7 +1714,7 @@
     "anSingleNodeTest": "Single node test",
     "anNodeBandwidth": "Node bandwidth…",
     "anLocate": "Locate",
-    "anSelectANodeToSwitchTo": "Select a node to switch to manual selection",
+    "anSelectANodeToSwitchTo": "Select a node to change the current exit; automatic selection stays on",
     "anClearFilters": "Clear filters",
     "anMobileNavigation": "Mobile navigation",
     "anNavigateTo": "Navigate to {name}",

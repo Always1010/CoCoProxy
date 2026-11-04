@@ -6,7 +6,7 @@ import { atomicWrite, inspectPrivateDirectory, privateRead, PrivateFileError } f
 import { parseAutoGroupPolicy, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings } from './automatic-policy.ts';
 import { bandwidthBudgetFits } from './bandwidth-policy.ts';
 
-export type RoutingOverrides = { selections: Record<string, string>; rules: string[]; automatic?: Record<string, AutoGroupPolicy> };
+export type RoutingOverrides = { selections: Record<string, string>; selectionRevisions?: Record<string, number>; rules: string[]; automatic?: Record<string, AutoGroupPolicy> };
 export type LocalRoutingOverrides = RoutingOverrides & { sharedGroups?: string[] };
 export type WorkspaceSettings = {
   mode: 'legacy' | 'local' | 'subscription';
@@ -39,12 +39,20 @@ function string(value: unknown, max = 1024): value is string {
 }
 function overrides(value: unknown, allowSharedGroups = false): LocalRoutingOverrides {
   const record = object(value);
-  const allowed = ['selections', 'rules', 'automatic', ...(allowSharedGroups ? ['sharedGroups'] : [])];
+  const allowed = ['selections', 'selectionRevisions', 'rules', 'automatic', ...(allowSharedGroups ? ['sharedGroups'] : [])];
   if (!Object.hasOwn(record, 'selections') || !Object.hasOwn(record, 'rules') || Object.keys(record).some(key => !allowed.includes(key))) fail();
   const selections = object(record.selections);
   if (Object.keys(selections).length > 100 || Object.entries(selections).some(([key, target]) =>
     !string(key) || ['__proto__', 'prototype', 'constructor'].includes(key) || !string(target))) fail();
   if (!Array.isArray(record.rules) || record.rules.length > 512 || record.rules.some(rule => !string(rule, 8192))) fail();
+  // A repeated manual choice still supersedes an automatic runtime binding.
+  let selectionRevisions: Record<string, number> | undefined;
+  if (record.selectionRevisions !== undefined) {
+    const revisions = object(record.selectionRevisions);
+    if (Object.keys(revisions).length > 100 || Object.entries(revisions).some(([key, revision]) =>
+      !string(key) || ['__proto__', 'prototype', 'constructor'].includes(key) || !Number.isSafeInteger(revision) || Number(revision) < 1)) fail();
+    selectionRevisions = Object.fromEntries(Object.entries(revisions).filter(([key]) => Object.hasOwn(selections, key))) as Record<string, number>;
+  }
   let automatic: Record<string, AutoGroupPolicy> | undefined;
   if (record.automatic !== undefined) {
     const policies = object(record.automatic);
@@ -65,6 +73,7 @@ function overrides(value: unknown, allowSharedGroups = false): LocalRoutingOverr
     sharedGroups = [...record.sharedGroups];
   }
   return { selections: { ...selections } as Record<string, string>, rules: [...record.rules] as string[],
+    ...(selectionRevisions ? { selectionRevisions } : {}),
     ...(automatic ? { automatic } : {}), ...(sharedGroups ? { sharedGroups } : {}) };
 }
 export function parseWorkspaceSettings(input: unknown): WorkspaceSettings {

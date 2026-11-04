@@ -587,7 +587,7 @@ test('automatic history imports legacy IDs once and keeps its multibyte archive 
   assert.equal(retained.at(-1)!.id, events.at(-1)!.id);
 });
 
-test('manual takeover and toggling automatic selection retain candidate pools and resume only when enabled', async t => {
+test('manual switching preserves automatic policies, monitors outside nodes and resumes candidate selection', async t => {
   const f = await fixture(t);
   await f.source('pool', { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }] });
   const policy = { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: false,
@@ -617,27 +617,51 @@ test('manual takeover and toggling automatic selection retain candidate pools an
   const manual = await f.view();
   assert.equal(manual.pending, false);
   assert.equal(manual.workspace.local.selections.Proxy, 'outside');
-  assert.deepEqual({ ...manual.workspace.local.automatic!.Proxy }, { ...policy, enabled: false });
-  assert.equal(await f.action.automaticSnapshot(true), null);
+  assert.deepEqual({ ...manual.workspace.local.automatic!.Proxy }, policy);
+  f.restart();
+  const outside = await f.action.automaticSnapshot(true); assert.ok(outside);
+  assert.equal(outside.groups[0].current, 'outside');
+  assert.deepEqual(outside.groups[0].policy, policy);
   assert.equal(await f.action.automaticSwitch(before, 'Proxy', 'spare', 'failure-recovery'), false);
-  const resumedSettings = withoutRevision(structuredClone(manual.workspace));
-  resumedSettings.local.automatic!.Proxy.enabled = true;
-  const resumed = await f.save(resumedSettings, manual.workspace.revision);
-  const running = await f.apply(resumed, manual.active);
-  f.observe({ Proxy: 'synthetic-node' });
-  assert.deepEqual((await f.action.automaticSnapshot(true))?.groups[0].policy, { ...policy, enabled: true });
-  const disabledSettings = withoutRevision(structuredClone(resumed));
+  assert.equal(await f.action.automaticSwitch(outside, 'Proxy', 'spare', 'failure-recovery'), true);
+  f.observe({ Proxy: 'spare' });
+  const automatic = await f.view();
+  assert.equal(automatic.pending, false);
+  assert.equal(automatic.workspace.local.selections.Proxy, 'outside');
+  const events = (await f.call<{ events: { from: string; fromPool?: string }[] }>('/automatic/status')).events;
+  assert.equal(events.at(-1)!.from, 'outside');
+  assert.equal(events.at(-1)!.fromPool, undefined);
+  // Selecting the same saved manual seed must override the newer runtime binding.
+  f.observe({ Proxy: 'outside' });
+  await f.call('/workspace/select', 'POST', { expectedRevision: automatic.workspace.revision,
+    expectedActive: automatic.active, group: 'Proxy', name: 'outside' });
+  assert.equal((await f.action.automaticSnapshot(true))?.groups[0].current, 'outside');
+  const repeatedSnapshot = (await f.action.automaticSnapshot(true))!;
+  const repeated = await f.view();
+  await f.call('/workspace/select', 'POST', { expectedRevision: repeated.workspace.revision,
+    expectedActive: repeated.active, group: 'Proxy', name: 'outside' });
+  assert.equal((await f.view()).active, repeated.active);
+  assert.equal(await f.action.automaticSwitch(repeatedSnapshot, 'Proxy', 'spare', 'failure-recovery'), false);
+  const selected = await f.view();
+  const disabledSettings = withoutRevision(structuredClone(selected.workspace));
   disabledSettings.local.automatic!.Proxy.enabled = false;
   disabledSettings.local.selections.Proxy = 'synthetic-node';
-  const disabled = await f.save(disabledSettings, resumed.revision);
-  await f.apply(disabled, running.active);
+  const disabled = await f.save(disabledSettings, selected.workspace.revision);
+  const stopped = await f.apply(disabled, selected.active);
   assert.equal(await f.action.automaticSnapshot(true), null);
   assert.deepEqual({ ...(await f.view()).workspace.local.automatic!.Proxy }, { ...policy, enabled: false });
+  f.observe({ Proxy: 'outside' });
+  await f.call('/workspace/select', 'POST', { expectedRevision: disabled.revision,
+    expectedActive: stopped.active, group: 'Proxy', name: 'outside' });
+  const off = await f.view();
+  assert.equal(off.pending, false);
+  assert.equal(off.workspace.local.automatic!.Proxy.enabled, false);
+  assert.equal(await f.action.automaticSnapshot(true), null);
   // A removed candidate in a dormant pool must not block manual operation;
   // enabling that same pool still requires current group membership.
-  const stale = withoutRevision(structuredClone(disabled));
+  const stale = withoutRevision(structuredClone(off.workspace));
   stale.local.automatic!.Proxy.preferred = ['removed-node'];
-  const dormant = await f.save(stale, disabled.revision);
+  const dormant = await f.save(stale, off.workspace.revision);
   stale.local.automatic!.Proxy.enabled = true;
   await assert.rejects(f.save(stale, dormant.revision), { code: 'AUTO_GROUP_INVALID' });
 });
@@ -1066,7 +1090,7 @@ test('failed selection apply restores the active generation while keeping review
 });
 
 for (const mode of ['local', 'subscription'] as const) {
-  test(`failed automatic takeover can select another node or return to the active node (${mode})`, async t => {
+  test(`failed manual switch preserves automatic mode and can select another node or return to the active node (${mode})`, async t => {
     const f = await fixture(t);
     const input = { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }],
       'proxy-groups': [{ name: 'Proxy', type: 'select', proxies: ['synthetic-node', 'spare', 'outside'] }], rules: ['MATCH,Proxy'] };
@@ -1082,16 +1106,18 @@ for (const mode of ['local', 'subscription'] as const) {
       const target = returnToActive ? before.groups.find(group => group.name === 'Proxy')!.activeSelected : 'spare';
       f.fail();
       await assert.rejects(f.call('/workspace/select', 'POST', { expectedRevision: before.workspace.revision,
-        expectedActive: before.active, group: 'Proxy', name: 'outside' }), { code: 'ACTIVATION_FAILED' });
+        expectedActive: before.active, group: 'Proxy', name: returnToActive ? 'synthetic-node' : 'outside' }), { code: 'ACTIVATION_FAILED' });
       const pending = await f.view();
       assert.equal(pending.pending, true);
+      assert.equal(await f.action.automaticSnapshot(true), null);
+      assert.equal((await f.view()).pending, true);
       f.fail(false);
       const recovered = await f.call<{ view: View }>('/workspace/select', 'POST', { expectedRevision: pending.workspace.revision,
         expectedActive: pending.active, group: 'Proxy', name: target });
       assert.equal(recovered.view.pending, false);
       assert.equal(recovered.view.groups.find(group => group.name === 'Proxy')!.activeSelected, target);
       const edits = mode === 'local' ? recovered.view.workspace.local : recovered.view.workspace.subscriptionOverrides.pool;
-      assert.deepEqual(edits.automatic!.Proxy, { ...policy, enabled: false });
+      assert.deepEqual(edits.automatic!.Proxy, policy);
     }
     const before = await f.view();
     const edited = withoutRevision(structuredClone(before.workspace));

@@ -510,7 +510,7 @@ export function createAutomaticSelector(options: Options) {
         scope: snapshot?.scope,
         groups: [...groups.values()].map(g => ({ name: g.name, current: g.current,
           health: g.health, phase: g.search?.kind === 'outage' ? 'outage' : g.search ? g.search.kind === 'slow' ? 'slow-search' : 'failure-search'
-            : g.secondaryAt !== null ? 'failure-confirmation' : g.returning ? 'return-confirmation' : isBackup(g) ? 'backup' : 'monitoring',
+            : g.secondaryAt !== null ? 'failure-confirmation' : g.returning ? 'return-confirmation' : g.policy.fallback.includes(g.current) ? 'backup' : 'monitoring',
           bandwidth: bandwidth.status(g.name),
           nextAt: g.search ? g.search.confirming?.due ?? g.search.due
             : Math.min(g.secondaryAt ?? g.monitorAt, g.returning?.due ?? g.returnAt ?? Infinity), reason: g.reason })),
