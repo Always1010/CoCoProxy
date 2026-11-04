@@ -126,8 +126,80 @@ test('expired domain details are unavailable while daily source totals and alias
   assert.equal(result.aliases['192.0.2.20'], '来源备注');
   assert.throws(() => f.store.query(query(start - 60_000, f.now() + 1, { dimension: 'host' })), { code: 'USAGE_DETAIL_EXPIRED' });
   assert.equal((await inspectUsageDatabase(f.root))?.detailRows, 0);
+  const scope = { mode: 'range', startTime: start - 60_000, endTime: f.now() + 1, filters: { sourceIP: '192.0.2.20' } };
+  assert.throws(() => f.store.previewDeletion({ ...scope, filters: { host: 'video.example' } }), { code: 'USAGE_DETAIL_EXPIRED' });
+  const preview = f.store.previewDeletion(scope);
+  assert.equal(preview.resolution, 'day'); assert.equal(preview.detailRows, 0); assert.equal(preview.download, 10);
+  assert.equal(preview.scope.mode, 'range');
+  if (preview.scope.mode === 'range') { assert.equal(preview.scope.startTime % 86_400_000, 0); assert.equal(preview.scope.endTime % 86_400_000, 0); }
+  f.advance(1000); f.store.ingest(frame(2, 20));
+  f.store.confirmDeletion(preview.token);
+  assert.equal((f.store.query(query(start - 60_000, f.now() + 1)) as any).summary.download, 10);
+  assert.equal((await inspectUsageDatabase(f.root))?.download, 10);
+  assert.equal(f.store.aliases()['192.0.2.20'], '来源备注');
   f.advance(USAGE_DAILY_RETENTION);
   assert.throws(() => f.store.query(query(start - 60_000, start + 60_000)), { code: 'USAGE_RANGE_EXPIRED' });
+});
+
+test('usage deletion freezes exact scoped counters, keeps newer traffic and checkpoints, and retries without subtracting twice', async t => {
+  const f = await fixture(t);
+  const sample = (n: number) => parseUsageSnapshot({ uploadTotal: 6 * n, downloadTotal: 60 * n, connections: [
+    { id: 'a', upload: n, download: 10 * n, metadata: { sourceIP: '192.0.2.20', host: 'video.example' } },
+    { id: 'b', upload: 2 * n, download: 20 * n, metadata: { sourceIP: '192.0.2.20', host: 'keep.example' } },
+    { id: 'c', upload: 3 * n, download: 30 * n, metadata: { sourceIP: '192.0.2.30', host: 'video.example' } },
+  ] }, 'same-core');
+  f.store.ingest(sample(0)); f.advance(1000); f.store.ingest(sample(1));
+  f.store.setAlias('192.0.2.20', '保留备注');
+  const scope = { mode: 'range', startTime: start - 60_000, endTime: f.now(), filters: { sourceIP: '192.0.2.20' }, selection: { dimension: 'host', values: ['video.example'] } };
+  const preview = f.store.previewDeletion(scope);
+  assert.equal(preview.download, 10); assert.equal(preview.detailRows, 1); assert.equal(preview.dailyRows, 1);
+  f.advance(1000); f.store.ingest(sample(2)); // Same minute row changes after the preview.
+  assert.equal(f.store.confirmDeletion(preview.token).download, 10);
+  let info = (await inspectUsageDatabase(f.root))!;
+  assert.equal(info.download, 110); assert.equal(info.dailyDownload, 110);
+  assert.equal((f.store.query(query(undefined, undefined, { dimension: 'host', filters: { sourceIP: '192.0.2.30' } })) as any).summary.download, 60);
+  f.advance(1000); f.store.ingest(sample(3));
+  f.store.confirmDeletion(preview.token); f.store.flush();
+  assert.equal((f.store.query(query()) as any).summary.download, 170);
+  await f.restart(); f.advance(1000); f.store.ingest(sample(4)); f.store.flush();
+  assert.equal((f.store.query(query()) as any).summary.download, 230);
+  assert.equal(f.store.aliases()['192.0.2.20'], '保留备注');
+  const replaced = f.store.previewDeletion(scope);
+  const clear = f.store.previewDeletion({ mode: 'all' });
+  assert.throws(() => f.store.confirmDeletion(replaced.token), { code: 'USAGE_DELETE_STALE' });
+  f.advance(1000); f.store.ingest(sample(5));
+  f.store.confirmDeletion(clear.token);
+  info = (await inspectUsageDatabase(f.root))!;
+  assert.equal(info.download, 60); assert.equal(info.dailyDownload, 60);
+  const expired = f.store.previewDeletion(scope); f.advance(300_001);
+  assert.throws(() => f.store.confirmDeletion(expired.token), { code: 'USAGE_DELETE_STALE' });
+  const year = f.store.previewDeletion({ mode: 'range', startTime: Math.floor((f.now() - USAGE_DAILY_RETENTION) / 60_000) * 60_000, endTime: Math.ceil(f.now() / 60_000) * 60_000 });
+  assert.equal(year.resolution, 'day'); assert.equal(year.download, 60);
+  for (const invalid of [{ ...scope, selection: { dimension: 'host);DELETE FROM metadata', values: ['x'] } }, { ...scope, selection: { dimension: 'host', values: [] } }, { mode: 'all', filters: {} }]) assert.throws(() => f.store.previewDeletion(invalid));
+});
+
+test('usage deletion preserves expired parts of a daily bucket and rolls back both tables on failure', async t => {
+  const f = await fixture(t);
+  f.store.ingest(frame(0, 0)); f.advance(1000); f.store.ingest(frame(1, 10)); f.store.flush();
+  f.advance(120_000); f.store.ingest(frame(3, 30)); f.store.flush();
+  // The first detail expires within the same UTC day; its daily contribution remains.
+  f.advance(USAGE_DETAIL_RETENTION - 60_000); f.store.ingest(frame(3, 30)); f.store.flush();
+  const preview = f.store.previewDeletion({ mode: 'range', startTime: start + 100_000, endTime: start + 180_000, filters: { host: 'video.example' } });
+  assert.equal(preview.download, 20);
+  const db = new DatabaseSync(join(f.root, USAGE_DATABASE));
+  try {
+    db.exec("CREATE TRIGGER block_deletion BEFORE UPDATE ON daily_usage WHEN new.download < old.download BEGIN SELECT RAISE(ABORT, 'synthetic deletion failure'); END;");
+    assert.throws(() => f.store.confirmDeletion(preview.token));
+    const unchanged = (await inspectUsageDatabase(f.root))!;
+    assert.equal(unchanged.download, 20); assert.equal(unchanged.dailyDownload, 30);
+    db.exec('DROP TRIGGER block_deletion');
+  } finally { db.close(); }
+  f.store.confirmDeletion(preview.token);
+  const info = (await inspectUsageDatabase(f.root))!;
+  assert.equal(info.detailRows, 0); assert.equal(info.dailyDownload, 10);
+  const stale = f.store.previewDeletion({ mode: 'all' });
+  f.advance(USAGE_DAILY_RETENTION); f.store.ingest(frame(3, 30));
+  assert.throws(() => f.store.confirmDeletion(stale.token), { code: 'USAGE_DELETE_STALE' });
 });
 
 test('background service collects without browser sessions, drains shutdown and retains the authentication/Origin boundary', async t => {
@@ -145,6 +217,15 @@ test('background service collects without browser sessions, drains shutdown and 
   const status = await gateway.fetch(new Request(origin + '/api/cocoproxy/usage/status', { headers: { cookie } }));
   assert.equal((await status.json()).collecting, true);
   assert.equal((await gateway.fetch(new Request(origin + '/api/cocoproxy/usage/alias', { method: 'PUT', headers: { cookie, origin: 'https://other.example', 'content-type': 'application/json' }, body: '{}' }))).status, 403);
+  for (const action of ['preview', 'confirm']) {
+    const url = origin + '/api/cocoproxy/usage/deletion/' + action;
+    assert.equal((await gateway.fetch(new Request(url, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: '{}' }))).status, 401);
+    assert.equal((await gateway.fetch(new Request(url, { method: 'POST', headers: { cookie, origin: 'https://other.example', 'content-type': 'application/json' }, body: '{}' }))).status, 403);
+  }
+  const preview = await gateway.fetch(new Request(origin + '/api/cocoproxy/usage/deletion/preview', { method: 'POST', headers: { cookie, origin, 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'all' }) }));
+  assert.equal(preview.status, 200);
+  const { token } = await preview.json();
+  assert.equal((await gateway.fetch(new Request(origin + '/api/cocoproxy/usage/deletion/confirm', { method: 'POST', headers: { cookie, origin, 'content-type': 'application/json' }, body: JSON.stringify({ token }) }))).status, 200);
   await service.close();
   assert.ok((await inspectUsageDatabase(root))?.schemaVersion);
 });

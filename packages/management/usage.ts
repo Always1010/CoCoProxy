@@ -21,6 +21,8 @@ export type UsageSnapshot = Counters & { epoch: string; connections: UsageConnec
 type Checkpoint = Counters & { epoch: string; at: number; connections: Record<string, Counters> };
 type Entry = UsageConnection & { at: number };
 type Gap = { start: number; end: number; reason: string };
+type DeletionScope = { mode: 'all' } | { mode: 'range'; startTime: number; endTime: number; filters: Record<string, string>; selection?: { dimension: UsageDimension; values: string[] } };
+type DeletionPreview = { token: string; expiresAt: number; sampledAt: number | null; scope: DeletionScope; resolution: 'minute' | 'day' | 'mixed'; detailRows: number; dailyRows: number; sources: number } & Counters;
 const fail: (code?: string) => never = (code = 'USAGE_UNAVAILABLE') => { throw new ManagementError(code, 503); };
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const text = (value: unknown, maximum = 512): value is string => typeof value === 'string' && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
@@ -107,6 +109,8 @@ export class UsageStore {
   private cleanedAt = 0;
   private failed = false;
   private closed = false;
+  private deletion: DeletionPreview | null = null;
+  private deleted: DeletionPreview | null = null;
   private readonly db: DatabaseSync;
   private readonly now: () => number;
   private constructor(db: DatabaseSync, now: () => number) {
@@ -144,6 +148,11 @@ export class UsageStore {
       // FULL commits preserve the last completed batch across power loss; no unsafe speed pragmas.
       db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000;');
       migrateDatabase(db, schemaVersion);
+      // One expiring preview per process. Only row identities/counters are snapshotted,
+      // in memory, never in SQLite's default on-disk temporary directory.
+      db.exec(`PRAGMA temp_store=MEMORY;
+        CREATE TEMP TABLE deletion_minutes(id INTEGER PRIMARY KEY, upload INTEGER NOT NULL, download INTEGER NOT NULL);
+        CREATE TEMP TABLE deletion_days(id INTEGER PRIMARY KEY, upload INTEGER NOT NULL, download INTEGER NOT NULL);`);
       return new UsageStore(db, now);
     } catch { db.close(); fail(); }
   }
@@ -167,6 +176,7 @@ export class UsageStore {
 
   ingest(snapshot: UsageSnapshot): void {
     this.guard();
+    if (this.deletion && this.deletion.expiresAt <= this.now()) this.discardDeletion();
     const at = this.now(), previous = this.checkpoint;
     if (!integer(at) || (previous && at < previous.at)) fail('USAGE_CLOCK_INVALID');
     const connections: Record<string, Counters> = Object.create(null);
@@ -209,8 +219,10 @@ export class UsageStore {
       metadata.run('committedAt', String(this.checkpoint.at));
       this.db.prepare("INSERT OR IGNORE INTO metadata VALUES('startedAt',?)").run(String(this.checkpoint.at));
       if (this.now() - this.cleanedAt >= 3_600_000) {
-        this.db.prepare('DELETE FROM minute_usage WHERE at<?').run(Math.floor((this.now() - USAGE_DETAIL_RETENTION) / MINUTE) * MINUTE);
-        this.db.prepare('DELETE FROM daily_usage WHERE at<?').run(Math.floor((this.now() - USAGE_DAILY_RETENTION) / DAY) * DAY);
+        const minutes = this.db.prepare('DELETE FROM minute_usage WHERE at<?').run(Math.floor((this.now() - USAGE_DETAIL_RETENTION) / MINUTE) * MINUTE);
+        const days = this.db.prepare('DELETE FROM daily_usage WHERE at<?').run(Math.floor((this.now() - USAGE_DAILY_RETENTION) / DAY) * DAY);
+        // Retention can remove/reuse rowids: no old preview may survive that change.
+        if (minutes.changes || days.changes) this.discardDeletion();
         this.db.prepare('DELETE FROM gaps WHERE end<?').run(this.now() - USAGE_DAILY_RETENTION);
       }
       this.db.exec('COMMIT');
@@ -236,6 +248,84 @@ export class UsageStore {
       if (!this.db.prepare('SELECT 1 FROM source_aliases WHERE sourceIP=?').get(address) && Number(this.db.prepare('SELECT count(*) AS n FROM source_aliases').get()?.n) >= 4096) throw new ManagementError('USAGE_ALIAS_LIMIT', 409);
       this.db.prepare('INSERT INTO source_aliases VALUES(?,?) ON CONFLICT(sourceIP) DO UPDATE SET label=excluded.label').run(address, normalized);
     }
+  }
+
+  private discardDeletion(): void {
+    this.deletion = null;
+    this.db.exec('DELETE FROM deletion_minutes; DELETE FROM deletion_days;');
+  }
+
+  previewDeletion(input: unknown): DeletionPreview {
+    this.guard();
+    const value = exactRecord(input, ['mode'], ['startTime', 'endTime', 'filters', 'selection']);
+    let scope: DeletionScope, resolution: DeletionPreview['resolution'];
+    const params: SQLInputValue[] = [], where: string[] = [];
+    if (value.mode === 'all') {
+      if (Object.keys(value).length !== 1) throw new ManagementError('USAGE_DELETE_INVALID');
+      scope = { mode: 'all' }; resolution = 'mixed';
+    } else {
+      const { startTime: start, endTime: end } = value;
+      // A full-year picker can gain one minute when both visible endpoints align.
+      if (value.mode !== 'range' || !integer(start) || !integer(end) || end <= start || end - start > USAGE_DAILY_RETENTION + MINUTE) throw new ManagementError('USAGE_DELETE_INVALID');
+      if (start < Math.floor((this.now() - USAGE_DAILY_RETENTION) / DAY) * DAY) throw new ManagementError('USAGE_RANGE_EXPIRED', 409);
+      const filters = value.filters === undefined ? {} : exactRecord(value.filters, [], dimensions);
+      if (Object.values(filters).some(item => !text(item))) throw new ManagementError('USAGE_DELETE_INVALID');
+      let selection: { dimension: UsageDimension; values: string[] } | undefined;
+      if (value.selection !== undefined) {
+        const selected = exactRecord(value.selection, ['dimension', 'values']);
+        if (!dimensions.includes(selected.dimension as UsageDimension) || !Array.isArray(selected.values) || !selected.values.length || selected.values.length > 200 || selected.values.some(item => !text(item))) throw new ManagementError('USAGE_DELETE_INVALID');
+        selection = { dimension: selected.dimension as UsageDimension, values: [...new Set(selected.values as string[])] };
+      }
+      resolution = start < Math.floor((this.now() - USAGE_DETAIL_RETENTION) / MINUTE) * MINUTE ? 'day' : 'minute';
+      if (resolution === 'day' && (Object.keys(filters).some(key => key !== 'sourceIP') || (selection && selection.dimension !== 'sourceIP'))) throw new ManagementError('USAGE_DETAIL_EXPIRED', 409);
+      const interval = resolution === 'day' ? DAY : MINUTE;
+      scope = { mode: 'range', startTime: Math.floor(start / interval) * interval, endTime: Math.ceil(end / interval) * interval, filters: filters as Record<string, string>, ...(selection ? { selection } : {}) };
+      if (!integer(scope.endTime)) throw new ManagementError('USAGE_DELETE_INVALID');
+      where.push('at>=?', 'at<?'); params.push(scope.startTime, scope.endTime);
+      for (const [key, field] of Object.entries(filters)) { where.push(`${key}=?`); params.push(field as string); }
+      if (selection) { where.push(`${selection.dimension} IN (${selection.values.map(() => '?').join(',')})`); params.push(...selection.values); }
+    }
+    this.flush();
+    this.deletion = null;
+    const clause = where.length ? ` WHERE ${where.join(' AND ')}` : '';
+    try {
+      this.db.exec('BEGIN IMMEDIATE; DELETE FROM deletion_minutes; DELETE FROM deletion_days;');
+      this.db.prepare(`INSERT INTO deletion_minutes SELECT rowid,upload,download FROM minute_usage${clause}`).run(...params);
+      if (resolution === 'minute') {
+        // Subtract exactly the selected details. Rebuilding a day from remaining
+        // minute rows would lose the expired part of the retention boundary day.
+        this.db.exec(`INSERT INTO deletion_days
+          SELECT d.rowid,sum(s.upload),sum(s.download) FROM deletion_minutes s
+          JOIN minute_usage m ON m.rowid=s.id JOIN daily_usage d ON d.at=(m.at/${DAY})*${DAY} AND d.sourceIP=m.sourceIP GROUP BY d.rowid;`);
+      } else this.db.prepare(`INSERT INTO deletion_days SELECT rowid,upload,download FROM daily_usage${clause}`).run(...params);
+      const summary = this.db.prepare('SELECT coalesce(sum(upload),0) AS upload,coalesce(sum(download),0) AS download,count(*) AS dailyRows FROM deletion_days').get()!;
+      const preview: DeletionPreview = { token: randomUUID(), expiresAt: this.now() + 300_000, sampledAt: this.checkpoint?.at ?? null, scope, resolution,
+        upload: Number(summary.upload), download: Number(summary.download), dailyRows: Number(summary.dailyRows),
+        detailRows: Number(this.db.prepare('SELECT count(*) AS n FROM deletion_minutes').get()!.n),
+        sources: Number(this.db.prepare('SELECT count(DISTINCT sourceIP) AS n FROM daily_usage WHERE rowid IN (SELECT id FROM deletion_days)').get()!.n) };
+      this.db.exec('COMMIT'); this.deletion = preview; return preview;
+    } catch (error) { try { this.db.exec('ROLLBACK'); } catch { /* preserve original failure */ } throw error; }
+  }
+
+  confirmDeletion(token: unknown): DeletionPreview {
+    this.guard();
+    if (typeof token !== 'string' || token.length > 64) throw new ManagementError('USAGE_DELETE_INVALID');
+    // A lost response may be retried without deleting any newly collected traffic.
+    if (this.deleted?.token === token) return this.deleted;
+    this.flush();
+    const preview = this.deletion;
+    if (!preview || preview.token !== token || preview.expiresAt <= this.now()) throw new ManagementError('USAGE_DELETE_STALE', 409);
+    try {
+      this.db.exec('BEGIN IMMEDIATE');
+      for (const [table, snapshot] of [['minute_usage', 'deletion_minutes'], ['daily_usage', 'deletion_days']]) {
+        if (this.db.prepare(`SELECT 1 FROM ${snapshot} s LEFT JOIN ${table} u ON u.rowid=s.id WHERE u.rowid IS NULL OR u.upload<s.upload OR u.download<s.download LIMIT 1`).get()) throw new ManagementError('USAGE_DELETE_STALE', 409);
+        this.db.exec(`UPDATE ${table} SET upload=upload-(SELECT upload FROM ${snapshot} WHERE id=${table}.rowid), download=download-(SELECT download FROM ${snapshot} WHERE id=${table}.rowid)
+          WHERE rowid IN (SELECT id FROM ${snapshot});
+          DELETE FROM ${table} WHERE rowid IN (SELECT id FROM ${snapshot}) AND upload=0 AND download=0;`);
+      }
+      this.db.exec('DELETE FROM deletion_minutes; DELETE FROM deletion_days; COMMIT;');
+      this.deletion = null; this.deleted = preview; return preview;
+    } catch (error) { try { this.db.exec('ROLLBACK'); } catch { /* preserve original failure */ } throw error; }
   }
 
   query(input: unknown) {
@@ -311,6 +401,11 @@ export function createUsageService(options: { directory: string; sample: () => P
         const current = await get(), path = new URL(request.url).pathname;
         if (path === '/api/cocoproxy/usage/status' && request.method === 'GET') return { ...current.status(), collecting: !stopped, sampleError };
         if (path === '/api/cocoproxy/usage/query' && request.method === 'POST') return { ...current.query(await readJsonBody(request, 4096)), sampleError, collecting: !stopped };
+        if (path === '/api/cocoproxy/usage/deletion/preview' && request.method === 'POST') return current.previewDeletion(await readJsonBody(request, 131072));
+        if (path === '/api/cocoproxy/usage/deletion/confirm' && request.method === 'POST') {
+          const { token } = exactRecord(await readJsonBody(request, 1024), ['token']);
+          return current.confirmDeletion(token);
+        }
         if (path === '/api/cocoproxy/usage/alias' && request.method === 'PUT') {
           const { sourceIP, label } = exactRecord(await readJsonBody(request, 1024), ['sourceIP', 'label']);
           current.setAlias(sourceIP, label); return { aliases: current.aliases() };

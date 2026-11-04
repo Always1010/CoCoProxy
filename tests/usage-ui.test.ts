@@ -11,7 +11,8 @@ const source = await readFile(new URL('../integrations/metacubexd/overlay/packag
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
 const code = ts.transpileModule(script.replace(/^import .*$/gm, '') + `
 globalThis.ui = { refresh, select, toggle, loadExpanded, changeSort, view, selected, range, overview, details, expanded,
-  busy, refreshing, detailBusy, expandedBusy, error, detailError };
+  busy, refreshing, detailBusy, expandedBusy, error, detailError, managing, checkedRows, toggleManagement, checkPage,
+  deleteRows, deleteDialog, afterDelete, detailPage };
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 
 function harness() {
@@ -100,6 +101,75 @@ test('usage expansions are independent and late responses cannot reopen a closed
   setReply(async body => data(body));
   await ui.select('192.0.2.30');
   assert.deepEqual(Object.keys(ui.expanded.value), []);
+});
+
+test('usage management scopes selection to displayed rows and deletion discards late reads while retaining unrelated expansions', async () => {
+  const { ui, data, setReply } = harness();
+  const response = (body: any, removed = false) => ({ ...data(body), ...(!body.overview && !body.filters?.host ? {
+    rows: [!removed && { label: 'example.test', upload: 10, download: 20, total: 30 }, { label: 'keep.example', upload: 10, download: 20, total: 30 }].filter(Boolean), totalRows: removed ? 1 : 2,
+  } : {}) });
+  setReply(async body => response(body));
+  await ui.refresh(); await ui.toggle({ label: 'keep.example' });
+  const kept = ui.expanded.value['keep.example'];
+  let complete!: () => void;
+  setReply(async body => { await new Promise<void>(resolve => { complete = resolve; }); return response(body); });
+  const late = ui.refresh(true);
+  ui.toggleManagement(); ui.checkPage();
+  assert.equal(ui.checkedRows.value.length, 2);
+  let scope: any;
+  ui.deleteDialog.value = { open: (value: any) => { scope = value; } };
+  ui.deleteRows(['example.test', 'not-on-this-page.example']);
+  assert.equal(scope.filters.sourceIP, '192.0.2.20');
+  assert.equal(scope.selection.dimension, 'host');
+  assert.deepEqual(Array.from(scope.selection.values), ['example.test']);
+  assert.equal(scope.startTime, ui.range.value.startTime);
+  setReply(async body => response(body, true));
+  await ui.afterDelete({ upload: 10, download: 20 });
+  complete(); await late;
+  assert.equal(ui.details.value.rows.length, 1); assert.equal(ui.details.value.rows[0].label, 'keep.example');
+  assert.equal(ui.expanded.value['keep.example'], kept); assert.equal(ui.checkedRows.value.length, 0);
+  assert.equal(ui.refreshing.value, false); assert.equal(ui.detailBusy.value, false);
+  ui.detailPage.value = 2;
+  setReply(async body => ({ ...response(body, true), ...(!body.overview && body.page > 0 ? { rows: [], totalRows: 1 } : {}) }));
+  await ui.afterDelete({ upload: 0, download: 0 });
+  assert.equal(ui.detailPage.value, 0); assert.equal(ui.details.value.rows[0].label, 'keep.example');
+});
+
+test('usage deletion dialog requires explicit clear confirmation and never uses a superseded preview', async () => {
+  const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/UsageDeleteDialog.vue', import.meta.url), 'utf8');
+  const code = ts.transpileModule(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') + `
+    globalThis.ui = { open, close, readPreview, remove, preview, confirmation, canDelete, invalidate, panel, error, deleting };
+  `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const result = { token: 'frozen-snapshot', scope: { mode: 'all' }, detailRows: 1, dailyRows: 1, upload: 1, download: 10 };
+  let reply: (path: string, body: any) => Promise<any> = async () => result;
+  const requests: any[] = [], emitted: any[] = [];
+  const context: any = { ...uiTestContext,
+    ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
+    watch() {}, nextTick: async () => {}, onBeforeUnmount() {}, defineExpose() {},
+    defineEmits: () => (...args: any[]) => { emitted.push(args); }, AbortController,
+    useCoCoProxy: () => ({ request: (path: string, options: any) => { requests.push({ path, body: options.body }); return reply(path, options.body); } }),
+    cocoproxyErrorMessage: () => '请求失败',
+  };
+  new Script(code).runInNewContext(context);
+  const ui = context.ui;
+  ui.panel.value = { open() {}, close() { ui.close(); } };
+  await ui.open({ mode: 'all' }); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.canDelete.value, false);
+  ui.confirmation.value = useI18n().t('coco.usageClearWord');
+  assert.equal(ui.canDelete.value, true);
+  // A failed response keeps the same token available for an idempotent retry.
+  reply = async () => { throw new Error('synthetic lost response'); };
+  await ui.remove(); assert.equal(ui.preview.value.token, result.token); assert.ok(ui.error.value);
+  reply = async () => result;
+  await ui.remove();
+  const confirms = requests.filter(row => row.path.endsWith('/confirm'));
+  assert.deepEqual(confirms.map(row => row.body.token), [result.token, result.token]);
+  assert.equal(emitted.filter(row => row[0] === 'deleted').length, 1);
+  let finish!: (value: unknown) => void;
+  reply = () => new Promise(resolve => { finish = resolve; });
+  const pending = ui.readPreview();
+  ui.invalidate(); finish(result); await pending;
+  assert.equal(ui.preview.value, null); assert.equal(ui.canDelete.value, false);
 });
 
 test('usage refresh failures retain matching results but never expose results from another query', async () => {

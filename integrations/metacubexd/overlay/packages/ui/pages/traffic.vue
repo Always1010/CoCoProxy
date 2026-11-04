@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { IconArrowsExchange, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCpu, IconDevices, IconDownload, IconEdit, IconInfoCircle, IconListDetails, IconRefresh, IconRoute, IconSearch, IconSelector, IconSum, IconUpload, IconUser, IconWorld, IconX } from '@tabler/icons-vue'
+import { IconArrowsExchange, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCpu, IconDevices, IconDownload, IconEdit, IconInfoCircle, IconListDetails, IconRefresh, IconRoute, IconSearch, IconSelector, IconSum, IconTrash, IconUpload, IconUser, IconWorld, IconX } from '@tabler/icons-vue'
 import { onClickOutside, onKeyStroke } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { cocoproxyErrorMessage, useCoCoProxy } from '~/composables/useCoCoProxy'
 import { formatBytes } from '~/utils'
 import { usageTarget } from '~/utils/usage-rules'
+import type { UsageDeleteScope, UsageDeletePreview } from '~/utils/usage-management'
 
 const { t, locale } = useI18n()
 useHead({ title: computed(() => t('coco.pzUsageCocoproxy')) })
@@ -52,6 +53,12 @@ const noteErrorSource = shallowRef<(() => string) | null>(null)
 const noteError = computed(() => noteErrorSource.value?.() ?? '')
 const ruleDialog = ref<{ open: (host: string) => void }>()
 const ruleEditing = ref(false)
+const managing = ref(false)
+const checkedRows = ref<string[]>([])
+const deleteEditing = ref(false)
+const deleteDialog = ref<{ open: (input: UsageDeleteScope) => void }>()
+const deletedAmount = ref<number | null>(null)
+const allChecked = computed(() => !!details.value?.rows.length && details.value.rows.every(row => checkedRows.value.includes(row.label)))
 const editing = ref(false)
 const noteIP = ref('')
 const note = ref('')
@@ -97,7 +104,7 @@ onKeyStroke('Escape', (event) => {
   if (infoOpen.value) { event.preventDefault(); closeInfo() }
 })
 
-async function refresh(background = false) {
+async function refresh(background = false, reconcile = false) {
   const version = ++overviewVersion
   controller?.abort(); controller = new AbortController()
   busy.value = true; refreshing.value = !background
@@ -115,17 +122,19 @@ async function refresh(background = false) {
     const nextRange = { startTime, endTime }
     const result = await query({ dimension: view.value, overview: true, page: rankPage.value, pageSize, search: rankSearch.value }, controller.signal, nextRange)
     if (version !== overviewVersion) return
+    const lastPage = Math.max(0, Math.ceil(result.totalRows / pageSize) - 1)
+    if (reconcile && rankPage.value > lastPage) { rankPage.value = lastPage; await refresh(background, true); return }
     range.value = nextRange; overview.value = assignChanged(overview.value, result); aliases.value = assignChanged(aliases.value, result.aliases); errorSource.value = null
     if (selected.value === null || !result.rows.some(row => row.label === selected.value)) {
       selected.value = result.rows[0]?.label ?? null; detailPage.value = 0; clearExpanded()
     }
-    await loadDetails(background)
+    await loadDetails(background, reconcile)
   } catch (cause) {
     if (version === overviewVersion) errorSource.value = overview.value ? () => t('coco.pzUpdateFailedShowingPreviousData') : () => cocoproxyErrorMessage(cause, t)
   } finally { if (version === overviewVersion) { busy.value = false; refreshing.value = false } }
 }
 
-async function loadDetails(background = false) {
+async function loadDetails(background = false, reconcile = false) {
   const version = ++detailVersion
   detailController?.abort(); detailController = new AbortController()
   if (selected.value === null) { details.value = null; detailBusy.value = false; return }
@@ -135,7 +144,13 @@ async function loadDetails(background = false) {
   try {
     const result = await query({ dimension: detailDimension.value, filters: filters(), sort: sort.value, order: order.value, search: detailSearch.value, page: detailPage.value, pageSize }, detailController.signal)
     if (version !== detailVersion) return
+    const lastPage = Math.max(0, Math.ceil(result.totalRows / pageSize) - 1)
+    if (reconcile && detailPage.value > lastPage) { detailPage.value = lastPage; await loadDetails(background, true); return }
     details.value = assignChanged(details.value, result); detailErrorSource.value = null
+    checkedRows.value = checkedRows.value.filter(label => result.rows.some(row => row.label === label))
+    if (reconcile) for (const label of Object.keys(expanded.value)) {
+      if (!result.rows.some(row => row.label === label)) { expandedControllers.get(label)?.abort(); expandedControllers.delete(label); delete expanded.value[label] }
+    }
     const labels = result.rows.map(row => row.label).filter(label => expanded.value[label])
     let next = 0
     await Promise.all(Array.from({ length: Math.min(4, labels.length) }, async () => {
@@ -146,6 +161,7 @@ async function loadDetails(background = false) {
 }
 
 async function select(label: string) {
+  checkedRows.value = []
   clearExpanded()
   selected.value = label; detailPage.value = 0
   await loadDetails()
@@ -174,6 +190,7 @@ async function toggle(row: Row) {
   await loadExpanded(row.label)
 }
 function changeSort(field: Sort) {
+  checkedRows.value = []
   order.value = sort.value === field && order.value === 'desc' ? 'asc' : 'desc'
   sort.value = field; detailPage.value = 0; void loadDetails()
 }
@@ -191,10 +208,40 @@ async function saveNote() {
   finally { saving.value = false }
 }
 function reset() {
+  checkedRows.value = []
   detailVersion++; detailController?.abort(); clearExpanded(); detailBusy.value = false
   selected.value = null; details.value = null; rankPage.value = 0; detailPage.value = 0
   void refresh()
 }
+function stopReads() {
+  overviewVersion++; detailVersion++; controller?.abort(); detailController?.abort()
+  for (const [label, controller] of expandedControllers) { controller.abort(); const state = expanded.value[label]; if (state) { state.version++; state.busy = false } }
+  expandedControllers.clear(); busy.value = false; refreshing.value = false; detailBusy.value = false
+}
+function toggleManagement() {
+  stopReads(); managing.value = !managing.value; checkedRows.value = []; deletedAmount.value = null
+  if (!managing.value) void refresh(true)
+}
+function toggleChecked(label: string) {
+  checkedRows.value = checkedRows.value.includes(label) ? checkedRows.value.filter(value => value !== label) : [...checkedRows.value, label]
+}
+function checkPage() { checkedRows.value = allChecked.value ? [] : (details.value?.rows.map(row => row.label) ?? []) }
+function deleteRows(labels: string[]) {
+  const values = labels.filter(label => details.value?.rows.some(row => row.label === label))
+  if (!values.length || selected.value === null) return
+  stopReads()
+  deleteDialog.value?.open({ mode: 'range', ...range.value, filters: filters(), selection: { dimension: detailDimension.value, values } })
+}
+function deleteRange() {
+  stopReads()
+  deleteDialog.value?.open({ mode: 'range', ...range.value, filters: view.value === 'sourceIP' && selected.value ? { sourceIP: selected.value } : {} })
+}
+function deleteAll() { stopReads(); deleteDialog.value?.open({ mode: 'all' }) }
+async function afterDelete(result: UsageDeletePreview) {
+  stopReads(); checkedRows.value = []; deletedAmount.value = result.upload + result.download
+  await refresh(true, true)
+}
+watch([view, selected, rangeDays, customStart, customEnd, rankSearch, detailSearch, rankPage, detailPage], () => { checkedRows.value = [] })
 watch([view, rangeDays], reset)
 watch(rankSearch, useDebounceFn(() => { rankPage.value = 0; void refresh() }, 250))
 watch(detailSearch, useDebounceFn(() => { detailPage.value = 0; void loadDetails() }, 250))
@@ -205,7 +252,7 @@ watch(editing, async (open) => {
 })
 onMounted(() => {
   void refresh()
-  timer = setInterval(() => { if (!document.hidden && !busy.value && !detailBusy.value && !expandedBusy.value && !editing.value && !ruleEditing.value) void refresh(true) }, 5000)
+  timer = setInterval(() => { if (!document.hidden && !busy.value && !detailBusy.value && !expandedBusy.value && !editing.value && !ruleEditing.value && !managing.value && !deleteEditing.value) void refresh(true) }, 5000)
 })
 onBeforeUnmount(() => {
   clearInterval(timer); overviewVersion++; detailVersion++
@@ -222,6 +269,7 @@ onBeforeUnmount(() => {
       <div class="flex flex-wrap items-end gap-2">
         <label class="flex flex-col gap-1 text-xs">{{ t('coco.pzTimeRange') }} <select v-model.number="rangeDays" class="select select-bordered select-sm w-36"><option :value="1 / 24">{{ t('coco.pzLastHour') }}</option><option :value="1">{{ t('coco.pzLastDay') }}</option><option :value="7">{{ t('coco.pzLastDays') }}</option><option :value="30">{{ t('coco.pzLastDays2') }}</option><option :value="365">{{ t('coco.pzLastYear') }}</option><option :value="-1">{{ t('coco.pzCustom') }}</option></select></label>
         <button type="button" class="btn btn-ghost btn-sm w-20 px-2" :disabled="refreshing" @click="refresh()"><IconRefresh :size="16" :class="{ 'animate-spin': refreshing }" />{{ refreshing ? t('coco.pzRefreshing') : t('coco.pzRefresh') }}</button>
+        <button type="button" class="btn btn-ghost btn-sm" :class="{ 'bg-primary/10 text-primary': managing }" :aria-pressed="managing" @click="toggleManagement"><IconListDetails :size="16" aria-hidden="true" />{{ t(managing ? 'coco.usageManageDone' : 'coco.usageManage') }}</button>
         <div ref="infoContainer" class="relative">
           <button ref="infoButton" type="button" class="btn btn-ghost btn-sm px-2" aria-haspopup="dialog" aria-controls="usage-info" :aria-expanded="infoOpen" @click="toggleInfo"><IconInfoCircle :size="16" /><span>{{ t('coco.pzInfo') }}</span><span v-if="hasDataNotes" class="h-1.5 w-1.5 rounded-full bg-warning" :aria-label="t('coco.pzDataNotesAvailable')" /></button>
           <div v-if="infoOpen" id="usage-info" role="dialog" aria-labelledby="usage-info-title" class="absolute right-0 top-full z-30 mt-2 max-h-[calc(100dvh-2rem)] w-96 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-base-content/15 bg-base-200 p-4 text-sm shadow-xl max-sm:fixed max-sm:inset-x-4 max-sm:bottom-4 max-sm:top-auto max-sm:mt-0 max-sm:w-auto">
@@ -255,6 +303,14 @@ onBeforeUnmount(() => {
       <button type="submit" class="btn btn-primary btn-sm"><IconSearch :size="16" />{{ t('coco.pzSearch') }}</button>
     </form>
     <p v-if="error" class="alert alert-error text-sm" role="alert">{{ error }}</p>
+    <div v-if="managing" class="flex flex-wrap items-center gap-2 rounded-lg border border-base-content/10 bg-base-200 p-3">
+      <span class="mr-auto text-sm" role="status">{{ t('coco.usageSelected', { count: checkedRows.length }) }}</span>
+      <button type="button" class="btn btn-sm" :disabled="!checkedRows.length || detailBusy" @click="deleteRows(checkedRows)"><IconTrash :size="16" aria-hidden="true" />{{ t('coco.usageDeleteSelected') }}</button>
+      <button type="button" class="btn btn-sm" @click="deleteRange">{{ t('coco.usageDeleteRange') }}</button>
+      <button type="button" class="btn btn-ghost btn-sm" @click="deleteAll">{{ t('coco.usageClearAll') }}</button>
+      <p class="w-full text-xs text-base-content/60">{{ t('coco.usageManageHint') }}</p>
+    </div>
+    <p v-if="deletedAmount !== null" class="text-sm text-success" role="status">{{ t('coco.usageDeleted', { amount: formatBytes(deletedAmount) }) }}</p>
     <p v-if="collectionUnavailable" class="text-xs text-warning" role="status">{{ t('coco.pzCollectionPausedShowingHistory') }}</p>
     <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
       <div v-for="card in [{ label: t('coco.pzSourceIp'), value: total.sources, icon: IconDevices }, { label: t('coco.pzUpload'), value: formatBytes(total.upload), icon: IconUpload }, { label: t('coco.pzDownload'), value: formatBytes(total.download), icon: IconDownload }, { label: t('coco.pzTotal'), value: formatBytes(total.upload + total.download), icon: IconSum }]" :key="card.label" class="flex h-20 items-center gap-3 rounded-2xl border border-base-content/10 bg-base-200/60 p-3">
@@ -289,11 +345,15 @@ onBeforeUnmount(() => {
       <p v-if="detailError" class="p-4 text-sm text-warning" role="alert">{{ detailError }}</p>
       <div class="overflow-x-auto">
         <table class="table table-sm w-full">
-          <thead><tr><th v-for="column in [{ key: 'label', label: detailDimension === 'sourceIP' ? t('coco.pzSourceIp') : t('coco.pzHosts') }, { key: 'upload', label: t('coco.pzUpload') }, { key: 'download', label: t('coco.pzDownload') }, { key: 'total', label: t('coco.pzTotal') }]" :key="column.key"><button class="inline-flex items-center gap-1 whitespace-nowrap" type="button" :aria-label="t('coco.pzSortBy', { column: column.label })" @click="changeSort(column.key as Sort)">{{ column.label }}<IconSelector :size="14" /><span v-if="sort === column.key">{{ order === 'desc' ? '↓' : '↑' }}</span></button></th></tr></thead>
+          <thead><tr><th v-if="managing" class="w-10"><input type="checkbox" class="checkbox checkbox-sm" :checked="allChecked" :indeterminate="!!checkedRows.length && !allChecked" :disabled="!details?.rows.length || detailBusy" :aria-label="t('coco.usageSelectPage')" @change="checkPage" /></th><th v-for="column in [{ key: 'label', label: detailDimension === 'sourceIP' ? t('coco.pzSourceIp') : t('coco.pzHosts') }, { key: 'upload', label: t('coco.pzUpload') }, { key: 'download', label: t('coco.pzDownload') }, { key: 'total', label: t('coco.pzTotal') }]" :key="column.key"><button class="inline-flex items-center gap-1 whitespace-nowrap" type="button" :aria-label="t('coco.pzSortBy', { column: column.label })" @click="changeSort(column.key as Sort)">{{ column.label }}<IconSelector :size="14" /><span v-if="sort === column.key">{{ order === 'desc' ? '↓' : '↑' }}</span></button></th><th v-if="managing"><span class="sr-only">{{ t('coco.usageDeleteTitle') }}</span></th></tr></thead>
           <tbody>
             <template v-for="row in details?.rows ?? []" :key="row.label">
-              <tr class="hover:bg-base-content/5"><td class="max-w-[55vw] sm:max-w-none"><div class="flex items-center gap-2"><button type="button" class="inline-flex min-w-0 items-center gap-1 text-left" :aria-expanded="!!expanded[row.label]" @click="toggle(row)"><IconChevronDown v-if="!!expanded[row.label]" :size="14" class="shrink-0" /><IconChevronRight v-else :size="14" class="shrink-0" /><span class="truncate font-mono text-xs">{{ display(row.label) }}{{ detailDimension === 'sourceIP' && aliases[row.label] ? `(${aliases[row.label]})` : '' }}</span></button><button v-if="detailDimension === 'sourceIP' && isAddress(row.label)" type="button" class="btn btn-ghost btn-xs shrink-0" @click="editNote(row.label)"><IconEdit :size="12" />{{ t('coco.pzNote') }}</button><span v-if="detailDimension === 'host' && usageTarget(row.label)" class="tooltip tooltip-bottom shrink-0" :data-tip="t('coco.usageRuleAdd')"><button type="button" class="btn btn-ghost btn-xs" :title="t('coco.usageRuleAdd')" :aria-label="t('coco.usageRuleAddFor', { host: row.label })" @click="ruleDialog?.open(row.label)"><IconRoute :size="14" aria-hidden="true" /></button></span></div></td><td class="whitespace-nowrap">{{ formatBytes(row.upload) }}</td><td class="whitespace-nowrap">{{ formatBytes(row.download) }}</td><td class="whitespace-nowrap font-bold text-primary">{{ formatBytes(row.total) }}</td></tr>
-              <tr v-if="expanded[row.label]"><td colspan="4" class="bg-base-content/5 p-4">
+              <tr class="hover:bg-base-content/5">
+                <td v-if="managing"><input type="checkbox" class="checkbox checkbox-sm" :checked="checkedRows.includes(row.label)" :disabled="detailBusy" :aria-label="t('coco.usageSelectRow', { label: display(row.label) })" @change="toggleChecked(row.label)" /></td>
+                <td class="max-w-[55vw] sm:max-w-none"><div class="flex items-center gap-2"><button type="button" class="inline-flex min-w-0 items-center gap-1 text-left" :aria-expanded="!!expanded[row.label]" @click="toggle(row)"><IconChevronDown v-if="!!expanded[row.label]" :size="14" class="shrink-0" /><IconChevronRight v-else :size="14" class="shrink-0" /><span class="truncate font-mono text-xs">{{ display(row.label) }}{{ detailDimension === 'sourceIP' && aliases[row.label] ? `(${aliases[row.label]})` : '' }}</span></button><button v-if="detailDimension === 'sourceIP' && isAddress(row.label)" type="button" class="btn btn-ghost btn-xs shrink-0" @click="editNote(row.label)"><IconEdit :size="12" />{{ t('coco.pzNote') }}</button><span v-if="detailDimension === 'host' && usageTarget(row.label)" class="tooltip tooltip-bottom shrink-0" :data-tip="t('coco.usageRuleAdd')"><button type="button" class="btn btn-ghost btn-xs" :title="t('coco.usageRuleAdd')" :aria-label="t('coco.usageRuleAddFor', { host: row.label })" @click="ruleDialog?.open(row.label)"><IconRoute :size="14" aria-hidden="true" /></button></span></div></td><td class="whitespace-nowrap">{{ formatBytes(row.upload) }}</td><td class="whitespace-nowrap">{{ formatBytes(row.download) }}</td><td class="whitespace-nowrap font-bold text-primary">{{ formatBytes(row.total) }}</td>
+                <td v-if="managing"><span class="tooltip tooltip-left" :data-tip="t('coco.usageDeleteRow', { label: display(row.label) })"><button type="button" class="btn btn-ghost btn-xs text-error" :disabled="detailBusy" :aria-label="t('coco.usageDeleteRow', { label: display(row.label) })" @click="deleteRows([row.label])"><IconTrash :size="16" aria-hidden="true" /></button></span></td>
+              </tr>
+              <tr v-if="expanded[row.label]"><td :colspan="managing ? 6 : 4" class="bg-base-content/5 p-4">
                 <p class="mb-2 flex items-center gap-2 text-xs text-base-content/60">{{ view === 'outbound' ? t('coco.pzSourceIp') : t('coco.usageRoute') }}<span :class="{ invisible: !expanded[row.label]!.busy }" :aria-hidden="!expanded[row.label]!.busy" role="status">{{ t('coco.pzLoading') }}</span></p>
                 <p v-if="expanded[row.label]!.error" class="mb-2 text-xs text-error" role="alert">{{ expanded[row.label]!.error?.() }}</p>
                 <div v-for="child in expanded[row.label]!.rows" :key="child.key ?? child.label" class="border-b border-base-content/10 py-2 text-xs last:border-0">
@@ -305,13 +365,14 @@ onBeforeUnmount(() => {
                 <div v-if="expanded[row.label]!.total > pageSize" class="mt-2 flex justify-between"><button class="btn btn-ghost btn-xs" type="button" :disabled="expanded[row.label]!.page === 0 || expanded[row.label]!.busy" @click="expanded[row.label]!.page--; loadExpanded(row.label)"><IconChevronLeft :size="14" />{{ t('coco.pzPrevious') }}</button><button class="btn btn-ghost btn-xs" type="button" :disabled="(expanded[row.label]!.page + 1) * pageSize >= expanded[row.label]!.total || expanded[row.label]!.busy" @click="expanded[row.label]!.page++; loadExpanded(row.label)">{{ t('coco.pzNext') }}<IconChevronRight :size="14" /></button></div>
               </td></tr>
             </template>
-            <tr v-if="!details?.rows.length && !detailBusy"><td colspan="4" class="py-8 text-center text-base-content/50">{{ overview?.resolution === 'day' ? t('coco.pzOnlyDailySourceSummariesAreRetainedForThisRange') : t('coco.pzNoUsageDetails') }}</td></tr>
+            <tr v-if="!details?.rows.length && !detailBusy"><td :colspan="managing ? 6 : 4" class="py-8 text-center text-base-content/50">{{ overview?.resolution === 'day' ? t('coco.pzOnlyDailySourceSummariesAreRetainedForThisRange') : t('coco.pzNoUsageDetails') }}</td></tr>
           </tbody>
         </table>
       </div>
       <div class="flex items-center justify-between gap-2 border-t border-base-content/10 p-3 text-xs"><button type="button" class="btn btn-ghost btn-sm" :disabled="detailPage === 0 || detailBusy" @click="detailPage--; loadDetails()"><IconChevronLeft :size="14" />{{ t('coco.pzPrevious') }}</button><span>{{ detailPage + 1 }} / {{ Math.max(1, Math.ceil((details?.totalRows ?? 0) / pageSize)) }} · {{ t('coco.pzItemCount', { count: details?.totalRows ?? 0 }) }}</span><button type="button" class="btn btn-ghost btn-sm" :disabled="(detailPage + 1) * pageSize >= (details?.totalRows ?? 0) || detailBusy" @click="detailPage++; loadDetails()">{{ t('coco.pzNext') }}<IconChevronRight :size="14" /></button></div>
     </section>
     <UsageRuleDialog ref="ruleDialog" @opened="ruleEditing = $event" />
+    <UsageDeleteDialog ref="deleteDialog" @opened="deleteEditing = $event" @deleted="afterDelete" />
     <dialog ref="noteDialog" class="m-auto w-[calc(100%-2rem)] max-w-sm rounded-xl border border-base-content/10 bg-base-200 p-5 text-base-content shadow-xl backdrop:bg-black/60" aria-labelledby="source-note-title" @cancel.prevent="!saving && (editing = false)">
       <form @submit.prevent="saveNote">
         <h2 id="source-note-title" class="font-semibold">{{ t('coco.pzEditSourceNote') }}</h2><p class="mt-3 break-all font-mono text-sm">{{ noteIP }}</p>

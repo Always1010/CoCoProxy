@@ -107,6 +107,10 @@ npm run test:management
 
 `PUT /api/cocoproxy/usage/alias` 接收 `{sourceIP,label}`，给规范化 IP 添加最多 40 字备注，空白备注删除。备注可重名，历史查询使用当前备注，不改变分组或历史字节，不关联登录授权、NAT 后设备或物理身份。不会导入浏览器 IndexedDB 中可能互相重叠的历史。用量与域名属于私有数据，不写入源码、通用日志或默认可提交输出。
 
+`POST /api/cocoproxy/usage/deletion/preview` 接收 `{mode:"all"}` 或 `{mode:"range",startTime,endTime,filters?,selection?:{dimension,values}}`；范围最多 365 天，精确筛选沿用查询维度，批量选择最多 200 个值，不接受搜索或分页作为删除范围。范围按分钟对齐；起点超出明细期限时，只接受来源 IP 筛选／选择，并对齐完整 UTC 日。返回实际 `scope`、`resolution`、`sampledAt`、`expiresAt`、流量、来源数、明细／汇总行数及随机 `token`。`POST /api/cocoproxy/usage/deletion/confirm` 仅接受 `{token}`，两接口共用既有认证和同源 Origin 检查。
+
+预览先保存待写批次，在连接私有的内存临时表中保存行 ID 和待扣减计数，不写入默认临时目录，不改变持久 schema。同一实例最多保留一份预览，5 分钟过期；新预览替换旧预览，保留期删除会使旧预览失效。确认先保存新采样，再在单个事务中从分钟及每日计数中扣减预览快照，仅删除归零的目标行，保留预览后新增流量与采集检查点。按明细删除时按日、来源扣减原汇总，不从剩余明细重建每日数据，避免丢失已过期明细的贡献；失败两表一起回滚。最近一次成功 token 在当前进程内可重试，服务重启后旧 token 拒绝执行。来源备注和全局采集间断诊断保持独立。
+
 ## 单节点带宽测试
 
 `GET /api/cocoproxy/bandwidth` 返回固定 Cloudflare 服务、时间／载荷上限和最近任务；`POST` 接收 `{node, expectedActive}`，`POST /api/cocoproxy/bandwidth/cancel` 接收 `{id}`。所有操作复用管理会话与写入 Origin 检查，浏览器以会话存储中的随机 `X-CoCoProxy-Bandwidth-Client` 标识任务，服务端再绑定认证浏览器身份；只返回 `owned`，不暴露标识或凭据。任务全局单实例互斥、后台运行，关闭请求连接不取消任务；取消及服务关闭等待清理完成才释放任务。GET 可供其他授权浏览器观察，取消仅限发起者。
