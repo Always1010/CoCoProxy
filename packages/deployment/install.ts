@@ -390,7 +390,9 @@ export async function assertReleasePaths(root: string, files: Entry[], modes = t
 }
 async function stopped(systemctl: string, units: string[], allowReload = false) {
   for (const unit of units) {
-    const value = await run(systemctl, ['show', unit, '--property=ActiveState,MainPID,ControlPID,DropInPaths,NeedDaemonReload,FragmentPath,Job']);
+    // Read runtime and enablement properties together; keep every stop/override
+    // check, including the fresh query after taking the installation lock.
+    const value = await run(systemctl, ['show', unit, '--property=ActiveState,MainPID,ControlPID,DropInPaths,NeedDaemonReload,FragmentPath,Job,UnitFileState', '--all']);
     const properties = Object.fromEntries(value.trim().split('\n').map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)]; }));
     require(['inactive', 'failed'].includes(properties.ActiveState) &&
       (unit.endsWith('.socket') || properties.MainPID === '0' && properties.ControlPID === '0') &&
@@ -399,8 +401,7 @@ async function stopped(systemctl: string, units: string[], allowReload = false) 
     require(!(await info('/etc/systemd/system/' + unit + '.d')) && !(await info('/run/systemd/system/' + unit)) &&
       !(await info('/run/systemd/system/' + unit + '.d')), 'INSTALL_UNIT_OVERRIDE_CONFLICT');
     // An enabled unit would survive removal as a dangling alias. Lifecycle is explicit.
-    const state = (await run(systemctl, ['show', unit, '--property=UnitFileState', '--value'])).trim();
-    require(['', 'disabled', 'static', 'not-found'].includes(state), 'INSTALL_UNITS_MUST_BE_DISABLED');
+    require(['', 'disabled', 'static', 'not-found'].includes(properties.UnitFileState), 'INSTALL_UNITS_MUST_BE_DISABLED');
   }
 }
 async function networkClear(input: any) {

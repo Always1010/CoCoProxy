@@ -17,6 +17,20 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_unit_properties_uses_one_fresh_query_and_rejects_incomplete_or_ambiguous_replies(self):
+        command = ['/usr/bin/systemctl', 'show', 'cocoproxy-management.service',
+                   '--property=ActiveState,UnitFileState', '--all']
+        with patch.object(deploy, 'run', side_effect=[b'UnitFileState=enabled\nActiveState=active\n',
+                                                     b'ActiveState=inactive\nUnitFileState=disabled\n']) as run:
+            self.assertEqual(deploy.unit_properties(command[0], command[2]), {'ActiveState': 'active', 'UnitFileState': 'enabled'})
+            self.assertEqual(deploy.unit_properties(command[0], command[2]), {'ActiveState': 'inactive', 'UnitFileState': 'disabled'})
+            self.assertEqual(run.call_args_list, [unittest.mock.call(command), unittest.mock.call(command)])
+        for reply in [b'', b'ActiveState=inactive', b'ActiveState=inactive\nUnitFileState=disabled\nUnitFileState=enabled',
+                      b'ActiveState=inactive\nUnitFileState=disabled\nUnexpected=value', b'invalid']:
+            with self.subTest(reply=reply), patch.object(deploy, 'run', return_value=reply):
+                with self.assertRaisesRegex(RuntimeError, '^REMOTE_SERVICE_PROPERTIES_INVALID$'):
+                    deploy.unit_properties(command[0], command[2])
+
     def test_operation_timings_preserve_results_and_failures_without_exposing_arguments(self):
         result = object()
         failure = RuntimeError('synthetic private command detail')
@@ -290,8 +304,9 @@ class RemoteDeploymentTests(unittest.TestCase):
                 if action == 'show':
                     if args[3].startswith('--property='):
                         pid = '99' if runtime_changed and any('upgrade' in event and '--apply' in event for event in events) else '42'
-                        rows = ['ActiveState=' + ('active' if active[args[2]] else 'inactive'), 'MainPID=' + pid,
-                            'ExecMainStartTimestampMonotonic=1234', 'UnitFileState=' + enabled[args[2]]]
+                        properties = {'ActiveState': 'active' if active[args[2]] else 'inactive', 'MainPID': pid,
+                            'ExecMainStartTimestampMonotonic': '1234', 'UnitFileState': enabled[args[2]]}
+                        rows = [name + '=' + properties[name] for name in args[3].split('=', 1)[1].split(',')]
                         if reordered_properties and any('upgrade' in event and '--apply' in event for event in events):
                             rows.reverse()
                         return '\n'.join(rows).encode()

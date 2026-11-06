@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { link, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, compatibleOwnedFiles, configurationReviewDigest, deployRelease,
   parseDeploymentLock, prepareUpgrade, stageUpgrade, preparedReleaseIdentity, assertPreparedReleaseIdentity, releaseTarget, validateReceipt, verifyRelease, assertFrontendFiles, assertComponentReuse, type Receipt } from '../packages/deployment/install.ts';
-import { assertDeploymentStateCompatibility } from '../packages/deployment/install.ts';
+import { assertDeploymentStateCompatibility, assertDeploymentStopped } from '../packages/deployment/install.ts';
 import { inspectStateCompatibility, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/compatibility.ts';
 import { assessRecoveryCredential, assertFinalizableReceipt, deploymentOwnerGone, inspectDeployment, recoverDeployment } from '../packages/deployment/maintenance.ts';
@@ -17,6 +17,40 @@ import { withPathEvidence, assertRootControlledPath, type PathEvidenceHost, type
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
+
+test('stopped-unit checks query all properties once and retain stop and enablement rejection rules', { skip: process.platform === 'win32' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-unit-query-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const executable = join(root, 'systemctl.mjs'), calls = join(root, 'calls.jsonl');
+  const unit = 'cocoproxy-synthetic-' + root.split('-').at(-1) + '.service';
+  const baseline: Record<string, string> = { ActiveState: 'inactive', MainPID: '0', ControlPID: '0', DropInPaths: '',
+    NeedDaemonReload: 'no', FragmentPath: '/etc/systemd/system/' + unit, Job: '', UnitFileState: 'disabled' };
+  async function query(properties: Record<string, string>, allowReload = false) {
+    await writeFile(executable, '#!' + process.execPath + '\n' +
+      "import { appendFileSync } from 'node:fs';\n" +
+      'appendFileSync(' + JSON.stringify(calls) + ', JSON.stringify(process.argv.slice(2)) + "\\n");\n' +
+      'console.log(' + JSON.stringify(Object.entries(properties).reverse().map(([key, value]) => key + '=' + value).join('\n')) + ');\n');
+    await chmod(executable, 0o700);
+    return assertDeploymentStopped(executable, [unit], allowReload);
+  }
+  await query(baseline);
+  const [args] = (await readFile(calls, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(args, ['show', unit,
+    '--property=ActiveState,MainPID,ControlPID,DropInPaths,NeedDaemonReload,FragmentPath,Job,UnitFileState', '--all']);
+  assert.equal((await readFile(calls, 'utf8')).trim().split('\n').length, 1);
+  const rejected: Record<string, string>[] = [{ ActiveState: 'active' }, { MainPID: '123' }, { ControlPID: '123' }, { Job: '123' },
+    { DropInPaths: '/synthetic/override.conf' }, { NeedDaemonReload: 'yes' }, { FragmentPath: '/synthetic/foreign.service' }];
+  for (const changed of rejected) {
+    await assert.rejects(query({ ...baseline, ...changed }), code('INSTALL_SERVICES_MUST_BE_STOPPED'));
+  }
+  for (const state of ['enabled', 'enabled-runtime', 'linked', 'indirect']) {
+    await assert.rejects(query({ ...baseline, UnitFileState: state }), code('INSTALL_UNITS_MUST_BE_DISABLED'));
+  }
+  const missing = { ...baseline }; delete missing.UnitFileState;
+  await assert.rejects(query(missing), code('INSTALL_UNITS_MUST_BE_DISABLED'));
+  for (const state of ['', 'static', 'not-found']) await query({ ...baseline, UnitFileState: state });
+  await query({ ...baseline, NeedDaemonReload: 'yes' }, true);
+});
 
 test('release path evidence shares ancestors only within one check and refuses changes before acceptance', async () => {
   const calls = new Map<string, number>();

@@ -265,6 +265,19 @@ def wait_core_ready(node, service, runtime, code):
     raise RuntimeError(code)
 
 
+def unit_properties(systemctl, unit):
+    """One fresh query per unit; empty properties are explicit and order is irrelevant."""
+    names = ('ActiveState', 'UnitFileState')
+    rows = run([systemctl, 'show', unit, '--property=' + ','.join(names), '--all']).decode().splitlines()
+    properties = {}
+    for row in rows:
+        key, separator, value = row.partition('=')
+        need(separator and key in names and key not in properties, 'REMOTE_SERVICE_PROPERTIES_INVALID')
+        properties[key] = value
+    need(set(properties) == set(names), 'REMOTE_SERVICE_PROPERTIES_INVALID')
+    return properties
+
+
 def restore_unit_intent(systemctl, before, core_ready=None):
     """Restore both active and inactive intentions; never enable static units."""
     order = ['cocoproxy-gateway-guard.service', 'cocoproxy-gateway-network.service',
@@ -286,8 +299,9 @@ def restore_unit_intent(systemctl, before, core_ready=None):
             if unit == 'cocoproxy-mihomo.service' and core_ready:
                 core_ready()
     for unit, prior in before.items():
-        need((unit == 'cocoproxy-bandwidth.service' or value(unit, 'ActiveState') == ('active' if prior['active'] else 'inactive')) and
-             value(unit, 'UnitFileState') == prior.get('enableState', prior.get('enabled')), 'REMOTE_ROLLBACK_SERVICE_NOT_RESTORED')
+        observed = unit_properties(systemctl, unit)
+        need((unit == 'cocoproxy-bandwidth.service' or observed['ActiveState'] == ('active' if prior['active'] else 'inactive')) and
+             observed['UnitFileState'] == prior.get('enableState', prior.get('enabled')), 'REMOTE_ROLLBACK_SERVICE_NOT_RESTORED')
 
 
 def lifecycle_marker_identity(path):
@@ -561,8 +575,8 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
     network = regular(NETWORK_RECEIPT, True) if NETWORK_RECEIPT.exists() else None
     before = {}
     for unit in managed:
-        active = run([systemctl, 'show', unit, '-p', 'ActiveState', '--value']).decode().strip()
-        enabled = run([systemctl, 'show', unit, '-p', 'UnitFileState', '--value']).decode().strip()
+        observed = unit_properties(systemctl, unit)
+        active, enabled = observed['ActiveState'], observed['UnitFileState']
         need(active in ['active', 'inactive'] and enabled in ['enabled', 'disabled', 'static', 'indirect'], 'REMOTE_SERVICE_STATE_UNSUPPORTED')
         before[unit] = {'active': active == 'active', 'enabled': enabled}
     if options.preview:
@@ -639,8 +653,8 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
                 '--state-dir', candidate['runtime']['stateDirectory'], '--runtime-settings', candidate['runtime']['settingsPath']]))
             need((status.get('core') or {}).get('ready') is True, 'REMOTE_CORE_NOT_READY')
         for unit in managed:
-            active = run([systemctl, 'show', unit, '-p', 'ActiveState', '--value']).decode().strip()
-            enabled = run([systemctl, 'show', unit, '-p', 'UnitFileState', '--value']).decode().strip()
+            observed = unit_properties(systemctl, unit)
+            active, enabled = observed['ActiveState'], observed['UnitFileState']
             need((unit == 'cocoproxy-bandwidth.service' or active == ('active' if before[unit]['active'] else 'inactive')) and enabled == before[unit]['enabled'],
                  'REMOTE_SERVICE_NOT_RESTORED')
         check_runtime()
@@ -852,12 +866,11 @@ def main_locked(options):
             units += ['cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']
         if candidate.get('web') or web_unit:
             units += ['cocoproxy-web.service']
-        def unit_value(unit, prop):
-            return run([systemctl, 'show', unit, '-p', prop, '--value']).decode().strip()
         before_units = {}
         if installed:
             for unit in units:
-                active, enable_state = unit_value(unit, 'ActiveState'), unit_value(unit, 'UnitFileState')
+                observed = unit_properties(systemctl, unit)
+                active, enable_state = observed['ActiveState'], observed['UnitFileState']
                 need(active in ['active', 'inactive'] and enable_state in ['enabled', 'disabled', 'static', 'indirect'], 'REMOTE_SERVICE_STATE_UNSUPPORTED')
                 before_units[unit] = {'active': active == 'active', 'enabled': enable_state == 'enabled', 'enableState': enable_state}
         def maintenance(command, token_path=None):
@@ -1003,8 +1016,9 @@ def main_locked(options):
                 if not intent['paused'] and (not installed or before_units.get('cocoproxy-management.service', {}).get('active')):
                     run([systemctl, 'start', 'cocoproxy-bandwidth.socket'])
             for unit, previous in before_units.items():
-                need(unit == 'cocoproxy-bandwidth.service' or not previous['active'] or unit_value(unit, 'ActiveState') == 'active', 'REMOTE_SERVICE_NOT_RESTORED')
-                need(unit_value(unit, 'UnitFileState') == previous['enableState'], 'REMOTE_SERVICE_ENABLE_INTENT_CHANGED')
+                observed = unit_properties(systemctl, unit)
+                need(unit == 'cocoproxy-bandwidth.service' or not previous['active'] or observed['ActiveState'] == 'active', 'REMOTE_SERVICE_NOT_RESTORED')
+                need(observed['UnitFileState'] == previous['enableState'], 'REMOTE_SERVICE_ENABLE_INTENT_CHANGED')
             if not installed or before_units.get('cocoproxy-management.service', {}).get('active'):
                 clock.measure('management-ready', management_ready, management)
                 record_phase('management-restored-ready')
