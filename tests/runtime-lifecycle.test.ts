@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, lstat, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, lstat, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pauseRuntimeForMaintenance, readRuntimeLifecycle, restoreRuntimeAfterMaintenance, setRuntimeLifecycle } from '../packages/runtime/lifecycle.ts';
@@ -26,14 +26,24 @@ test('maintenance restores absent, disabled and enabled intent without starting 
 test('public maintenance CLI preserves absent intent without loading a core-version-dependent runtime file', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'cocoproxy-maintenance-cli-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const result = await runCli(['runtime-maintenance-pause', '--state-dir', directory]) as any;
+  const result = await runCli(['runtime-maintenance-pause', '--state-dir', directory, '--operation-id', 'a'.repeat(32)]) as any;
   assert.equal(result.servicesChanged, false);
   assert.equal(result.maintenanceRestore.previous.present, false);
+  const pausedReceipt = JSON.parse(await readFile(join(directory, 'maintenance-result.json'), 'utf8'));
+  assert.equal(pausedReceipt.id, 'a'.repeat(32));
+  assert.equal(pausedReceipt.markerSha256, result.maintenanceRestore.pausedSha256);
+  assert.deepEqual(pausedReceipt.result.maintenanceRestore, result.maintenanceRestore);
   const input = join(directory, 'maintenance-restore.json');
   await writeFile(input, JSON.stringify(result.maintenanceRestore), { mode: 0o600 });
-  const restored = await runCli(['runtime-maintenance-restore', '--state-dir', directory, '--input', input]) as any;
+  const restored = await runCli(['runtime-maintenance-restore', '--state-dir', directory, '--input', input, '--operation-id', 'b'.repeat(32)]) as any;
   assert.deepEqual(restored.lifecycle, { schemaVersion: 1, enabled: false, paused: false });
   await assert.rejects(lstat(join(directory, 'lifecycle.json')), { code: 'ENOENT' });
+  const restoredReceipt = JSON.parse(await readFile(join(directory, 'maintenance-result.json'), 'utf8'));
+  assert.equal(restoredReceipt.id, 'b'.repeat(32));
+  assert.equal(restoredReceipt.action, 'restore');
+  assert.equal(restoredReceipt.markerSha256, null);
+  assert.deepEqual(restoredReceipt.result.lifecycle, restored.lifecycle);
+  await assert.rejects(pauseRuntimeForMaintenance(directory, { operationId: 'invalid' }));
 });
 test('intervening pause or explicit disable invalidates the old maintenance restore receipt', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'cocoproxy-maintenance-conflict-'));

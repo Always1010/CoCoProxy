@@ -55,6 +55,20 @@ export async function setRuntimeLifecycle(stateDirectory: string, input: Pick<Ru
 }
 
 export type MaintenanceRestore = { schemaVersion: 1; previous: { present: boolean; enabled: boolean; paused: boolean }; pausedSha256: string };
+type MaintenanceOptions = { operationId?: string };
+
+function validateMaintenanceOperation(options: MaintenanceOptions): void {
+  if (options.operationId !== undefined && !/^[a-f0-9]{32}$/.test(options.operationId)) throw new RuntimeError('RUNTIME_MAINTENANCE_RESTORE_INVALID');
+}
+
+/** Written under the intent lock, before lock release or CLI output can fail. */
+async function recordMaintenanceResult(stateDirectory: string, options: MaintenanceOptions, action: 'pause' | 'restore', result: unknown) {
+  if (options.operationId === undefined) return;
+  let markerSha256: string | null;
+  try { markerSha256 = await lifecycleIdentity(stateDirectory); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; markerSha256 = null; }
+  await atomicWrite(stateDirectory, 'maintenance-result.json', JSON.stringify({ schemaVersion: 1, id: options.operationId, action, result, markerSha256 }));
+}
 
 async function exclusiveRuntimeIntent<T>(stateDirectory: string, operation: () => Promise<T>): Promise<T> {
   const outcome = await new FileTransactionStore(stateDirectory).exclusive(async () => {
@@ -77,7 +91,8 @@ async function lifecycleIdentity(stateDirectory: string): Promise<string> {
 }
 
 /** A maintenance pause captures absent/disabled states as well as enabled intent, under the common lock. */
-export async function pauseRuntimeForMaintenance(stateDirectory: string): Promise<{ lifecycle: RuntimeLifecycle; maintenanceRestore: MaintenanceRestore }> {
+export async function pauseRuntimeForMaintenance(stateDirectory: string, options: MaintenanceOptions = {}): Promise<{ lifecycle: RuntimeLifecycle; maintenanceRestore: MaintenanceRestore }> {
+  validateMaintenanceOperation(options);
   const deadline = performance.now() + 60_000;
   for (;;) {
     try {
@@ -88,8 +103,10 @@ export async function pauseRuntimeForMaintenance(stateDirectory: string): Promis
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') present = false; else throw error; }
         const lifecycle: RuntimeLifecycle = { schemaVersion: 1, enabled: previous.enabled, paused: true };
         await atomicWrite(stateDirectory, 'lifecycle.json', JSON.stringify(lifecycle));
-        return { lifecycle, maintenanceRestore: { schemaVersion: 1, previous: { present, enabled: previous.enabled, paused: previous.paused },
+        const result = { lifecycle, maintenanceRestore: { schemaVersion: 1 as const, previous: { present, enabled: previous.enabled, paused: previous.paused },
           pausedSha256: await lifecycleIdentity(stateDirectory) } };
+        await recordMaintenanceResult(stateDirectory, options, 'pause', result);
+        return result;
       });
     } catch (error) {
       if (!(error instanceof TransactionError) || error.code !== 'STORE_LOCKED' || performance.now() >= deadline) throw error;
@@ -99,7 +116,8 @@ export async function pauseRuntimeForMaintenance(stateDirectory: string): Promis
 }
 
 /** Explicit maintenance completion only; a newer pause/disable invalidates the captured marker identity. */
-export async function restoreRuntimeAfterMaintenance(stateDirectory: string, input: unknown): Promise<RuntimeLifecycle> {
+export async function restoreRuntimeAfterMaintenance(stateDirectory: string, input: unknown, options: MaintenanceOptions = {}): Promise<RuntimeLifecycle> {
+  validateMaintenanceOperation(options);
   let value: MaintenanceRestore;
   try {
     const parsed = cloneConfigJson(input) as any;
@@ -117,6 +135,7 @@ export async function restoreRuntimeAfterMaintenance(stateDirectory: string, inp
     const previous: RuntimeLifecycle = { schemaVersion: 1, enabled: value.previous.enabled, paused: value.previous.paused };
     if (value.previous.present) await atomicWrite(stateDirectory, 'lifecycle.json', JSON.stringify(previous));
     else { await unlink(join(stateDirectory, 'lifecycle.json')); await syncDirectory(stateDirectory); }
+    await recordMaintenanceResult(stateDirectory, options, 'restore', { lifecycle: previous });
     return previous;
   });
 }

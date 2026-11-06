@@ -20,6 +20,7 @@ import tempfile
 import time
 import urllib.request
 import urllib.parse
+import uuid
 
 PRIVATE = Path('/etc/cocoproxy-install')
 RECEIPT = Path('/var/lib/cocoproxy-deployment/receipt.json')
@@ -314,6 +315,39 @@ def lifecycle_marker_identity(path):
     return hashlib.sha256(identity(after).encode() + b'\0' + data).hexdigest()
 
 
+def run_maintenance(payload, node, service, runtime, command, token_path=None, on_error_completed=None):
+    """A lost CLI result must not lose a completed, identity-bound intent change."""
+    operation_id = uuid.uuid4().hex
+    args = ['runuser', '-u', service, '--', node, '--experimental-strip-types',
+            payload / 'source/apps/cli/main.ts', command, '--state-dir', runtime['stateDirectory'], '--operation-id', operation_id]
+    try:
+        return json.loads(run(args + (['--input', token_path] if token_path else [])))
+    except Exception as cause:
+        try:
+            path = Path(runtime['stateDirectory']) / 'maintenance-result.json'
+            info = path.lstat()
+            need(info.st_uid == runtime['serviceUid'] and stat.S_IMODE(info.st_mode) == 0o600, 'REMOTE_MAINTENANCE_RESULT_UNTRUSTED')
+            receipt = json.loads(regular(path, maximum=8192))
+            marker = Path(runtime['stateDirectory']) / 'lifecycle.json'
+            identity = lifecycle_marker_identity(marker) if marker.exists() else None
+            action = command.removeprefix('runtime-maintenance-')
+            need(receipt.get('schemaVersion') == 1 and receipt.get('id') == operation_id and receipt.get('action') == action
+                 and receipt.get('markerSha256') == identity, 'REMOTE_MAINTENANCE_RESULT_UNTRUSTED')
+            result = receipt['result']
+            observed = json.loads(regular(marker)) if marker.exists() else {'schemaVersion': 1, 'enabled': False, 'paused': False}
+            need(result['lifecycle'] == observed, 'REMOTE_MAINTENANCE_RESULT_UNTRUSTED')
+            if action == 'pause':
+                need(observed['paused'] is True and result['maintenanceRestore']['pausedSha256'] == identity,
+                     'REMOTE_MAINTENANCE_RESULT_UNTRUSTED')
+        except Exception:
+            # No usable proof: retain the original command failure and fail closed.
+            raise cause
+        if on_error_completed is not None:
+            on_error_completed(result)
+            raise
+        return result
+
+
 def rollback_update(context):
     """Undo this live upgrade only; private state is never copied or downgraded."""
     c = context
@@ -335,8 +369,7 @@ def rollback_update(context):
                 'REMOTE_ROLLBACK_RUNTIME_INTENT_CHANGED')
         else:
             need(marker.exists() == c['intent']['present'] and observed['paused'] == c['intent']['paused'], 'REMOTE_ROLLBACK_RUNTIME_INTENT_CHANGED')
-        paused = json_run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
-            c['payload'] / 'source/apps/cli/main.ts', 'runtime-maintenance-pause', '--state-dir', runtime['stateDirectory']])
+        paused = run_maintenance(c['payload'], node, service, runtime, 'runtime-maintenance-pause')
         token = paused['maintenanceRestore']
         need(token['previous']['enabled'] == c['intent']['enabled'], 'REMOTE_ROLLBACK_RUNTIME_INTENT_CHANGED')
         # Fresh marker identity, original intention: a previously consumed token
@@ -395,8 +428,7 @@ def rollback_update(context):
         token_path = c['temporary'] / 'rollback-runtime-restore.json'
         put(token_path, (json.dumps(token) + '\n').encode())
         os.chown(token_path, runtime['serviceUid'], 0); os.chmod(token_path, 0o600)
-        json_run(['runuser', '-u', service, '--', node, '--experimental-strip-types', c['payload'] / 'source/apps/cli/main.ts',
-                  'runtime-maintenance-restore', '--state-dir', runtime['stateDirectory'], '--input', token_path])
+        run_maintenance(c['payload'], node, service, runtime, 'runtime-maintenance-restore', token_path)
     # Type=exec reports the Node launcher as running before it becomes the core.
     # Keep the manager's reconciler stopped until this launch has really settled.
     verify_core = lambda: wait_core_ready(node, service, runtime, 'REMOTE_ROLLBACK_CORE_NOT_READY')
@@ -908,9 +940,14 @@ def main_locked(options):
                 need(active in ['active', 'inactive'] and enable_state in ['enabled', 'disabled', 'static', 'indirect'], 'REMOTE_SERVICE_STATE_UNSUPPORTED')
                 before_units[unit] = {'active': active == 'active', 'enabled': enable_state == 'enabled', 'enableState': enable_state}
         def maintenance(command, token_path=None):
-            args = ['runuser', '-u', service, '--', node, '--experimental-strip-types', payload / 'source/apps/cli/main.ts',
-                    command, '--state-dir', runtime['stateDirectory']]
-            return json.loads(run(args + (['--input', token_path] if token_path else [])))
+            def completed(result):
+                nonlocal intent_restored
+                if command == 'runtime-maintenance-pause':
+                    need(result['maintenanceRestore']['previous'] == progress['previousLifecycle'], 'REMOTE_RUNTIME_INTENT_CHANGED')
+                    progress['maintenanceRestore'] = result['maintenanceRestore']
+                else:
+                    intent_restored = True
+            return run_maintenance(payload, node, service, runtime, command, token_path, completed)
         before_lifecycle = json.loads(regular(Path(runtime['stateDirectory']) / 'lifecycle.json')) if installed and (Path(runtime['stateDirectory']) / 'lifecycle.json').exists() else None
         if before_lifecycle:
             need(not (before_lifecycle['enabled'] and before_lifecycle['paused']), 'REMOTE_RUNTIME_ALREADY_PAUSED')

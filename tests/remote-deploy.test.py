@@ -4,6 +4,7 @@ import importlib.util
 import io
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import subprocess
@@ -17,6 +18,33 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_lost_maintenance_result_requires_this_operation_and_unchanged_marker_identity(self):
+        for mismatch in [None, 'operation', 'marker']:
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as temporary:
+                state = Path(temporary)
+                marker = state / 'lifecycle.json'
+                marker.write_text(json.dumps({'schemaVersion': 1, 'enabled': True, 'paused': True}))
+                runtime = {'stateDirectory': str(state), 'serviceUid': os.geteuid()}
+                def run(args):
+                    identity = deploy.lifecycle_marker_identity(marker)
+                    result = {'lifecycle': json.loads(marker.read_text()), 'maintenanceRestore': {'schemaVersion': 1,
+                        'previous': {'present': True, 'enabled': True, 'paused': False}, 'pausedSha256': identity}}
+                    receipt = state / 'maintenance-result.json'
+                    receipt.write_text(json.dumps({'schemaVersion': 1, 'id': 'stale' if mismatch == 'operation' else args[args.index('--operation-id') + 1],
+                        'action': 'pause', 'result': result, 'markerSha256': identity}))
+                    receipt.chmod(0o600)
+                    if mismatch == 'marker':
+                        replacement = state / 'replacement'
+                        replacement.write_bytes(marker.read_bytes())
+                        replacement.replace(marker)
+                    raise subprocess.TimeoutExpired(['synthetic'], 120)
+                with patch.object(deploy, 'run', run):
+                    if mismatch is None:
+                        self.assertTrue(deploy.run_maintenance(state, 'node', 'synthetic', runtime, 'runtime-maintenance-pause')['lifecycle']['paused'])
+                    else:
+                        with self.assertRaises(subprocess.TimeoutExpired):
+                            deploy.run_maintenance(state, 'node', 'synthetic', runtime, 'runtime-maintenance-pause')
+
     def test_unit_properties_uses_one_fresh_query_and_rejects_incomplete_or_ambiguous_replies(self):
         command = ['/usr/bin/systemctl', 'show', 'cocoproxy-management.service',
                    '--property=ActiveState,UnitFileState', '--all']
@@ -208,7 +236,7 @@ class RemoteDeploymentTests(unittest.TestCase):
         hook.chmod(0o755)
         before = {'schemaVersion': 1, 'runtime': {'nodePath': '/usr/bin/node', 'systemctlPath': '/usr/bin/systemctl',
             'sourceDirectory': '/opt/sample/releases/' + 'a' * 64 + '/source', 'binaryPath': '/old/core', 'binarySha256': 'c' * 64,
-            'stateDirectory': str(state), 'settingsPath': '/etc/sample/runtime.json', 'serviceUid': 12345, 'automaticGateway': {'schemaVersion': 1}},
+            'stateDirectory': str(state), 'settingsPath': '/etc/sample/runtime.json', 'serviceUid': os.geteuid(), 'automaticGateway': {'schemaVersion': 1}},
             'management': {'serviceUser': 'synthetic', 'credentialPath': str(credential), 'settingsPath': '/etc/sample/management.json',
                 'serverEntry': '/old/server', 'deployment': {'controllerSecret': 'synthetic secret'}}}
         (private / 'deployment.json').write_text(json.dumps(before))
@@ -237,6 +265,14 @@ class RemoteDeploymentTests(unittest.TestCase):
         def run(args, timeout=120, input=None):
             args = [str(item) for item in args]
             events.append(args)
+            def maintenance_reply(action, result):
+                if '--operation-id' in args:
+                    path = state / 'maintenance-result.json'
+                    path.write_text(json.dumps({'schemaVersion': 1, 'id': args[args.index('--operation-id') + 1], 'action': action,
+                        'result': result, 'markerSha256': 'd' * 64 if (state / 'lifecycle.json').exists() else None}))
+                    path.chmod(0o600)
+                inject(action + '-result')
+                return json.dumps(result).encode()
             if any(item.replace('\\', '/').endswith('/apps/deployment/rollback.ts') for item in args):
                 if rollback_failure:
                     raise RuntimeError('INSTALL_ROLLBACK_SYNTHETIC_FAILURE')
@@ -272,9 +308,9 @@ class RemoteDeploymentTests(unittest.TestCase):
                 previous = json.loads(marker.read_text()) if present else {'schemaVersion': 1, 'enabled': False, 'paused': False}
                 paused = {**previous, 'paused': True}
                 marker.write_text(json.dumps(paused))
-                return json.dumps({'lifecycle': paused, 'maintenanceRestore': {'schemaVersion': 1,
+                return maintenance_reply('pause', {'lifecycle': paused, 'maintenanceRestore': {'schemaVersion': 1,
                     'previous': {'present': present, 'enabled': previous['enabled'], 'paused': previous['paused']},
-                    'pausedSha256': 'd' * 64}}).encode()
+                    'pausedSha256': 'd' * 64}})
             if 'runtime-maintenance-restore' in args:
                 previous = json.loads(Path(args[args.index('--input') + 1]).read_text())['previous']
                 restored = {'schemaVersion': 1, 'enabled': previous['enabled'], 'paused': previous['paused']}
@@ -282,7 +318,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                     (state / 'lifecycle.json').write_text(json.dumps(restored))
                 else:
                     (state / 'lifecycle.json').unlink()
-                return json.dumps({'lifecycle': restored}).encode()
+                return maintenance_reply('restore', {'lifecycle': restored})
             if '--operation' in args:
                 operation = args[args.index('--operation') + 1]
                 if operation == 'prepare':
@@ -582,7 +618,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                 deploy.main_locked(args)
 
     def test_failures_during_maintenance_startup_and_router_restore_recover_original_intent(self):
-        for phase in ['router-disable', 'management-stop', 'core-start', 'router-enable']:
+        for phase in ['pause-result', 'restore-result', 'router-disable', 'management-stop', 'core-start', 'router-enable']:
             with self.subTest(phase=phase):
                 temporary, stack, private, before, events, router, args = self.scenario(failure_at=phase)
                 with temporary, stack:

@@ -85,8 +85,8 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     'runtime-status': ['--state-dir', '--runtime-settings'],
     'runtime-enable': ['--state-dir', '--runtime-settings'],
     'runtime-pause': ['--state-dir', '--runtime-settings'],
-    'runtime-maintenance-pause': ['--state-dir'],
-    'runtime-maintenance-restore': ['--state-dir', '--input'],
+    'runtime-maintenance-pause': ['--state-dir', '--operation-id'],
+    'runtime-maintenance-restore': ['--state-dir', '--input', '--operation-id'],
     'runtime-resume': ['--state-dir', '--runtime-settings'],
     'runtime-disable': ['--state-dir', '--runtime-settings'],
     'runtime-lifecycle-status': ['--state-dir', '--runtime-settings'],
@@ -103,7 +103,7 @@ function parse(args: string[]): { command: string; flags: Map<string, string> } 
     }
     flags.set(key, value);
   }
-  if (allowed[command].some((key) => !flags.has(key))) throw new CliError('MISSING_ARGUMENT');
+  if (allowed[command].some((key) => key !== '--operation-id' && !flags.has(key))) throw new CliError('MISSING_ARGUMENT');
   for (const key of ['--output', '--state-dir', '--mihomo-bin', '--runtime-settings']) {
     if (flags.has(key) && !isAbsolute(flags.get(key)!)) throw new CliError('ABSOLUTE_PATH_REQUIRED');
   }
@@ -198,13 +198,13 @@ export async function runCli(args: string[]): Promise<Record<string, unknown> | 
     return { planned: true, unitSha256: plan.settings.unitSha256, runtime: 'not_started' };
   }
   if (command === 'runtime-maintenance-pause') {
-    return { ...await pauseRuntimeForMaintenance(flags.get('--state-dir')!), scope: 'runtime_intent', servicesChanged: false, routerChanged: false };
+    return { ...await pauseRuntimeForMaintenance(flags.get('--state-dir')!, { operationId: flags.get('--operation-id') }), scope: 'runtime_intent', servicesChanged: false, routerChanged: false };
   }
   if (command === 'runtime-maintenance-restore') {
     let input: unknown;
     try { input = JSON.parse(await privateRead(resolve(flags.get('--input')!), 8192)); }
     catch { throw new CliError('RUNTIME_MAINTENANCE_RESTORE_INVALID'); }
-    return { lifecycle: await restoreRuntimeAfterMaintenance(flags.get('--state-dir')!, input), scope: 'runtime_intent', servicesChanged: false, routerChanged: false };
+    return { lifecycle: await restoreRuntimeAfterMaintenance(flags.get('--state-dir')!, input, { operationId: flags.get('--operation-id') }), scope: 'runtime_intent', servicesChanged: false, routerChanged: false };
   }
   if (command.startsWith('runtime-')) {
     const settings = await loadRuntimeSettings(flags.get('--runtime-settings')!);

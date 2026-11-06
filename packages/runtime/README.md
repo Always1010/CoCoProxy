@@ -6,6 +6,8 @@
 
 维护协调可以使用 `runtime-maintenance-pause --state-dir <绝对路径>`，在事务共锁内暂停并返回本次的 `maintenanceRestore`。将该对象保存为服务身份所有的 0600 私有 JSON 后，通过 `runtime-maintenance-restore --state-dir <绝对路径> --input <私有JSON>` 恢复原 enabled/paused，原标记不存在时精确撤销本次新增标记。恢复凭据绑定暂停后的字节及文件身份；期间再次暂停、禁用或替换标记会使旧凭据失效。这两个入口仅操作受当前身份控制的私有状态，不读取核心版本、不启动服务、不操作路由器，适用于跨核心版本维护。它不替代停止服务或安装收据检查。
 
+协调器为这两个命令传入可选 `--operation-id <32位小写十六进制编号>`，在共锁内将完成结果及标记身份写入状态目录的私有 `maintenance-result.json`，再释放锁和返回输出。命令完成后返回失败时，只接受编号、动作和当前标记身份均匹配的结果；正向部署仍进入失败恢复，回退阶段可继续已证实完成的步骤。无完成凭据、凭据过期或状态已变化时保留证据并要求人工处理。
+
 `renderRuntimePlan(input)` 返回 `{unit, settings}`，只生成数据。必填字段为 `schemaVersion: 1`、`stateDirectory`、`binaryPath`、`binarySha256`、`systemctlPath`、`nodePath`、`sourceDirectory`、`settingsPath`、`unitPath`、非零 `serviceUid`；可选 `automaticGateway`，拒绝未知字段。输入见[显式合成样本](../../examples/runtime-deployment.json)。
 
 路径为规范 POSIX 绝对路径，拒绝控制字符与被 ProtectHome 隐藏的 /home、/root、/run/user。unit 固定名为 `cocoproxy-mihomo.service`，`unitSha256` 覆盖完整 UTF-8/LF 字节。核心摘要必须是审核过的解压后二进制 SHA-256。CLI `runtime-plan` 仅写指定的新私有计划，不安装文件。
