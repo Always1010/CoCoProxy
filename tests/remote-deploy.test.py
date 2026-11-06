@@ -55,7 +55,7 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertFalse(late.exists())
 
     def test_lost_maintenance_result_requires_this_operation_and_unchanged_marker_identity(self):
-        for mismatch in [None, 'operation', 'marker']:
+        for mismatch in [None, 'operation', 'marker', 'deadline', 'owner']:
             with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as temporary:
                 state = Path(temporary)
                 marker = state / 'lifecycle.json'
@@ -73,10 +73,15 @@ class RemoteDeploymentTests(unittest.TestCase):
                         replacement = state / 'replacement'
                         replacement.write_bytes(marker.read_bytes())
                         replacement.replace(marker)
+                    if mismatch in ['deadline', 'owner']:
+                        raise RuntimeError('REMOTE_ROLLBACK_TIMEOUT' if mismatch == 'deadline' else 'REMOTE_TOOL_STOP_UNCONFIRMED')
                     raise subprocess.TimeoutExpired(['synthetic'], 120)
                 with patch.object(deploy, 'run', run):
                     if mismatch is None:
                         self.assertTrue(deploy.run_maintenance(state, 'node', 'synthetic', runtime, 'runtime-maintenance-pause')['lifecycle']['paused'])
+                    elif mismatch in ['deadline', 'owner']:
+                        with self.assertRaisesRegex(RuntimeError, '^REMOTE_ROLLBACK_TIMEOUT$' if mismatch == 'deadline' else '^REMOTE_TOOL_STOP_UNCONFIRMED$'):
+                            deploy.run_maintenance(state, 'node', 'synthetic', runtime, 'runtime-maintenance-pause')
                     else:
                         with self.assertRaises(subprocess.TimeoutExpired):
                             deploy.run_maintenance(state, 'node', 'synthetic', runtime, 'runtime-maintenance-pause')
@@ -361,8 +366,9 @@ class RemoteDeploymentTests(unittest.TestCase):
                     return json.dumps(preparation_report or {'readiness': 'prepared-not-applied', 'review': {'configurationChanged': False},
                         'runtimePreservation': {'eligible': preserve_runtime}}).encode()
                 if operation == 'inspect':
-                    return json.dumps({'installed': True, 'release': 'matches-receipt', 'receipt': {'status': 'complete', 'manifestSha256': 'b' * 64},
-                        'files': [{'status': 'matches-receipt'}], 'lock': {'present': False}}).encode()
+                    return json.dumps({'installed': True, 'release': 'matches-receipt', 'receipt': {'status': 'complete', 'manifestSha256': ('a' if stage_failure else 'b') * 64},
+                        'files': [{'status': 'matches-receipt'}], 'lock': {'present': False},
+                        'recoveryLock': {'present': False}, 'lifecycleClaim': {'present': False}}).encode()
                 if operation == 'stage':
                     if stage_failure:
                         raise RuntimeError('INSTALL_SYNTHETIC_STAGE_FAILURE')
@@ -461,6 +467,24 @@ class RemoteDeploymentTests(unittest.TestCase):
                     self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
                     self.assertTrue(router['enabled'])
                     self.assertFalse(any('runtime-maintenance-pause' in event or event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'disable', 'enable'] for event in events))
+
+    def test_preinstallation_failure_with_residual_lock_is_never_reported_as_recovered(self):
+        for preserve in [False, True]:
+            temporary, stack, private, before, events, router, args = self.scenario(preserve_runtime=preserve, stage_failure=True)
+            with temporary, stack:
+                original = deploy.run
+                def run(command, **kwargs):
+                    result = original(command, **kwargs)
+                    if 'inspect' in command:
+                        report = json.loads(result)
+                        report['lock']['present'] = True
+                        return json.dumps(report).encode()
+                    return result
+                with patch.object(deploy, 'run', run), self.assertRaisesRegex(RuntimeError, '^INSTALL_SYNTHETIC_STAGE_FAILURE$'):
+                    deploy.main_locked(args)
+                journal = json.loads((private / 'remote-last.json').read_text())
+                self.assertEqual(journal['status'], 'failed')
+                self.assertEqual(journal['recovery']['code'], 'REMOTE_INSTALLATION_NOT_VERIFIED')
 
     def test_frontend_update_pins_runtime_and_never_enters_router_or_runtime_maintenance(self):
         temporary, stack, private, before, events, router, args = self.scenario(frontend=True)

@@ -49,6 +49,15 @@ export async function trustedRead(path: string, limit = 4 * 1024 * 1024): Promis
   } finally { await file.close(); }
 }
 const trustedJSON = async (path: string, limit?: number): Promise<any> => JSON.parse((await trustedRead(path, limit)).toString('utf8'));
+
+/** Recovery success requires a complete inspection, including all outstanding claims. */
+export function verifiedUpdateInstallation(input: unknown, expectedManifest: string): boolean {
+  const report = input as any;
+  return Boolean(report?.installed === true && report.release === 'matches-receipt' && report.receipt?.status === 'complete'
+    && report.receipt?.manifestSha256 === expectedManifest && report.lock?.present === false
+    && report.recoveryLock?.present === false && report.lifecycleClaim?.present === false
+    && Array.isArray(report.files) && report.files.length > 0 && report.files.every((item: any) => item?.status === 'matches-receipt'));
+}
 export async function loadUpdaterSettings(path: string): Promise<UpdaterSettings> {
   const input = await trustedJSON(path, 8192);
   need(input && Object.keys(input).sort().join(',') === 'nodePath,releaseDirectory,schemaVersion,serviceUid,sourceDirectory'
@@ -137,9 +146,7 @@ export async function acknowledgeUpdateRecovery(settings: UpdaterSettings, expec
   const inspected = await runUpdaterTool(settings.nodePath, ['--experimental-strip-types', settings.sourceDirectory + '/apps/deployment/main.ts', '--operation', 'inspect']);
   need(inspected.code === 0, 'UPDATER_REVIEW_REQUIRED');
   const report = JSON.parse(inspected.stdout.toString('utf8'));
-  need(report.installed === true && report.release === 'matches-receipt' && report.receipt?.status === 'complete'
-    && report.receipt?.manifestSha256 === expectedManifest && report.lock?.present === false
-    && Array.isArray(report.files) && report.files.every((item: any) => item.status === 'matches-receipt'), 'UPDATER_REVIEW_REQUIRED');
+  need(verifiedUpdateInstallation(report, expectedManifest), 'UPDATER_REVIEW_REQUIRED');
   const state = await loadUpdateState();
   need(state.needsReview, 'UPDATER_RECOVERY_INVALID');
   state.needsReview = false; state.scheduledAt = null; state.lastResult = 'recovered';
@@ -215,7 +222,11 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
       }
       const journal = await trustedJSON(JOURNAL, 512 * 1024).catch(() => null);
       const current = await installed().catch(() => null);
-      if (journal?.status === 'recovered' && current?.manifestSha256 === original.manifestSha256) return 'recovered';
+      if (journal?.status === 'recovered' && journal.manifestSha256 === update.manifestSha256 && current?.manifestSha256 === original.manifestSha256) {
+        const inspected = await runUpdaterTool(settings.nodePath, ['--experimental-strip-types', settings.sourceDirectory + '/apps/deployment/main.ts',
+          '--operation', 'inspect'], { timeout: 30_000 });
+        if (inspected.code === 0 && verifiedUpdateInstallation(JSON.parse(inspected.stdout.toString('utf8')), original.manifestSha256)) return 'recovered';
+      }
       return 'manual-review-required';
     },
     cleanup: id => rm(join(UPDATER_STATE_DIRECTORY, 'download-' + id), { recursive: true, force: true }),

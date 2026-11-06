@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, chown, lstat, mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { chmod, chown, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { posix, resolve } from 'node:path';
 import { arch, machine, platform } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -15,6 +15,7 @@ import { policyRuleConflicts, routeConflicts, firewallConflicts, tunConflicts, n
 import { validateBuildInputs, validateComponentUpdate, validateFrontendUpdate } from './update-scope.mjs';
 import { inspectUsageDatabase } from '../management/usage.ts';
 import { assessRuntimePreservation } from './runtime-preservation.ts';
+import { atomicWrite } from '../storage/private-files.ts';
 
 // This is deliberately an offline file installer. Service lifecycle, router
 // activation and the existing root network helper remain separate operations.
@@ -515,8 +516,25 @@ export function assertPreparedReleaseIdentity(value: unknown, expected: ReturnTy
   require(JSON.stringify(value) === JSON.stringify(expected), 'INSTALL_PREPARED_RELEASE_CHANGED');
 }
 
-async function copyRelease(payload: string, target: string, release: Awaited<ReturnType<typeof verifyRelease>>, manifestSha256: string) {
+/** No live receipt/settings change during staging; clean only this attempt's writes. */
+export async function completeReleaseStaging(host: {
+  stage(): Promise<void>; unchanged(): Promise<void>; cleanup(): Promise<void>; unlock(): Promise<void>;
+}): Promise<void> {
+  try { await host.stage(); }
+  catch (error) {
+    await host.unchanged();
+    await host.cleanup();
+    await host.unlock();
+    throw error;
+  }
+  await host.unchanged();
+  await host.unlock();
+}
+
+async function copyRelease(payload: string, target: string, release: Awaited<ReturnType<typeof verifyRelease>>, manifestSha256: string,
+  created?: (identity: { dev: number; ino: number }) => void) {
   await mkdir(target, { mode: 0o755 });
+  created?.(await lstat(target));
   await chmod(target, 0o755); await chown(target, 0, 0);
   const directories = new Set([target]);
   for (const entry of release.files) {
@@ -769,7 +787,8 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
   require(identity.startTime !== null, 'INSTALL_PROCESS_IDENTITY_UNAVAILABLE');
   const lockOwner: DeploymentLock = { schemaVersion: 1, id: randomUUID(), pid: process.pid,
     bootId: identity.bootId, startTime: identity.startTime };
-  await writeExclusive(lock, JSON.stringify(lockOwner) + '\n', 0o600);
+  const lockBytes = Buffer.from(JSON.stringify(lockOwner) + '\n');
+  await writeExclusive(lock, lockBytes, 0o600);
   // Catch a concurrent completed installer between read-only preflight and lock.
   // No target changes have occurred yet, so these checks can release our lock.
   try {
@@ -787,11 +806,38 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
     }
   } catch (error) { await unlink(lock); throw error; }
   if (stageOnly) {
-    if (!staged) {
-      await copyRelease(payload, target, release, options.manifestSha256);
-      await atomic(preparedPath, JSON.stringify(preparedIdentity) + '\n', 0o600);
-    }
-    await unlink(lock);
+    let createdTarget: { dev: number; ino: number } | undefined;
+    await completeReleaseStaging({
+      stage: async () => {
+        if (!staged) {
+          await copyRelease(payload, target, release, options.manifestSha256, identity => { createdTarget = identity; });
+          await atomicWrite(STORE, posix.basename(preparedPath), JSON.stringify(preparedIdentity) + '\n');
+        }
+      },
+      unchanged: async () => {
+        await privateFile(lock, 0);
+        require((await regular(lock, 4096)).equals(lockBytes), 'INSTALL_STAGING_EVIDENCE_CHANGED');
+        await privateFile(RECEIPT, 0);
+        require(JSON.stringify(JSON.parse((await regular(RECEIPT)).toString())) === JSON.stringify(previous), 'INSTALL_RECEIPT_CHANGED');
+        await checkOwned(previous!.files);
+      },
+      cleanup: async () => {
+        if (staged) return; // A reused immutable release belongs to an earlier completed stage.
+        const observed = await info(target);
+        require(!observed || createdTarget && observed.isDirectory() && !observed.isSymbolicLink() && observed.uid === 0
+          && observed.dev === createdTarget.dev && observed.ino === createdTarget.ino, 'INSTALL_STAGING_EVIDENCE_CHANGED');
+        if (await info(preparedPath)) {
+          await privateFile(preparedPath, 0);
+          assertPreparedReleaseIdentity(JSON.parse((await regular(preparedPath)).toString()), preparedIdentity!);
+          await unlink(preparedPath);
+        }
+        if (observed) await rm(target, { recursive: true });
+      },
+      unlock: async () => {
+        require((await regular(lock, 4096)).equals(lockBytes), 'INSTALL_STAGING_EVIDENCE_CHANGED');
+        await unlink(lock);
+      },
+    });
     return { ...preview, operation: 'stage', staged: true, reused: staged, liveSettingsChanged: false };
   }
   const next: Receipt = { schemaVersion: 1, status: 'pending', release: target, manifestSha256: options.manifestSha256,

@@ -5,7 +5,23 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
-import { runUpdaterTool, createNativeUpdaterHost, trustedRead } from '../packages/updater/native.ts';
+import { runUpdaterTool, createNativeUpdaterHost, trustedRead, verifiedUpdateInstallation } from '../packages/updater/native.ts';
+
+test('recovery verification rejects incomplete reports, drift and every outstanding deployment claim', () => {
+  const expected = 'a'.repeat(64);
+  const report = { installed: true, release: 'matches-receipt', receipt: { status: 'complete', manifestSha256: expected },
+    lock: { present: false }, recoveryLock: { present: false }, lifecycleClaim: { present: false }, files: [{ status: 'matches-receipt' }] };
+  assert.equal(verifiedUpdateInstallation(report, expected), true);
+  for (const key of ['lock', 'recoveryLock', 'lifecycleClaim'] as const) {
+    assert.equal(verifiedUpdateInstallation({ ...report, [key]: { present: true } }, expected), false);
+    assert.equal(verifiedUpdateInstallation({ ...report, [key]: undefined }, expected), false);
+  }
+  for (const value of [null, { ...report, files: [] }, { ...report, files: [{ status: 'changed' }] },
+    { ...report, receipt: { ...report.receipt, status: 'pending' } }, { ...report, release: 'changed' }]) {
+    assert.equal(verifiedUpdateInstallation(value, expected), false);
+  }
+  assert.equal(verifiedUpdateInstallation(report, 'b'.repeat(64)), false);
+});
 
 test('first-start owner reads preserve missing-leaf errors without trusting missing ancestors', { skip: process.platform !== 'linux' }, async () => {
   // No files are created in this root-controlled directory.

@@ -385,6 +385,10 @@ def run_maintenance(payload, node, service, runtime, command, token_path=None, o
         if on_error_completed is not None:
             on_error_completed(result)
             raise
+        if isinstance(cause, RuntimeError) and str(cause) in ['REMOTE_DEPLOYMENT_INTERRUPTED', 'REMOTE_DEPLOYMENT_TIMEOUT',
+                'REMOTE_ROLLBACK_TIMEOUT', 'REMOTE_TOOL_STOP_UNCONFIRMED']:
+            # A completed intent write cannot cancel the enclosing deadline or prove its owner has stopped.
+            raise
         return result
 
 
@@ -494,11 +498,16 @@ def rollback_update(context):
             'scope': 'previous-program-services-and-network-intent; incompatible-usage-reader-may-be-degraded'}
 
 
-def finish_failed_upgrade(journal, progress, clock, cause, recovery=None):
+def finish_failed_upgrade(journal, progress, clock, cause, recovery=None, unchanged=None):
     signal.setitimer(signal.ITIMER_REAL, 0)
     failure = {'phase': progress['phase'], 'code': str(cause) if isinstance(cause, RuntimeError) and
         re.fullmatch('[A-Z][A-Z0-9_]+', str(cause)) else 'REMOTE_DEPLOYMENT_FAILED'}
     result = {'status': 'not-needed', 'services': 'unchanged'}
+    if recovery is None and unchanged is not None:
+        try:
+            unchanged()
+        except Exception:
+            result = {'status': 'failed', 'code': 'REMOTE_INSTALLATION_NOT_VERIFIED'}
     if recovery is False:
         result = {'status': 'not-available', 'code': 'REMOTE_FIRST_INSTALL_NO_PREVIOUS_VERSION'}
     elif recovery is not None:
@@ -770,7 +779,8 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
             'baseline': baseline, 'snapshot': preservation, 'files_attempted': files_attempted,
             'temporary': next_path.parent, 'inputs': {input_path: original_input}, 'written_inputs': written_inputs,
             'check_runtime': check_runtime} if maintenance_started else None
-        finish_failed_upgrade(journal, progress, clock, cause, recovery)
+        finish_failed_upgrade(journal, progress, clock, cause, recovery,
+                              None if maintenance_started else lambda: inspect_complete(receipt['manifestSha256']))
         raise
 
 
@@ -887,7 +897,9 @@ def main_locked(options):
                  evidence.get('receipt', {}).get('status') == 'complete' and
                  evidence.get('receipt', {}).get('manifestSha256') == expected_sha and
                  all(item.get('status') == 'matches-receipt' for item in evidence['files']) and
-                 not evidence.get('lock', {}).get('present'), 'REMOTE_INSTALLATION_NOT_VERIFIED')
+                 evidence.get('lock', {}).get('present') is False and
+                 evidence.get('recoveryLock', {}).get('present') is False and
+                 evidence.get('lifecycleClaim', {}).get('present') is False, 'REMOTE_INSTALLATION_NOT_VERIFIED')
         systemctl = runtime['systemctlPath']
         service = management['serviceUser']
         common = ['--payload', payload, '--manifest-sha256', options.manifest_sha256, '--input', next_path]
@@ -1161,7 +1173,8 @@ def main_locked(options):
                 'router_command': router_command, 'router_enabled': router_enabled, 'intent': progress.get('previousLifecycle'),
                 'maintenance_token': progress.get('maintenanceRestore'), 'intent_restored': intent_restored}
             finish_failed_upgrade(journal, progress, clock, cause, recovery if installed and maintenance_started else
-                False if not installed and files_attempted else None)
+                False if not installed and files_attempted else None,
+                (lambda: inspect_complete(receipt['manifestSha256'])) if installed and not maintenance_started else None)
             raise
 
 

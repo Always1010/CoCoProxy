@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertMaintenanceLifecycle, assertReviewedUpgradeConfiguration, compatibleOwnedFiles, configurationReviewDigest, deployRelease,
-  parseDeploymentLock, prepareUpgrade, stageUpgrade, preparedReleaseIdentity, assertPreparedReleaseIdentity, releaseTarget, validateReceipt, verifyRelease, assertFrontendFiles, assertComponentReuse, type Receipt } from '../packages/deployment/install.ts';
+  parseDeploymentLock, prepareUpgrade, stageUpgrade, completeReleaseStaging, preparedReleaseIdentity, assertPreparedReleaseIdentity, releaseTarget, validateReceipt, verifyRelease, assertFrontendFiles, assertComponentReuse, type Receipt } from '../packages/deployment/install.ts';
 import { assertDeploymentStateCompatibility, assertDeploymentStopped } from '../packages/deployment/install.ts';
 import { inspectStateCompatibility, type UpgradeStateHost } from '../packages/deployment/upgrade-assessment.ts';
 import { DEPLOYMENT_STATE_COMPATIBILITY } from '../packages/deployment/compatibility.ts';
@@ -17,6 +17,49 @@ import { withPathEvidence, assertRootControlledPath, type PathEvidenceHost, type
 
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const code = (expected: string) => (error: any) => error.code === expected;
+
+test('failed preinstallation removes its partial release before releasing its own lock and permits retry', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-stage-failure-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const target = join(root, 'release'), prepared = join(root, 'prepared.json'), lock = join(root, 'install.lock');
+  const receipt = join(root, 'receipt.json');
+  await writeFile(receipt, 'old complete receipt');
+  for (const failure of ['copy', 'prepared', 'drift', null]) {
+    await writeFile(lock, 'this installer');
+    const run = completeReleaseStaging({
+      stage: async () => {
+        await mkdir(target); await writeFile(join(target, 'source'), 'synthetic release');
+        if (failure === 'copy') throw new Error('copy failed');
+        await writeFile(prepared, 'prepared identity');
+        if (failure === 'prepared') throw new Error('prepared write failed after rename');
+        if (failure === 'drift') { await writeFile(lock, 'another owner'); throw new Error('stage failed'); }
+      },
+      unchanged: async () => {
+        assert.equal(await readFile(receipt, 'utf8'), 'old complete receipt');
+        assert.equal(await readFile(lock, 'utf8'), 'this installer');
+      },
+      cleanup: async () => { await rm(target, { recursive: true }); await rm(prepared, { force: true }); },
+      unlock: async () => { await unlink(lock); },
+    });
+    if (failure) {
+      await assert.rejects(run);
+      if (failure === 'drift') {
+        assert.equal(await readFile(lock, 'utf8'), 'another owner');
+        assert.equal(await readFile(join(target, 'source'), 'utf8'), 'synthetic release');
+        await rm(target, { recursive: true }); await unlink(prepared); await unlink(lock);
+      } else {
+        await assert.rejects(readFile(lock), { code: 'ENOENT' });
+        await assert.rejects(readFile(join(target, 'source')), { code: 'ENOENT' });
+        await assert.rejects(readFile(prepared), { code: 'ENOENT' });
+      }
+    } else {
+      await run;
+      assert.equal(await readFile(prepared, 'utf8'), 'prepared identity');
+      await assert.rejects(readFile(lock), { code: 'ENOENT' });
+    }
+    assert.equal(await readFile(receipt, 'utf8'), 'old complete receipt');
+  }
+});
 
 test('stopped-unit checks query all properties once and retain stop and enablement rejection rules', { skip: process.platform === 'win32' }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-unit-query-'));
