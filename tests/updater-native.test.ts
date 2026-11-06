@@ -46,3 +46,33 @@ test('native cancellation waits until child cleanup finishes before download scr
     assert.equal(await readFile(ended, 'utf8'), 'closed');
   } finally { controller.abort(); await work.catch(() => {}); await rm(directory, { recursive: true, force: true }); }
 });
+
+test('timeout and cancellation escalate ignored TERM and close descendant output pipes', { timeout: 10_000 }, async () => {
+  for (const cancel of [false, true]) {
+    const directory = await mkdtemp(join(tmpdir(), 'cocoproxy-updater-stubborn-'));
+    const marker = join(directory, 'pids');
+    const controller = new AbortController();
+    const work = runUpdaterTool('/usr/bin/python3', ['-I', '-B', '-c',
+      'import json,os,pathlib,signal,subprocess,sys,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\np=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"])\npathlib.Path(sys.argv[1]).write_text(json.dumps([os.getpid(),p.pid]))\ntime.sleep(30)', marker],
+    { signal: controller.signal, timeout: cancel ? 5000 : 300, killAfterMs: 100 });
+    const observed = work.then(() => null, error => error);
+    let pids: number[] = [];
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const value = await readFile(marker, 'utf8').catch(() => null);
+        if (value) { pids = JSON.parse(value); break; }
+        assert.ok(attempt < 200, 'child did not reach ready state'); await setTimeout(10);
+      }
+      if (cancel) controller.abort();
+      const error = await observed;
+      assert.equal(error?.code, cancel ? 'ABORT_ERR' : 'UPDATER_TOOL_LIMIT');
+      for (const pid of pids) {
+        const status = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => null);
+        assert.ok(status === null || status.slice(status.lastIndexOf(')') + 2).startsWith('Z'), 'helper can still mutate installation files');
+      }
+    } finally {
+      if (pids[0]) { try { process.kill(-pids[0], 'SIGKILL'); } catch { /* already reaped */ } }
+      controller.abort(); await observed; await rm(directory, { recursive: true, force: true });
+    }
+  }
+});

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Release-bundled local/SSH deployment coordinator. No downloads or dependency installs."""
 import argparse
+import contextlib
 import copy
 try:
     import fcntl
@@ -26,6 +27,28 @@ PRIVATE = Path('/etc/cocoproxy-install')
 RECEIPT = Path('/var/lib/cocoproxy-deployment/receipt.json')
 INCOMING = Path('/opt/cocoproxy/incoming')
 NETWORK_RECEIPT = Path('/var/lib/cocoproxy-gateway-network/network-receipt.json')
+DEPLOYMENT_TIMEOUT = 600
+RECOVERY_TIMEOUT = 600
+
+
+@contextlib.contextmanager
+def deployment_deadline(seconds, code):
+    """Recovery receives its own budget rather than inheriting an expired install timer."""
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    started = time.monotonic()
+    def expired(_signum, _frame):
+        raise RuntimeError(code)
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            remaining = previous_timer[0] - (time.monotonic() - started)
+            signal.setitimer(signal.ITIMER_REAL, max(0.001, remaining), previous_timer[1])
 
 
 class DeploymentClock:
@@ -214,7 +237,24 @@ def replace(path, value):
 
 
 def run(args, timeout=120, input=None):
-    result = subprocess.run([str(arg) for arg in args], capture_output=True, timeout=timeout, input=input)
+    # Reap the whole command group before rollback can touch its files or locks.
+    child = subprocess.Popen([str(arg) for arg in args], stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        stdout, stderr = child.communicate(input=input, timeout=timeout)
+    except BaseException:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            child.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.stdout.close()
+            child.stderr.close()
+            raise RuntimeError('REMOTE_TOOL_STOP_UNCONFIRMED') from None
+        raise
+    result = subprocess.CompletedProcess(args, child.returncode, stdout, stderr)
     if result.returncode:
         errors = result.stderr.decode(errors='replace').splitlines()
         # Node may prepend runtime warnings to an installer's fixed error code.
@@ -455,6 +495,7 @@ def rollback_update(context):
 
 
 def finish_failed_upgrade(journal, progress, clock, cause, recovery=None):
+    signal.setitimer(signal.ITIMER_REAL, 0)
     failure = {'phase': progress['phase'], 'code': str(cause) if isinstance(cause, RuntimeError) and
         re.fullmatch('[A-Z][A-Z0-9_]+', str(cause)) else 'REMOTE_DEPLOYMENT_FAILED'}
     result = {'status': 'not-needed', 'services': 'unchanged'}
@@ -465,7 +506,8 @@ def finish_failed_upgrade(journal, progress, clock, cause, recovery=None):
             if fcntl is not None:
                 for name in ['SIGINT', 'SIGTERM', 'SIGHUP']:
                     signal.signal(getattr(signal, name), signal.SIG_IGN)
-            result = rollback_update(recovery)
+            with deployment_deadline(RECOVERY_TIMEOUT, 'REMOTE_ROLLBACK_TIMEOUT'):
+                result = rollback_update(recovery)
         except Exception as error:
             result = {'status': 'failed', 'code': str(error) if isinstance(error, RuntimeError) and
                 re.fullmatch('[A-Z][A-Z0-9_]+', str(error)) else 'REMOTE_ROLLBACK_FAILED'}
@@ -761,7 +803,8 @@ def main(argv=None):
             raise RuntimeError('REMOTE_DEPLOYMENT_INTERRUPTED')
         for name in ['SIGINT', 'SIGTERM', 'SIGHUP']:
             signal.signal(getattr(signal, name), interrupted)
-        result = main_locked(options)
+        with deployment_deadline(DEPLOYMENT_TIMEOUT, 'REMOTE_DEPLOYMENT_TIMEOUT'):
+            result = main_locked(options)
         if not options.preview:
             try:
                 cleanup_successful_payload(options.manifest_sha256)

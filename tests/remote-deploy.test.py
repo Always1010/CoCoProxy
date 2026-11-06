@@ -5,6 +5,9 @@ import io
 import hashlib
 import json
 import os
+import signal
+import sys
+import time
 from pathlib import Path
 import tempfile
 import subprocess
@@ -18,6 +21,39 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_deployment_deadline_enters_recovery_and_recovery_has_a_separate_bound(self):
+        temporary, stack, private, before, events, router, args = self.scenario()
+        with temporary, stack:
+            original = deploy.run
+            def run(command, **kwargs):
+                if 'upgrade' in command and '--apply' in command:
+                    signal.setitimer(signal.ITIMER_REAL, 0.01)
+                    time.sleep(0.1)
+                return original(command, **kwargs)
+            with patch.object(deploy, 'run', run), deploy.deployment_deadline(1, 'REMOTE_DEPLOYMENT_TIMEOUT'):
+                with self.assertRaisesRegex(RuntimeError, '^REMOTE_DEPLOYMENT_TIMEOUT$'):
+                    deploy.main_locked(args)
+            journal = json.loads((private / 'remote-last.json').read_text())
+            self.assertEqual(journal['status'], 'recovered')
+            self.assertTrue(router['enabled'])
+        temporary, stack, private, before, events, router, args = self.scenario(fail_apply=True)
+        with temporary, stack, patch.object(deploy, 'RECOVERY_TIMEOUT', 0.01), patch.object(deploy, 'rollback_update', side_effect=lambda _: time.sleep(0.1)):
+            with self.assertRaisesRegex(RuntimeError, '^INSTALL_SYNTHETIC_FAILURE$'):
+                deploy.main_locked(args)
+            journal = json.loads((private / 'remote-last.json').read_text())
+            self.assertEqual(journal['status'], 'failed')
+            self.assertEqual(journal['recovery']['code'], 'REMOTE_ROLLBACK_TIMEOUT')
+
+    def test_command_timeout_kills_descendants_before_returning_to_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            late = Path(temporary) / 'late'
+            child = 'import pathlib,time; time.sleep(0.4); pathlib.Path(' + repr(str(late)) + ').write_text("unsafe write")'
+            parent = 'import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",sys.argv[1]]); time.sleep(30)'
+            with self.assertRaises(subprocess.TimeoutExpired):
+                deploy.run([sys.executable, '-c', parent, child], timeout=0.2)
+            time.sleep(0.45)
+            self.assertFalse(late.exists())
+
     def test_lost_maintenance_result_requires_this_operation_and_unchanged_marker_identity(self):
         for mismatch in [None, 'operation', 'marker']:
             with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as temporary:
@@ -207,8 +243,8 @@ class RemoteDeploymentTests(unittest.TestCase):
              'INSTALL_SERVICES_MUST_BE_STOPPED', {}),
         ]
         for args, stdout, stderr, code, fields in cases:
-            with self.subTest(code=code), patch.object(deploy.subprocess, 'run', return_value=SimpleNamespace(
-                    returncode=1, stdout=stdout, stderr=stderr)), contextlib.redirect_stderr(io.StringIO()) as output:
+            with self.subTest(code=code), patch.object(deploy.subprocess, 'Popen', return_value=SimpleNamespace(
+                    returncode=1, communicate=lambda **_: (stdout, stderr))), contextlib.redirect_stderr(io.StringIO()) as output:
                 with self.assertRaisesRegex(RuntimeError, '^' + code + '$'):
                     deploy.run(args)
                 self.assertEqual(json.loads(output.getvalue()), {'phase': 'deployment-command', 'code': code, 'exitCode': 1, **fields})

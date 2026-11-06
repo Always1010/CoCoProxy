@@ -274,7 +274,7 @@ function render(input: unknown): DeploymentPlan {
     '[Service]', 'Type=exec', 'User=root',
     `ExecStart=${[nodePath, '--experimental-strip-types', posix.join(updaterSourceDirectory, 'apps/updater/main.ts'),
       '--settings', updaterSettingsPath].map(argument => quote(argument, true)).join(' ')}`,
-    'Restart=on-failure', 'RestartSec=2', 'KillMode=mixed', 'TimeoutStopSec=900', 'UMask=0077',
+    'Restart=on-failure', 'RestartSec=2', 'KillMode=mixed', 'TimeoutStopSec=1320', 'UMask=0077',
     'RuntimeDirectory=cocoproxy-updater', 'RuntimeDirectoryMode=0755',
     'StateDirectory=cocoproxy-updater', 'StateDirectoryMode=0700', '', '[Install]', 'WantedBy=multi-user.target', '',
   ].join('\n');

@@ -218,7 +218,9 @@ export class UpdateEngine {
         }
         this.plan();
       }
-      try { await this.host.cleanup(id); } catch { /* Only private download scratch, never deployment evidence. */ }
+      if (!this.state.needsReview) {
+        try { await this.host.cleanup(id); } catch { /* Only private download scratch, never deployment evidence. */ }
+      }
       await this.persist();
     }
   }

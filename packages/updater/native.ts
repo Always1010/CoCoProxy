@@ -68,24 +68,52 @@ export async function loadUpdateState(): Promise<UpdateState> {
 }
 
 /** All subprocess output remains private; callers receive only fixed result codes. */
-export async function runUpdaterTool(command: string, args: string[], options: { signal?: AbortSignal; timeout?: number } = {}): Promise<{ code: number; stdout: Buffer }> {
+export async function runUpdaterTool(command: string, args: string[], options: { signal?: AbortSignal; timeout?: number; killAfterMs?: number } = {}): Promise<{ code: number; stdout: Buffer }> {
   await assertTrustedExecutable(command, evidence);
+  options.signal?.throwIfAborted();
   return new Promise((resolveRun, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin',
-      LANG: 'C.UTF-8', NODE_NO_WARNINGS: '1' }, signal: options.signal });
-    const chunks: Buffer[] = []; let size = 0, exceeded = false;
+      LANG: 'C.UTF-8', NODE_NO_WARNINGS: '1' }, detached: process.platform !== 'win32' });
+    const chunks: Buffer[] = []; let size = 0, settled = false;
     let failure: Error | null = null;
-    const timer = options.timeout ? setTimeout(() => { exceeded = true; child.kill('SIGTERM'); }, options.timeout) : undefined;
+    let escalation: ReturnType<typeof setTimeout> | undefined, finalWait: ReturnType<typeof setTimeout> | undefined;
+    const killGroup = () => {
+      try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); }
+      catch { /* Closure is verified separately; never infer a successful recovery from a signal. */ }
+    };
+    const finish = (code: number | null, unconfirmed = false) => {
+      if (settled) return; settled = true;
+      clearTimeout(timer); clearTimeout(escalation); clearTimeout(finalWait);
+      options.signal?.removeEventListener('abort', abort);
+      if (unconfirmed) { child.stdout.destroy(); child.stderr.destroy(); child.unref(); reject(new UpdateError('UPDATER_TOOL_STOP_UNCONFIRMED', 503)); }
+      else if (failure) reject(failure);
+      else resolveRun({ code: code ?? -1, stdout: Buffer.concat(chunks) });
+    };
+    const stop = (error: Error) => {
+      if (settled || failure) return;
+      failure = error;
+      // Only the coordinator receives TERM, so it can drain helpers and roll back.
+      child.kill('SIGTERM');
+      escalation = setTimeout(() => {
+        killGroup();
+        finalWait = setTimeout(() => finish(null, true), 1000);
+      }, options.killAfterMs ?? 5000);
+    };
+    const abort = () => stop(Object.assign(new Error('UPDATER_CANCELLED'), { name: 'AbortError', code: 'ABORT_ERR' }));
+    const timer = setTimeout(() => stop(new UpdateError('UPDATER_TOOL_LIMIT', 503)), options.timeout ?? 300_000);
+    options.signal?.addEventListener('abort', abort, { once: true });
+    if (options.signal?.aborted) abort();
     child.stdout.on('data', (bytes: Buffer) => {
       size += bytes.length;
-      if (size > 2 * 1024 * 1024) { exceeded = true; child.kill('SIGTERM'); }
+      if (size > 2 * 1024 * 1024) stop(new UpdateError('UPDATER_TOOL_LIMIT', 503));
       else chunks.push(bytes);
     });
     // Native diagnostics may contain operational details; never relay them to the UI or journal summary.
     child.stderr.on('data', () => {});
-    child.once('error', error => { failure = error; });
-    child.once('close', code => { clearTimeout(timer); failure ? reject(failure) : exceeded ? reject(new UpdateError('UPDATER_TOOL_LIMIT', 503))
-      : resolveRun({ code: code ?? -1, stdout: Buffer.concat(chunks) }); });
+    child.once('error', error => { if (!child.pid) { failure = error; finish(null); } else stop(error); });
+    // Descendants holding inherited output pipes must not keep `close` pending.
+    child.once('exit', killGroup);
+    child.once('close', code => finish(code));
   });
 }
 
@@ -139,7 +167,8 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
   async function coordinator(payload: string, update: VerifiedUpdate, original: InstalledUpdate, preview: boolean, signal?: AbortSignal) {
     return runUpdaterTool('/usr/bin/python3', [payload + '/source/scripts/remote-deploy.py', '--payload', payload,
       '--manifest-sha256', update.manifestSha256, '--expected-manifest-sha256', original.manifestSha256,
-      ...(preview ? ['--preview'] : [])], { signal, ...(preview ? { timeout: 300_000 } : {}) });
+      ...(preview ? ['--preview'] : [])], { signal, timeout: preview ? 300_000 : 630_000,
+      ...(preview ? {} : { killAfterMs: 620_000 }) });
   }
   return {
     now: Date.now,
@@ -172,7 +201,11 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
     },
     apply: async (payload, update, original) => {
       await stable(original);
-      const result = await coordinator(payload, update, original, false);
+      const result = await coordinator(payload, update, original, false).catch(error => {
+        // A timed-out coordinator may have completed its independent recovery budget.
+        if (error instanceof UpdateError && error.code === 'UPDATER_TOOL_LIMIT') return { code: -1, stdout: Buffer.alloc(0) };
+        throw error;
+      });
       if (result.code === 0) {
         const current = await installed();
         need(current.manifestSha256 === update.manifestSha256 && current.version === update.version, 'UPDATER_VERSION_NOT_RUNNING');

@@ -87,6 +87,17 @@ test('recovered target is blocked on future automatic attempts and interrupted i
   await assert.rejects(interrupted.engine.handle({ action: 'check' }), (error: any) => error.code === 'UPDATER_REVIEW_REQUIRED');
 });
 
+test('unconfirmed installer termination retains scratch and blocks further installation without staying busy', async () => {
+  let applies = 0;
+  const h = harness({ apply: async () => { applies++; throw new Error('UPDATER_TOOL_STOP_UNCONFIRMED'); } });
+  await h.engine.initialize(); await h.engine.tick(); await h.engine.idle();
+  assert.equal(h.engine.busy, false);
+  assert.equal((await h.engine.view()).lastResult, 'manual-review-required');
+  assert.equal(h.calls.cleanup, 0);
+  h.advance('2026-11-14T03:10:00Z'); await h.engine.tick(); await h.engine.close();
+  assert.equal(applies, 1);
+});
+
 test('failed discovery retries once due and honors upstream rate-limit deadlines across reboot', async () => {
   const deadline = Date.parse('2026-11-07T03:20:00Z'); let checks = 0;
   const h = harness({ find: async () => { checks++; throw new UpdateReleaseError('UPDATE_RATE_LIMITED', deadline); } });

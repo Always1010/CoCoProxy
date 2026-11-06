@@ -343,7 +343,7 @@ test('root updater follows management release while runtime remains pinned and g
   const unit = plan.files.find(file => file.path.endsWith('/cocoproxy-updater.service'))!.content;
   assert.match(unit, /^User=root$/m);
   assert.match(unit, /"--experimental-strip-types" "\/opt\/cocoproxy\/releases\/next\/source\/apps\/updater\/main.ts" "--settings" "\/etc\/cocoproxy\/updater.json"/);
-  assert.match(unit, /^KillMode=mixed$/m); assert.match(unit, /^TimeoutStopSec=900$/m);
+  assert.match(unit, /^KillMode=mixed$/m); assert.match(unit, /^TimeoutStopSec=1320$/m);
   assert.match(unit, /^RuntimeDirectoryMode=0755$/m); assert.match(unit, /^StateDirectoryMode=0700$/m);
   assert.ok(plan.directories.some(directory => directory.path === '/var/lib/cocoproxy-updater' && directory.mode === '0700' && directory.owner === 'root'));
   assert.ok(!plan.files.some(file => file.path.endsWith('/update-trust.pem')));
