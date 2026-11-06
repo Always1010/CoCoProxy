@@ -990,6 +990,8 @@ def main_locked(options):
             if installed:
                 if before_units.get('cocoproxy-gateway-guard.service', {}).get('active'):
                     run([systemctl, 'start', 'cocoproxy-gateway-guard.service'])
+                if before_units.get('cocoproxy-gateway-network.service', {}).get('active'):
+                    run([systemctl, 'start', 'cocoproxy-gateway-network.service'])
                 if before_units['cocoproxy-mihomo.service']['active']:
                     run([systemctl, 'start', 'cocoproxy-mihomo.service'])
                     clock.measure('core-ready', wait_core_ready, node, service, runtime, 'REMOTE_CORE_NOT_READY')

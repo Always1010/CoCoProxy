@@ -606,17 +606,22 @@ class RemoteDeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'REMOTE_PREVIOUS_DEPLOYMENT_REQUIRES_REVIEW'):
                 deploy.main_locked(args)
 
-    def test_rollback_preserves_disabled_router_and_inactive_core_with_active_network(self):
-        temporary, stack, private, _, events, router, args = self.scenario(fail_apply=True, core_active=False,
-            router_enabled=False, network_active=True, lifecycle={'schemaVersion': 1, 'enabled': False, 'paused': False})
-        with temporary, stack:
-            with self.assertRaisesRegex(RuntimeError, 'INSTALL_SYNTHETIC_FAILURE'):
-                deploy.main_locked(args)
-            result = json.loads((private / 'remote-last.json').read_text())
-            self.assertEqual(result['status'], 'recovered', result.get('recovery'))
-            self.assertFalse(router['enabled'])
-            self.assertIn(['/usr/bin/systemctl', 'start', 'cocoproxy-gateway-network.service'], events)
-            self.assertNotIn(['/usr/bin/systemctl', 'start', 'cocoproxy-mihomo.service'], events)
+    def test_upgrade_and_rollback_preserve_disabled_router_and_inactive_core_with_active_network(self):
+        for fail_apply in [False, True]:
+            with self.subTest(rollback=fail_apply):
+                temporary, stack, private, _, events, router, args = self.scenario(fail_apply=fail_apply, core_active=False,
+                    router_enabled=False, network_active=True, lifecycle={'schemaVersion': 1, 'enabled': False, 'paused': False})
+                with temporary, stack:
+                    if fail_apply:
+                        with self.assertRaisesRegex(RuntimeError, 'INSTALL_SYNTHETIC_FAILURE'):
+                            deploy.main_locked(args)
+                    else:
+                        deploy.main_locked(args)
+                    result = json.loads((private / 'remote-last.json').read_text())
+                    self.assertEqual(result['status'], 'recovered' if fail_apply else 'complete', result.get('recovery'))
+                    self.assertFalse(router['enabled'])
+                    self.assertIn(['/usr/bin/systemctl', 'start', 'cocoproxy-gateway-network.service'], events)
+                    self.assertNotIn(['/usr/bin/systemctl', 'start', 'cocoproxy-mihomo.service'], events)
 
     def test_upgrade_restores_missing_and_disabled_lifecycle_intent_exactly(self):
         for lifecycle, active in [(None, True), ({'schemaVersion': 1, 'enabled': False, 'paused': False}, True),
