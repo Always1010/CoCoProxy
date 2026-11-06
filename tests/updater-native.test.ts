@@ -4,7 +4,15 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout } from 'node:timers/promises';
-import { runUpdaterTool, createNativeUpdaterHost } from '../packages/updater/native.ts';
+import { randomUUID } from 'node:crypto';
+import { runUpdaterTool, createNativeUpdaterHost, trustedRead } from '../packages/updater/native.ts';
+
+test('first-start owner reads preserve missing-leaf errors without trusting missing ancestors', { skip: process.platform !== 'linux' }, async () => {
+  // No files are created in this root-controlled directory.
+  const missing = join('/usr/bin', 'cocoproxy-updater-missing-' + randomUUID());
+  await assert.rejects(trustedRead(missing, 1024), { code: 'ENOENT' });
+  await assert.rejects(trustedRead(join(missing, 'owner.json'), 1024), { code: 'INSTALL_ROOT_OWNERSHIP_REQUIRED' });
+});
 
 test('supported installations need no publisher keys, tokens or device trust files', async () => {
   const host = createNativeUpdaterHost({ schemaVersion: 1, serviceUid: 12345, nodePath: '/usr/bin/node',

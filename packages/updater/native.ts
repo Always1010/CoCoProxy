@@ -31,7 +31,9 @@ const evidence: PathEvidenceHost = { resolve: realpath, info: async path => {
 
 /** Only root-controlled single-link regular files can select executable code or trust roots. */
 export async function trustedRead(path: string, limit = 4 * 1024 * 1024): Promise<Buffer> {
-  await assertRootControlledPath(path, evidence);
+  // A missing leaf must retain ENOENT for optional first-start files. Existing
+  // leaves and every ancestor still require the same ownership checks.
+  await assertRootControlledPath(path, evidence, true);
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const before = await file.stat();
