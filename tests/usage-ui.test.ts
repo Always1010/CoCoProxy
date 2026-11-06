@@ -231,16 +231,19 @@ test('quick routing validates domains and exact IPs, normalizes networks and pre
 async function quickRuleDialog(initial: string[] = [], mode = 'local') {
   const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/UsageRuleDialog.vue', import.meta.url), 'utf8');
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nglobalThis.ui = { panel, open, reread, submit, type, payload, target, replace, canSave, plan, needsRead, savedAttempt, error, feedback };';
+    '\nglobalThis.ui = { panel, open, reread, submit, close, type, payload, target, replace, canSave, plan, needsRead, savedAttempt, error };';
   const settings = { mode, subscriptionId: mode === 'subscription' ? 'profile-a' : null, sourceIds: ['source-a'], runMode: 'rule',
     local: { selections: {}, rules: [...initial] }, subscriptionOverrides: { 'profile-a': { selections: {}, rules: [...initial] } } };
   const view = { value: { workspace: { ...settings, revision: 1 }, pending: false,
     groups: [{ name: 'Work', role: 'service' }, { name: 'Stream', role: 'service' }, { name: 'Shared', role: 'shared' }] } };
   const overrides = () => mode === 'local' ? settings.local : settings.subscriptionOverrides['profile-a'];
   let saves = 0, failApply = false, failRead = false;
+  const notices: { message: string; options: { duration: number; description?: string } }[] = [];
+  const closed: boolean[] = [], opened: boolean[] = [];
   const context: any = { ...uiTestContext, ...usageRules, customRuleTargets,
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
-    defineEmits: () => () => {}, defineExpose() {}, watch() {},
+    defineEmits: () => (_event: string, value: boolean) => opened.push(value), defineExpose() {}, watch() {},
+    toast: { success: (message: string, options: typeof notices[number]['options']) => notices.push({ message, options }) },
     cocoproxyErrorMessage: () => '合成请求失败',
     useWorkspace: () => ({ view, workspace: { get value() { return view.value.workspace; } }, overrides: { get value() { return overrides(); } }, busy: { value: false },
       load: async () => { if (failRead) throw Error('read failed'); },
@@ -253,8 +256,8 @@ async function quickRuleDialog(initial: string[] = [], mode = 'local') {
       } }),
   };
   new Script(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText).runInNewContext(context);
-  context.ui.panel.value = { open() {}, close() {} };
-  return { ui: context.ui, settings, view, saves: () => saves, failApply(value: boolean) { failApply = value; }, failRead(value: boolean) { failRead = value; } };
+  context.ui.panel.value = { open() {}, close(force: boolean) { closed.push(force); context.ui.close(); } };
+  return { ui: context.ui, settings, view, notices, closed, opened, saves: () => saves, failApply(value: boolean) { failApply = value; }, failRead(value: boolean) { failRead = value; } };
 }
 
 test('quick routing requires explicit conflict replacement, scopes subscription overrides and blocks stale or unapplied settings', async () => {
@@ -266,27 +269,36 @@ test('quick routing requires explicit conflict replacement, scopes subscription 
   await h.ui.submit(); assert.equal(h.saves(), 1);
   assert.deepEqual(Array.from(h.settings.subscriptionOverrides['profile-a'].rules), ['DOMAIN,video.example,Work']);
   assert.deepEqual(h.settings.local.rules, ['DOMAIN,video.example,DIRECT']);
-  assert.match(h.ui.feedback.value, /已生效/);
+  assert.deepEqual(h.closed, [true]);
+  assert.deepEqual(h.opened, [true, false]);
+  assert.equal(h.notices.length, 1);
+  assert.equal(h.notices[0].message, '规则已保存');
+  assert.equal(h.notices[0].options.duration, 2500);
+  assert.equal(h.notices[0].options.description, undefined);
   assert.equal(h.ui.canSave.value, false);
   const pending = await quickRuleDialog(); pending.view.value.pending = true;
   await pending.ui.open('192.0.2.8'); pending.ui.target.value = 'Work';
   assert.equal(pending.ui.canSave.value, false); await pending.ui.submit(); assert.equal(pending.saves(), 0);
+  assert.equal(pending.closed.length, 0); assert.equal(pending.notices.length, 0);
   const stale = await quickRuleDialog(); await stale.ui.open('video.example'); stale.ui.target.value = 'Work';
   stale.view.value.workspace.revision++; await stale.ui.submit(); assert.equal(stale.saves(), 0);
+  assert.equal(stale.closed.length, 0); assert.equal(stale.notices.length, 0);
   const direct = await quickRuleDialog(); direct.view.value.workspace.runMode = 'direct';
   await direct.ui.open('video.example'); direct.ui.target.value = 'Work'; await direct.ui.submit();
-  assert.match(direct.ui.feedback.value, /切回规则模式/);
+  assert.deepEqual(direct.closed, [true]);
+  assert.match(direct.notices[0].options.description!, /切回规则模式/);
 });
 
 test('quick routing distinguishes saved rules from activation and retries only its own verified revision', async () => {
   const h = await quickRuleDialog(); await h.ui.open('2001:db8::8'); h.ui.target.value = 'Work'; h.failApply(true);
   await h.ui.submit(); assert.equal(h.saves(), 1); assert.equal(h.ui.needsRead.value, true);
-  assert.match(h.ui.error.value, /已保存/); assert.equal(h.ui.feedback.value, '');
+  assert.match(h.ui.error.value, /已保存/);
+  assert.equal(h.closed.length, 0); assert.equal(h.notices.length, 0);
   await h.ui.submit(true); assert.equal(h.saves(), 1);
   h.failRead(true); await h.ui.reread(); assert.equal(h.ui.needsRead.value, true);
   h.failRead(false); await h.ui.reread(); assert.equal(h.ui.needsRead.value, false);
   h.failApply(false); await h.ui.submit(true); assert.equal(h.saves(), 2);
-  assert.match(h.ui.feedback.value, /已生效/);
+  assert.deepEqual(h.closed, [true]); assert.equal(h.notices.length, 1);
   assert.deepEqual(Array.from(h.settings.local.rules), ['IP-CIDR6,2001:db8::8/128,Work']);
   const changed = await quickRuleDialog(); await changed.ui.open('video.example'); changed.ui.target.value = 'Work'; changed.failApply(true);
   await changed.ui.submit(); await changed.ui.reread();

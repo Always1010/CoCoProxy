@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { IconCheck, IconRefresh, IconX } from '@tabler/icons-vue'
+import { toast } from 'vue-sonner'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import type { WorkspaceSettings } from '~/composables/useWorkspace'
 import { customRuleTargets } from '~/utils/group-rules'
@@ -8,7 +9,7 @@ import { usageRuleDefault, usageRulePlan, usageTarget, type UsageRuleType } from
 const { t } = useI18n()
 const emit = defineEmits<{ opened: [value: boolean] }>()
 const { view, workspace, overrides, busy, load, run, save, editOverrides } = useWorkspace()
-const panel = ref<{ open: () => void; close: () => void }>()
+const panel = ref<{ open: () => void; close: (force?: boolean) => void }>()
 const type = ref<UsageRuleType>('DOMAIN')
 const payload = ref('')
 const target = ref('')
@@ -24,7 +25,6 @@ const savedAttempt = ref<string[] | null>(null)
 const savedRevision = ref(-1)
 const savedSettingsKey = ref('')
 const error = useLocalizedMessage()
-const feedback = useLocalizedMessage()
 const targets = computed(() => customRuleTargets(workspace.value?.mode, view.value?.groups))
 const types = computed(() => usageTarget(observed.value)?.kind === 'domain' ? ['DOMAIN', 'DOMAIN-SUFFIX'] as const : [usageTarget(observed.value)?.kind === 'ipv4' ? 'IP-CIDR' : 'IP-CIDR6'] as const)
 const plan = computed(() => usageRulePlan(original.value, type.value, payload.value, target.value))
@@ -52,7 +52,7 @@ async function open(host: string) {
   const initial = usageRuleDefault(address)
   type.value = initial.type; payload.value = initial.payload; target.value = ''
   original.value = []; revision.value = -1; replace.value = false; needsRead.value = true; savedAttempt.value = null
-  error.value = ''; feedback.value = ''
+  error.value = ''
   panel.value?.open(); emit('opened', true)
   await reread()
 }
@@ -65,8 +65,7 @@ async function reread() {
       if (currentScope() !== scope.value || !sameRules(overrides.value.rules, savedAttempt.value) || workspace.value?.revision !== savedRevision.value || settingsKey(workspace.value) !== savedSettingsKey.value) {
         savedAttempt.value = null; error.value = () => t('coco.usageRuleChanged')
       } else if (!view.value?.pending) {
-        feedback.value = () => t(workspace.value?.runMode === 'rule' ? 'coco.usageRuleApplied' : 'coco.usageRuleInactiveMode')
-        savedAttempt.value = null
+        finish()
       } else error.value = () => t('coco.usageRuleSavedPending')
     }
     if (!savedAttempt.value) capture()
@@ -76,7 +75,7 @@ async function reread() {
 }
 async function submit(retry = false) {
   if (locked.value || needsRead.value || (retry ? !savedAttempt.value : !canSave.value)) return
-  saving.value = true; error.value = ''; feedback.value = ''
+  saving.value = true; error.value = ''
   try {
     await run(async () => {
       try {
@@ -88,7 +87,7 @@ async function submit(retry = false) {
         if (!retry && view.value?.pending) { error.value = () => t('coco.usageRuleExistingPending'); return }
         if (retry && !view.value?.pending) {
           capture(); savedAttempt.value = null
-          feedback.value = () => t(workspace.value?.runMode === 'rule' ? 'coco.usageRuleApplied' : 'coco.usageRuleInactiveMode')
+          finish()
           return
         }
         const attempt = retry ? savedAttempt.value! : plan.value!.rules
@@ -99,7 +98,7 @@ async function submit(retry = false) {
         try {
           await save(settings => { editOverrides(settings).rules = [...attempt]; attemptedSettingsKey = settingsKey(settings) })
           capture(); savedAttempt.value = null
-          feedback.value = () => t(workspace.value?.runMode === 'rule' ? 'coco.usageRuleApplied' : 'coco.usageRuleInactiveMode')
+          finish()
         } catch (cause) {
           // save() rereads after failure. Only retry our own isolated saved revision;
           // never apply pre-existing or subsequently changed workspace edits.
@@ -114,8 +113,16 @@ async function submit(retry = false) {
     })
   } finally { saving.value = false }
 }
+function finish() {
+  savedAttempt.value = null
+  panel.value?.close(true)
+  toast.success(t('coco.anRulesSaved'), {
+    duration: 2500,
+    description: workspace.value?.runMode === 'rule' ? undefined : t('coco.usageRuleInactiveMode'),
+  })
+}
 function close() { emit('opened', false) }
-watch([type, payload, target], () => { replace.value = false; feedback.value = '' })
+watch([type, payload, target], () => { replace.value = false })
 defineExpose({ open })
 </script>
 
@@ -131,7 +138,7 @@ defineExpose({ open })
       <div v-if="plan" class="space-y-2 rounded-lg bg-base-200 p-3 text-xs">
         <p class="break-all font-mono">{{ plan.rule }}</p>
         <p class="text-base-content/60">{{ t('coco.usageRulePriority') }}</p>
-        <p v-if="plan.duplicate && !feedback" role="status">{{ t('coco.usageRuleExists') }}</p>
+        <p v-if="plan.duplicate" role="status">{{ t('coco.usageRuleExists') }}</p>
         <div v-if="plan.conflicts.length" class="space-y-2 text-warning"><p>{{ t('coco.usageRuleConflict') }}</p><p v-for="entry in plan.conflicts" :key="entry.index" class="break-all font-mono">{{ entry.value }}</p><label class="flex items-start gap-2"><input v-model="replace" class="checkbox checkbox-sm" type="checkbox" :disabled="locked || !!savedAttempt" /><span>{{ t('coco.usageRuleReplace') }}</span></label></div>
       </div>
       <p v-else-if="payload && target" class="text-sm text-error">{{ t('coco.usageRuleInvalid') }}</p>
@@ -139,7 +146,6 @@ defineExpose({ open })
       <p v-if="view?.pending && !savedAttempt" class="text-xs text-warning">{{ t('coco.usageRuleExistingPending') }}</p>
       <p v-if="workspace && (workspace.revision !== revision || currentScope() !== scope) && !savedAttempt" class="text-xs text-warning">{{ t('coco.usageRuleChanged') }}</p>
       <p v-if="error" role="alert" class="text-sm text-error">{{ error }}</p>
-      <p v-if="feedback" role="status" class="text-sm text-success">{{ feedback }}</p>
       <p v-if="saving" role="status" class="text-sm">{{ t('coco.applyingSettings') }}</p>
       <NuxtLink v-if="!locked" to="/rules?tab=custom" class="link text-xs">{{ t('coco.usageRuleManage') }}</NuxtLink>
     </form>
