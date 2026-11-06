@@ -201,12 +201,27 @@ test('HTTP route and query allowlists reject core reconfiguration, token auth, a
   const forbidden = [request('/restart', 'POST', {}), request('/configs', 'PATCH', {}), request('/configs', 'PUT', {}),
     request('/providers/proxies/provider', 'PUT', {}), request('/scripts'), request('/upgrade', 'POST', {}),
     request('/version?token=private'), request('/version?target=http://example.com'), request('/version?url=https://example.com'),
-    request('/proxies/a%2Fb'), request('/proxies/a%5Cb'), request('/proxies/a%00b'), request('/proxies/%252e%252e'),
-    request('/proxies/a..b'), request('/version', 'GET', undefined, { authorization: 'Bearer browser' })];
+    request('/proxies/a%00b'), request('/proxies/%ZZ'), request('/proxies/%2e%2e/configs', 'PUT', {}),
+    request('/proxies/node/delay/configs', 'PUT', {}), request('/version', 'GET', undefined, { authorization: 'Bearer browser' })];
   for (const input of forbidden) assert.ok((await proxy.fetch(input)).status >= 400, input.url);
   assert.equal(f.calls.length, 0);
   for (const path of ['/version', '/configs', '/rules', '/proxies', '/group', '/providers/proxies', '/providers/rules/provider', '/connections']) {
     assert.equal((await proxy.fetch(request(path))).status, 200, path);
+  }
+});
+
+test('proxy names round-trip as single encoded segments without opening configuration routes', async t => {
+  const f = await fixture(t);
+  const proxy = createControllerProxy({ ...f.options, allowedProbeOrigins: ['https://probe.example'] });
+  for (const name of ['HK / 01', 'HK..01', 'HK 50%', 'HK\\01', '../configs', '%2e%2e']) {
+    const path = '/proxies/' + encodeURIComponent(name);
+    assert.equal((await proxy.fetch(request(path))).status, 200);
+    assert.equal(f.calls.at(-1)?.url, path);
+    const delay = path + '/delay?' + new URLSearchParams({ url: 'https://probe.example/ping', timeout: '1000' });
+    assert.equal((await proxy.fetch(request(delay))).status, 200);
+    assert.equal(f.calls.at(-1)?.url, delay);
+    assert.equal((await proxy.fetch(request(path, 'PUT', { name: 'REJECT' }, { 'if-match': 'generation-1' }))).status, 200);
+    assert.equal(f.calls.at(-1)?.url, path);
   }
 });
 

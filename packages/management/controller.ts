@@ -56,7 +56,9 @@ function pathParts(request: Request): { parts: string[]; url: URL } {
   let parts: string[];
   try { parts = url.pathname.split('/').slice(1).map(part => decodeURIComponent(part)); }
   catch { throw new ManagementError('CONTROLLER_REQUEST_DENIED'); }
-  if (parts.some(part => !part || /[%/\\\x00-\x1f\x7f]/.test(part) || part.includes('..'))) throw new ManagementError('CONTROLLER_REQUEST_DENIED');
+  // Names may contain slashes, percent signs and adjacent dots. Decode once;
+  // httpRoute re-encodes every segment before forwarding, so names remain data.
+  if (parts.some(part => !part || /[\x00-\x1f\x7f]/.test(part) || part === '.' || part === '..')) throw new ManagementError('CONTROLLER_REQUEST_DENIED');
   return { parts, url };
 }
 
