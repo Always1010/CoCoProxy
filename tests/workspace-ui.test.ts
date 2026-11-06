@@ -19,6 +19,77 @@ const { CoCoProxyError, cocoproxyErrorMessage } = apiExports;
 const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/composables/useWorkspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 
+test('unchanged workspace reads retain displayed state and failed reads keep the previous view', async () => {
+  const states = new Map<string, { value: any }>();
+  let reply = { workspace: { revision: 1 }, active: 'generation-one', pending: false };
+  let fail = false;
+  const api = { generation: { value: null as string | null }, request: async () => {
+    if (fail) throw new Error('synthetic read failure');
+    return structuredClone(reply);
+  } };
+  const exports: Record<string, any> = {};
+  new Script(compiled).runInNewContext({ ...uiTestContext, exports,
+    require: () => ({ CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy: () => api }),
+    useState: (key: string, initial: () => unknown) => {
+      if (!states.has(key)) states.set(key, { value: initial() });
+      return states.get(key);
+    },
+  });
+  const workspace = exports.useWorkspace();
+  await workspace.load();
+  const first = workspace.view.value;
+  await workspace.load();
+  assert.equal(workspace.view.value, first);
+  reply = { ...reply, active: 'generation-two' };
+  await workspace.load();
+  assert.notEqual(workspace.view.value, first);
+  assert.equal(api.generation.value, 'generation-two');
+  const current = workspace.view.value;
+  fail = true;
+  await assert.rejects(workspace.load(), /synthetic read failure/);
+  assert.equal(workspace.view.value, current);
+});
+
+test('proxy refresh retains unchanged lists and histories and drops removed node caches', async () => {
+  const source = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/stores/proxies.ts', import.meta.url), 'utf8');
+  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const node = (name: string) => ({ name, type: 'Socks5', history: [{ time: '2026-01-01', delay: 20 }] });
+  let nodes: Record<string, any> = { current: node('current'), removed: node('removed'),
+    group: { name: 'group', type: 'Selector', all: ['current'], now: 'current' } };
+  let fail = false;
+  const exports: Record<string, any> = {};
+  const ref = (value: unknown) => ({ value });
+  new Script(code).runInNewContext({ ...uiTestContext, exports, ref,
+    require: (name: string) => name === 'pinia' ? { defineStore: (_id: string, create: () => unknown) => create }
+      : name.includes('useLatencyFeedback') ? { useLatencyFeedback: () => ({}) }
+        : name.includes('useApi') ? {
+          fetchProxyProvidersAPI: async () => ({ providers: {} }), fetchProxiesAPI: async () => {
+            if (fail) throw new Error('synthetic read failure');
+            return { proxies: structuredClone(nodes) };
+          },
+        } : { toast: {} },
+    useConfigStore: () => ({ resolveLatencyTestUrl: () => 'https://probe.example/check', latencyQualityMap: { NOT_CONNECTED: 0 } }),
+    useConnectionsStore: () => ({}), useState: (_key: string, initial: () => unknown) => ref(initial()),
+    useLocalStorage: (_key: string, initial: unknown) => ref(initial),
+  });
+  const store = exports.useProxiesStore();
+  await store.fetchProxies();
+  const list = store.proxies.value, providers = store.proxyProviders.value;
+  const history = store.getLatencyHistoryByName('current', null);
+  await store.fetchProxies();
+  assert.equal(store.proxies.value, list);
+  assert.equal(store.proxyProviders.value, providers);
+  assert.equal(store.getLatencyHistoryByName('current', null), history);
+  delete nodes.removed;
+  await store.fetchProxies();
+  assert.equal(store.getNode('removed'), undefined);
+  assert.equal(store.nodeNames().includes('removed'), false);
+  fail = true;
+  await assert.rejects(store.fetchProxies(), /synthetic read failure/);
+  assert.equal(store.getNode('current').name, 'current');
+  assert.equal(store.proxies.value, list);
+});
+
 test('bandwidth validation remains available across pages and checks shared budgets', () => {
   let current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true };
   const automatic: Record<string, AutoGroupPolicy> = {};

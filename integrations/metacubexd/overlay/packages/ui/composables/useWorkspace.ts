@@ -132,8 +132,9 @@ export function useWorkspace() {
   })
 
   async function load() {
-    view.value = await api.request<WorkspaceView>('/api/cocoproxy/workspace')
-    api.generation.value = view.value.active
+    const next = await api.request<WorkspaceView>('/api/cocoproxy/workspace')
+    if (JSON.stringify(view.value) !== JSON.stringify(next)) view.value = next
+    api.generation.value = next.active
   }
 
   async function execute(action: () => Promise<void>) {

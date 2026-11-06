@@ -23,6 +23,9 @@ import {
   updateProxyProviderAPI,
 } from '~/composables/useApi'
 
+const retainEqual = <T>(current: T, next: T): T =>
+  JSON.stringify(current) === JSON.stringify(next) ? current : next
+
 export interface ProxyNodeView {
   name: string
   type: string
@@ -287,8 +290,8 @@ export const useProxiesStore = defineStore('proxies', () => {
   const setProxiesInfo = (
     proxyList: (ProxyWithProvider | ProxyNodeWithProvider)[],
   ) => {
-    const newProxyNodeMap = { ...proxyNodeMap.value }
-    const newLatencyMap = { ...latencyMap.value }
+    const newProxyNodeMap: Record<string, ProxyInfo> = Object.create(null)
+    const newLatencyMap: typeof latencyMap.value = Object.create(null)
 
     proxyList.forEach((proxy) => {
       const { allTestUrlLatency, allTestUrlLatencyHistory } =
@@ -312,8 +315,8 @@ export const useProxiesStore = defineStore('proxies', () => {
       newLatencyMap[proxy.name] = allTestUrlLatency
     })
 
-    proxyNodeMap.value = newProxyNodeMap
-    latencyMap.value = newLatencyMap
+    proxyNodeMap.value = retainEqual(proxyNodeMap.value, newProxyNodeMap)
+    latencyMap.value = retainEqual(latencyMap.value, newLatencyMap)
   }
 
   // Fetch proxies
@@ -359,8 +362,8 @@ export const useProxiesStore = defineStore('proxies', () => {
       ),
     ]
 
-    proxies.value = sortedProxies
-    proxyProviders.value = sortedProviders as typeof proxyProviders.value
+    proxies.value = retainEqual(proxies.value, sortedProxies)
+    proxyProviders.value = retainEqual(proxyProviders.value, sortedProviders as typeof proxyProviders.value)
     setProxiesInfo(allProxies)
   }
 
