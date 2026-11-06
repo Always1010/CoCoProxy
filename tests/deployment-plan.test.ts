@@ -40,9 +40,9 @@ test('optional managed HTTPS adds only owned config and unit with private indepe
   const value = { ...old, web: { schemaVersion: 1, nginxPath: '/usr/sbin/nginx',
     certificatePath: '/etc/cocoproxy/tls/server.crt', privateKeyPath: '/etc/cocoproxy/tls/server.key' } };
   const base = renderDeploymentPlan(old), plan = renderDeploymentPlan(value);
-  assert.equal(plan.files.length, 13);
-  assert.deepEqual(plan.files.slice(0, 11), base.files);
-  assert.deepEqual(plan.files.slice(11).map(file => file.path), ['/etc/cocoproxy/web/nginx.conf', '/etc/systemd/system/cocoproxy-web.service']);
+  assert.equal(plan.files.length, 15);
+  assert.deepEqual(plan.files.slice(0, 13), base.files);
+  assert.deepEqual(plan.files.slice(13).map(file => file.path), ['/etc/cocoproxy/web/nginx.conf', '/etc/systemd/system/cocoproxy-web.service']);
   assert.equal(plan.directories.length, new Set(plan.directories.map(d => d.path)).size);
   const unit = plan.files.find(f => f.path.endsWith('/cocoproxy-web.service'))!.content;
   assert.match(unit, /^User=12345$/m);
@@ -58,7 +58,7 @@ test('optional managed HTTPS adds only owned config and unit with private indepe
     assert.ok(plan.directories.some(d => d.path === '/var/lib/cocoproxy-web-' + name && d.mode === '0700' && d.owner === 12345));
   }
   assert.ok(!plan.files.some(f => f.path === value.web.privateKeyPath || f.path === value.web.certificatePath));
-  assert.equal(renderDeploymentPlan(input()).files.length, 8);
+  assert.equal(renderDeploymentPlan(input()).files.length, 10);
   assert.throws(() => renderDeploymentPlan({ ...value, management: { ...value.management, origin: 'https://gateway.example' } }), DeploymentPlanError);
   assert.throws(() => renderDeploymentPlan({ ...value, runtime: { ...value.runtime, stateDirectory: '/var/lib/cocoproxy-web-client' } }), DeploymentPlanError);
   assert.throws(() => renderDeploymentPlan({ ...value, web: { ...value.web, privateKeyPath: value.runtime.settingsPath } }), DeploymentPlanError);
@@ -97,7 +97,7 @@ test('installed systemd parser accepts both generated unit definitions', {
 
 test('native deployment adds early protection and network prerequisites without management network capabilities', () => {
   const plan = renderDeploymentPlan(automaticInput());
-  assert.equal(plan.files.length, 11);
+  assert.equal(plan.files.length, 13);
   const core = plan.files.find(file => file.path.endsWith('/cocoproxy-mihomo.service'))!;
   const manager = plan.files.find(file => file.path.endsWith('/cocoproxy-management.service'))!;
   const network = plan.files.find(file => file.path.endsWith('/cocoproxy-gateway-network.service'))!;
@@ -128,7 +128,7 @@ test('deployment proposal shares the private runtime identity and pins core byte
   const plan = renderDeploymentPlan(value);
   assert.deepEqual(renderDeploymentPlan(value), plan);
   assert.equal(plan.sensitive, true);
-  assert.equal(plan.files.length, 8);
+  assert.equal(plan.files.length, 10);
   const find = (path: string) => plan.files.find(file => file.path === path)!;
   const core = find(value.runtime.unitPath);
   const runtime = JSON.parse(find(value.runtime.settingsPath).content);
@@ -229,12 +229,12 @@ test('native reconciliation grants only fixed network start/reload without broad
 
 test('systemd arguments and environments escape words without allowing unit or shell injection', () => {
   const value = input();
-  value.management.serverEntry = '/opt/server "quoted"\\$HOME%instance/index.mjs';
+  value.management.serverEntry = '/opt/server "quoted"\\$HOME%instance/server/.output/server/index.mjs';
   value.management.settingsPath = '/etc/cocoproxy/config "quoted"\\$HOME%i.json';
   value.runtime.stateDirectory = '/var/lib/cocoproxy "quoted"\\%i';
   const plan = renderDeploymentPlan(value);
   const unit = plan.files.find(file => file.path === value.management.unitPath)!.content;
-  assert.ok(unit.includes('ExecStart="/usr/bin/node" "/opt/server \\"quoted\\"\\\\$$HOME%%instance/index.mjs"\n'));
+  assert.ok(unit.includes('ExecStart="/usr/bin/node" "/opt/server \\"quoted\\"\\\\$$HOME%%instance/server/.output/server/index.mjs"\n'));
   assert.ok(unit.includes('Environment="COCOPROXY_MANAGEMENT_CONFIG=/etc/cocoproxy/config \\"quoted\\"\\\\$HOME%%i.json"\n'));
   assert.ok(unit.includes('ReadWritePaths="/var/lib/cocoproxy \\"quoted\\"\\\\%%i"\n'));
   assert.equal(unit.split('\n').filter(line => line.startsWith('ExecStart=')).length, 1);
@@ -329,4 +329,27 @@ test('deployment accepts data only and errors do not expose secrets or evaluate 
     });
   }
   assert.equal(calls, 0);
+});
+
+
+test('root updater follows management release while runtime remains pinned and grants no management privilege', () => {
+  const value = input();
+  value.management.serverEntry = '/opt/cocoproxy/releases/next/server/.output/server/index.mjs';
+  const plan = renderDeploymentPlan(value);
+  const settings = plan.files.find(file => file.path === '/etc/cocoproxy/updater.json')!;
+  assert.equal(settings.owner, 'root'); assert.equal(settings.mode, '0644');
+  assert.deepEqual(JSON.parse(settings.content), { schemaVersion: 1, serviceUid: 12345, nodePath: '/usr/bin/node',
+    sourceDirectory: '/opt/cocoproxy/releases/next/source', releaseDirectory: '/opt/cocoproxy/releases/next' });
+  const unit = plan.files.find(file => file.path.endsWith('/cocoproxy-updater.service'))!.content;
+  assert.match(unit, /^User=root$/m);
+  assert.match(unit, /"--experimental-strip-types" "\/opt\/cocoproxy\/releases\/next\/source\/apps\/updater\/main.ts" "--settings" "\/etc\/cocoproxy\/updater.json"/);
+  assert.match(unit, /^KillMode=mixed$/m); assert.match(unit, /^TimeoutStopSec=900$/m);
+  assert.match(unit, /^RuntimeDirectoryMode=0755$/m); assert.match(unit, /^StateDirectoryMode=0700$/m);
+  assert.ok(plan.directories.some(directory => directory.path === '/var/lib/cocoproxy-updater' && directory.mode === '0700' && directory.owner === 'root'));
+  assert.ok(!plan.files.some(file => file.path.endsWith('/update-trust.pem')));
+  assert.doesNotMatch(plan.files.find(file => file.path.endsWith('.rules'))!.content, /cocoproxy-updater/);
+  for (const reserved of ['/run/cocoproxy-updater/private', '/var/lib/cocoproxy-updater/private']) {
+    assert.throws(() => renderDeploymentPlan({ ...value, runtime: { ...value.runtime, stateDirectory: reserved } }), DeploymentPlanError);
+    assert.throws(() => renderDeploymentPlan({ ...value, management: { ...value.management, credentialPath: reserved } }), DeploymentPlanError);
+  }
 });

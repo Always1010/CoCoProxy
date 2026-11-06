@@ -147,6 +147,14 @@ function render(input: unknown): DeploymentPlan {
   const policyPath = path(management.policyPath);
   const networkSettingsPath = posix.join(posix.dirname(runtimeSettingsPath), 'gateway-network.json');
   const bandwidthSettingsPath = posix.join(posix.dirname(runtimeSettingsPath), 'bandwidth-worker.json');
+  const updaterSettingsPath = posix.join(posix.dirname(runtimeSettingsPath), 'updater.json');
+  const serverSuffix = '/server/.output/server/index.mjs';
+  if (!serverEntry.endsWith(serverSuffix)) fail();
+  const updaterReleaseDirectory = serverEntry.slice(0, -serverSuffix.length);
+  const updaterSourceDirectory = path(posix.join(updaterReleaseDirectory, 'source'));
+  const updaterUnitPath = '/etc/systemd/system/cocoproxy-updater.service';
+  const updaterStateDirectory = '/var/lib/cocoproxy-updater';
+  const updaterRuntimeDirectory = '/run/cocoproxy-updater';
   const networkStateDirectory = '/var/lib/cocoproxy-gateway-network';
   const networkPlan = core.settings.automaticGateway ? renderAutomaticGatewayHostPlan({
     network: core.settings.automaticGateway, sourceDirectory, pythonPath: '/usr/bin/python3',
@@ -170,32 +178,37 @@ function render(input: unknown): DeploymentPlan {
 
   const controlledFiles = [binaryPath, systemctlPath, nodePath, runtimeSettingsPath, coreUnitPath,
     serverEntry, settingsPath, credentialPath, unitPath, policyPath,
+    updaterSettingsPath, updaterUnitPath, '/run/cocoproxy-updater/control.sock',
+    posix.join(updaterSourceDirectory, 'apps/updater/main.ts'),
     bandwidthSettingsPath, '/etc/systemd/system/cocoproxy-bandwidth.service', '/etc/systemd/system/cocoproxy-bandwidth.socket', '/run/cocoproxy-bandwidth.sock',
     posix.join(sourceDirectory, 'apps/runtime/bandwidth-worker.ts'),
     posix.join(sourceDirectory, 'apps/runtime/launch-core.ts'),
     ...(networkPlan ? [networkSettingsPath, '/etc/systemd/system/cocoproxy-gateway-network.service',
       posix.join(sourceDirectory, 'apps/gateway/network.py'), posix.join(sourceDirectory, 'apps/gateway/host_proxy.py'), '/usr/bin/python3', '/usr/sbin/ip', '/usr/sbin/nft',
       '/usr/bin/ip', '/usr/bin/nft'] : [])];
+  if ([stateDirectory, sourceDirectory, updaterSourceDirectory, ...controlledFiles].some(file => overlap(updaterStateDirectory, file))) fail();
+  if ([stateDirectory, sourceDirectory, updaterSourceDirectory, ...controlledFiles.filter(file => file !== updaterRuntimeDirectory + '/control.sock')]
+    .some(file => overlap(updaterRuntimeDirectory, file))) fail();
   if (webPlan) {
     const webFiles = [webPlan.settings.nginxPath, webPlan.settings.certificatePath, webPlan.settings.privateKeyPath,
       ...webPlan.files.map(file => file.path)];
     if (webFiles.some(file => controlledFiles.some(existing => overlap(file, existing)) ||
-      overlap(file, sourceDirectory) || overlap(file, stateDirectory) || overlap(file, networkStateDirectory)) ||
-      webPlan.directories.some(directory => [stateDirectory, sourceDirectory, networkStateDirectory, ...controlledFiles].some(existing => overlap(directory.path, existing)))) fail();
+      overlap(file, sourceDirectory) || overlap(file, updaterSourceDirectory) || overlap(file, stateDirectory) || overlap(file, networkStateDirectory) || overlap(file, updaterStateDirectory) || overlap(file, updaterRuntimeDirectory)) ||
+      webPlan.directories.some(directory => [stateDirectory, sourceDirectory, updaterSourceDirectory, networkStateDirectory, updaterStateDirectory, updaterRuntimeDirectory, ...controlledFiles].some(existing => overlap(directory.path, existing)))) fail();
     if ([management.deployment && (management.deployment as JsonObject).mixedPort,
       management.deployment && (management.deployment as JsonObject).controllerPort,
       management.deployment && (management.deployment as JsonObject).dnsPort].includes(webPlan.port)) fail();
   }
   if (networkPlan && (overlap(networkStateDirectory, stateDirectory) || overlap(networkStateDirectory, sourceDirectory) ||
       controlledFiles.some(file => overlap(networkStateDirectory, file)) || overlap(networkSettingsPath, sourceDirectory))) fail();
-  if (overlap(stateDirectory, sourceDirectory) || controlledFiles.some(file => overlap(stateDirectory, file))) fail();
+  if (overlap(stateDirectory, sourceDirectory) || overlap(stateDirectory, updaterSourceDirectory) || controlledFiles.some(file => overlap(stateDirectory, file))) fail();
   for (let index = 0; index < controlledFiles.length; index++) {
     if (controlledFiles.slice(index + 1).some(file => overlap(controlledFiles[index], file))) fail();
   }
   // Private settings may not replace or become children of the trusted source tree.
-  if ([runtimeSettingsPath, bandwidthSettingsPath, settingsPath, credentialPath, coreUnitPath, unitPath, policyPath,
+  if ([runtimeSettingsPath, bandwidthSettingsPath, updaterSettingsPath, updaterUnitPath, settingsPath, credentialPath, coreUnitPath, unitPath, policyPath,
     '/etc/systemd/system/cocoproxy-bandwidth.service', '/etc/systemd/system/cocoproxy-bandwidth.socket', '/run/cocoproxy-bandwidth.sock']
-    .some(file => overlap(file, sourceDirectory))) fail();
+    .some(file => overlap(file, sourceDirectory) || overlap(file, updaterSourceDirectory))) fail();
   // Never describe making a standard shared installation directory service-private.
   if (['/etc', '/usr', '/usr/local', '/opt', '/run', '/var', '/var/lib', '/var/cache', '/srv'].includes(stateDirectory)) fail();
 
@@ -256,6 +269,15 @@ function render(input: unknown): DeploymentPlan {
     ] : []),
     '    return polkit.Result.NO;', '});', '',
   ].join('\n');
+  const updaterUnit = [
+    '[Unit]', 'Description=CoCoProxy independent update coordinator', 'After=network.target', '',
+    '[Service]', 'Type=exec', 'User=root',
+    `ExecStart=${[nodePath, '--experimental-strip-types', posix.join(updaterSourceDirectory, 'apps/updater/main.ts'),
+      '--settings', updaterSettingsPath].map(argument => quote(argument, true)).join(' ')}`,
+    'Restart=on-failure', 'RestartSec=2', 'KillMode=mixed', 'TimeoutStopSec=900', 'UMask=0077',
+    'RuntimeDirectory=cocoproxy-updater', 'RuntimeDirectoryMode=0755',
+    'StateDirectory=cocoproxy-updater', 'StateDirectoryMode=0700', '', '[Install]', 'WantedBy=multi-user.target', '',
+  ].join('\n');
   const files: DeploymentFile[] = [
     { path: coreUnitPath, mode: '0644', owner: 'root', sensitive: false, content: core.unit },
     { path: runtimeSettingsPath, mode: '0600', owner: serviceUid, sensitive: true, content: JSON.stringify(core.settings, null, 2) + '\n' },
@@ -265,6 +287,10 @@ function render(input: unknown): DeploymentPlan {
     { path: '/etc/systemd/system/cocoproxy-bandwidth.service', mode: '0644', owner: 'root', sensitive: false, content: bandwidthPlan.serviceUnit },
     { path: '/etc/systemd/system/cocoproxy-bandwidth.socket', mode: '0644', owner: 'root', sensitive: false, content: bandwidthPlan.socketUnit },
     { path: bandwidthSettingsPath, mode: '0644', owner: 'root', sensitive: false, content: bandwidthPlan.settingsContent },
+    { path: updaterUnitPath, mode: '0644', owner: 'root', sensitive: false, content: updaterUnit },
+    { path: updaterSettingsPath, mode: '0644', owner: 'root', sensitive: false,
+      content: JSON.stringify({ schemaVersion: 1, serviceUid, nodePath, sourceDirectory: updaterSourceDirectory,
+        releaseDirectory: updaterReleaseDirectory }, null, 2) + '\n' },
     ...(networkPlan ? [
       { path: '/etc/systemd/system/cocoproxy-gateway-guard.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.earlyUnit },
       { path: '/etc/systemd/system/cocoproxy-gateway-network.service', mode: '0644' as const, owner: 'root' as const, sensitive: false, content: networkPlan.unit },
@@ -277,11 +303,13 @@ function render(input: unknown): DeploymentPlan {
   return {
     schemaVersion: 1, sensitive: true, files,
     directories: [{ path: stateDirectory, mode: '0700', owner: serviceUid },
+      { path: updaterStateDirectory, mode: '0700', owner: 'root' },
       ...(networkPlan ? [{ path: networkStateDirectory, mode: '0700' as const, owner: 'root' as const }] : []),
       ...parents.filter(parent => !webPlan?.directories.some(directory => directory.path === parent))
         .map(parent => ({ path: parent, mode: '0755' as const, owner: 'root' as const })),
       ...(webPlan?.directories ?? [])],
     requirements: [
+      '独立 root 更新服务始终启用；自动更新策略默认关闭。信任公钥由管理员单独提供，部署不创建或覆盖。更新服务不随管理与核心维护停止，运行中进程在任务完成后读取新设置并自行切换受信源码。',
       '带宽测量由固定 Unix socket 激活的非 root worker 执行；管理服务保持空 capabilities。worker 设置为 root:0644 无密钥配置，和固定 service/socket 一起纳入收据；维护暂停须先停 socket，再停 worker，恢复仅按既有持久意图处理。',
       ...(webPlan ? ['托管 HTTPS 只引用既有匹配 SAN 且未过期的证书及服务 UID 的 0600 单链接私钥；不会生成、复制或轮换证书、安装 nginx 或修改证书信任。配置与 unit 由同一部署收据管理；启动仍须显式执行。'] : []),
       ...(networkPlan ? [

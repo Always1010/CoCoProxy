@@ -31,6 +31,50 @@ class RemoteDeploymentTests(unittest.TestCase):
                 self.assertLess(stop_worker, stop_manager)
                 self.assertIn(['/usr/bin/systemctl', 'start', 'cocoproxy-bandwidth.socket'], events)
                 self.assertNotIn(['/usr/bin/systemctl', 'start', 'cocoproxy-bandwidth.service'], events)
+                self.assertIn(['/usr/bin/systemctl', 'enable', 'cocoproxy-updater.service'], events)
+                for action in ['stop', 'disable', 'restart', 'start']:
+                    self.assertNotIn(['/usr/bin/systemctl', action, 'cocoproxy-updater.service'], events)
+
+    def test_expected_manifest_option_rejects_noncanonical_hash_before_lock_or_staging(self):
+        for value in ['a' * 63, 'A' * 64, '../' + 'a' * 64]:
+            with patch.object(deploy.os, 'geteuid', return_value=0), patch.object(deploy, 'directory') as directory, patch.object(deploy, 'stage_payload') as stage:
+                with self.assertRaisesRegex(RuntimeError, '^REMOTE_EXPECTED_MANIFEST_SHA_INVALID$'):
+                    deploy.main(['--payload', '/synthetic/payload', '--manifest-sha256', 'b' * 64,
+                                 '--expected-manifest-sha256', value])
+                directory.assert_not_called()
+                stage.assert_not_called()
+
+    def test_locked_expected_installation_check_precedes_staging_and_rejects_changed_or_pending_receipt(self):
+        for manifest, status in [('c' * 64, 'complete'), ('a' * 64, 'pending'), ('a' * 64, 'complete')]:
+            temporary, stack, private, before, events, router, args = self.scenario()
+            with temporary, stack:
+                args.expected_manifest_sha256 = 'a' * 64
+                args.preview = True
+                receipt = json.loads(deploy.RECEIPT.read_bytes())
+                receipt.update(manifestSha256=manifest, status=status)
+                deploy.RECEIPT.write_text(json.dumps(receipt))
+                with patch.object(deploy, 'stage_payload', wraps=deploy.stage_payload) as stage:
+                    if manifest == 'a' * 64 and status == 'complete':
+                        deploy.main_locked(args)
+                        stage.assert_called_once()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, '^REMOTE_EXPECTED_INSTALLATION_CHANGED$'):
+                            deploy.main_locked(args)
+                        stage.assert_not_called()
+                    self.assertFalse(any(command[0] == '/usr/bin/systemctl' and command[1] in
+                                         ['start', 'stop', 'enable', 'disable'] for command in events))
+
+    def test_updater_activation_enables_and_starts_only_inactive_coordinator(self):
+        for state in ['active', 'activating', 'inactive']:
+            events = []
+            def run(args):
+                events.append(args)
+                return state.encode() if args[1] == 'show' else b''
+            with patch.object(deploy, 'run', run):
+                deploy.ensure_updater_started('/usr/bin/systemctl')
+            self.assertEqual(events[0], ['/usr/bin/systemctl', 'enable', 'cocoproxy-updater.service'])
+            self.assertEqual(any(args[1] == 'start' for args in events), state == 'inactive')
+            self.assertFalse(any(args[1] in ['stop', 'restart', 'disable'] for args in events))
 
     def test_candidate_evidence_is_private_scratch_and_is_removed_from_installer_results(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -99,6 +143,7 @@ class RemoteDeploymentTests(unittest.TestCase):
         events = []
         active = {'cocoproxy-management.service': True, 'cocoproxy-mihomo.service': core_active,
             'cocoproxy-gateway-network.service': core_active if network_active is None else network_active, 'cocoproxy-gateway-guard.service': True}
+        active['cocoproxy-updater.service'] = True
         enabled = {key: 'enabled' if 'management' in key or 'guard' in key else 'static' for key in active}
         if bandwidth_worker:
             active.update({'cocoproxy-bandwidth.socket': True, 'cocoproxy-bandwidth.service': False})
@@ -217,6 +262,7 @@ class RemoteDeploymentTests(unittest.TestCase):
         stack.enter_context(patch.object(deploy, 'run', run))
         stack.enter_context(patch.object(deploy, 'lifecycle_marker_identity', lambda _: 'd' * 64))
         def health(_):
+            events.append(['management-health', _['serverEntry']])
             if health_failure and _['serverEntry'] != before['management']['serverEntry']:
                 raise RuntimeError('REMOTE_MANAGEMENT_NOT_READY')
         stack.enter_context(patch.object(deploy, 'management_ready', health))
@@ -237,7 +283,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                     self.assertTrue(any('--preserve-runtime' in event and '--apply' in event for event in events))
                     self.assertFalse(any('runtime-maintenance-pause' in event or event[0].endswith('router-hook') for event in events))
                     mutations = [event for event in events if event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable']]
-                    self.assertTrue(all(event[2:] == ['cocoproxy-management.service'] for event in mutations))
+                    self.assertTrue(all(event[2:] == ['cocoproxy-management.service'] or event[1:] == ['enable', 'cocoproxy-updater.service'] for event in mutations))
                     self.assertTrue(router['enabled'])
 
     def test_preserving_runtime_rejects_state_mutation_core_restart_and_unready_manager(self):
@@ -276,7 +322,7 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertFalse(any('router-hook' in event[0] for event in events))
             mutations = [event for event in events if event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable']]
             self.assertTrue(mutations)
-            self.assertTrue(all(event[2:] == ['cocoproxy-management.service'] for event in mutations))
+            self.assertTrue(all(event[2:] == ['cocoproxy-management.service'] or event[1:] == ['enable', 'cocoproxy-updater.service'] for event in mutations))
             self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'complete')
 
     def test_frontend_preview_does_not_stop_services_or_write_install_input(self):
@@ -415,6 +461,24 @@ class RemoteDeploymentTests(unittest.TestCase):
             journal = json.loads((private / 'remote-last.json').read_text())
             self.assertEqual(journal['preservation']['status'], 'fail')
             self.assertEqual(journal['status'], 'failed')
+
+    def test_full_upgrade_manager_health_failure_restores_previous_program_before_router_delivery(self):
+        temporary, stack, private, before, events, router, args = self.scenario(health_failure=True)
+        with temporary, stack:
+            with self.assertRaisesRegex(RuntimeError, '^REMOTE_MANAGEMENT_NOT_READY$'):
+                deploy.main_locked(args)
+            journal = json.loads((private / 'remote-last.json').read_text())
+            self.assertEqual(journal['status'], 'recovered')
+            self.assertEqual(journal['recovery']['status'], 'restored')
+            self.assertEqual(json.loads((private / 'deployment.json').read_text()), before)
+            self.assertTrue(router['enabled'])
+            health = [(index, event[1]) for index, event in enumerate(events) if event[0] == 'management-health']
+            self.assertEqual(len(health), 2)
+            self.assertNotEqual(health[0][1], before['management']['serverEntry'])
+            self.assertEqual(health[1][1], before['management']['serverEntry'])
+            router_enable = [index for index, event in enumerate(events) if event[-1] == 'enable' and 'router-hook' in event[0]]
+            self.assertEqual(len(router_enable), 1)
+            self.assertLess(health[1][0], router_enable[0])
 
     def test_failed_install_restores_previous_version_services_and_allows_reviewed_new_attempt(self):
         temporary, stack, private, before, events, router, args = self.scenario(True)

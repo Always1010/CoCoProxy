@@ -151,7 +151,7 @@ test('upgrade apply refuses invalid complete content, unknown readers and missin
 
 test('upgrade adds only the early guard to a verified previous seven-file gateway receipt', async () => {
   const input = JSON.parse(await readFile(new URL('../examples/automatic-gateway-deployment.json', import.meta.url), 'utf8'));
-  const current = renderDeploymentPlan(input).files.filter(file => !file.path.includes('bandwidth')).map(({ content, ...file }) => ({ ...file, sha256: digest(content) }));
+  const current = renderDeploymentPlan(input).files.filter(file => !file.path.includes('bandwidth') && !file.path.includes('updater')).map(({ content, ...file }) => ({ ...file, sha256: digest(content) }));
   const previous = current.filter(file => !file.path.endsWith('/cocoproxy-gateway-guard.service'));
   assert.equal(previous.length, 7);
   assert.equal(compatibleOwnedFiles(previous, current, true), true);
@@ -243,7 +243,7 @@ test('deployment target is explicit, versioned by manifest, and cannot replace s
   input.runtime.binaryPath = target + '/bin/mihomo';
   input.management.serverEntry = target + '/server/.output/server/index.mjs';
   assert.equal(releaseTarget(input, hash), target);
-  assert.equal(renderDeploymentPlan(input).files.length, 8);
+  assert.equal(renderDeploymentPlan(input).files.length, 10);
   input.runtime.sourceDirectory = '/opt/source';
   assert.throws(() => releaseTarget(input, hash), code('INSTALL_RELEASE_LAYOUT_REQUIRED'));
   input.runtime.sourceDirectory = '/opt/cocoproxy/releases/' + hash + '/source';
@@ -359,3 +359,21 @@ test('recovery permits an uninitialized first install but never bypasses existin
   assert.deepEqual(await assessRecoveryCredential(receipt, host, absent), absent);
 });
 
+
+
+test('updater receipt migration requires the exact complete root-owned pair and permits pinned-runtime refresh', () => {
+  const previous = [{ path: '/etc/sample/runtime.json', mode: '0600', owner: 12345, sensitive: true, sha256: digest('runtime') }];
+  const updater = ['/etc/systemd/system/cocoproxy-updater.service', '/etc/sample/updater.json'].map(path =>
+    ({ path, mode: '0644', owner: 'root' as const, sensitive: false, sha256: digest(path) }));
+  const current = [...previous, ...updater];
+  assert.equal(compatibleOwnedFiles(previous, current, true), true);
+  assert.equal(compatibleOwnedFiles(previous, current, false), false);
+  assert.doesNotThrow(() => assertFrontendFiles(previous, current));
+  assert.doesNotThrow(() => assertFrontendFiles(current, current.map(file => file.sensitive ? file : { ...file, sha256: digest('new updater') })));
+  for (const item of updater) {
+    assert.equal(compatibleOwnedFiles(previous, current.filter(file => file !== item), true), false);
+    assert.equal(compatibleOwnedFiles(previous, current.map(file => file === item ? { ...file, owner: 12345 } : file), true), false);
+  }
+  assert.equal(compatibleOwnedFiles(previous, [...previous, updater[0], { ...updater[1], path: '/etc/other/updater.json' }], true), false);
+  assert.throws(() => assertFrontendFiles(current, current.map(file => file.sensitive ? { ...file, sha256: digest('runtime changed') } : file)), code('INSTALL_FRONTEND_SCOPE_CHANGED'));
+});

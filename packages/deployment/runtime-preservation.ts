@@ -10,6 +10,7 @@ function managementOnly(path: string): boolean {
     return !/\/(?:startup|service|workspace-application|automatic-[^/]+|bandwidth-selector|bandwidth-policy)\.ts$/u.test(path);
   }
   return path === 'README.md' || path === 'cocoproxy' ||
+    path.startsWith('source/packages/updater/') || path.startsWith('source/apps/updater/') ||
     path.startsWith('source/packages/deployment/') || path.startsWith('source/apps/deployment/') ||
     ['source/scripts/cocoproxy-setup.sh', 'source/scripts/deploy-ssh.mjs', 'source/scripts/remote-deploy.py',
       'source/scripts/router-ssh-hook.py'].includes(path);

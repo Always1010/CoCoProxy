@@ -25,9 +25,9 @@
 | `directories` | 需要的路径、身份和权限 |
 | `requirements`、`steps` | 部署前提及操作说明，无任意可执行 shell |
 
-显式模式八文件：核心 unit、runtime 设置、管理 unit、management 设置、polkit 规则，以及固定带宽 worker 的 service、socket 和无密钥设置。原生模式增加 root 早期 guard unit、网络 unit 和网络设置，共十一文件；托管 HTTPS 再增加两文件。原生模式另有独立 root:0700 回执目录。早期 unit 在 network-pre 之前只建立保护，网络 unit 随后核对实际有线接口并准备路由。运行／管理设置为服务 UID:0600，网络设置为 root:0600；`bandwidth-worker.json` 位于 runtime 设置同目录，由 root:0644 控制，只有运行路径、摘要、网络约束和启用标记。管理员凭据不在输出清单。
+显式模式十文件：核心 unit、runtime 设置、管理 unit、management 设置、polkit 规则，以及固定带宽 worker 的 service、socket 和无密钥设置，独立 updater service 与 root 设置。原生模式增加 root 早期 guard unit、网络 unit 和网络设置，共十三文件；托管 HTTPS 再增加两文件。原生模式另有独立 root:0700 回执目录。早期 unit 在 network-pre 之前只建立保护，网络 unit 随后核对实际有线接口并准备路由。运行／管理设置为服务 UID:0600，网络设置为 root:0600；`bandwidth-worker.json` 位于 runtime 设置同目录，由 root:0644 控制，只有运行路径、摘要、网络约束和启用标记。管理员凭据不在输出清单。
 
-系统 unit 固定为 `/etc/systemd/system/cocoproxy-mihomo.service`、`cocoproxy-management.service`、`cocoproxy-bandwidth.service` 和 `cocoproxy-bandwidth.socket`，原生另有 `cocoproxy-gateway-guard.service` 和 `cocoproxy-gateway-network.service`；polkit 固定为 `/etc/polkit-1/rules.d/50-cocoproxy-management.rules`。unit 摘要覆盖完整 UTF-8/LF 字节。旧收据升级可受控新增完整的 worker 三文件；拒绝部分追加、服务可写设置、已有目标和未知文件。既有早期 guard 与 HTTPS 迁移边界继续适用。
+系统 unit 固定为 `/etc/systemd/system/cocoproxy-mihomo.service`、`cocoproxy-management.service`、`cocoproxy-bandwidth.service` 、`cocoproxy-bandwidth.socket` 和 `cocoproxy-updater.service`，原生另有 `cocoproxy-gateway-guard.service` 和 `cocoproxy-gateway-network.service`；polkit 固定为 `/etc/polkit-1/rules.d/50-cocoproxy-management.rules`。unit 摘要覆盖完整 UTF-8/LF 字节。旧收据升级可受控新增完整的 worker 三文件或 updater 两文件；拒绝部分追加、服务可写设置、已有目标和未知文件。既有早期 guard 与 HTTPS 迁移边界继续适用。
 
 ## 服务与权限边界
 
@@ -38,6 +38,8 @@
 带宽请求通过固定 `/run/cocoproxy-bandwidth.sock` 进入独立非 root worker，socket 仅允许服务 UID 以 0600 访问。worker 使用私有临时目录和只读持久状态、45 秒总运行上限与整个控制组清理；原生网关时单独获得网络 capabilities，管理服务仍为空 capability 集。空探测来源许可生成禁用设置，生命周期不启动或启用 socket。没有新增 worker 的 polkit 管理权限。
 
 `start-management` 仅在未暂停时启动获准的 socket；enable/resume 在恢复运行意图后启用并启动 socket。pause/stop 先关闭 socket，等待 runtime pause，再停止 worker 并禁用 socket，避免维护中再次激活或重启后恢复入口。完整升级、管理侧保留运行时更新、恢复和卸载都纳入两单元的停用检查；管理侧更新保留核心和网络，暂时关闭 worker。失败回滚只删除本次新加且仍匹配收据的 worker 文件，并恢复原 socket 启用/运行意图；worker 进程可按需空闲退出。
+
+独立 root updater 读取 runtime 设置同目录的 `updater.json`（root:0644），使用管理服务入口所属发行目录的源码，不随保留的核心源码固定。`/run/cocoproxy-updater/control.sock` 位于 root:0755 运行目录；策略与任务记录保存在 `/var/lib/cocoproxy-updater`（root:0700）。管理员单独提供 `/etc/cocoproxy-install/update-trust.pem`，部署不会生成或覆盖公钥。自动策略默认关闭，部署协调器仍启用并启动 updater；已有活动进程在当前任务完成后自行读取新设置切换源码，维护过程不停止或重启 updater，也保留原发行目录。卸载先停止并禁用 updater；迁移回滚只删除本次新增且仍匹配收据的两文件。管理服务未获得新增 polkit 权限。
 
 路径为规范 POSIX 绝对路径，状态不得与源码、二进制、设置、凭据或系统文件重叠，拒绝沙箱隐藏目录和相互嵌套文件目标。systemd 参数与环境分别转义，不经 shell。祖先、链接目标、ACL、挂载与现场身份仍由安装预检核对。
 

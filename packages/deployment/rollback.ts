@@ -3,7 +3,7 @@ import { lstat, unlink } from 'node:fs/promises';
 import { platform } from 'node:os';
 import { posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { InstallError, validateReceipt, compatibleOwnedFiles, releaseTarget, verifyRelease, verifyRuntimeRelease,
+import { InstallError, validateReceipt, compatibleOwnedFiles, isManagementDeploymentFile, releaseTarget, verifyRelease, verifyRuntimeRelease,
   assertRootPath, assertPrivateDeploymentFile, assertOwnedDeploymentFiles, assertDeploymentStopped,
   assertDeploymentLifecycle, assertDeploymentNetworkClear, assertDeploymentAccount, assertDeploymentExecutable,
   readRegularDeploymentFile, deploymentPathInfo, deploymentProcessIdentity, parseDeploymentLock,
@@ -154,7 +154,13 @@ function nativeHost(): DeploymentRollbackHost {
       await writeExclusiveDeploymentFile(LOCK, bytes, 0o600);
       return bytes;
     },
-    write: writeAtomicDeploymentFile, remove: unlink,
+    write: writeAtomicDeploymentFile, remove: async path => {
+      if (path === '/etc/systemd/system/cocoproxy-updater.service') {
+        await runDeploymentTool('/usr/bin/systemctl', ['stop', 'cocoproxy-updater.service']);
+        await runDeploymentTool('/usr/bin/systemctl', ['disable', 'cocoproxy-updater.service']);
+      }
+      await unlink(path);
+    },
     reload: async systemctl => { await runDeploymentTool(systemctl, ['daemon-reload']); },
   };
 }
@@ -174,7 +180,7 @@ export async function rollbackDeployment(context: RollbackContext, options: { ho
     current.serviceUid === previous.serviceUid && current.stateDirectory === previous.stateDirectory && current.credentialPath === previous.credentialPath,
   'INSTALL_ROLLBACK_RECEIPT_CHANGED');
   if (context.preserveRuntime && !unchanged) require(current.runtimeManifestSha256 === (previous.runtimeManifestSha256 ?? previous.manifestSha256) &&
-    previous.files.every(file => file.path === '/etc/systemd/system/cocoproxy-management.service' || current.files.some(next =>
+    previous.files.every(file => isManagementDeploymentFile(file.path) || current.files.some(next =>
       JSON.stringify(next) === JSON.stringify(file))), 'INSTALL_ROLLBACK_RUNTIME_CHANGED');
   const lock = await host.lock();
   if (lock) require(!unchanged && current.transaction?.id === lock.value.id && await host.ownerGone(lock.value), 'INSTALL_ROLLBACK_LOCK_UNVERIFIED');

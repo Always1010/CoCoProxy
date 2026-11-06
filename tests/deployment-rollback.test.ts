@@ -136,3 +136,24 @@ test('rollback accepts failure before the first live write with the original rec
   assert.deepEqual(f.receipt(), f.context.previousReceipt);
   assert.ok(!f.events.some(event => event.startsWith('write:/etc/')));
 });
+
+
+test('rollback removes only the newly introduced matching updater pair and rejects foreign drift', async () => {
+  for (const changed of [false, true]) {
+    const f = fixture();
+    const paths = ['/etc/systemd/system/cocoproxy-updater.service', '/etc/cocoproxy/updater.json'];
+    for (const path of paths) {
+      f.current().files.push({ path, owner: 'root', mode: '0644', sensitive: false, sha256: digest('new updater') });
+      f.disk.set(path, { content: 'new updater', uid: 0, mode: '0644' });
+    }
+    if (changed) {
+      f.disk.get(paths[1])!.content = 'foreign settings';
+      await assert.rejects(rollbackDeployment(f.context, { host: f.host }), code('INSTALL_ROLLBACK_OWNED_FILE_CHANGED'));
+      assert.ok(!f.events.includes('claim'));
+    } else {
+      await rollbackDeployment(f.context, { host: f.host });
+      for (const path of paths) assert.equal(f.disk.has(path), false);
+      assert.deepEqual(f.receipt(), f.context.previousReceipt);
+    }
+  }
+});

@@ -108,6 +108,17 @@ export function compatibleOwnedFiles(previous: readonly Owned[], current: readon
   if (previous.some(old => !current.some(file => file.path === old.path && file.mode === old.mode &&
       file.owner === old.owner && file.sensitive === old.sensitive))) return false;
   const added = current.filter(file => !previous.some(old => old.path === file.path));
+  const updater = (file: Owned) => file.path === '/etc/systemd/system/cocoproxy-updater.service' || posix.basename(file.path) === 'updater.json';
+  const updaterAdded = added.filter(updater);
+  if (updaterAdded.length) {
+    if (!upgrade || updaterAdded.length !== 2 ||
+      !updaterAdded.some(file => file.path === '/etc/systemd/system/cocoproxy-updater.service') ||
+      !updaterAdded.every(file => file.owner === 'root' && file.mode === '0644' && !file.sensitive) ||
+      !updaterAdded.some(file => posix.basename(file.path) === 'updater.json' && previous.some(old =>
+        old.sensitive && posix.dirname(old.path) === posix.dirname(file.path)))) return false;
+    return compatibleOwnedFiles(previous, current.filter(file => !updaterAdded.includes(file)), upgrade);
+  }
+  if (added.length && current.some(updater)) return compatibleOwnedFiles(previous.filter(file => !updater(file)), current.filter(file => !updater(file)), upgrade);
   const workerAdded = added.filter(file => file.path === '/etc/systemd/system/cocoproxy-bandwidth.service' ||
     file.path === '/etc/systemd/system/cocoproxy-bandwidth.socket' || posix.basename(file.path) === 'bandwidth-worker.json');
   if (workerAdded.length) {
@@ -443,11 +454,19 @@ export function releaseTarget(input: any, manifestSha256: string) {
   return target;
 }
 
+/** Only these deployment artifacts follow the management release during pinned-runtime updates. */
+export function isManagementDeploymentFile(path: string): boolean {
+  return path === '/etc/systemd/system/cocoproxy-management.service' ||
+    path === '/etc/systemd/system/cocoproxy-updater.service' || posix.basename(path) === 'updater.json';
+}
+
 /** A UI update retains the immutable runtime tree, including its executable paths. */
 export function assertFrontendFiles(previous: Owned[], current: Owned[]) {
-  require(previous.length === current.length && current.every(file => previous.some(old => old.path === file.path && old.mode === file.mode &&
-    old.owner === file.owner && old.sensitive === file.sensitive &&
-    (file.path === '/etc/systemd/system/cocoproxy-management.service' || old.sha256 === file.sha256))), 'INSTALL_FRONTEND_SCOPE_CHANGED');
+  require(compatibleOwnedFiles(previous, current, true) && current.every(file => {
+    const old = previous.find(item => item.path === file.path);
+    return old ? old.mode === file.mode && old.owner === file.owner && old.sensitive === file.sensitive &&
+      (isManagementDeploymentFile(file.path) || old.sha256 === file.sha256) : isManagementDeploymentFile(file.path);
+  }), 'INSTALL_FRONTEND_SCOPE_CHANGED');
 }
 
 export async function verifyRuntimeRelease(receipt: Receipt) {
@@ -536,6 +555,8 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
   if (input.runtime.automaticGateway) require(['source/apps/gateway/network.py', 'source/apps/gateway/host_proxy.py']
     .every(path => release.files.some(file => file.path === path)),
     'INSTALL_PAYLOAD_NETWORK_HELPER_MISSING');
+  require(release.files.some(file => file.path === 'source/apps/updater/main.ts'), 'INSTALL_PAYLOAD_UPDATER_MISSING');
+  await trusted('/run/cocoproxy-updater', true);
   const reserved = (path: string) => path === STORE || path.startsWith(STORE + '/') || STORE.startsWith(path + '/');
   require(![target, input.runtime.stateDirectory, input.management.credentialPath, ...plan.files.map(file => file.path)].some(reserved),
     'INSTALL_RECEIPT_PATH_OVERLAP');
@@ -778,6 +799,8 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
   if (preserveRuntime) next.runtimeManifestSha256 = previous!.runtimeManifestSha256 ?? previous!.manifestSha256;
   await atomic(RECEIPT, JSON.stringify(next) + '\n', 0o600);
   if (options.operation === 'uninstall') {
+    await run(input.runtime.systemctlPath, ['stop', 'cocoproxy-updater.service']);
+    await run(input.runtime.systemctlPath, ['disable', 'cocoproxy-updater.service']);
     for (const file of plan.files.filter(file => !file.sensitive)) await unlink(file.path);
   } else {
     for (const directory of [...plan.directories].sort((a, b) => a.path.split('/').length - b.path.split('/').length)) if (!(await info(directory.path))) {
@@ -786,7 +809,7 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
       await chmod(directory.path, parseInt(directory.mode, 8));
     }
     if (!staged) await copyRelease(payload, target, release, options.manifestSha256);
-    for (const file of plan.files.filter(file => !preserveRuntime || file.path === '/etc/systemd/system/cocoproxy-management.service')) {
+    for (const file of plan.files.filter(file => !preserveRuntime || isManagementDeploymentFile(file.path))) {
       await atomic(file.path, file.content, parseInt(file.mode, 8), file.owner === 'root' ? 0 : file.owner);
     }
     await checkOwned(currentFiles);

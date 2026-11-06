@@ -1,0 +1,72 @@
+# 自动软件更新
+
+CoCoProxy 可按指定时区、每日时间窗口和 1～365 天的间隔检查 GitHub 正式发行，并自动安装通过验证的版本。自动更新默认关闭；设置保存在独立 root 私有目录，浏览器关闭、管理服务重启不会丢失计划。只跟随 CoCoProxy 整体发行，包内 Mihomo、管理界面及依赖继续使用审核组合。
+
+## 首次启用
+
+旧版本没有更新执行器，须先按[部署与维护](deployment.md)手动部署一次包含此功能的版本。正常公开部署会安装并启用 `cocoproxy-updater.service`，它与管理服务独立；自动更新关闭时不主动访问发行源。底层安装器仍保持服务停止的原契约，日常部署使用公开协调入口。
+
+自动安装还需要配置发布签名：
+
+1. 发布者在仓库外已有的私有目录生成 Ed25519 密钥，保存 PKCS8 PEM 私钥及 SPKI PEM 公钥。例如下列命令的 `PRIVATE_DIRECTORY` 须由操作者明确设置为仓库外绝对私有路径；不得将私钥放入源码、发行包或普通输出。
+
+   ```sh
+   umask 077
+   openssl genpkey -algorithm ED25519 -out "$PRIVATE_DIRECTORY/update-signing-key.pem"
+   openssl pkey -in "$PRIVATE_DIRECTORY/update-signing-key.pem" -pubout -out "$PRIVATE_DIRECTORY/update-signing-public.pem"
+   ```
+
+2. 将私钥设置为 GitHub Actions 仓库 secret `COCOPROXY_UPDATE_PRIVATE_KEY`。流水线在构建结束后独立签名 `update.json`，上传所有附件后公开 Release；无签名的版本仍可人工安装，但不能自动执行。详见[发行签名](release-staging.md#自动更新签名)。
+3. 管理员核验公钥后，向目标的 `/etc/cocoproxy-install/update-trust.pem` 安装公钥，owner 为 root、权限 0600 或 0644，父目录由 root 控制且不可由服务身份写入。设备不需要私钥，也不需要 GitHub Token。更新器每次检查重新读取公钥。
+4. 在“CoCoProxy 设置 → 软件更新”确认当前版本与可用状态，填写间隔、IANA 时区及窗口，打开自动更新并保存。
+
+首次验证可先点“检查更新”，它不会安装。确认版本和服务影响后，“立即更新”可在窗口外由用户主动执行。未配置公钥时界面显示需要初始化，不把未签名版本当作已经是最新。
+
+## 调度规则
+
+- 间隔只能是 1～365 的整数，空值、0、负数、小数、字符串和超范围值由前后端拒绝；30 天表示 30 个日历日，并非自然月。
+- 使用保存的 IANA 时区计算窗口，支持跨午夜，开始和结束不能相同。时间不存在时向后移到有效分钟；重复时段从第一次开始到最后一次结束。
+- 首次在当前或下一个允许窗口执行；窗口开始后最多加入五分钟随机分散。成功检查后从执行窗口所属日期安排下一个间隔，重启不重新起算。
+- 到期离线则在恢复后的下一个允许窗口补查一次，不累计补跑。请求失败最多按一分钟、五分钟等节奏进行三次尝试，此后延到下一日窗口；GitHub 的更晚限流期限优先。
+- 下载及准备可以取消，最终开始安装前重查开关、设置版本、时间和安装身份。关闭或修改自动策略取消尚未进入维护的自动任务；已经进入安装则等待完成或恢复。窗口结束不会强杀正在执行的维护。
+- “检查更新”只查询；“立即更新”需确认，且发现的目标变化时拒绝套用旧确认。
+
+## 下载、安装和恢复
+
+执行器只访问固定项目仓库及明确允许的 GitHub 下载域名，验证签名绑定的版本、提交、架构、大小和摘要；使用有界流式下载、安全解压及完整逐文件 manifest 检查，不执行未验证的包。需要现有受信 Node.js、Python 3 和 Linux/systemd；不会安装依赖、更改 Node 或修正目标环境。磁盘预检为解包、预装配及新旧版本留出余量。
+
+正式安装仍调用发行内公开部署协调器，共享人工部署使用的锁。协调器在锁内核验预期旧 manifest，避免人工升级与自动升级交错。普通兼容更新沿用自动判断的保留运行时路径；核心或受保护输入变化时进入完整维护。管理服务重新响应、必要核心就绪及原有服务和交付意图恢复后才记录成功。
+
+自动策略不会跨主版本安装；状态格式声明变化需人工部署。未签名、最低运行时/更新器协议不满足或不允许自动安装的发行只提示人工处理。遇到不可逆迁移时不能因保留旧程序目录就推断可以回滚。
+
+普通安装故障由既有协调器尝试恢复旧程序；已恢复的失败目标不会自动反复重装。恢复失败、文件漂移、安装中断或未知锁进入待人工处理状态，保留部署证据，不能通过清锁、删收据或重建数据库绕过。掉电、SIGKILL 等强制中断不承诺自动恢复。私有状态、凭据、用量数据库均原地保留，不额外创建业务备份。
+
+## 待人工处理后的恢复
+
+先按[中断恢复规程](deployment.md#升级准备与中断恢复)完成 inspect/recover 或受控重新部署，并核对服务、核心与交付。仅有网页能访问不能代替这些检查。
+
+更新器保留独立的阻止安装标记；处理完成后，由管理员停止 updater，使用当前可信发行入口显式确认已核验的安装 manifest，再启动服务：
+
+```sh
+sudo systemctl stop cocoproxy-updater.service
+sudo "$UPDATER_NODE_EXECUTABLE" --experimental-strip-types "$UPDATER_RELEASE_DIRECTORY/source/apps/updater/main.ts" \
+  --settings "$UPDATER_SETTINGS_FILE" --acknowledge-recovery "$REVIEWED_MANIFEST_SHA256"
+sudo systemctl start cocoproxy-updater.service
+```
+
+上述变量均由操作者从当前受信安装中填写：`UPDATER_NODE_EXECUTABLE` 为原有 Node 路径，`UPDATER_RELEASE_DIRECTORY` 为当前安装发行目录，`UPDATER_SETTINGS_FILE` 为 runtime 设置同目录的 `updater.json`，摘要来自已核验的安装收据。确认入口只在无 updater owner、完整收据匹配、部署日志已完成/恢复、公开 inspect 无漂移和安装锁时清除此标记，不执行恢复或删除未知锁。失败目标的自动重装阻止仍保留，人工确认更新可另行执行。
+
+## 文件与权限
+
+| 文件或入口 | 归属与用途 |
+| --- | --- |
+| `cocoproxy-updater.service` 与 runtime 设置同目录的 `updater.json` | root 管理，纳入安装收据；绑定管理发行目录，不跟随保留的旧核心源码 |
+| `/run/cocoproxy-updater/control.sock` | root 控制父目录，固定服务 UID 的 0600 socket，仅接受有限操作 |
+| `/var/lib/cocoproxy-updater/state.json` | root:0600，保存策略、计划、任务摘要及人工处理标志 |
+| `/etc/cocoproxy-install/update-trust.pem` | 管理员配置的公钥，不属于业务配置草稿，不接受浏览器替换 |
+
+管理服务继续以非 root 身份运行，没有新增任意 systemd、shell 或下载权限。更新器自身代码在本次任务结束后才切换；人工部署尚未完成时不提前跟随新设置。卸载先停止并禁用执行器，再按收据删除受管文件；私有状态和信任配置保留，便于审阅。
+
+## 验证范围
+
+`npm run test:updater` 覆盖调度、关闭竞态、重启、限流、签名篡改、危险归档、完整合成载荷和管理认证；部署测试覆盖两文件迁移、运行时保留、失败恢复、锁内版本约束和管理健康检查。另需执行 TypeScript、Vue 和脚本语法检查。上述合成检查不代替目标设备的真实签名发行升级、systemd 权限矩阵、网络和路由器恢复验收。

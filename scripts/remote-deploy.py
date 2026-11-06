@@ -492,6 +492,14 @@ def stage_payload(source, manifest_sha):
     return stage, manifest
 
 
+def ensure_updater_started(systemctl):
+    """Keep a live coordinator running until its own settled-task settings refresh."""
+    unit = 'cocoproxy-updater.service'
+    run([systemctl, 'enable', unit])
+    if run([systemctl, 'show', unit, '-p', 'ActiveState', '--value']).decode().strip() not in ['active', 'activating']:
+        run([systemctl, 'start', unit])
+
+
 def management_ready(management):
     """Probe the private listener without credentials or an environment proxy."""
     origin = urllib.parse.urlsplit(management['origin'])
@@ -618,6 +626,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         preserved_state = compare_preservation(baseline, preservation())
         need(preserved_state['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
         clock.mark('management-restored-verified')
+        ensure_updater_started(systemctl)
         replace(journal, {**progress, 'status': 'complete', 'phase': 'verified', 'preservation': preserved_state, 'timings': clock.report()})
         print(json.dumps({'installed': True, 'updated': True, 'components': components, 'commit': manifest['commit'],
                           'manifestSha256': options.manifest_sha256, 'runtimePreserved': True, 'preservation': preserved_state, 'timings': clock.report()}))
@@ -635,12 +644,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--payload', required=True)
     parser.add_argument('--manifest-sha256', required=True)
+    parser.add_argument('--expected-manifest-sha256')
     for key in ['environment', 'input', 'admin-input', 'router-config', 'router-hook', 'web-unit']:
         parser.add_argument('--' + key)
     parser.add_argument('--preview', action='store_true')
     options = parser.parse_args(argv)
     need(fcntl is not None and os.name == 'posix' and os.uname().sysname == 'Linux' and os.geteuid() == 0, 'REMOTE_LINUX_ROOT_REQUIRED')
     need(re.fullmatch('[a-f0-9]{64}', options.manifest_sha256), 'REMOTE_MANIFEST_SHA_INVALID')
+    need(options.expected_manifest_sha256 is None or re.fullmatch('[a-f0-9]{64}', options.expected_manifest_sha256),
+         'REMOTE_EXPECTED_MANIFEST_SHA_INVALID')
     os.umask(0o077)
     directory(PRIVATE, 0o700)
     need(stat.S_IMODE(PRIVATE.stat().st_mode) == 0o700, 'REMOTE_INSTALL_DIRECTORY_PRIVATE_REQUIRED')
@@ -663,6 +675,14 @@ def main(argv=None):
 
 
 def main_locked(options):
+    # The shared deployment lock is already held. Bind the updater's installed
+    # identity before staging, preparing or changing any deployment files.
+    expected = getattr(options, 'expected_manifest_sha256', None)
+    if expected is not None:
+        need(RECEIPT.exists(), 'REMOTE_EXPECTED_INSTALLATION_CHANGED')
+        current = json.loads(regular(RECEIPT, True))
+        need(current.get('status') == 'complete' and current.get('manifestSha256') == expected,
+             'REMOTE_EXPECTED_INSTALLATION_CHANGED')
     clock = DeploymentClock()
     journal = PRIVATE / 'remote-last.json'
     if journal.exists():
@@ -966,6 +986,9 @@ def main_locked(options):
             for unit, previous in before_units.items():
                 need(unit == 'cocoproxy-bandwidth.service' or not previous['active'] or unit_value(unit, 'ActiveState') == 'active', 'REMOTE_SERVICE_NOT_RESTORED')
                 need(unit_value(unit, 'UnitFileState') == previous['enableState'], 'REMOTE_SERVICE_ENABLE_INTENT_CHANGED')
+            if not installed or before_units.get('cocoproxy-management.service', {}).get('active'):
+                management_ready(management)
+                record_phase('management-restored-ready')
             if router_enabled:
                 record_phase('router-restore-started')
                 run([*router_command, 'enable'], timeout=300)
@@ -975,6 +998,7 @@ def main_locked(options):
             if installed:
                 preservation = {'schemaVersion': 1, 'status': 'pass', 'scope': 'verified-install-window-and-restored-stable-state',
                     'windows': preservation_windows, 'notAssessed': ['real-restored-authentication', 'long-running-business-availability']}
+            ensure_updater_started(systemctl)
             replace(journal, {'status': 'complete', 'phase': 'verified', 'manifestSha256': options.manifest_sha256, 'commit': manifest['commit'], 'components': components,
                 'preservation': preservation, 'timings': clock.report()})
             print(json.dumps({'installed': True, 'updated': installed, 'commit': manifest['commit'], 'manifestSha256': options.manifest_sha256, 'components': components,
