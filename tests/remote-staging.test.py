@@ -2,9 +2,11 @@
 import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import tempfile
 import unittest
@@ -151,6 +153,78 @@ class RemoteStagingTests(unittest.TestCase):
                 raw = json.dumps(value).encode()
                 with self.assertRaisesRegex(RuntimeError, 'REMOTE_PAYLOAD_PATH_INVALID'):
                     deploy.payload_manifest(raw, hashlib.sha256(raw).hexdigest())
+
+    def test_cleanup_removes_only_the_verified_successful_transport_copy(self):
+        for changed in [None, 'failed', 'preview', 'extra-stage', 'changed-release', 'missing-release', 'delete-failed']:
+            with self.subTest(changed=changed):
+                temporary, stack, source, incoming, digest, raw = self.fixture()
+                with temporary, stack:
+                    stage, _ = deploy.stage_payload(source, digest)
+                    releases = incoming.parent / 'releases'
+                    releases.mkdir()
+                    installed = releases / digest
+                    shutil.copytree(stage, installed)
+                    old = releases / ('a' * 64)
+                    old.mkdir()
+                    (old / 'preserve').write_text('previous release')
+                    private = incoming.parent / 'private'
+                    private.mkdir()
+                    receipt = private / 'receipt.json'
+                    receipt.write_text(json.dumps({'status': 'complete', 'manifestSha256': digest, 'release': str(installed)}))
+                    journal = private / 'remote-last.json'
+                    journal.write_text(json.dumps({'status': 'running' if changed == 'preview' else 'failed' if changed == 'failed' else 'complete',
+                        'manifestSha256': digest}))
+                    if changed == 'extra-stage':
+                        (stage / 'unknown').write_text('keep unknown file')
+                    elif changed == 'changed-release':
+                        (installed / 'bin/core').write_bytes(b'changed')
+                    elif changed == 'missing-release':
+                        shutil.rmtree(installed)
+                    original_read = deploy.regular
+                    # Synthetic files belong to the test process, never root system state.
+                    with patch.object(deploy, 'PRIVATE', private), patch.object(deploy, 'RECEIPT', receipt), \
+                         patch.object(deploy, 'regular', lambda path, private=False, maximum=256 * 1024 * 1024:
+                             original_read(path, maximum=maximum)):
+                        if changed == 'delete-failed':
+                            with patch.object(deploy.shutil, 'rmtree', side_effect=OSError('SYNTHETIC_DELETE_FAILURE')):
+                                with self.assertRaises(OSError):
+                                    deploy.cleanup_successful_payload(digest)
+                            self.assertFalse(stage.exists())
+                            self.assertEqual(len(list(incoming.glob('.cleanup-*'))), 1)
+                            self.assertEqual((installed / 'manifest.json').read_bytes(), raw)
+                        elif changed is None:
+                            deploy.cleanup_successful_payload(digest)
+                            self.assertFalse(stage.exists())
+                            self.assertEqual((installed / 'manifest.json').read_bytes(), raw)
+                        else:
+                            with self.assertRaises((RuntimeError, FileNotFoundError)):
+                                deploy.cleanup_successful_payload(digest)
+                            self.assertTrue(stage.exists())
+                    self.assertEqual((old / 'preserve').read_text(), 'previous release')
+
+    @unittest.skipUnless(deploy.fcntl is not None and os.uname().sysname == 'Linux', 'requires Linux coordinator lock')
+    def test_coordinator_cleans_only_after_success_and_cleanup_failure_never_reverts_success(self):
+        for outcome in ['success', 'preview', 'failed', 'cleanup-failed']:
+            with self.subTest(outcome=outcome):
+                temporary, stack, source, incoming, digest, _ = self.fixture()
+                with temporary, stack:
+                    private = incoming.parent / 'private'
+                    private.mkdir(mode=0o700)
+                    private.chmod(0o700)
+                    args = ['--payload', str(source), '--manifest-sha256', digest]
+                    if outcome == 'preview':
+                        args.append('--preview')
+                    with patch.object(deploy, 'PRIVATE', private), patch.object(deploy.os, 'geteuid', return_value=0), patch.object(deploy.os, 'umask'), \
+                         patch.object(deploy.signal, 'signal'), contextlib.redirect_stderr(io.StringIO()), \
+                         patch.object(deploy, 'main_locked', side_effect=RuntimeError('SYNTHETIC_FAILURE') if outcome == 'failed' else None,
+                             return_value='complete'), \
+                         patch.object(deploy, 'cleanup_successful_payload', side_effect=OSError('SYNTHETIC_FAILURE') if outcome == 'cleanup-failed' else None) as cleanup:
+                        if outcome == 'failed':
+                            with self.assertRaisesRegex(RuntimeError, 'SYNTHETIC_FAILURE'):
+                                deploy.main(args)
+                        else:
+                            self.assertEqual(deploy.main(args), 'complete')
+                        self.assertEqual(cleanup.call_count, int(outcome in ['success', 'cleanup-failed']))
 
 
 if __name__ == '__main__':

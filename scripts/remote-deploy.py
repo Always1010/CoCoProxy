@@ -528,6 +528,30 @@ def stage_payload(source, manifest_sha):
     return stage, manifest
 
 
+def cleanup_successful_payload(manifest_sha):
+    """Called under the coordinator lock, after success. Never removes releases."""
+    need(isinstance(manifest_sha, str) and re.fullmatch('[a-f0-9]{64}', manifest_sha), 'REMOTE_MANIFEST_SHA_INVALID')
+    receipt = json.loads(regular(trusted(RECEIPT), True))
+    journal = json.loads(regular(trusted(PRIVATE / 'remote-last.json'), True))
+    need(receipt.get('status') == 'complete' and receipt.get('manifestSha256') == manifest_sha and
+         journal.get('status') == 'complete' and journal.get('manifestSha256') == manifest_sha,
+         'REMOTE_INCOMING_CLEANUP_NOT_SETTLED')
+    installed = Path(receipt['release'])
+    need(installed.is_absolute() and '..' not in installed.parts and installed.name == manifest_sha and
+         installed != INCOMING and INCOMING not in installed.parents, 'REMOTE_INCOMING_CLEANUP_RELEASE_INVALID')
+    stage = INCOMING / manifest_sha
+    raw = regular(stage / 'manifest.json', maximum=4 * 1024 * 1024)
+    manifest = payload_manifest(raw, manifest_sha)
+    # Refuse unknown files, links, changed bytes or permissions in either copy.
+    verify_staged_payload(stage, raw, manifest)
+    verify_staged_payload(installed, raw, manifest)
+    # An interrupted deletion must not leave a half-cache under a reusable hash.
+    retired = INCOMING / ('.cleanup-' + manifest_sha + '-' + os.urandom(8).hex())
+    need(not retired.exists() and not retired.is_symlink(), 'REMOTE_INCOMING_CLEANUP_CONFLICT')
+    stage.rename(retired)
+    shutil.rmtree(retired)
+
+
 def ensure_updater_started(systemctl):
     """Keep a live coordinator running until its own settled-task settings refresh."""
     unit = 'cocoproxy-updater.service'
@@ -705,7 +729,17 @@ def main(argv=None):
             raise RuntimeError('REMOTE_DEPLOYMENT_INTERRUPTED')
         for name in ['SIGINT', 'SIGTERM', 'SIGHUP']:
             signal.signal(getattr(signal, name), interrupted)
-        return main_locked(options)
+        result = main_locked(options)
+        if not options.preview:
+            try:
+                cleanup_successful_payload(options.manifest_sha256)
+                print(json.dumps({'phase': 'incoming-cache-cleanup', 'status': 'removed'}), file=sys.stderr)
+            except Exception:
+                # Deployment has succeeded. Keep cleanup evidence for review;
+                # optional transport-cache reclamation never rolls services back.
+                print(json.dumps({'phase': 'incoming-cache-cleanup', 'status': 'review-required',
+                    'code': 'REMOTE_INCOMING_CLEANUP_UNCONFIRMED'}), file=sys.stderr)
+        return result
     finally:
         os.close(lock)
 
