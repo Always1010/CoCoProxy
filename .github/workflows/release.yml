@@ -49,12 +49,24 @@ jobs:
           npm run test:release-stage
           npm run test:setup
           node --experimental-strip-types --test tests/runtime-lifecycle.test.ts tests/remote-deploy.test.mjs
+          npm run test:updater
           python3 -B tests/remote-deploy.test.py
           python3 -B tests/remote-staging.test.py
           python3 -B tests/router-ssh-hook.test.py
           npm run test:deployment
       - name: Build UI, server and both reviewed Linux payloads
         run: node scripts/build-github-release.mjs
+      - name: Sign automatic update metadata when configured
+        env:
+          COCOPROXY_UPDATE_PRIVATE_KEY: ${{ secrets.COCOPROXY_UPDATE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$COCOPROXY_UPDATE_PRIVATE_KEY" ]]; then
+            node scripts/sign-update.mjs "$RUNNER_TEMP/cocoproxy-release/assets"
+            cd "$RUNNER_TEMP/cocoproxy-release/assets"
+            sha256sum update.json update.json.sig >> SHA256SUMS
+            sha256sum --check SHA256SUMS
+          fi
       - name: Preserve complete release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -87,6 +99,9 @@ jobs:
           set -euo pipefail
           flags=()
           if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" assets/* \
+          gh release create "$RELEASE_TAG" \
+            --draft \
             --verify-tag --title "CoCoProxy $RELEASE_TAG" \
             --notes-file assets/RELEASE-NOTES.md "${flags[@]}"
+          gh release upload "$RELEASE_TAG" assets/*
+          gh release edit "$RELEASE_TAG" --draft=false "${flags[@]}"

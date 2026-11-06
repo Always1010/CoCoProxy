@@ -31,6 +31,14 @@ git push origin refs/tags/v1.0.2
 
 下载后先按可信 Release 的 `SHA256SUMS` 核对附件，再解压所选架构安装包。校验对应 `.manifest.json` 与包内 `manifest.json` 一致，其 SHA-256 即安装入口需要的 `manifestSha256`；继续按部署说明核验文件集和安装前置条件。
 
+### 自动更新签名
+
+发布方可在 GitHub Actions 仓库 secret `COCOPROXY_UPDATE_PRIVATE_KEY` 配置 Ed25519 PKCS8 PEM 私钥。构建完成后的独立步骤运行 `scripts/sign-update.mjs`，生成 `update.json` 与原始 64 字节签名 `update.json.sig` 并加入 `SHA256SUMS`。私钥不传给上游构建、归档或日志。缺少 secret 时仍发布供人工安装的普通发行包，自动更新拒绝执行没有签名的版本。
+
+签名覆盖元数据原始字节，绑定仓库、版本、Tag、提交、最低 Node/更新器协议，以及两个架构安装包的名称、大小、下载地址、包与 manifest 摘要。客户端使用管理员预置的 Ed25519 SPKI PEM 公钥验签，仅接受指定仓库的正式版。发布任务先创建草稿、上传完整附件，再公开发行，避免客户端读取到未上传完整的版本。
+
+更新器按 1～365 个日历日和指定时区窗口调度，使用 ETag、有界下载及限流退避；只执行匹配架构且验签、逐文件核验成功的载荷。安装仍使用公开部署协调器与同一部署锁，不在设备上构建或安装系统依赖。
+
 ## 输入与布局
 
 ```sh
