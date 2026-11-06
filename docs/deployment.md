@@ -74,7 +74,7 @@ node source/scripts/deploy-ssh.mjs 192.0.2.2
 
 ## 后续更新
 
-可在管理界面配置按 1～365 天间隔执行的[自动软件更新](automatic-updates.md)，首次需手动部署更新执行器并配置发行验签公钥。自动安装继续使用本文的协调、状态保留和失败恢复流程。
+安装包含更新功能的版本后，可直接在管理界面启用按 1～365 天间隔执行的[自动软件更新](automatic-updates.md)，无需配置密钥。自动安装继续使用本文的协调、状态保留和失败恢复流程。
 
 核验新发行包后，对既有安装运行相同的 `deploy --local` 或 `deploy <IP>`。目标以 root:0600 的 `/etc/cocoproxy-install/deployment.json` 为部署输入主本，父目录 root:0700。正常更新只更换 release、核心摘要和服务入口，保留网络、内部身份、凭据路径及业务状态。
 

@@ -76,8 +76,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); document.removeEve
     <p v-if="!view && busy" class="mt-3 text-sm" role="status">{{ t('coco.pzLoading3') }}</p>
     <p v-if="offline" class="mt-3 text-sm text-warning" role="status">{{ t('coco.updatesOffline') }}</p>
     <template v-if="view">
-      <p v-if="!view.available" class="mt-3 text-sm text-warning">{{ t('coco.updatesUnavailable') }}</p>
-      <p v-else-if="!view.configured" class="mt-3 text-sm text-warning">{{ t('coco.updatesSetup') }}</p>
+      <p v-if="!view.available || !view.configured" class="mt-3 text-sm text-warning">{{ t('coco.updatesUnavailable') }}</p>
       <dl class="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
         <dt>{{ t('coco.updatesInstalled') }}</dt><dd class="break-all">{{ view.currentVersion ?? t('coco.pzUnknown') }}</dd>
         <dt>{{ t('coco.updatesLatest') }}</dt><dd class="break-all">{{ view.latestVersion ?? t('coco.pzUnknown') }}</dd>

@@ -4,7 +4,13 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout } from 'node:timers/promises';
-import { runUpdaterTool } from '../packages/updater/native.ts';
+import { runUpdaterTool, createNativeUpdaterHost } from '../packages/updater/native.ts';
+
+test('supported installations need no publisher keys, tokens or device trust files', async () => {
+  const host = createNativeUpdaterHost({ schemaVersion: 1, serviceUid: 12345, nodePath: '/usr/bin/node',
+    sourceDirectory: '/synthetic/release/source', releaseDirectory: '/synthetic/release' });
+  assert.equal(await host.configured(), ['arm64', 'x64'].includes(process.arch));
+});
 
 test('native tool passes arguments literally and does not expose private stderr', async () => {
   const literal = '$(printf secret); `exit 1`';

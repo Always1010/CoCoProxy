@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { signUpdate } from './sign-update.mjs';
+import { buildUpdateMetadata } from './build-update-metadata.mjs';
 import { stageExplicitRelease } from './stage-explicit-release.mjs';
 import { validateReleaseMetadata, validateReleaseTooling, validateReleaseVersion } from './release-metadata.mjs';
 import { assertReleaseSourcePaths, releaseAssetPlatform } from './release-layout.mjs';
@@ -125,11 +125,7 @@ if (process.argv.length === 3 && process.argv[2] === '--validate') {
   ];
   await writeFile(join(assets, 'SOURCES.txt'), `${sources.join('\n')}\n`);
   await copyFile(join(source, 'docs/release-notes.md'), join(assets, 'RELEASE-NOTES.md'));
-  // Signing is optional for manual releases; the updater rejects unsigned assets.
-  if (process.env.COCOPROXY_UPDATE_PRIVATE_KEY) {
-    await signUpdate({ directory: assets, version: pkg.version, tag, commit: process.env.GITHUB_SHA,
-      privateKey: process.env.COCOPROXY_UPDATE_PRIVATE_KEY });
-  }
+  await buildUpdateMetadata({ directory: assets, version: pkg.version, tag, commit: process.env.GITHUB_SHA });
   const checksums = [];
   for (const name of (await readdir(assets)).sort()) checksums.push(`${await sha256(join(assets, name))}  ${name}`);
   await writeFile(join(assets, 'SHA256SUMS'), `${checksums.join('\n')}\n`);

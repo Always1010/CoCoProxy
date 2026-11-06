@@ -56,17 +56,6 @@ jobs:
           npm run test:deployment
       - name: Build UI, server and both reviewed Linux payloads
         run: node scripts/build-github-release.mjs
-      - name: Sign automatic update metadata when configured
-        env:
-          COCOPROXY_UPDATE_PRIVATE_KEY: ${{ secrets.COCOPROXY_UPDATE_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$COCOPROXY_UPDATE_PRIVATE_KEY" ]]; then
-            node scripts/sign-update.mjs "$RUNNER_TEMP/cocoproxy-release/assets"
-            cd "$RUNNER_TEMP/cocoproxy-release/assets"
-            sha256sum update.json update.json.sig >> SHA256SUMS
-            sha256sum --check SHA256SUMS
-          fi
       - name: Preserve complete release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

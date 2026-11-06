@@ -2123,10 +2123,9 @@
       "retry-after": "检测服务要求稍后重试", "queued": "等待下一批检测"
     },
     "updatesTitle": "软件更新",
-    "updatesDescription": "检查并安装签名验证的 CoCoProxy 稳定版本。修改计划后需保存生效。",
+    "updatesDescription": "自动检查并安装 CoCoProxy 正式版本。开启后按保存的间隔和时段执行。",
     "updatesOffline": "管理服务暂时离线，当前状态已保留，将自动重新连接。",
     "updatesUnavailable": "当前安装环境不支持自动更新。",
-    "updatesSetup": "更新尚未配置：请管理员设置可信发布者公钥。",
     "updatesInstalled": "已安装版本",
     "updatesLatest": "最新版本",
     "updatesLastCheck": "上次检查",
@@ -2148,7 +2147,6 @@
     "errorUPDATER_CONFLICT": "更新设置已变化，请刷新后核对并保存。",
     "errorUPDATER_BUSY": "已有更新任务正在执行。",
     "errorUPDATER_VERSION_INVALID": "所选更新版本无效。",
-    "errorUPDATER_NOT_CONFIGURED": "请先配置可信发布者公钥。",
     "errorUPDATER_VERSION_CONFLICT": "可用版本已变化，请重新检查更新。",
     "updatesReset": "放弃修改并使用当前设置",
     "updatesPhases": {

@@ -106,7 +106,7 @@ export class UpdateEngine {
       if (nextCheckAt < window.start || nextCheckAt >= window.end) nextCheckAt = window.start;
     }
     return { available: installed !== null, configured, unavailableReason: this.state.needsReview ? 'UPDATER_REVIEW_REQUIRED'
-      : !installed ? 'UPDATER_INSTALLATION_INVALID' : !configured ? 'UPDATER_TRUST_REQUIRED' : null,
+      : !installed ? 'UPDATER_INSTALLATION_INVALID' : !configured ? 'UPDATER_PLATFORM_UNSUPPORTED' : null,
       settings: { ...this.state.settings }, revision: this.state.revision, currentVersion: installed?.version ?? null,
       latestVersion: this.state.latestVersion, nextCheckAt: this.state.needsReview ? null : nextCheckAt,
       lastCheckedAt: this.state.lastCheckedAt, lastResult: this.state.lastResult, job: this.state.job ? { ...this.state.job } : null };
@@ -123,7 +123,7 @@ export class UpdateEngine {
       if (this.active?.automatic && !this.active.installing && changed) this.active.controller.abort();
       await this.persist(); return this.view();
     }
-    if (!await this.host.configured()) throw new UpdateError('UPDATER_TRUST_REQUIRED', 503);
+    if (!await this.host.configured()) throw new UpdateError('UPDATER_PLATFORM_UNSUPPORTED', 503);
     if (this.state.needsReview) throw new UpdateError('UPDATER_REVIEW_REQUIRED', 409);
     if (command.action === 'install' && (!version(command.expectedVersion) || !command.expectedVersion)) throw new UpdateError('UPDATER_VERSION_INVALID');
     await this.launch(false, command.action === 'install' ? command.expectedVersion : null);
@@ -194,13 +194,13 @@ export class UpdateEngine {
     } catch (error) {
       this.state.job!.error = signal.aborted && !task.installing ? 'UPDATER_CANCELLED' : errorCode(error);
       this.state.job!.phase = signal.aborted && !task.installing ? 'cancelled' : 'failed';
-      const manualRequired = ['UPDATER_UNSIGNED_RELEASE', 'UPDATER_MANUAL_MIGRATION_REQUIRED'].includes(this.state.job!.error);
+      const manualRequired = ['UPDATER_METADATA_UNAVAILABLE', 'UPDATER_MANUAL_MIGRATION_REQUIRED'].includes(this.state.job!.error);
       this.state.lastResult = this.state.job!.phase === 'cancelled' ? 'cancelled' : manualRequired ? 'manual-update-required' : 'failed';
       if (manualRequired) { checkSucceeded = true; this.state.lastCheckedAt = this.host.now(); }
       const releaseError = error as { retryAt?: unknown; version?: unknown } | null;
       if (releaseError && typeof releaseError.retryAt === 'number' && Number.isSafeInteger(releaseError.retryAt)
         && releaseError.retryAt > this.host.now()) retryAt = releaseError.retryAt;
-      if (this.state.job!.error === 'UPDATER_UNSIGNED_RELEASE' && version(releaseError?.version) && releaseError?.version) this.state.latestVersion = releaseError.version as string;
+      if (this.state.job!.error === 'UPDATER_METADATA_UNAVAILABLE' && version(releaseError?.version) && releaseError?.version) this.state.latestVersion = releaseError.version as string;
       if (task.installing) { this.state.needsReview = true; this.state.lastResult = 'manual-review-required'; }
       // Download/network failures may retry; failed application must never loop on the same release.
       if (!task.installing && !signal.aborted && !manualRequired) checkSucceeded = false;

@@ -44,7 +44,7 @@ export interface CoCoProxyStatus {
 }
 
 const messages: Record<string, string> = {
-  UPDATER_TRUST_REQUIRED: 'coco.errorUPDATER_NOT_CONFIGURED',
+  UPDATER_PLATFORM_UNSUPPORTED: 'coco.updatesUnavailable',
   UPDATER_VERSION_CHANGED: 'coco.errorUPDATER_VERSION_CONFLICT',
   UPDATER_REVIEW_REQUIRED: 'coco.updatesResults.manual-review-required',
   UPDATER_INSTALLATION_CHANGED: 'coco.updatesResults.manual-update-required',
@@ -55,7 +55,6 @@ const messages: Record<string, string> = {
   UPDATER_CONFLICT: 'coco.errorUPDATER_CONFLICT',
   UPDATER_BUSY: 'coco.errorUPDATER_BUSY',
   UPDATER_VERSION_INVALID: 'coco.errorUPDATER_VERSION_INVALID',
-  UPDATER_NOT_CONFIGURED: 'coco.errorUPDATER_NOT_CONFIGURED',
   UPDATER_VERSION_CONFLICT: 'coco.errorUPDATER_VERSION_CONFLICT',
 
   SITE_SETTINGS_INVALID: 'coco.errorSITE_SETTINGS_INVALID',

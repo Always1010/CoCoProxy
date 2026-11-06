@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, open, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -40,7 +40,7 @@ export class UpdateReleaseError extends Error {
   }
 }
 type CachedResponse = { etag: string; bytes: Buffer };
-// Each fetch implementation retains at most the three small discovery documents.
+// Each fetch implementation retains at most three small discovery documents.
 const discoveryCache = new WeakMap<typeof fetch, Map<string, CachedResponse>>();
 async function request(url: string, limit: number, signal: AbortSignal, fetcher: typeof fetch,
   sink?: (chunk: Uint8Array) => Promise<void>, conditional = false): Promise<Buffer> {
@@ -97,7 +97,7 @@ async function request(url: string, limit: number, signal: AbortSignal, fetcher:
   }
   throw new Error('UPDATE_REDIRECT_INVALID');
 }
-export async function findRelease(currentVersion: string, platform: Platform, publicKey: string, signal: AbortSignal,
+export async function findRelease(currentVersion: string, platform: Platform, signal: AbortSignal,
   dependencies: Dependencies = {}): Promise<VerifiedUpdate | null> {
   need(version(currentVersion), 'UPDATE_CURRENT_VERSION_INVALID');
   need(['linux-arm64', 'linux-amd64'].includes(platform), 'UPDATE_PLATFORM_INVALID');
@@ -108,25 +108,54 @@ export async function findRelease(currentVersion: string, platform: Platform, pu
   if (!version(candidate) || release.tag_name !== `v${candidate}` || compare(candidate, currentVersion) <= 0) return null;
   const base = `${origin}${release.tag_name}/`;
   need(Array.isArray(release.assets), 'UPDATE_ASSETS_INVALID');
-  const assetURL = (name: string) => {
+  const asset = (name: string) => {
     const matches = release.assets.filter((asset: any) => asset.name === name);
     need(matches.length === 1 && matches[0].browser_download_url === base + name, 'UPDATE_ASSET_INVALID');
-    return base + name;
+    return matches[0] as { name: string; browser_download_url: string; digest?: string | null; size: number };
   };
-  // Old releases without a signature remain available for manual installation.
-  if (!release.assets.some((asset: any) => asset.name === 'update.json') || !release.assets.some((asset: any) => asset.name === 'update.json.sig')) throw new UpdateReleaseError('UPDATE_UNSIGNED_RELEASE', undefined, candidate);
-  const bytes = await request(assetURL('update.json'), 1024 * 1024, signal, fetcher, undefined, true);
-  const signature = await request(assetURL('update.json.sig'), 64, signal, fetcher, undefined, true);
-  const key = createPublicKey(publicKey);
-  need(key.asymmetricKeyType === 'ed25519' && signature.length === 64 && verify(null, bytes, key, signature), 'UPDATE_SIGNATURE_INVALID');
+  // Release identity comes from the fixed GitHub repository over verified HTTPS.
+  // GitHub asset digests bind downloaded bytes without per-device keys or credentials.
+  if (!release.assets.some((asset: any) => asset.name === 'update.json')) throw new UpdateReleaseError('UPDATE_METADATA_UNAVAILABLE', undefined, candidate);
+  let sums: Map<string, string> | undefined;
+  const assetDigest = async (entry: ReturnType<typeof asset>): Promise<string> => {
+    if (entry.digest !== undefined && entry.digest !== null) {
+      need(typeof entry.digest === 'string' && /^sha256:[a-f0-9]{64}$/.test(entry.digest), 'UPDATE_ASSET_DIGEST_INVALID');
+      return entry.digest.slice('sha256:'.length);
+    }
+    // Earlier GitHub assets may lack a digest. Use the same release's existing checksum file.
+    if (!sums) {
+      const checksums = asset('SHA256SUMS');
+      const raw = await request(checksums.browser_download_url, 256 * 1024, signal, fetcher, undefined, true);
+      if (checksums.digest !== undefined && checksums.digest !== null) {
+        need(typeof checksums.digest === 'string' && /^sha256:[a-f0-9]{64}$/.test(checksums.digest)
+          && createHash('sha256').update(raw).digest('hex') === checksums.digest.slice('sha256:'.length), 'UPDATE_CHECKSUMS_HASH_MISMATCH');
+      }
+      sums = new Map();
+      for (const line of raw.toString('utf8').split('\n')) {
+        if (!line) continue;
+        const match = /^([a-f0-9]{64}) [ *]([A-Za-z0-9][A-Za-z0-9._-]{0,255})$/.exec(line);
+        need(match && !sums.has(match[2]), 'UPDATE_CHECKSUMS_INVALID');
+        sums.set(match[2], match[1]);
+      }
+    }
+    const digest = sums.get(entry.name);
+    need(digest, 'UPDATE_ASSET_DIGEST_MISSING');
+    return digest;
+  };
+  const metadataAsset = asset('update.json');
+  const bytes = await request(metadataAsset.browser_download_url, 1024 * 1024, signal, fetcher, undefined, true);
+  need(createHash('sha256').update(bytes).digest('hex') === await assetDigest(metadataAsset), 'UPDATE_METADATA_HASH_MISMATCH');
   const metadata = JSON.parse(bytes.toString());
   need(metadata.schemaVersion === 1 && metadata.repository === repository && metadata.version === candidate && metadata.tag === release.tag_name
     && /^[a-f0-9]{40}$/.test(metadata.commit) && version(metadata.minimumNode) && Number.isSafeInteger(metadata.minimumUpdater)
     && metadata.minimumUpdater >= 1 && typeof metadata.automatic === 'boolean', 'UPDATE_METADATA_INVALID');
   const entry = metadata.platforms?.[platform];
   const name = `cocoproxy-${candidate}-${platform}.tar.gz`;
-  need(entry && entry.name === name && entry.url === assetURL(name) && Number.isSafeInteger(entry.size)
-    && entry.size > 0 && entry.size <= 256 * 1024 * 1024 && sha(entry.sha256) && sha(entry.manifestSha256), 'UPDATE_PACKAGE_INVALID');
+  const packageAsset = asset(name);
+  need(entry && entry.name === name && entry.url === packageAsset.browser_download_url && Number.isSafeInteger(entry.size)
+    && entry.size === packageAsset.size && entry.size > 0 && entry.size <= 256 * 1024 * 1024
+    && sha(entry.sha256) && sha(entry.manifestSha256), 'UPDATE_PACKAGE_INVALID');
+  need(entry.sha256 === await assetDigest(packageAsset), 'UPDATE_PACKAGE_DIGEST_MISMATCH');
   return { version: candidate, tag: metadata.tag, commit: metadata.commit, platform, manifestSha256: entry.manifestSha256,
     asset: { name, url: entry.url, size: entry.size, sha256: entry.sha256 },
     automatic: metadata.automatic && metadata.minimumUpdater <= 1 && compare(dependencies.nodeVersion ?? process.versions.node, metadata.minimumNode) >= 0 };

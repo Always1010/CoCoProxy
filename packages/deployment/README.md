@@ -39,7 +39,7 @@
 
 `start-management` 仅在未暂停时启动获准的 socket；enable/resume 在恢复运行意图后启用并启动 socket。pause/stop 先关闭 socket，等待 runtime pause，再停止 worker 并禁用 socket，避免维护中再次激活或重启后恢复入口。完整升级、管理侧保留运行时更新、恢复和卸载都纳入两单元的停用检查；管理侧更新保留核心和网络，暂时关闭 worker。失败回滚只删除本次新加且仍匹配收据的 worker 文件，并恢复原 socket 启用/运行意图；worker 进程可按需空闲退出。
 
-独立 root updater 读取 runtime 设置同目录的 `updater.json`（root:0644），使用管理服务入口所属发行目录的源码，不随保留的核心源码固定。`/run/cocoproxy-updater/control.sock` 位于 root:0755 运行目录；策略与任务记录保存在 `/var/lib/cocoproxy-updater`（root:0700）。管理员单独提供 `/etc/cocoproxy-install/update-trust.pem`，部署不会生成或覆盖公钥。自动策略默认关闭，部署协调器仍启用并启动 updater；已有活动进程在当前任务完成后自行读取新设置切换源码，维护过程不停止或重启 updater，也保留原发行目录。卸载先停止并禁用 updater；迁移回滚只删除本次新增且仍匹配收据的两文件。管理服务未获得新增 polkit 权限。
+独立 root updater 读取 runtime 设置同目录的 `updater.json`（root:0644），使用管理服务入口所属发行目录的源码，不随保留的核心源码固定。`/run/cocoproxy-updater/control.sock` 位于 root:0755 运行目录；策略与任务记录保存在 `/var/lib/cocoproxy-updater`（root:0700）。发行仓库固定，更新信息和安装包使用 HTTPS 及发行附件摘要自动验证，无需额外设备密钥。自动策略默认关闭，部署协调器仍启用并启动 updater；已有活动进程在当前任务完成后自行读取新设置切换源码，维护过程不停止或重启 updater，也保留原发行目录。卸载先停止并禁用 updater；迁移回滚只删除本次新增且仍匹配收据的两文件。管理服务未获得新增 polkit 权限。
 
 路径为规范 POSIX 绝对路径，状态不得与源码、二进制、设置、凭据或系统文件重叠，拒绝沙箱隐藏目录和相互嵌套文件目标。systemd 参数与环境分别转义，不经 shell。祖先、链接目标、ACL、挂载与现场身份仍由安装预检核对。
 

@@ -309,7 +309,7 @@ function render(input: unknown): DeploymentPlan {
         .map(parent => ({ path: parent, mode: '0755' as const, owner: 'root' as const })),
       ...(webPlan?.directories ?? [])],
     requirements: [
-      '独立 root 更新服务始终启用；自动更新策略默认关闭。信任公钥由管理员单独提供，部署不创建或覆盖。更新服务不随管理与核心维护停止，运行中进程在任务完成后读取新设置并自行切换受信源码。',
+      '独立 root 更新服务始终启用；自动更新策略默认关闭，固定发行来源与摘要校验随软件提供，不需要用户配置密钥。更新服务不随管理与核心维护停止，运行中进程在任务完成后读取新设置并自行切换受信源码。',
       '带宽测量由固定 Unix socket 激活的非 root worker 执行；管理服务保持空 capabilities。worker 设置为 root:0644 无密钥配置，和固定 service/socket 一起纳入收据；维护暂停须先停 socket，再停 worker，恢复仅按既有持久意图处理。',
       ...(webPlan ? ['托管 HTTPS 只引用既有匹配 SAN 且未过期的证书及服务 UID 的 0600 单链接私钥；不会生成、复制或轮换证书、安装 nginx 或修改证书信任。配置与 unit 由同一部署收据管理；启动仍须显式执行。'] : []),
       ...(networkPlan ? [

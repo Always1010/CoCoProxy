@@ -13,7 +13,7 @@ export interface UpdateJob {
   error: string | null;
 }
 
-/** Browser-safe summary. No paths, trust material or native error messages. */
+/** Browser-safe summary. No paths, credentials or native error messages. */
 export interface UpdateView {
   available: boolean;
   configured: boolean;

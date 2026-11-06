@@ -1,4 +1,4 @@
-import { createHash, createPublicKey } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, realpath, mkdir, rm, statfs } from 'node:fs/promises';
 import { join, posix } from 'node:path';
@@ -16,7 +16,6 @@ import { UpdateError } from './types.ts';
 
 export const UPDATER_STATE_DIRECTORY = '/var/lib/cocoproxy-updater';
 export const UPDATER_RUNTIME_DIRECTORY = '/run/cocoproxy-updater';
-export const UPDATER_TRUST_PATH = '/etc/cocoproxy-install/update-trust.pem';
 const RECEIPT = '/var/lib/cocoproxy-deployment/receipt.json';
 const DEPLOYMENT = '/etc/cocoproxy-install/deployment.json';
 const JOURNAL = '/etc/cocoproxy-install/remote-last.json';
@@ -130,11 +129,6 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
     need(typeof version === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version), 'UPDATER_CURRENT_VERSION_INVALID');
     return { version, manifestSha256: receipt.manifestSha256, receipt, manifest };
   }
-  async function trust() {
-    const pem = (await trustedRead(UPDATER_TRUST_PATH, 8192)).toString('utf8');
-    need(createPublicKey(pem).asymmetricKeyType === 'ed25519', 'UPDATER_TRUST_REQUIRED');
-    return pem;
-  }
   async function stable(original: InstalledUpdate) {
     const current = await installed();
     need(current.manifestSha256 === original.manifestSha256, 'UPDATER_INSTALLATION_CHANGED');
@@ -149,10 +143,10 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
     now: Date.now,
     save: state => atomicWrite(UPDATER_STATE_DIRECTORY, 'state.json', JSON.stringify(state) + '\n'),
     installed,
-    configured: async () => { try { need(platform, 'UPDATER_PLATFORM_UNSUPPORTED'); await trust(); return true; } catch { return false; } },
+    configured: async () => platform !== null,
     find: async (currentVersion, signal) => {
       need(platform, 'UPDATER_PLATFORM_UNSUPPORTED');
-      return findRelease(currentVersion, platform!, await trust(), signal);
+      return findRelease(currentVersion, platform!, signal);
     },
     download: async (update, id, signal) => {
       const scratch = join(UPDATER_STATE_DIRECTORY, 'download-' + id);
