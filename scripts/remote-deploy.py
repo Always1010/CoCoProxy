@@ -240,10 +240,22 @@ def new_input(previous, manifest_sha, core_sha, frontend=False):
     return value
 
 
-def restore_unit_intent(systemctl, before):
+def wait_core_ready(node, service, runtime, code):
+    for attempt in range(30):
+        status = json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
+            Path(runtime['sourceDirectory']) / 'apps/cli/main.ts', 'runtime-status', '--state-dir', runtime['stateDirectory'],
+            '--runtime-settings', runtime['settingsPath']]))
+        if (status.get('core') or {}).get('ready') is True:
+            return
+        if attempt < 29:
+            time.sleep(1)
+    raise RuntimeError(code)
+
+
+def restore_unit_intent(systemctl, before, core_ready=None):
     """Restore both active and inactive intentions; never enable static units."""
     order = ['cocoproxy-gateway-guard.service', 'cocoproxy-gateway-network.service',
-             'cocoproxy-management.service', 'cocoproxy-web.service', 'cocoproxy-mihomo.service',
+             'cocoproxy-mihomo.service', 'cocoproxy-management.service', 'cocoproxy-web.service',
              'cocoproxy-bandwidth.socket', 'cocoproxy-bandwidth.service']
     def value(unit, prop):
         return run([systemctl, 'show', unit, '-p', prop, '--value']).decode().strip()
@@ -258,6 +270,8 @@ def restore_unit_intent(systemctl, before):
     for unit in order:
         if unit in before and before[unit]['active']:
             run([systemctl, 'start', unit])
+            if unit == 'cocoproxy-mihomo.service' and core_ready:
+                core_ready()
     for unit, prior in before.items():
         need((unit == 'cocoproxy-bandwidth.service' or value(unit, 'ActiveState') == ('active' if prior['active'] else 'inactive')) and
              value(unit, 'UnitFileState') == prior.get('enableState', prior.get('enabled')), 'REMOTE_ROLLBACK_SERVICE_NOT_RESTORED')
@@ -356,7 +370,10 @@ def rollback_update(context):
         os.chown(token_path, runtime['serviceUid'], 0); os.chmod(token_path, 0o600)
         json_run(['runuser', '-u', service, '--', node, '--experimental-strip-types', c['payload'] / 'source/apps/cli/main.ts',
                   'runtime-maintenance-restore', '--state-dir', runtime['stateDirectory'], '--input', token_path])
-    restore_unit_intent(systemctl, c['units'])
+    # Type=exec reports the Node launcher as running before it becomes the core.
+    # Keep the manager's reconciler stopped until this launch has really settled.
+    verify_core = lambda: wait_core_ready(node, service, runtime, 'REMOTE_ROLLBACK_CORE_NOT_READY')
+    restore_unit_intent(systemctl, c['units'], None if c['preserve_runtime'] else verify_core)
     if c['units']['cocoproxy-management.service']['active']:
         management_ready(management)
     if not c['preserve_runtime']:
@@ -365,16 +382,8 @@ def rollback_update(context):
         if lifecycle_path.exists():
             need(json.loads(regular(lifecycle_path)) == {'schemaVersion': 1, 'enabled': c['intent']['enabled'],
                  'paused': c['intent']['paused']}, 'REMOTE_ROLLBACK_LIFECYCLE_NOT_RESTORED')
-        if c['units'].get('cocoproxy-mihomo.service', {}).get('active') or c['router_enabled']:
-            for _ in range(30):
-                status = json_run(['runuser', '-u', service, '--', node, '--experimental-strip-types',
-                    Path(runtime['sourceDirectory']) / 'apps/cli/main.ts', 'runtime-status', '--state-dir', runtime['stateDirectory'],
-                    '--runtime-settings', runtime['settingsPath']])
-                if (status.get('core') or {}).get('ready') is True:
-                    break
-                time.sleep(1)
-            else:
-                raise RuntimeError('REMOTE_ROLLBACK_CORE_NOT_READY')
+        if c['router_enabled'] and not c['units'].get('cocoproxy-mihomo.service', {}).get('active'):
+            verify_core()
         if gateway:
             if c['router_enabled']:
                 json_run([*c['router_command'], 'enable'], timeout=300)
@@ -838,9 +847,6 @@ def main_locked(options):
                 active, enable_state = unit_value(unit, 'ActiveState'), unit_value(unit, 'UnitFileState')
                 need(active in ['active', 'inactive'] and enable_state in ['enabled', 'disabled', 'static', 'indirect'], 'REMOTE_SERVICE_STATE_UNSUPPORTED')
                 before_units[unit] = {'active': active == 'active', 'enabled': enable_state == 'enabled', 'enableState': enable_state}
-        def lifecycle(command, release, settings):
-            return json.loads(run(['runuser', '-u', service, '--', node, '--experimental-strip-types', Path(release) / 'source/apps/cli/main.ts',
-                command, '--state-dir', settings['stateDirectory'], '--runtime-settings', settings['settingsPath']]))
         def maintenance(command, token_path=None):
             args = ['runuser', '-u', service, '--', node, '--experimental-strip-types', payload / 'source/apps/cli/main.ts',
                     command, '--state-dir', runtime['stateDirectory']]
@@ -956,18 +962,18 @@ def main_locked(options):
             if enabled:
                 run([systemctl, 'enable', *enabled])
             if installed:
-                for unit in ['cocoproxy-gateway-guard.service', 'cocoproxy-management.service', 'cocoproxy-web.service', *worker_units]:
-                    if before_units.get(unit, {}).get('active'):
-                        run([systemctl, 'start', unit])
+                if before_units.get('cocoproxy-gateway-guard.service', {}).get('active'):
+                    run([systemctl, 'start', 'cocoproxy-gateway-guard.service'])
                 if before_units['cocoproxy-mihomo.service']['active']:
                     run([systemctl, 'start', 'cocoproxy-mihomo.service'])
-                if before_units['cocoproxy-mihomo.service']['active'] or router_enabled:
-                    for _ in range(30):
-                        if (lifecycle('runtime-status', Path(runtime['sourceDirectory']).parent, runtime).get('core') or {}).get('ready'):
-                            break
-                        time.sleep(1)
-                    else:
-                        raise RuntimeError('REMOTE_CORE_NOT_READY')
+                    wait_core_ready(node, service, runtime, 'REMOTE_CORE_NOT_READY')
+                # The manager starts an immediate reconciliation pass. Starting
+                # it before core readiness could stop an unfinished launcher.
+                for unit in ['cocoproxy-management.service', 'cocoproxy-web.service', *worker_units]:
+                    if before_units.get(unit, {}).get('active'):
+                        run([systemctl, 'start', unit])
+                if router_enabled and not before_units['cocoproxy-mihomo.service']['active']:
+                    wait_core_ready(node, service, runtime, 'REMOTE_CORE_NOT_READY')
                 record_phase('core-restored-ready')
                 restored_preservation = compare_preservation(before_preservation, snapshot_preservation())
                 preservation_windows.append(restored_preservation)

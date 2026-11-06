@@ -17,6 +17,55 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_upgrade_and_rollback_wait_for_slow_core_before_starting_manager(self):
+        for fail_apply in [False, True]:
+            with self.subTest(rollback=fail_apply):
+                temporary, stack, private, before, events, router, args = self.scenario(fail_apply=fail_apply)
+                with temporary, stack:
+                    original_run = deploy.run
+                    observed = {'ready': False, 'polls': 0}
+                    def run(command, **kwargs):
+                        command = [str(item) for item in command]
+                        if command == ['/usr/bin/systemctl', 'start', 'cocoproxy-management.service']:
+                            self.assertTrue(observed['ready'], 'manager could interrupt the unfinished core launcher')
+                        result = original_run(command, **kwargs)
+                        if command == ['/usr/bin/systemctl', 'start', 'cocoproxy-mihomo.service']:
+                            observed.update(ready=False, polls=0)
+                        if 'runtime-status' in command:
+                            observed['polls'] += 1
+                            observed['ready'] = observed['polls'] >= 2
+                            return json.dumps({'core': {'ready': observed['ready']}}).encode()
+                        return result
+                    with patch.object(deploy, 'run', run), patch.object(deploy.time, 'sleep'):
+                        if fail_apply:
+                            with self.assertRaisesRegex(RuntimeError, '^INSTALL_SYNTHETIC_FAILURE$'):
+                                deploy.main_locked(args)
+                        else:
+                            deploy.main_locked(args)
+                    self.assertTrue(router['enabled'])
+                    self.assertGreaterEqual(observed['polls'], 2)
+
+    def test_unready_new_core_keeps_manager_stopped_until_previous_core_recovers(self):
+        temporary, stack, private, before, events, router, args = self.scenario()
+        with temporary, stack:
+            original_run = deploy.run
+            def run(command, **kwargs):
+                result = original_run(command, **kwargs)
+                if 'runtime-status' in command:
+                    return json.dumps({'core': {'ready': not any('b' * 64 in str(item) for item in command)}}).encode()
+                return result
+            with patch.object(deploy, 'run', run), patch.object(deploy.time, 'sleep'):
+                with self.assertRaisesRegex(RuntimeError, '^REMOTE_CORE_NOT_READY$'):
+                    deploy.main_locked(args)
+            manager_starts = [index for index, event in enumerate(events)
+                              if event == ['/usr/bin/systemctl', 'start', 'cocoproxy-management.service']]
+            self.assertEqual(len(manager_starts), 1)
+            old_ready = next(index for index, event in enumerate(events) if 'runtime-status' in event
+                             and any('a' * 64 in str(item) for item in event))
+            self.assertLess(old_ready, manager_starts[0])
+            self.assertEqual(json.loads((private / 'remote-last.json').read_text())['status'], 'recovered')
+            self.assertTrue(router['enabled'])
+
     def test_worker_activation_closes_before_maintenance_and_restores_socket_intent(self):
         for preserve_runtime in [False, True]:
             with self.subTest(preserve_runtime=preserve_runtime):
