@@ -23,6 +23,7 @@ import { createUsageService, parseUsageSnapshot } from './usage.ts';
 import { createBandwidthService } from './bandwidth.ts';
 import { parseBandwidthLedger } from './bandwidth-selector.ts';
 import { createBandwidthWorkerClient } from './bandwidth-worker-client.ts';
+import { createUpdaterHandler } from './updater.ts';
 
 export function stripControllerMount(request: Request): Request {
   const url = new URL(request.url);
@@ -206,8 +207,10 @@ export async function loadManagementGateway(path: string) {
         return { config: candidate.config, binaryPath, stateDirectory: runtimeSettings.stateDirectory };
       },
     });
+    const updates = createUpdaterHandler();
     const gateway = createManagementGateway({ origin: settings.origin, credential, trustedDevices }, (request, principal) =>
       new URL(request.url).pathname.startsWith('/api/clash/') ? controller.fetch(stripControllerMount(request)) :
+        new URL(request.url).pathname.startsWith('/api/cocoproxy/updates') ? updates(request) :
         new URL(request.url).pathname.startsWith('/api/cocoproxy/usage/') ? usage.fetch(request) :
           ['/api/cocoproxy/bandwidth', '/api/cocoproxy/bandwidth/cancel'].includes(new URL(request.url).pathname) ? bandwidth!.fetch(request, principal) : action(request, principal));
     const lifecycle = createManagementLifecycle(runtimeSettings.stateDirectory, runtime,

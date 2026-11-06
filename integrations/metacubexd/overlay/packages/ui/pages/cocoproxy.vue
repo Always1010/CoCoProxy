@@ -75,6 +75,7 @@ onMounted(() => run(refresh))
       <div class="flex items-center justify-between border-b border-base-content/8 p-4"><span class="text-sm">{{ t('coco.pzCoreStatus') }}</span><span v-if="status" class="flex items-center gap-2 text-sm" :class="status.core?.ready ? 'text-success' : 'text-warning'"><IconCheck v-if="status.core?.ready" :size="16" /><IconX v-else :size="16" />{{ status.core?.ready ? t('coco.pzRunning') : t('coco.pzNotReady') }}</span><span v-else class="loading loading-spinner loading-xs" /></div>
       <div class="flex items-center justify-between p-4"><span class="text-sm">{{ t('coco.pzManagementSession') }}</span><button class="btn btn-outline btn-sm" :disabled="locked" @click="run(api.logout)"><IconLogout :size="16" />{{ t('coco.pzSignOut') }}</button></div>
     </div>
+    <SoftwareUpdates />
     <section class="max-w-2xl rounded-xl border border-base-content/10 bg-base-200/60 p-4" aria-labelledby="host-proxy-title">
       <label class="flex min-h-11 items-center justify-between gap-4" for="host-proxy-enabled">
         <span id="host-proxy-title" class="flex items-center gap-2 text-base font-semibold"><IconDeviceDesktop :size="20" aria-hidden="true" />{{ t('coco.hostProxyTitle') }}</span>

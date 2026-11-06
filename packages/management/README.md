@@ -50,6 +50,10 @@ HTTPS 使用 `__Host-cocoproxy_session` 和受信任设备的 `__Host-cocoproxy_
 | POST `/api/session/devices/revoke` | `{id}`；撤销指定设备及关联会话，撤销当前设备时清除 cookie |
 | GET `/api/cocoproxy/health` | 无需认证，仅报告 management_only 响应，不报告核心健康 |
 | GET `/api/cocoproxy/status` | 历史状态、草稿摘要和独立 core_only 观察；gateway 明确未实现 |
+| GET `/api/cocoproxy/updates` | 更新设置、当前/可用版本、计划与脱敏任务摘要；执行器不可用时返回关闭的只读状态 |
+| PUT `/api/cocoproxy/updates/settings` | `{expectedRevision,settings}`；保存自动更新开关、1～365 整数天间隔、时区和时间窗口 |
+| POST `/api/cocoproxy/updates/check` | 空对象；只检查签名发行，不安装 |
+| POST `/api/cocoproxy/updates/install` | `{expectedVersion}`；启动已确认版本的独立更新任务，返回任务摘要 |
 | GET `/api/cocoproxy/draft` | 草稿版本、代次及可编辑 policy，不返回部署参数 |
 | PUT `/api/cocoproxy/draft` | `{expectedRevision,policy}`；只保存 |
 | POST `/api/cocoproxy/stage` | `{expectedRevision,sources?:[{id,expectedRevision}]}`；捕获指定草稿和来源快照 |
@@ -61,7 +65,9 @@ HTTPS 使用 `__Host-cocoproxy_session` 和受信任设备的 `__Host-cocoproxy_
 | POST `/api/cocoproxy/sources/:id/refresh` | `{expectedRevision}`；按部署许可策略刷新，不自动应用 |
 | DELETE `/api/cocoproxy/sources/:id` | `{expectedRevision}`；删除来源，页面先解除工作区引用 |
 
-除最小 health、密码登录和同源注销外均要求管理认证，受信任设备可自动建立短期会话；上表路径不接受查询参数。未知路由和原有 `/api/control/**` 返回 404，没有兼容的直接 start、配置热写、脚本、升级、WebDAV 或 geo 下载旁路。
+除最小 health、密码登录和同源注销外均要求管理认证，受信任设备可自动建立短期会话；上表路径不接受查询参数。未知路由和原有 `/api/control/**` 返回 404，没有兼容的直接 start、配置热写、脚本、上游升级、WebDAV 或 geo 下载旁路。
+
+软件更新只经固定私有 Unix socket 转发到独立 root 执行器；管理进程不安装文件或获得任意服务命令权限。请求不能指定下载 URL、载荷路径、信任公钥或执行参数。策略即使暂缺公钥仍可保存和关闭，实际检查/安装须有有效信任配置；设置采用修订号 CAS。浏览器关闭或管理服务维护不会取消已进入安装的任务。首次配置、时间语义与故障处理见[自动软件更新](../../docs/automatic-updates.md)。
 
 浏览器不能提交 deployment 或 HTTPS 获取策略。`createManagementApplication` 在可信启动参数中捕获部署参数，保存时注入；读取或暂存不匹配的历史草稿会报告冲突。应用已有候选时，用固定部署重新编译并要求完整代次一致，不能只信任内容 hash 或部分监听字段。draft/source revision、generation、expectedActive 分别承担保存、捕获和运行 CAS，互不替代。
 

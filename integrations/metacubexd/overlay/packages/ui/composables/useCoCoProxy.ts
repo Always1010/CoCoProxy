@@ -44,6 +44,20 @@ export interface CoCoProxyStatus {
 }
 
 const messages: Record<string, string> = {
+  UPDATER_TRUST_REQUIRED: 'coco.errorUPDATER_NOT_CONFIGURED',
+  UPDATER_VERSION_CHANGED: 'coco.errorUPDATER_VERSION_CONFLICT',
+  UPDATER_REVIEW_REQUIRED: 'coco.updatesResults.manual-review-required',
+  UPDATER_INSTALLATION_CHANGED: 'coco.updatesResults.manual-update-required',
+  UPDATER_CANCELLED: 'coco.updatesResults.cancelled',
+  UPDATER_INTERRUPTED: 'coco.updatesPhases.interrupted',
+  UPDATER_UNAVAILABLE: 'coco.errorUPDATER_UNAVAILABLE',
+  UPDATER_SETTINGS_INVALID: 'coco.errorUPDATER_SETTINGS_INVALID',
+  UPDATER_CONFLICT: 'coco.errorUPDATER_CONFLICT',
+  UPDATER_BUSY: 'coco.errorUPDATER_BUSY',
+  UPDATER_VERSION_INVALID: 'coco.errorUPDATER_VERSION_INVALID',
+  UPDATER_NOT_CONFIGURED: 'coco.errorUPDATER_NOT_CONFIGURED',
+  UPDATER_VERSION_CONFLICT: 'coco.errorUPDATER_VERSION_CONFLICT',
+
   SITE_SETTINGS_INVALID: 'coco.errorSITE_SETTINGS_INVALID',
   SITE_SETTINGS_CONFLICT: 'coco.errorSITE_SETTINGS_CONFLICT',
   SITE_SETTINGS_CORRUPT: 'coco.errorSITE_SETTINGS_CORRUPT',
@@ -142,7 +156,7 @@ export class CoCoProxyError extends Error {
 
 export function cocoproxyErrorMessage(error: unknown, t: (key: string) => string): string {
   return error instanceof CoCoProxyError
-    ? t(messages[error.code] ?? 'coco.operationFailed')
+    ? t(messages[error.code] ?? (error.code.startsWith('UPDATER_') ? 'coco.updatesTaskError' : 'coco.operationFailed'))
     : t('coco.operationUnknown')
 }
 
