@@ -12,6 +12,9 @@ import { canonicalLocalPath, cleanLocalCommit, localFail, readLocalJSON, resolve
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const absent = async path => { try { await lstat(path); return false; } catch (error) { if (error.code === 'ENOENT') return true; throw error; } };
 const needPreparation = () => localFail('LOCAL_PREPARE_REQUIRED', '缺少或不匹配的构建依赖，请运行 bash scripts/build-release.sh --prepare。');
+const localCorePlatform = () => process.arch === 'arm64' ? 'linux-arm64' : process.arch === 'x64' ? 'linux-amd64-v1' : localFail('LOCAL_ARCHITECTURE_UNSUPPORTED');
+const localCatalog = async source => validateReleaseMetadata(await readLocalJSON(join(source, 'integrations/metacubexd/components.json')),
+  await readLocalJSON(join(source, 'integrations/metacubexd/review.json')), await readLocalJSON(join(source, 'integrations/metacubexd/source-tree.json')));
 
 export async function checkLocalNpmTree(base) {
   try {
@@ -60,7 +63,7 @@ async function prepareLocalInputs(paths, catalog, prepare, execute) {
   const { management, mihomo } = catalog;
   const archive = join(cache, `metacubexd-${management.sourceArchiveSha256}.tar.gz`);
   await asset(archive, `https://codeload.github.com/MetaCubeX/metacubexd/tar.gz/${management.commit}`, management.sourceArchiveSha256, prepare, execute);
-  const platform = process.arch === 'arm64' ? 'linux-arm64' : process.arch === 'x64' ? 'linux-amd64-v1' : localFail('LOCAL_ARCHITECTURE_UNSUPPORTED');
+  const platform = localCorePlatform();
   const coreMetadata = mihomo.platforms[platform];
   const compressed = join(cache, `${coreMetadata.releaseReportedSha256}.gz`);
   await asset(compressed, coreMetadata.downloadUrl, coreMetadata.releaseReportedSha256, prepare, execute);
@@ -153,7 +156,9 @@ export async function runLocalBuild({ source, workspace, prepare = false, compon
   return withLocalBuildLock(paths, async ({ signal, assertHeld }) => {
     if (preview) {
       const commit = await cleanLocalCommit(paths.source, execute);
-      const baseline = components !== 'all' ? await componentBaseline({ snapshot: paths.source }, baseRelease, execute, components) : {};
+      const reviewedCoreSha256 = components !== 'all' ? (await localCatalog(paths.source)).mihomo.platforms[localCorePlatform()].binarySha256 : undefined;
+      // Preview compares reviewed identity without preparing dependencies or downloading a core.
+      const baseline = components !== 'all' ? await componentBaseline({ snapshot: paths.source, reviewedCoreSha256 }, baseRelease, execute, components) : {};
       const { frontendUpdate, componentUpdate, inputComparison } = baseline;
       return { preview: true, components, commit, deployment: components === 'frontend' ? 'restart-management-and-dependent-https; preserve-core-and-network' : 'full-maintenance', ...(frontendUpdate ? { frontendUpdate } : {}), ...(componentUpdate ? { componentUpdate } : {}), ...(inputComparison ? { inputComparison } : {}) };
     }
@@ -163,8 +168,7 @@ export async function runLocalBuild({ source, workspace, prepare = false, compon
     try {
       await prerequisites(command);
       const commit = await cleanLocalCommit(paths.source, command);
-      const catalog = validateReleaseMetadata(await readLocalJSON(join(paths.source, 'integrations/metacubexd/components.json')),
-        await readLocalJSON(join(paths.source, 'integrations/metacubexd/review.json')), await readLocalJSON(join(paths.source, 'integrations/metacubexd/source-tree.json')));
+      const catalog = await localCatalog(paths.source);
       validateReleaseTooling(catalog, await readLocalJSON(join(paths.source, 'tooling/package.json')), await readLocalJSON(join(paths.source, 'tooling/package-lock.json')));
       const dependencies = await inputs(paths, catalog, prepare, command);
       const work = join(paths.workspace, 'work'); await mkdir(work, { recursive: true, mode: 0o700 }); await canonicalLocalPath(work);

@@ -251,10 +251,11 @@ export async function componentBaseline(config, baseRelease, execute, components
   const bytes = await regular(join(baseRelease, 'manifest.json')); const manifest = JSON.parse(bytes.toString('utf8'));
   const baseManifestSha256 = hash(bytes);
   await verifyBuiltRelease(baseRelease, { staged: true, commit: manifest.commit, manifestSha256: baseManifestSha256, fileCount: manifest.files?.length }, manifest.commit);
+  const coreMatches = async core => Boolean(core && core.sha256 === manifest.components?.mihomo?.binarySha256
+    && core.sha256 === (config.core ? hash(await regular(config.core)) : config.reviewedCoreSha256));
   if (components === 'management') {
     const core = manifest.files.find(entry => entry.path === 'bin/mihomo');
-    if (!core || core.sha256 !== manifest.components?.mihomo?.binarySha256
-      || core.sha256 !== hash(await regular(config.core))) fail('BUILD_MANAGEMENT_CORE_CHANGED');
+    if (!await coreMatches(core)) fail('BUILD_MANAGEMENT_CORE_CHANGED');
     return { baseRelease, componentUpdate: { schemaVersion: 1, components, baseManifestSha256, reusedInputSha256: core.sha256 } };
   }
   const raw = await execute('git', ['-C', config.snapshot, 'ls-tree', '-rz', '--full-tree', 'HEAD'], { capture: true });
@@ -267,8 +268,7 @@ export async function componentBaseline(config, baseRelease, execute, components
     targetCommit: config.expected?.commit ?? (await execute('git', ['-C', config.snapshot, 'rev-parse', 'HEAD'], { capture: true })).trim() };
   const reject = async code => {
     const core = manifest.files.find(entry => entry.path === 'bin/mihomo');
-    const coreUnchanged = core && core.sha256 === manifest.components?.mihomo?.binarySha256 && config.core
-      && core.sha256 === hash(await regular(config.core));
+    const coreUnchanged = await coreMatches(core);
     throw Object.assign(new Error(code), { code, inputComparison: { ...inputComparison, recommendedComponents: coreUnchanged ? 'management' : 'all' } });
   };
   if (manifest.buildInputs?.schemaVersion !== INPUT_SCHEMA_VERSION) await reject(components === 'frontend'

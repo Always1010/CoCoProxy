@@ -65,3 +65,37 @@ test('local build and deployment use the same nonblocking lock', { skip: process
     await assert.rejects(withLocalBuildLock(paths, async () => assert.fail('busy lock entered')), { code: 'LOCAL_BUILD_LOCK_LOST' });
   });
 });
+
+test('management preview checks the reviewed core without preparing inputs or changing the build receipt', { skip: process.platform !== 'linux' }, async t => {
+  const state = await fixture(t);
+  const core = Buffer.from('synthetic reviewed core');
+  const catalogPath = join(state.source, 'integrations/metacubexd/components.json');
+  const reviewPath = join(state.source, 'integrations/metacubexd/review.json');
+  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+  const review = JSON.parse(await readFile(reviewPath, 'utf8'));
+  for (const platform of Object.keys(catalog.mihomo.platforms)) {
+    catalog.mihomo.platforms[platform].binarySha256 = sha(core);
+    review.coreCandidate.platforms[platform].binarySha256 = sha(core);
+  }
+  review.coreCandidate.binarySha256 = sha(core);
+  await writeFile(catalogPath, JSON.stringify(catalog)); await writeFile(reviewPath, JSON.stringify(review));
+  await runLocalCommand('git', ['-C', state.source, 'add', '.']);
+  await runLocalCommand('git', ['-C', state.source, '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Synthetic',
+    '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 'synthetic reviewed core']);
+  const paths = await resolveLocalPaths(state.source);
+  await writeFile(paths.receipt, 'previous successful build\n');
+  const base = join(paths.workspace, 'base'); await mkdir(join(base, 'bin'), { recursive: true });
+  const writeBase = async bytes => {
+    await writeFile(join(base, 'bin/mihomo'), bytes); await chmod(join(base, 'bin/mihomo'), 0o755);
+    await writeFile(join(base, 'manifest.json'), JSON.stringify({ schemaVersion: 1, commit: 'a'.repeat(40),
+      components: { mihomo: { binarySha256: sha(bytes) } },
+      files: [{ path: 'bin/mihomo', size: bytes.length, sha256: sha(bytes), mode: '0755' }] }));
+  };
+  await writeBase(core);
+  const plan = await runLocalBuild({ ...state, preview: true, components: 'management', baseRelease: base });
+  assert.equal(plan.componentUpdate.reusedInputSha256, sha(core));
+  await writeBase(Buffer.from('different core'));
+  await assert.rejects(runLocalBuild({ ...state, preview: true, components: 'management', baseRelease: base }), { code: 'BUILD_MANAGEMENT_CORE_CHANGED' });
+  assert.equal(state.prepared(), 0);
+  assert.equal(await readFile(paths.receipt, 'utf8'), 'previous successful build\n');
+});
