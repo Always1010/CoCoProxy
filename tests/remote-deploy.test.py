@@ -17,6 +17,22 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_operation_timings_preserve_results_and_failures_without_exposing_arguments(self):
+        result = object()
+        failure = RuntimeError('synthetic private command detail')
+        with patch.object(deploy.time, 'monotonic', side_effect=[10, 11, 12.25, 13, 14.5, 15]):
+            clock = deploy.DeploymentClock()
+            self.assertIs(clock.measure('apply', lambda value: value, result), result)
+            with self.assertRaises(RuntimeError) as raised:
+                clock.measure('inspect', lambda: (_ for _ in ()).throw(failure))
+            self.assertIs(raised.exception, failure)
+            report = clock.report()
+        self.assertEqual(report['elapsedMs'], 5000)
+        self.assertEqual(report['operations'], [
+            {'phase': 'apply', 'durationMs': 1250, 'status': 'complete'},
+            {'phase': 'inspect', 'durationMs': 1500, 'status': 'failed'}])
+        self.assertNotIn('synthetic private', json.dumps(report))
+
     def test_upgrade_and_rollback_wait_for_slow_core_before_starting_manager(self):
         for fail_apply in [False, True]:
             with self.subTest(rollback=fail_apply):
@@ -453,6 +469,11 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertLess(phases.index('release-preinstalled'), phases.index('maintenance-started'))
             self.assertIn('services-and-delivery-restored', phases)
             self.assertEqual(report['timings']['scope'], 'coordinator-not-client-outage')
+            operations = {item['phase']: item for item in report['timings']['operations']}
+            for phase in ['prepare', 'stage', 'apply', 'inspect', 'preservation-before', 'preservation-after',
+                          'core-ready', 'management-ready', 'preservation-restored', 'router-disable', 'router-enable']:
+                self.assertEqual(operations[phase]['status'], 'complete')
+                self.assertGreaterEqual(operations[phase]['durationMs'], 0)
 
     def test_rejected_preparation_retains_reason_codes_without_private_values_or_maintenance(self):
         report = {'readiness': 'compatibility-evidence-incomplete', 'review': {'configurationChanged': False, 'changedFiles': ['/private/synthetic-path']},

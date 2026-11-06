@@ -126,6 +126,8 @@ node source/scripts/deploy-ssh.mjs 192.0.2.2
 
 协调器输出及 `remote-last.json` 的 `timings` 使用单调时钟，记录载荷暂存、预装配完成、维护开始、核心就绪、交付恢复等累计毫秒数。比较相邻 `phases[].elapsedMs` 可定位耗时；`scope:coordinator-not-client-outage` 表示这些是流程时间，不能当作终端连续流量测得的断网时长。
 
+`timings.operations` 另列 prepare、stage、apply、inspect、安装前后与恢复后的状态读取、核心／管理就绪等待及路由器启停的单项 `durationMs` 和 `status`，用于区分安装校验与恢复等待。已进入的操作即使失败也记录耗时，不记录命令参数或错误原文；故障仍进入原有恢复流程。
+
 构建入口逐阶段输出 `phase:build-timing`，记录源码核验、上游准备、类型检查、UI／Server 编译、装配、发行核验及部署的 `durationMs` 与累计 `elapsedMs`，失败步骤也会输出计时；最终回执包含 `timings`。其范围包含可选部署，但不包含源码同步及最终临时目录清理。源码与 Git 提交的字节对应关系仅在本次构建进程内复用；构建前后仍重新读取两份源码的文件集合、字节摘要、执行位及 Git 快照身份，不跨次缓存。
 
 发行路径核验在单次检查内复用共同父目录信息，接受结果前重新读取路径身份、权限等元数据；不跨 prepare、stage、apply、inspect 或恢复阶段复用。发行摘要仍逐文件核验，小文件最多两个并发读取，大于 16 MiB 的文件独占读取。预装配时每个新目录只创建和设置权限一次，之后仍按原流程核验发行内容。

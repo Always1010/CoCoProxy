@@ -33,6 +33,7 @@ class DeploymentClock:
         self.started = time.monotonic()
         self.phases = []
         self.candidate_verification = []
+        self.operations = []
 
     def mark(self, phase):
         self.phases.append({'phase': phase, 'elapsedMs': round((time.monotonic() - self.started) * 1000)})
@@ -40,7 +41,19 @@ class DeploymentClock:
     def report(self):
         return {'elapsedMs': round((time.monotonic() - self.started) * 1000), 'phases': list(self.phases),
                 'candidateVerification': list(self.candidate_verification),
+                'operations': list(self.operations),
                 'scope': 'coordinator-not-client-outage'}
+
+    def measure(self, phase, action, *args, **kwargs):
+        started = time.monotonic()
+        status = 'failed'
+        try:
+            result = action(*args, **kwargs)
+            status = 'complete'
+            return result
+        finally:
+            # Fixed phase names only; command arguments and errors stay private.
+            self.operations.append({'phase': phase, 'durationMs': round((time.monotonic() - started) * 1000), 'status': status})
 
     def candidates(self, phase, result):
         stats = result.get('candidateVerification')
@@ -578,7 +591,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
                 'previousRuntime': stable, 'previousNetworkSha256': hashlib.sha256(network).hexdigest() if network is not None else None}
     replace(journal, progress)
     try:
-        clock.candidates('stage', preinstall_release(installer, common))
+        clock.candidates('stage', clock.measure('stage', preinstall_release, installer, common))
         clock.mark('release-preinstalled')
         progress['timings'] = clock.report()
         replace(journal, progress)
@@ -593,22 +606,22 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         enabled_units = [unit for unit, value in before.items() if value['enabled'] == 'enabled']
         if enabled_units:
             run([systemctl, 'disable', *enabled_units])
-        baseline = preservation(True)
+        baseline = clock.measure('preservation-before', preservation, True)
         need(baseline.get('ready') is True, 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
         clock.mark('preservation-baseline-verified')
         # Apply repeats the complete read-only preflight before any live write;
         # an extra dry-run here would duplicate it inside the outage window.
         files_attempted = True
-        clock.candidates('apply', installer_result(installer + ['--operation', 'upgrade', *common, '--apply']))
+        clock.candidates('apply', clock.measure('apply', installer_result, installer + ['--operation', 'upgrade', *common, '--apply']))
         clock.mark('management-files-installed')
         progress['phase'] = 'frontend-files-installed'
         replace(journal, progress)
-        frozen = compare_preservation(baseline, preservation(True), frozen=True)
+        frozen = compare_preservation(baseline, clock.measure('preservation-after', preservation, True), frozen=True)
         need(frozen['status'] == 'pass', 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
         clock.mark('preservation-install-window-verified')
         written_inputs[input_path] = candidate
         replace(input_path, candidate)
-        inspect_complete(options.manifest_sha256)
+        clock.measure('inspect', inspect_complete, options.manifest_sha256)
         clock.mark('installation-inspected')
         if enabled_units:
             run([systemctl, 'enable', *enabled_units])
@@ -616,7 +629,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
             if before[unit]['active']:
                 run([systemctl, 'start', unit])
         if before['cocoproxy-management.service']['active']:
-            management_ready(candidate['management'])
+            clock.measure('management-ready', management_ready, candidate['management'])
         clock.mark('management-services-restored')
         # The pinned launcher must still recognize the current committed state,
         # including after a future systemd crash restart. It is never repointed.
@@ -632,7 +645,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
                  'REMOTE_SERVICE_NOT_RESTORED')
         check_runtime()
         clock.mark('preserved-runtime-verified')
-        preserved_state = compare_preservation(baseline, preservation())
+        preserved_state = compare_preservation(baseline, clock.measure('preservation-restored', preservation))
         need(preserved_state['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
         clock.mark('management-restored-verified')
         ensure_updater_started(systemctl)
@@ -768,7 +781,7 @@ def main_locked(options):
             print(json.dumps({'installed': True, 'unchanged': True, 'commit': manifest['commit'],
                 'preservation': {'status': 'not-run', 'code': 'REMOTE_UNCHANGED_NO_PRESERVATION_WINDOW'}}))
             return
-        preparation = installer_result(installer + ['--operation', 'prepare' if installed else 'install', *common])
+        preparation = clock.measure('prepare', installer_result, installer + ['--operation', 'prepare' if installed else 'install', *common])
         clock.candidates('prepare', preparation)
         clock.mark('installation-preflight-complete')
         if installed:
@@ -797,7 +810,7 @@ def main_locked(options):
             candidate = new_input(old, options.manifest_sha256, runtime['binarySha256'], True)
             replace(next_path, candidate)
             common += ['--preserve-runtime']
-            pinned = installer_result(installer + ['--operation', 'prepare', *common])
+            pinned = clock.measure('prepare-preserve-runtime', installer_result, installer + ['--operation', 'prepare', *common])
             clock.candidates('prepare-preserve-runtime', pinned)
             clock.mark('runtime-preservation-preflight-complete')
             need(pinned.get('readiness') == 'prepared-not-applied' and pinned.get('review', {}).get('configurationChanged') is False,
@@ -885,7 +898,7 @@ def main_locked(options):
             originals[PRIVATE / 'router-ssh.json'] = json.loads(regular(PRIVATE / 'router-ssh.json', True)) if (PRIVATE / 'router-ssh.json').exists() else None
         try:
             if installed:
-                clock.candidates('stage', preinstall_release(installer, common))
+                clock.candidates('stage', clock.measure('stage', preinstall_release, installer, common))
                 record_phase('release-preinstalled')
                 record_phase('maintenance-started')
                 maintenance_started = True
@@ -904,7 +917,7 @@ def main_locked(options):
                 os.chown(token_path, runtime['serviceUid'], 0)
                 os.chmod(token_path, 0o600)
                 if gateway:
-                    run([*router_command, 'disable'], timeout=300)
+                    clock.measure('router-disable', run, [*router_command, 'disable'], timeout=300)
                     need(json.loads(run([*router_command, 'status']))['enabled'] is False, 'REMOTE_ROUTER_NOT_DISABLED')
                     record_phase('router-disabled')
                 for unit in ['cocoproxy-bandwidth.socket', 'cocoproxy-bandwidth.service', 'cocoproxy-web.service', 'cocoproxy-management.service', 'cocoproxy-mihomo.service', 'cocoproxy-gateway-network.service', 'cocoproxy-gateway-guard.service']:
@@ -927,14 +940,14 @@ def main_locked(options):
                 # entering maintenance must remain valid, rather than look like
                 # changes caused by the subsequent file installation.
                 record_phase('services-stopped-network-retired')
-                before_preservation = snapshot_preservation(True)
+                before_preservation = clock.measure('preservation-before', snapshot_preservation, True)
                 record_phase('preservation-baseline-observed', preservation={'scope': 'stopped-baseline-readability',
                     'checks': before_preservation['contentChecks'], 'runtimeCode': before_preservation['runtime'].get('code')})
                 need(before_preservation.get('ready') is True, 'REMOTE_PRESERVATION_RUNTIME_RECOVERY_REQUIRED'
                     if before_preservation.get('runtime', {}).get('coherent') is False else 'REMOTE_PRESERVATION_BASELINE_UNVERIFIED')
             operation = 'upgrade' if installed else 'install'
             files_attempted = True
-            clock.candidates('apply', installer_result(installer + ['--operation', operation, *common, '--apply']))
+            clock.candidates('apply', clock.measure('apply', installer_result, installer + ['--operation', operation, *common, '--apply']))
             record_phase('files-installed')
             written_inputs[input_path] = candidate
             replace(input_path, candidate)
@@ -947,9 +960,9 @@ def main_locked(options):
                 put(management['credentialPath'], regular(initial_credential, True))
                 os.chown(management['credentialPath'], runtime['serviceUid'], 0)
                 os.chmod(management['credentialPath'], 0o600)
-            inspect_complete(options.manifest_sha256)
+            clock.measure('inspect', inspect_complete, options.manifest_sha256)
             if installed:
-                frozen = compare_preservation(before_preservation, snapshot_preservation(True), frozen=True)
+                frozen = compare_preservation(before_preservation, clock.measure('preservation-after', snapshot_preservation, True), frozen=True)
                 preservation_windows.append(frozen)
                 record_phase('installed-state-verified', preservation=frozen)
                 need(frozen['status'] == 'pass', 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED')
@@ -966,16 +979,16 @@ def main_locked(options):
                     run([systemctl, 'start', 'cocoproxy-gateway-guard.service'])
                 if before_units['cocoproxy-mihomo.service']['active']:
                     run([systemctl, 'start', 'cocoproxy-mihomo.service'])
-                    wait_core_ready(node, service, runtime, 'REMOTE_CORE_NOT_READY')
+                    clock.measure('core-ready', wait_core_ready, node, service, runtime, 'REMOTE_CORE_NOT_READY')
                 # The manager starts an immediate reconciliation pass. Starting
                 # it before core readiness could stop an unfinished launcher.
                 for unit in ['cocoproxy-management.service', 'cocoproxy-web.service', *worker_units]:
                     if before_units.get(unit, {}).get('active'):
                         run([systemctl, 'start', unit])
                 if router_enabled and not before_units['cocoproxy-mihomo.service']['active']:
-                    wait_core_ready(node, service, runtime, 'REMOTE_CORE_NOT_READY')
+                    clock.measure('core-ready', wait_core_ready, node, service, runtime, 'REMOTE_CORE_NOT_READY')
                 record_phase('core-restored-ready')
-                restored_preservation = compare_preservation(before_preservation, snapshot_preservation())
+                restored_preservation = compare_preservation(before_preservation, clock.measure('preservation-restored', snapshot_preservation))
                 preservation_windows.append(restored_preservation)
                 record_phase('restored-state-verified', preservation=restored_preservation)
                 need(restored_preservation['status'] == 'pass', 'REMOTE_PRESERVATION_READBACK_REQUIRES_REVIEW')
@@ -993,11 +1006,11 @@ def main_locked(options):
                 need(unit == 'cocoproxy-bandwidth.service' or not previous['active'] or unit_value(unit, 'ActiveState') == 'active', 'REMOTE_SERVICE_NOT_RESTORED')
                 need(unit_value(unit, 'UnitFileState') == previous['enableState'], 'REMOTE_SERVICE_ENABLE_INTENT_CHANGED')
             if not installed or before_units.get('cocoproxy-management.service', {}).get('active'):
-                management_ready(management)
+                clock.measure('management-ready', management_ready, management)
                 record_phase('management-restored-ready')
             if router_enabled:
                 record_phase('router-restore-started')
-                run([*router_command, 'enable'], timeout=300)
+                clock.measure('router-enable', run, [*router_command, 'enable'], timeout=300)
                 need(json.loads(run([*router_command, 'status']))['enabled'] is True, 'REMOTE_ROUTER_NOT_RESTORED')
             record_phase('services-and-delivery-restored')
             preservation = {'schemaVersion': 1, 'status': 'not-applicable', 'code': 'REMOTE_FIRST_INSTALL_NO_PRESERVATION_BASELINE'}
