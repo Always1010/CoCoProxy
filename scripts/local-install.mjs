@@ -46,7 +46,7 @@ async function privateJSON(path, host) {
 /** Presence is never treated as proof of a fresh install; all decisions precede prompts. */
 export async function detectLocalInstallation(host = { ...pathHost, read: path => readFile(path, 'utf8') }) {
   const receipt = await host.info(receiptPath), input = await host.info(inputPath), journal = await host.info(journalPath);
-  if (journal && (await privateJSON(journalPath, host)).status !== 'complete') fail('LOCAL_INSTALL_STATE_REQUIRES_REVIEW');
+  if (journal && !['complete', 'recovered'].includes((await privateJSON(journalPath, host)).status)) fail('LOCAL_INSTALL_STATE_REQUIRES_REVIEW');
   if (receipt) {
     if ((await privateJSON(receiptPath, host)).status !== 'complete' || !input) fail('LOCAL_INSTALL_STATE_REQUIRES_REVIEW');
     await privateJSON(inputPath, host);

@@ -105,6 +105,12 @@ test('missing, damaged and partial installation evidence never enters first-inst
     { [receipt]: { stat: { link: true }, json: { status: 'complete' } }, [input]: { json: {} } },
   ]) await assert.rejects(detectLocalInstallation(installationHost(files)), { code: 'LOCAL_INSTALL_STATE_REQUIRES_REVIEW' });
   assert.equal(await detectLocalInstallation(installationHost({ [receipt]: { json: { status: 'complete' } }, [input]: { json: {} } })), 'existing');
+  for (const status of ['complete', 'recovered']) {
+    assert.equal(await detectLocalInstallation(installationHost({
+      [receipt]: { json: { status: 'complete' } }, [input]: { json: {} },
+      '/etc/cocoproxy-install/remote-last.json': { json: { status } },
+    })), 'existing');
+  }
 });
 
 test('a later automatic-gateway update guides missing router maintenance adapter and reuses saved references', async () => {
