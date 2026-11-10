@@ -282,6 +282,26 @@ test('Google DNS exceptions use website resolvers, retain explicit overrides and
   assert.equal(recompileAutomaticGatewayConfig(gateway.config, network).id, gateway.id);
 });
 
+test('HTTPS DNS stays authoritative for unknown DIRECT domains while domestic and old resolvers remain explicit', () => {
+  const deployment = { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'EXAMPLE_ONLY', dnsPort: 15353,
+    bootstrapResolvers: ['192.0.2.53'], nameservers: ['https://resolver.example/dns-query'] };
+  const value = policy({ selections: { Other: 'DIRECT' } });
+  const next = compileConfig({ schemaVersion: 1, deployment, policy: value });
+  const dns = next.config.dns as JsonObject;
+  assert.equal(dns['direct-nameserver'], undefined);
+  assert.deepEqual(dns.nameserver, deployment.nameservers);
+  assert.deepEqual(dns['proxy-server-nameserver'], deployment.bootstrapResolvers);
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)['+.cn'], ['192.0.2.53#DIRECT']);
+  assert.deepEqual((dns['nameserver-policy'] as JsonObject)[`rule-set:${DOMESTIC_DOMAIN_PROVIDER}`], ['192.0.2.53#DIRECT']);
+  assert.equal(compileConfig({ schemaVersion: 1, policy: value,
+    deployment: { ...deployment, ...deploymentDnsOptions(next.config) } }).id, next.id);
+  const old = compileConfig({ schemaVersion: 1, policy: value,
+    deployment: { ...deployment, directResolvers: deployment.bootstrapResolvers } });
+  assert.equal(old.id, 'ca5317a7a502857c0b53c9797d705feff936f0ba1842aca0ae920cabd113674e');
+  assert.equal(compileConfig({ schemaVersion: 1, policy: value,
+    deployment: { ...deployment, ...deploymentDnsOptions(old.config) } }).id, old.id);
+});
+
 test('previous local snapshots retain their original DNS behavior and configuration identity', () => {
   const value = { ...policy(), 'x-cocoproxy-rule-mode': 'routing-v3' };
   const deployment = { mixedPort: 17890, controllerPort: 19090, controllerSecret: 'EXAMPLE_ONLY', dnsPort: 15353,

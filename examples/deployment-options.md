@@ -15,13 +15,13 @@
 }
 ```
 
-`bootstrapResolvers` 始终保留为独立的纯 IP 引导解析器。`nameservers` 仅允许无凭据、无查询、无 fragment 的 HTTPS DNS 地址。可选 `nodeResolvers` 与 `directResolvers` 分别控制节点域名和直连域名解析，允许纯 IP 或相同受限 HTTPS 形式；未指定时，在启用规则 DNS 的配置中沿用引导解析器，避免节点 DNS 依赖代理节点本身。网关拒绝把节点及直连解析器的字面 IP 指向自身或受管客户端；HTTPS 主机名的实际解析结果仍需部署操作者确认不会回到受管 DNS 链路。
+`bootstrapResolvers` 始终保留为独立的纯 IP 引导解析器。`nameservers` 仅允许无凭据、无查询、无 fragment 的 HTTPS DNS 地址。可选 `nodeResolvers` 与 `directResolvers` 分别控制节点域名和直连域名解析，允许纯 IP 或相同受限 HTTPS 形式。节点解析未指定时沿用引导解析器，避免节点 DNS 依赖代理节点本身；配置网站 HTTPS DNS 且未指定 `directResolvers` 时，直连网站继续遵循网站 DNS 与域名策略，明确的国内域名仍按本地模板使用引导解析器。网关拒绝把节点及直连解析器的字面 IP 指向自身或受管客户端；HTTPS 主机名的实际解析结果仍需部署操作者确认不会回到受管 DNS 链路。
 
 `nameserverPolicy` 仅接受精确 ASCII 域名和 `+.example.com` 这种包含根域的后缀形式，不接受正则、`rule-set:`、`geosite:` 或任意远程规则来源。最多 256 条，每条 1–16 个纯 IP 或受限 HTTPS 解析器，域名最多 253 字符。配置域名策略或 `nameservers` 时启用 Mihomo `respect-rules`，并配置独立节点和直连解析。域名及 HTTPS 服务器的引导解析和实际可达性属于部署验收范围。核心语义见 [Mihomo DNS 文档](https://wiki.metacubex.one/config/dns/)。
 
 启用规则 DNS 后，HTTPS 解析器自身的连接也需要可达的出站规则。解析器 URL 使用域名时，可以匹配已有的域名分流规则；使用字面 IP 时，需要核对 IP 规则与最终兜底策略，不能假定加密 DNS 会自动走代理。尤其在兜底流量设为直连时，应分别核验解析器入口和业务请求：必要时选用同一解析服务的域名入口，并确认该域名已有合适的代理路由。引导解析仍须保持独立，不能回指受管 DNS 链路。部署验收需在核心重新启动、缓存尚未预热时检查真实 DNS 查询，避免缓存命中掩盖上游不可达。
 
-所有新字段均可省略；旧输入仍生成原有配置和哈希，已保存候选可按原有部署设置重编译。
+上述可选字段均可省略。已保存候选中的显式直连解析器会在重编译时恢复，保留旧配置和哈希；配置网站 HTTPS DNS 的部署重新生成候选后，采用前述直连网站解析行为。
 
 ## 并发连接与按需嗅探
 

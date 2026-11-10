@@ -6,7 +6,7 @@
 
 输入结构见 `examples/explicit-proxy.json`。`schemaVersion` 仅支持 `1`；`deployment` 的三个端口必须是 1–65535 的不同整数，控制凭据不能为空，bootstrap DNS 必须是 IP 字面量。示例使用文档专用地址，必须替换后才能实际连接。
 
-部署可显式提供 `nameservers: ["https://192.0.2.54/dns-query"]`，以 HTTPS DNS 解析网站域名，并让解析连接遵守当前分流规则。该列表仅接受不带身份、查询参数或 fragment 的 HTTPS 端点；节点域名与 DIRECT 出口仍使用独立的 `bootstrapResolvers`，避免依赖代理才能解析代理节点的循环。服务可达不等于解析正确，应同时验证解析结果与终端路径。省略 `nameservers` 时保留既有解析行为及候选摘要，升级需显式迁移部署配置后应用新代次。
+部署可显式提供 `nameservers: ["https://192.0.2.54/dns-query"]`，以 HTTPS DNS 解析网站域名，并让解析连接遵守当前分流规则。该列表仅接受不带身份、查询参数或 fragment 的 HTTPS 端点；节点域名仍使用独立的 `bootstrapResolvers`，避免依赖代理才能解析代理节点的循环。配置网站 HTTPS DNS 且未显式指定 `directResolvers` 时，DIRECT 连接同样遵循网站 DNS 与域名策略，避免未知域名落入直连兜底后再次泄露给引导解析器；本地模板明确的国内域名仍单独交给直连解析器或引导解析器。旧候选保存的显式直连解析器和哈希继续保留，新行为须重新生成并应用候选。服务可达不等于解析正确，应验证完整连接触发的查询，不能仅测试 DNS 查询接口。省略 `nameservers` 时保留既有解析行为及候选摘要。
 
 部署可另设 `sniffing: true`，为缺少 DNS 映射或映射冲突的 HTTP、TLS 和 QUIC 连接恢复域名并用于分流、连接目的。范围为 HTTP 80/8080–8880、TLS/QUIC 443/8443；本地、私有、组播及保留目的地址不覆盖。该能力不保证识别隐藏或不携带域名的协议；仍需可信 DNS。订阅和策略不能自行开启或覆盖嗅探。省略或设为 false 时不生成 sniffer，既有候选可继续重编译验证。
 

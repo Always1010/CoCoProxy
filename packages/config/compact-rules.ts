@@ -97,7 +97,11 @@ export function compactCompilerRuleSets(config: JsonObject): JsonObject {
   return { ...config, rules, 'rule-providers': structuredClone(isLocal(version) ? localProviders : providers),
     ...(direct ? { dns: { ...dns, 'respect-rules': true,
       'proxy-server-nameserver': dns['proxy-server-nameserver'] ?? dns['default-nameserver'],
-      'direct-nameserver': localResolvers, 'nameserver-policy': {
+      // Keep encrypted website DNS for unclassified DIRECT destinations. Older
+      // snapshots reconstruct their explicit direct resolver without changing hashes.
+      ...(version !== LOCAL_POLICY_VERSION || dns['direct-nameserver'] !== undefined ||
+        !(dns.nameserver as string[]).some(server => server.startsWith('https://'))
+        ? { 'direct-nameserver': localResolvers } : {}), 'nameserver-policy': {
       '+.cn': localDnsResolvers,
       ...(version === LOCAL_POLICY_VERSION ? googleNameserverPolicy(config) : {}),
       ...existing, [ownedDnsKey]: localDnsResolvers,

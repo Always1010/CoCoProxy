@@ -426,7 +426,7 @@ export function compileConfig(input: unknown): Candidate {
       nameserver: [...(nameservers ?? resolvers)],
       ...(nameservers || nameserverPolicy ? { 'respect-rules': true,
         'proxy-server-nameserver': [...(nodeResolvers ?? resolvers)],
-        'direct-nameserver': [...(directResolvers ?? resolvers)] } : {
+        ...(directResolvers || !nameservers ? { 'direct-nameserver': [...(directResolvers ?? resolvers)] } : {}) } : {
         ...(nodeResolvers || nodeNameserverPolicy ? { 'proxy-server-nameserver': [...(nodeResolvers ?? resolvers)] } : {}),
         ...(directResolvers ? { 'direct-nameserver': [...directResolvers] } : {}),
       }),

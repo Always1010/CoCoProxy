@@ -83,16 +83,18 @@ test('canonical hash ignores object-key order and changes with actual content', 
   assert.notEqual(compileConfig(first).sha256, a.sha256);
 });
 
-test('deployment separates routed HTTPS DNS from independent node and direct resolvers', () => {
+test('routed HTTPS DNS also resolves DIRECT destinations unless explicitly overridden', () => {
   const value = input();
   (value.deployment as JsonObject).nameservers = ['https://192.0.2.54/dns-query'];
   const candidate = compileConfig(value), dns = candidate.config.dns as JsonObject;
   assert.deepEqual(dns.nameserver, ['https://192.0.2.54/dns-query']);
   assert.equal(dns['respect-rules'], true);
   assert.deepEqual(dns['proxy-server-nameserver'], ['192.0.2.53']);
-  assert.deepEqual(dns['direct-nameserver'], ['192.0.2.53']);
+  assert.equal(dns['direct-nameserver'], undefined);
   assert.deepEqual(dns['default-nameserver'], ['192.0.2.53']);
   assert.notEqual(candidate.id, compileConfig(input()).id);
+  assert.equal(compileConfig({ ...value, deployment: { ...value.deployment as JsonObject,
+    ...deploymentDnsOptions(candidate.config) } }).id, candidate.id);
   for (const nameservers of [[], ['http://192.0.2.54/dns-query'], ['192.0.2.54'],
     ['https://user:pass@resolver.invalid/dns-query'], ['https://resolver.invalid/dns-query#eth0'],
     ['https://resolver.invalid/dns-query?name=example.com'], ['https://resolver.invalid/'], ['https://resolver.invalid/dns query']]) {
