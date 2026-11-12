@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { once } from 'node:events';
+import { spawn } from 'node:child_process';
 import { chmod, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -44,6 +45,38 @@ test('a socket-activated single-task instance stops accepting before reporting c
     await f.client.transfer(input(f.root));
     assert.equal(f.worker.server.listening, false);
   } finally { await f.close(); }
+});
+
+test('an inherited Unix listener accepts a null Node address and rejects the wrong kernel socket path', { skip: process.platform !== 'linux', timeout: 10000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'bandwidth-listener-'));
+  const socketPath = join(root, 'worker.sock'), listener = createServer();
+  let child: ReturnType<typeof spawn> | undefined;
+  try {
+    listener.listen(socketPath); await once(listener, 'listening');
+    const descriptor = (listener as unknown as { _handle: { fd: number } })._handle.fd;
+    const moduleUrl = new URL('../packages/runtime/bandwidth-worker.ts', import.meta.url).href;
+    child = spawn(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import { once } from 'node:events';
+      import { createServer } from 'node:net';
+      import { listenBandwidthWorkerSocket } from ${JSON.stringify(moduleUrl)};
+      const server = createServer();
+      assert.throws(() => listenBandwidthWorkerSocket(server, 3, process.argv[1] + '-wrong'), { code: 'BANDWIDTH_WORKER_UNAVAILABLE' });
+      listenBandwidthWorkerSocket(server, 3, process.argv[1]);
+      await once(server, 'listening');
+      assert.equal(server.listening, true);
+      assert.ok(server.address() === null || server.address() === process.argv[1]);
+      const closed = once(server, 'close'); server.close(); await closed;
+    `, socketPath], { stdio: ['ignore', 'ignore', 'pipe', descriptor] });
+    let stderr = '';
+    child.stderr!.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+    const [code, signal] = await once(child, 'exit');
+    assert.equal(signal, null, stderr); assert.equal(code, 0, stderr);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (listener.listening) await new Promise<void>(resolve => listener.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('automatic work rejects a stale workspace revision before loading or starting a core', async () => {

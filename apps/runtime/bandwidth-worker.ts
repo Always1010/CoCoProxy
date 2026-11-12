@@ -1,6 +1,5 @@
 import { fstatSync } from 'node:fs';
-import { loadBandwidthWorkerSettings, createBandwidthWorkerHost, createBandwidthWorkerServer } from '../../packages/runtime/bandwidth-worker.ts';
-import { BANDWIDTH_WORKER_SOCKET } from '../../packages/runtime/bandwidth-worker-plan.ts';
+import { loadBandwidthWorkerSettings, createBandwidthWorkerHost, createBandwidthWorkerServer, listenBandwidthWorkerSocket } from '../../packages/runtime/bandwidth-worker.ts';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -9,9 +8,7 @@ async function main() {
   const settings = await loadBandwidthWorkerSettings(args[1]);
   if (process.getuid?.() !== settings.runtime.serviceUid) throw new Error();
   const worker = createBandwidthWorkerServer(createBandwidthWorkerHost(settings), { singleTask: true });
-  worker.server.listen({ fd: 3 }, () => {
-    if (worker.server.address() !== BANDWIDTH_WORKER_SOCKET) close();
-  });
+  listenBandwidthWorkerSocket(worker.server, 3);
   let closing = false;
   const close = () => {
     if (closing) return; closing = true; clearInterval(idle);

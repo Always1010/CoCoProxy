@@ -1,6 +1,6 @@
-import { constants } from 'node:fs';
+import { constants, fstatSync, readFileSync } from 'node:fs';
 import { lstat, open, mkdtemp, readFile, rm } from 'node:fs/promises';
-import { createServer, type Socket } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { FileTransactionStore } from '../transaction/index.ts';
@@ -11,8 +11,20 @@ import { privateRead } from '../storage/private-files.ts';
 import { parseWorkspaceDocument } from '../management/workspace.ts';
 import { BANDWIDTH_LIMITS } from '../management/bandwidth.ts';
 import { buildBandwidthConfig, checkBandwidthEgress, runBandwidthTransfer, type TransferInput, type BandwidthReport } from '../management/bandwidth-transport.ts';
-import { parseBandwidthWorkerSettings, type BandwidthWorkerSettings } from './bandwidth-worker-plan.ts';
+import { BANDWIDTH_WORKER_SOCKET, parseBandwidthWorkerSettings, type BandwidthWorkerSettings } from './bandwidth-worker-plan.ts';
 import { BANDWIDTH_FRAME_LIMIT, bandwidthError, parseBandwidthJob, parseBandwidthReport, workerErrorCode, type BandwidthJob } from './bandwidth-protocol.ts';
+
+/** Node can report a null address for an inherited Unix listener. Check its kernel identity instead. */
+export function listenBandwidthWorkerSocket(server: Server, descriptor: number, socketPath = BANDWIDTH_WORKER_SOCKET): void {
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isSocket() || !readFileSync('/proc/net/unix', 'utf8').split('\n').some(line => {
+      const fields = line.trim().split(/\s+/);
+      return fields[6] === String(stat.ino) && fields[7] === socketPath && fields[3] === '00010000' && fields[4] === '0001';
+    })) throw bandwidthError();
+  } catch { throw bandwidthError(); }
+  server.listen({ fd: descriptor });
+}
 
 /** No credentials in this root-controlled file. Do not accept settings from a socket request. */
 export async function loadBandwidthWorkerSettings(path: string): Promise<BandwidthWorkerSettings> {
