@@ -3,6 +3,7 @@ import { IconArrowLeft, IconChevronRight, IconRefresh, IconRoute } from '@tabler
 import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import { processReason, processTraceRows } from '~/utils/bandwidth-process'
 import type { ProcessResponse } from '~/utils/bandwidth-process'
+import type { WorkspaceView } from '~/composables/useWorkspace'
 import BandwidthTraceEvent from '~/components/BandwidthTraceEvent.vue'
 
 const props = withDefaults(defineProps<{ groupName: string; selectable: boolean; inline?: boolean; dirty?: boolean }>(), { inline: false, dirty: false })
@@ -22,11 +23,13 @@ let session = 0, requestId = 0, disposed = false
 let reading = false
 let controller: AbortController | undefined
 let lockedSince: number | null = null
+const workspaceScope = (workspace: WorkspaceView['workspace']) => JSON.stringify([workspace.mode, workspace.mode === 'subscription' ? workspace.subscriptionId : workspace.sourceIds])
 const scope = computed(() => {
   const workspace = view.value?.workspace
-  return workspace ? JSON.stringify([workspace.mode, workspace.mode === 'subscription' ? workspace.subscriptionId : workspace.sourceIds]) : ''
+  return workspace ? workspaceScope(workspace) : ''
 })
 const rounds = computed(() => [...(data.value?.rounds ?? [])].sort((a, b) => b.startedAt - a.startedAt))
+const empty = computed(() => !!data.value && !data.value.error && !rounds.value.length)
 const detail = computed(() => data.value?.detail?.id === selectedId.value ? data.value.detail : null)
 const rows = computed(() => processTraceRows(detail.value?.events ?? []))
 const time = (at: number | null | undefined) => at === null || at === undefined ? t('coco.process.unknown') : new Date(at).toLocaleString(locale.value)
@@ -38,23 +41,39 @@ const reason = (value: string) => {
 
 async function refresh(background = true) {
   if (!visible.value || disposed || document.hidden || !view.value || (background && reading)) return
-  const id = ++requestId, expectedScope = scope.value, revision = view.value.workspace.revision
+  const id = ++requestId, expectedScope = scope.value, group = props.groupName
+  let revision = data.value?.status.workspaceRevision ?? view.value.workspace.revision
+  const current = () => visible.value && id === requestId && expectedScope === scope.value && group === props.groupName
   controller?.abort(); controller = new AbortController()
-  const query = new URLSearchParams({ group: props.groupName, scope: expectedScope, revision: String(revision) })
+  const signal = controller.signal
+  const query = new URLSearchParams({ group, scope: expectedScope, revision: String(revision) })
   if (selectedId.value) query.set('round', selectedId.value)
   reading = true
   loading.value = !background || !data.value
   if (!background) { lockedSince = null; delayed.value = false }
   try {
-    const result = await api.request<ProcessResponse>('/api/cocoproxy/automatic/bandwidth/history?' + query, { signal: controller.signal })
-    if (!visible.value || id !== requestId || expectedScope !== scope.value) return
-    if (result.status.scope !== expectedScope || result.status.workspaceRevision !== view.value?.workspace.revision) {
+    const read = () => api.request<ProcessResponse>('/api/cocoproxy/automatic/bandwidth/history?' + query, { signal })
+    let result: ProcessResponse
+    try { result = await read() }
+    catch (cause) {
+      if (!current()) return
+      if (!(cause instanceof CoCoProxyError) || cause.code !== 'WORKSPACE_CONFLICT') throw cause
+      // Refresh only this reader's revision; shared settings may contain an editor's draft.
+      const latest = await api.request<Pick<WorkspaceView, 'workspace'>>('/api/cocoproxy/workspace', { signal })
+      if (!current()) return
+      if (workspaceScope(latest.workspace) !== expectedScope) { dialog.value?.close(); close(); return }
+      revision = latest.workspace.revision
+      query.set('revision', String(revision))
+      result = await read()
+    }
+    if (!current()) return
+    if (result.status.scope !== expectedScope || result.status.workspaceRevision !== revision) {
       error.value = () => t('coco.anThePlanOrSettingsChangedClose'); return
     }
     if (JSON.stringify(result) !== JSON.stringify(data.value)) data.value = result
     updatedAt.value = Date.now(); error.value = ''; delayed.value = false; lockedSince = null
   } catch (cause) {
-    if (visible.value && id === requestId) {
+    if (current()) {
       if (background && data.value && cause instanceof CoCoProxyError && cause.code === 'STORE_LOCKED') {
         lockedSince ??= Date.now(); delayed.value = true
         if (Date.now() - lockedSince >= 15000) error.value = () => cocoproxyErrorMessage(cause, t)
@@ -76,7 +95,7 @@ function close() {
 }
 function choose(id: string | null) { selectedId.value = id; scroller.value?.scrollTo({ top: 0 }); void refresh(false) }
 function visibilityChanged() { if (!document.hidden && visible.value) void refresh() }
-watch(() => [props.groupName, scope.value, view.value?.workspace.revision], () => { dialog.value?.close(); close() })
+watch(() => [props.groupName, scope.value], () => { dialog.value?.close(); close() })
 onMounted(() => document.addEventListener('visibilitychange', visibilityChanged))
 onUnmounted(() => { disposed = true; close(); document.removeEventListener('visibilitychange', visibilityChanged) })
 
@@ -92,14 +111,15 @@ defineExpose({ open })
       <div class="mb-3 flex shrink-0 items-center gap-2">
         <button v-if="selectedId" type="button" class="btn btn-ghost min-h-11 shrink-0" :title="t('coco.process.back')" :aria-label="t('coco.process.back')" @click="choose(null)"><IconArrowLeft :size="18" aria-hidden="true" /></button>
         <select v-if="selectedId" :value="selectedId" class="select select-sm min-h-11 min-w-0 flex-1" :aria-label="t('coco.process.trace.chooseRound')" @change="choose(($event.target as HTMLSelectElement).value)"><option v-for="round in rounds" :key="round.id" :value="round.id">{{ time(round.startedAt) }} · {{ t('coco.process.trigger.' + round.trigger) }}{{ round.endedAt === null ? ' · ' + t('coco.process.ongoing') : '' }}</option></select>
-        <span v-else class="min-w-0 flex-1 text-sm">{{ t('coco.process.rounds') }} · {{ rounds.length }}</span>
+        <span v-else class="min-w-0 flex-1 text-sm">{{ t('coco.process.rounds') }}<template v-if="data"> · {{ rounds.length }}</template></span>
         <button type="button" class="btn btn-ghost min-h-11 shrink-0" :disabled="loading" :title="t('coco.anRefresh')" :aria-label="t('coco.anRefresh')" @click="refresh(false)"><IconRefresh :size="18" :class="{ 'animate-spin': loading }" aria-hidden="true" /></button>
       </div>
       <p v-if="error" role="alert" class="mb-3 shrink-0 text-sm text-warning">{{ t('coco.anUpdateFailedPreviouslyDisplayedRecordsAre', { value: error }) }}</p>
       <p v-if="data?.error" role="alert" class="mb-3 shrink-0 text-xs text-warning">{{ t('coco.process.archiveError') }}</p>
       <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <template v-if="!selectedId">
-          <p v-if="!data || !rounds.length" class="py-8 text-center text-sm text-base-content/60">{{ loading ? t('coco.process.loading') : t('coco.process.empty') }}</p>
+          <p v-if="loading && !data" class="py-8 text-center text-sm text-base-content/60">{{ t('coco.process.loading') }}</p>
+          <p v-else-if="empty" class="py-8 text-center text-sm text-base-content/60">{{ t('coco.process.empty') }}</p>
           <ol class="divide-y divide-base-content/10">
             <li v-for="round in rounds" :key="round.id"><button type="button" class="flex min-h-20 w-full items-center gap-3 py-3 text-left hover:bg-base-content/5" @click="choose(round.id)"><time class="shrink-0 text-xs tabular-nums text-base-content/65" :title="time(round.startedAt)">{{ shortTime(round.startedAt) }}</time><span class="min-w-0 flex-1 space-y-1"><span class="block text-sm">{{ t('coco.process.trigger.' + round.trigger) }} <span v-if="round.endedAt === null" class="text-primary">· {{ t('coco.process.ongoing') }}</span></span><span class="block break-all text-xs text-base-content/60">{{ round.current }} · {{ reason(round.reason) }}</span></span><span class="shrink-0 text-xs tabular-nums text-base-content/50">{{ t('coco.process.trace.events', { count: round.eventCount }) }}</span><IconChevronRight :size="16" class="shrink-0 text-base-content/50" aria-hidden="true" /></button></li>
           </ol>

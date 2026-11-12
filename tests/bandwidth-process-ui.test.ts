@@ -18,26 +18,32 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText).runInNewContext({ exports: helpers });
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '') +
-    '\nexport { open, close, refresh, choose, data, detail, rows, error, delayed, selectedId, loading, scroller };';
+    '\nexport { open, close, refresh, choose, data, detail, rows, empty, error, delayed, selectedId, loading, scroller, visible };';
   const scope = JSON.stringify(['local', ['synthetic']]);
   const status = { scope, workspaceRevision: 7, groups: [{ name: 'Stream', current: 'node-a', bandwidth: { reason: 'waiting-traffic' } }] };
   let result: any = { since: 1000, error: false, evicted: false, rounds: [{ id: 'one' }], detail: null, status };
-  let reply: (() => Promise<any>) | undefined, fail = false;
+  let reply: ((path: string) => Promise<any>) | undefined, fail = false;
   let failure: Error = new Error('synthetic failure'), now = 1000;
   class Clock extends Date { static now() { return now; } }
   const calls: { path: string; options: any }[] = [];
   const view = { value: { workspace: { mode: 'local', sourceIds: ['synthetic'], revision: 7 }, active: 'generation', pending: false } };
+  const watched: { read: () => unknown; changed: () => void; previous: string }[] = [];
+  const notifyWatchers = () => { for (const watcher of watched) {
+    const next = JSON.stringify(watcher.read());
+    if (next !== watcher.previous) { watcher.previous = next; watcher.changed(); }
+  } };
   let scheduled!: () => void;
   const exports: Record<string, any> = {};
   new Script(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText).runInNewContext({
     ...uiTestContext, exports, URLSearchParams, AbortController, processReason: helpers.processReason, processTraceRows: helpers.processTraceRows,
     ref: (value: unknown) => ({ value }), defineProps: () => ({ groupName: 'Stream', selectable: true }), withDefaults: (p: unknown) => p,
-    defineExpose() {}, watch() {}, onMounted() {}, onUnmounted() {}, setTimeout: (callback: () => void) => { scheduled = callback; return 1; }, clearTimeout() {},
+    defineExpose() {}, watch: (read: () => unknown, changed: () => void) => watched.push({ read, changed, previous: JSON.stringify(read()) }),
+    onMounted() {}, onUnmounted() {}, setTimeout: (callback: () => void) => { scheduled = callback; return 1; }, clearTimeout() {},
     document: { hidden: false }, Date: Clock, CoCoProxyError, cocoproxyErrorMessage: () => '读取失败',
     useWorkspace: () => ({ view, api: { request: async (path: string, options: any) => {
       calls.push({ path, options });
       if (fail) throw failure;
-      return reply ? reply() : structuredClone(result);
+      return reply ? reply(path) : structuredClone(result);
     } } }),
   });
   exports.open(); await new Promise(resolve => setImmediate(resolve));
@@ -98,6 +104,60 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
   fail = true; failure = new CoCoProxyError('STORE_LOCKED'); exports.open();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(exports.data.value, undefined); assert.equal(exports.error.value, '读取失败');
+  assert.equal(exports.empty.value, false); // Failed initial reads cannot claim that the archive is empty.
+  exports.close();
+
+  fail = false;
+  const sharedWorkspace = view.value.workspace;
+  let workspaceReads = 0;
+  result = { ...result, detail: { id: 'one', events: [] }, status: { ...status, workspaceRevision: 8 } };
+  reply = async path => {
+    if (path === '/api/cocoproxy/workspace') { workspaceReads++; return { workspace: { ...sharedWorkspace, revision: 8 } }; }
+    if (new URL('https://management.example' + path).searchParams.get('revision') !== '8') throw new CoCoProxyError('WORKSPACE_CONFLICT');
+    return structuredClone(result);
+  };
+  exports.open(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(workspaceReads, 1); assert.equal(exports.data.value.status.workspaceRevision, 8);
+  assert.equal(exports.visible.value, true); assert.equal(exports.error.value, '');
+  assert.equal(view.value.workspace, sharedWorkspace); assert.equal(sharedWorkspace.revision, 7);
+  exports.choose('one'); await new Promise(resolve => setImmediate(resolve));
+  const recovered = exports.data.value;
+  exports.scroller.value = { scrollTop: 240, scrollTo() { assert.fail('revision recovery must preserve the reading position'); } };
+  await exports.refresh();
+  assert.equal(exports.data.value, recovered); assert.equal(workspaceReads, 1);
+  assert.equal(exports.selectedId.value, 'one'); assert.equal(exports.detail.value.id, 'one');
+  assert.equal(exports.scroller.value.scrollTop, 240);
+  sharedWorkspace.revision = 8; notifyWatchers();
+  assert.equal(exports.visible.value, true); // Same-scheme workspace refreshes must keep the reader open.
+
+  reply = async path => {
+    if (path === '/api/cocoproxy/workspace') { workspaceReads++; return { workspace: { ...sharedWorkspace, revision: 9 } }; }
+    throw new CoCoProxyError('WORKSPACE_CONFLICT');
+  };
+  await exports.refresh();
+  assert.equal(workspaceReads, 2); // A second conflict is reported, never retried in a loop.
+  assert.equal(exports.error.value, '读取失败'); assert.equal(exports.data.value, recovered);
+  reply = async path => {
+    if (path === '/api/cocoproxy/workspace') return new Promise(resolve => { complete = resolve; });
+    throw new CoCoProxyError('WORKSPACE_CONFLICT');
+  };
+  const recovering = exports.refresh(); await new Promise(resolve => setImmediate(resolve));
+  const beforeClose = calls.length;
+  exports.close(); complete({ workspace: { ...sharedWorkspace, revision: 9 } }); await recovering;
+  assert.equal(calls.length, beforeClose); assert.equal(exports.data.value, recovered);
+
+  reply = async path => {
+    if (path === '/api/cocoproxy/workspace') return { workspace: { ...sharedWorkspace, sourceIds: ['other'], revision: 9 } };
+    throw new CoCoProxyError('WORKSPACE_CONFLICT');
+  };
+  exports.open(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(exports.visible.value, false); assert.equal(exports.data.value, undefined);
+  assert.equal(exports.empty.value, false);
+  reply = undefined; result = { ...result, rounds: [], detail: null };
+  exports.open(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(exports.empty.value, true);
+  sharedWorkspace.sourceIds = ['other']; notifyWatchers();
+  assert.equal(exports.visible.value, false);
   exports.close();
 });
 
