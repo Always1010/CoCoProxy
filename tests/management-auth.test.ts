@@ -9,6 +9,7 @@ import {
 } from '../packages/management/auth.ts';
 import { TrustedDeviceStore } from '../packages/management/trusted-devices.ts';
 import { normalizeIP, recordRequestAddress, requestAddress } from '../packages/management/request-address.ts';
+import { browserLabel } from '../packages/management/browser-label.ts';
 
 const password = 'synthetic-password-for-tests';
 const login = { username: 'example-admin', password };
@@ -224,29 +225,53 @@ test('credential/origin changes invalidate remembered devices and corrupt or lin
   }
 });
 
-test('browser labels serialize uniqueness, rename independently, and migrate legacy duplicates without revoking tokens', async t => {
+test('browser notes may repeat, remain independent, and survive restart and legacy migration', async t => {
   const root = await mkdtemp(join(tmpdir(), 'cocoproxy-labels-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const credential = await createAdminCredential(login), origin = 'https://management.example';
   let store = await TrustedDeviceStore.load(root, credential, origin);
-  const concurrent = await Promise.allSettled([store.issue('until-revoked', ' PC '), store.issue('until-revoked', 'pc')]);
-  assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
-  assert.equal((concurrent.find(result => result.status === 'rejected') as PromiseRejectedResult).reason.code, 'AUTH_DEVICE_LABEL_DUPLICATE');
-  const first = (concurrent.find(result => result.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof store.issue>>>).value;
-  const second = await store.issue('90days', 'PC Edge', undefined, '192.0.2.20');
+  const [first, second] = await Promise.all([
+    store.issue('until-revoked', ' PC '), store.issue('90days', 'PC', undefined, '192.0.2.20'),
+  ]);
+  assert.notEqual(first.device.id, second.device.id);
+  assert.equal(store.list().length, 2);
   await store.rename(first.device.id, 'PC Chrome');
   assert.equal(store.check(first.token)?.label, 'PC Chrome');
-  await assert.rejects(store.rename(second.device.id, ' pc chrome '), code('AUTH_DEVICE_LABEL_DUPLICATE'));
+  assert.equal(store.check(second.token)?.label, 'PC');
+  await store.rename(second.device.id, 'PC Chrome');
   const path = join(root, 'auth', 'trusted-devices.json');
-  const legacy = JSON.parse(await readFile(path, 'utf8'));
-  legacy.schemaVersion = 1;
-  for (const item of legacy.devices) { item.label = '浏览器设备'; delete item.lastIP; delete item.lastSeenAt; }
-  await writeFile(path, JSON.stringify(legacy));
   store = await TrustedDeviceStore.load(root, credential, origin);
   assert.equal(store.list().length, 2);
-  assert.equal(new Set(store.list().map(item => item.label)).size, 2);
+  assert.deepEqual(store.list().map(item => item.label), ['PC Chrome', 'PC Chrome']);
   assert.ok(store.check(first.token) && store.check(second.token));
-  assert.equal(JSON.parse(await readFile(path, 'utf8')).schemaVersion, 2);
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  for (const version of [1, 2]) {
+    const legacy = structuredClone(saved); legacy.schemaVersion = version;
+    for (const [index, item] of legacy.devices.entries()) {
+      item.label = version === 1 ? '浏览器备注' : `浏览器备注 ${index + 1}`;
+      if (version === 1) { delete item.lastIP; delete item.lastSeenAt; }
+    }
+    await writeFile(path, JSON.stringify(legacy));
+    store = await TrustedDeviceStore.load(root, credential, origin);
+    assert.deepEqual(store.list().map(item => item.label), legacy.devices.map((item: { label: string }) => item.label));
+    assert.equal(store.check(first.token)?.id, first.device.id);
+    assert.equal(store.check(second.token)?.expiresAt, second.device.expiresAt);
+    assert.equal(store.check(second.token)?.lastIP, version === 1 ? null : '192.0.2.20');
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).schemaVersion, 3);
+  }
+  await store.revoke(first.device.id);
+  assert.equal(store.check(first.token), null);
+  assert.ok(store.check(second.token));
+});
+
+test('automatic browser notes contain only coarse browser and platform names', () => {
+  assert.equal(browserLabel(null), 'Browser');
+  assert.equal(browserLabel('unknown-client/synthetic-private-detail'), 'Browser');
+  assert.equal(browserLabel('Windows NT 10.0 Chrome/130 Safari/537.36 Edg/130'), 'Edge · Windows');
+  assert.equal(browserLabel('Linux Android 14 Chrome/130 Safari/537.36'), 'Chrome · Android');
+  assert.equal(browserLabel('iPhone OS 18_0 CriOS/130 Mobile/15 Safari/604.1'), 'Chrome · iOS');
+  assert.equal(browserLabel('Macintosh Intel Mac OS X Version/18 Mobile/15 Safari/605.1'), 'Safari · iPadOS');
+  assert.equal(browserLabel('Macintosh Intel Mac OS X Firefox/130'), 'Firefox · macOS');
 });
 
 test('request IP uses adapter socket evidence and ignores untrusted forwarded headers', () => {

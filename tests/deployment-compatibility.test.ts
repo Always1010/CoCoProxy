@@ -23,7 +23,9 @@ test('state compatibility refuses newer or unknown schemas without guessing a da
   assert.equal(assessStateSchema('siteProbes', 1, { schemaVersion: 1, stateSchemas: { workspace: 1 } }), 'not-declared');
   assert.equal(assessStateSchema('trustedDevices', 2, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('trustedDevices', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
-  assert.equal(assessStateSchema('trustedDevices', 3, DEPLOYMENT_STATE_COMPATIBILITY), 'unsupported-version');
+  assert.equal(assessStateSchema('trustedDevices', 3, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
+  assert.equal(assessStateSchema('trustedDevices', 4, DEPLOYMENT_STATE_COMPATIBILITY), 'unsupported-version');
+  assert.equal(assessStateSchema('trustedDevices', 3, { schemaVersion: 1, stateSchemas: { trustedDevices: 2 } }), 'unsupported-version');
   assert.equal(assessStateSchema('usage', 1, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('usage', 2, DEPLOYMENT_STATE_COMPATIBILITY), 'supported-version');
   assert.equal(assessStateSchema('usage', 2, { schemaVersion: 1, stateSchemas: { usage: 1 } }), 'unsupported-version');

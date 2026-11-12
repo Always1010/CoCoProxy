@@ -81,8 +81,6 @@ test('remembered browsers reauthenticate after expiry and restart; logout and de
   };
   const first = await signIn('until-revoked', '合成手机');
   const second = await signIn('90days', '合成电脑');
-  assert.equal((await gateway.fetch(request('/api/session/login', 'POST', { username, password, trust: 'until-revoked' }))).status, 400);
-  assert.equal((await gateway.fetch(request('/api/session/login', 'POST', { username, password, trust: 'until-revoked', deviceLabel: '合成手机' }))).status, 409);
   const firstToken = first.split('; ')[1];
   const responseText = await (await gateway.fetch(request('/api/session/devices', 'GET', undefined, first))).text();
   assert.ok(!responseText.includes('tokenDigest') && !responseText.includes(firstToken.split('=')[1]));
@@ -125,6 +123,44 @@ test('remembered browsers reauthenticate after expiry and restart; logout and de
   assert.match(temporary.headers.getSetCookie()[1], /^__Host-cocoproxy_device=;.*Max-Age=0$/);
   gateway = await makeGateway();
   assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, fourth))).status, 401);
+});
+test('lost cookies allow password login with the same automatic note without taking over another authorization', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cocoproxy-remember-recovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const makeGateway = async () => createManagementGateway({ origin, credential,
+    trustedDevices: await TrustedDeviceStore.load(root, credential, origin),
+  }, async () => ({}));
+  let gateway = await makeGateway();
+  const signIn = async (cookie?: string, label?: string, headers = { 'user-agent': 'Windows NT 10.0 Chrome/130 Safari/537.36' }) => {
+    const response = await gateway.fetch(request('/api/session/login', 'POST', {
+      username, password, trust: 'until-revoked', ...(label === undefined ? {} : { deviceLabel: label }),
+    }, cookie, headers));
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
+  };
+  const list = async (cookie: string) => (await (await gateway.fetch(request('/api/session/devices', 'GET', undefined, cookie))).json()).devices;
+  const first = await signIn();
+  const second = await signIn(); // Same browser description, but its previous cookies have been lost.
+  let devices = await list(second);
+  assert.deepEqual(devices.map((device: { label: string }) => device.label), ['Chrome · Windows', 'Chrome · Windows']);
+  assert.notEqual(devices[0].id, devices[1].id);
+  assert.equal(devices[0].current, false); assert.equal(devices[1].current, true);
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, first))).status, 200);
+  assert.equal((await gateway.fetch(request('/api/session/devices/rename', 'POST', { id: devices[0].id, label: '合成浏览器备注' }, second))).status, 200);
+  const replacement = await signIn(first); // A valid previous cookie retains its user-supplied note.
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, first))).status, 401);
+  assert.equal((await list(replacement)).find((device: { current: boolean }) => device.current).label, '合成浏览器备注');
+  const explicit = await signIn(undefined, '合成浏览器备注'); // Existing API clients can still supply notes, including duplicates.
+  const generic = await signIn(undefined, undefined, { 'user-agent': 'unknown-client' });
+  assert.equal((await list(generic)).find((device: { current: boolean }) => device.current).label, 'Browser');
+  gateway = await makeGateway();
+  devices = await list(second);
+  assert.equal(devices.length, 4);
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, replacement))).status, 200);
+  const current = devices.find((device: { current: boolean }) => device.current);
+  await gateway.fetch(request('/api/session/devices/revoke', 'POST', { id: current.id }, explicit));
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, second))).status, 401);
+  assert.equal((await gateway.fetch(request('/api/session', 'GET', undefined, explicit))).status, 200);
 });
 async function fixture(t: test.TestContext, automaticGateway?: AutomaticGatewaySettings,
   automaticBandwidthHistory?: Parameters<typeof createManagementApplication>[0]['automaticBandwidthHistory']) {

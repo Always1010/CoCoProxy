@@ -18,7 +18,7 @@ const hostProxyEnabled = computed(() => hostProxy.value?.enabled ?? workspaceVie
 const hostProxyPending = computed(() => workspaceView.value?.pending && hostProxy.value?.active !== hostProxyEnabled.value)
 const visibleError = computed(() => error.value || workspaceError.value || (workspaceView.value?.error
   ? cocoproxyErrorMessage(new CoCoProxyError(workspaceView.value.error), t) : ''))
-type TrustedDevice = { id: string; label: string; trust: '90days' | 'until-revoked'; createdAt: number; renewedAt: number; expiresAt: number | null; current: boolean; lastIP: string | null }
+type TrustedDevice = { id: string; label: string; trust: '90days' | 'until-revoked'; createdAt: number; renewedAt: number; expiresAt: number | null; current: boolean; lastIP: string | null; lastSeenAt: number | null }
 const devices = ref<TrustedDevice[]>([])
 const editing = ref<string | null>(null)
 const label = ref('')
@@ -109,11 +109,16 @@ onMounted(() => run(refresh))
           <div class="min-w-0">
             <div class="flex items-center gap-2"><span class="truncate text-sm">{{ device.label }}</span><span v-if="device.current" class="badge badge-sm shrink-0">{{ t('coco.pzCurrentDevice') }}</span></div>
             <p class="mt-1 break-all text-xs text-base-content/65">{{ t('coco.pzLastIpAddress') }}{{ device.lastIP ?? t('coco.pzUnknown') }}</p>
+            <p class="mt-1 text-xs text-base-content/65">{{ t('coco.pzLastSeenAt') }}{{ device.lastSeenAt === null ? t('coco.pzUnknown') : new Date(device.lastSeenAt).toLocaleString(locale) }}</p>
             <p class="mt-1 text-xs text-base-content/55">{{ device.expiresAt === null ? t('coco.pzTrustedIndefinitely') : t('coco.pzValidUntil', { date: new Date(device.expiresAt).toLocaleDateString(locale) }) }} {{ t('coco.pzAuthorizedOn') }} {{ new Date(device.createdAt).toLocaleDateString(locale) }}</p>
           </div>
           <div class="flex shrink-0 gap-1">
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="locked" :aria-label="t('coco.pzRename', { device: device.label })" @click="editing = device.id; label = device.label"><IconEdit :size="16" />{{ t('coco.pzRename2') }}</button>
-            <button type="button" class="btn btn-ghost btn-sm text-error" :disabled="locked" :aria-label="device.current ? t('coco.pzRevokeThisDeviceAndSignOut') : t('coco.pzRevokeDevice', { device: device.label })" @click="run(() => revoke(device))"><IconShieldX :size="18" />{{ t('coco.pzRevoke') }}</button>
+            <div class="tooltip" :data-tip="t('coco.pzRename', { device: device.label })">
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="locked" :title="t('coco.pzRename', { device: device.label })" :aria-label="t('coco.pzRename', { device: device.label })" @click="editing = device.id; label = device.label"><IconEdit :size="16" aria-hidden="true" /></button>
+            </div>
+            <div class="tooltip" :data-tip="device.current ? t('coco.pzRevokeThisDeviceAndSignOut') : t('coco.pzRevokeDevice', { device: device.label })">
+              <button type="button" class="btn btn-ghost btn-sm text-error" :disabled="locked" :title="device.current ? t('coco.pzRevokeThisDeviceAndSignOut') : t('coco.pzRevokeDevice', { device: device.label })" :aria-label="device.current ? t('coco.pzRevokeThisDeviceAndSignOut') : t('coco.pzRevokeDevice', { device: device.label })" @click="run(() => revoke(device))"><IconShieldX :size="18" aria-hidden="true" /></button>
+            </div>
           </div>
         </li>
       </ul>

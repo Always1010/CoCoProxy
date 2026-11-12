@@ -1,6 +1,7 @@
 import { AuthError, parseAdminCredential, SessionStore, verifyAdminCredential } from './auth.ts';
 import type { AdminCredential } from './auth.ts';
 import { TRUST_COOKIE_MAX_AGE, type TrustedDeviceStore } from './trusted-devices.ts';
+import { browserLabel } from './browser-label.ts';
 import { requestAddress } from './request-address.ts';
 
 export class ManagementError extends Error {
@@ -162,7 +163,6 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
           const trust = input.trust ?? 'none';
           if (typeof trust !== 'string' || !['none', '90days', 'until-revoked'].includes(trust) ||
               (input.deviceLabel !== undefined && (typeof input.deviceLabel !== 'string' || !input.deviceLabel.trim() || input.deviceLabel.length > 160 || /[\u0000-\u001f\u007f]/.test(input.deviceLabel)))) throw new ManagementError('INVALID_REQUEST');
-          if (trust !== 'none' && input.deviceLabel === undefined) throw new ManagementError('DEVICE_LABEL_REQUIRED');
           if (!await verifyAdminCredential(credential, { username: input.username, password: input.password })) throw new ManagementError('INVALID_CREDENTIALS', 401);
           const previous = token(request);
           const previousDevice = token(request, deviceName);
@@ -171,7 +171,8 @@ export function createManagementGateway(options: ManagementAuthOptions, action: 
           if (trust !== 'none') {
             if (!trustedDevices) throw new ManagementError('DEVICE_TRUST_UNAVAILABLE', 503);
             const old = trustedDevices.check(previousDevice);
-            const issued = await trustedDevices.issue(trust as '90days' | 'until-revoked', input.deviceLabel as string, previousDevice, requestAddress(request));
+            const label = (input.deviceLabel as string | undefined) ?? old?.label ?? browserLabel(request.headers.get('user-agent'));
+            const issued = await trustedDevices.issue(trust as '90days' | 'until-revoked', label, previousDevice, requestAddress(request));
             if (old) sessions.revokeDevice(old.id);
             deviceId = issued.device.id;
             cookies.push(deviceCookie(issued.token, issued.device.expiresAt));

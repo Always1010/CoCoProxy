@@ -1,8 +1,8 @@
 export const DEPLOYMENT_STATE_COMPATIBILITY: Readonly<{ schemaVersion: 1; stateSchemas: Readonly<{
-  transaction: 1; lifecycle: 1; trustedDevices: 2; draft: 1; workspace: 1;
+  transaction: 1; lifecycle: 1; trustedDevices: 3; draft: 1; workspace: 1;
   siteProbes: 1; automaticSelections: 1; automaticHistory: 1; automaticBandwidth: 1; bandwidthHistory: 1; selection: 1; subscription: 1; usage: 2;
 }>; contentReaders: Readonly<{
-  transaction: 'cocoproxy.transaction.v1'; lifecycle: 'cocoproxy.lifecycle.v1'; trustedDevices: 'cocoproxy.trustedDevices.v2';
+  transaction: 'cocoproxy.transaction.v1'; lifecycle: 'cocoproxy.lifecycle.v1'; trustedDevices: 'cocoproxy.trustedDevices.v3';
   draft: 'cocoproxy.draft.v1'; workspace: 'cocoproxy.workspace.v1';
   siteProbes: 'cocoproxy.siteProbes.v1'; automaticSelections: 'cocoproxy.automaticSelections.v1';
   automaticHistory: 'cocoproxy.automaticHistory.v1';

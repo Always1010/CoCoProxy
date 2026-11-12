@@ -538,6 +538,26 @@ test('the active node remains selectable to recover a pending switch while retai
   assert.deepEqual(calls, ['node-a']);
 });
 
+test('login remembers the browser without a required note and can opt into a temporary session', async () => {
+  const page = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/pages/login.vue', import.meta.url), 'utf8');
+  const script = page.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*$/gm, '')
+    + '\nexport { submit, username, password, remember, trust };';
+  const exports: Record<string, any> = {}, calls: unknown[][] = [];
+  new Script(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)
+    .runInNewContext({ ...uiTestContext, exports,
+      useCoCoProxy: () => ({ login: async (...args: unknown[]) => { calls.push(args); } }),
+      ref: (value: unknown) => ({ value }), definePageMeta() {}, useHead() {}, navigateTo: async () => {},
+    });
+  exports.username.value = 'synthetic-admin';
+  for (const [remember, trust, expected] of [[true, 'until-revoked', 'until-revoked'], [false, 'until-revoked', 'none'], [true, '90days', '90days']]) {
+    exports.remember.value = remember; exports.trust.value = trust;
+    exports.password.value = 'synthetic-password-for-tests';
+    await exports.submit();
+    assert.deepEqual(calls.at(-1), ['synthetic-admin', 'synthetic-password-for-tests', expected]);
+    assert.equal(exports.password.value, '');
+  }
+});
+
 test('host proxy settings guard writes and distinguish saved settings from the active state after an apply failure', async () => {
   let settings: any = { mode: 'local', subscriptionId: null, sourceIds: [], runMode: 'rule', revision: 7,
     local: { selections: {}, rules: [] }, subscriptionOverrides: {} };
