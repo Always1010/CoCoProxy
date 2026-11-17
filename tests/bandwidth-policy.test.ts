@@ -7,6 +7,9 @@ test('bandwidth settings preserve legacy policies and validate coupled time and 
   const legacy = { preferred: ['a'], fallback: ['b'], returnToPreferred: true };
   assert.deepEqual(parseAutoGroupPolicy(legacy), legacy);
   assert.equal(parseBandwidthSettings({}).enabled, false);
+  assert.equal(parseBandwidthSettings({}).allowBusyConfirmation, false);
+  assert.equal(parseBandwidthSettings({ allowBusyConfirmation: true }).allowBusyConfirmation, true);
+  assert.throws(() => parseBandwidthSettings({ allowBusyConfirmation: 1 }));
   assert.equal(parseBandwidthSettings({}).hourMiB, 128);
   assert.equal(parseBandwidthSettings({}).dayMiB, 512);
   assert.deepEqual(parseBandwidthSettings({ hourMiB: 64, dayMiB: 128 }), { ...defaults, hourMiB: 64, dayMiB: 128 });

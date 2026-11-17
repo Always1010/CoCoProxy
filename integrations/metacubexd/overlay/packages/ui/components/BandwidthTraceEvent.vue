@@ -48,7 +48,7 @@ const samples = computed(() => comparison.value ? (['current', 'candidate'] as c
             <span v-else>{{ t('coco.process.trigger.' + event.reason) }}</span>
           </template>
           <template v-else-if="event.probe"><span>{{ number(event.probe.delayMs, 0) }} ms</span><span :class="event.probe.ok && event.probe.delayMs !== null ? 'text-success' : 'text-warning'">{{ event.probe.retryAfterMs ? t('coco.process.trace.retry') : event.probe.ok && event.probe.delayMs !== null ? '✓' : '×' }}</span></template>
-          <template v-else-if="event.sample"><span>{{ number(event.sample.mbps) }} Mbps</span><span>{{ number(event.sample.bytes / 1048576) }} MiB</span><span :class="event.sample.valid ? 'text-success' : 'text-warning'">{{ event.sample.valid ? '✓' : '×' }} {{ t(event.sample.valid ? 'coco.process.valid' : 'coco.process.invalid') }}</span></template>
+          <template v-else-if="event.sample"><span>{{ number(event.sample.mbps) }} Mbps</span><span>{{ number(event.sample.bytes / 1048576) }} MiB</span><span :class="event.sample.valid ? 'text-success' : 'text-warning'">{{ event.sample.valid ? '✓' : '×' }} {{ t(event.sample.limited ? 'coco.process.limitedEvidence' : event.sample.valid ? 'coco.process.valid' : 'coco.process.invalid') }}</span></template>
           <template v-else-if="comparison">
             <span class="break-all">{{ comparison.currentNode }} → {{ comparison.candidateNode }}</span>
             <span :class="gainPass ? 'text-success' : 'text-base-content/70'">{{ t('coco.process.trace.gain') }} {{ number(comparison.gain, 3) }} {{ gainPass ? '&gt;' : '≤' }} {{ number(comparison.threshold, 3) }} {{ t('coco.process.trace.scoreUnit') }} {{ flag(gainPass) }}</span>

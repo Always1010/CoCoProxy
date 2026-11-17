@@ -9,6 +9,7 @@ import { SystemdMihomoRuntime } from './systemd.ts';
 import { readRuntimeLifecycle } from './lifecycle.ts';
 import { privateRead } from '../storage/private-files.ts';
 import { parseWorkspaceDocument } from '../management/workspace.ts';
+import { automaticBandwidthTransfer } from '../management/bandwidth-policy.ts';
 import { BANDWIDTH_LIMITS } from '../management/bandwidth.ts';
 import { buildBandwidthConfig, checkBandwidthEgress, runBandwidthTransfer, type TransferInput, type BandwidthReport } from '../management/bandwidth-transport.ts';
 import { BANDWIDTH_WORKER_SOCKET, parseBandwidthWorkerSettings, type BandwidthWorkerSettings } from './bandwidth-worker-plan.ts';
@@ -72,11 +73,6 @@ export function createBandwidthWorkerHost(settings: BandwidthWorkerSettings): Ba
     async prepare(job, signal) {
       if (!settings.enabled) throw bandwidthError('BANDWIDTH_DISABLED');
       if (!await current(job)) throw bandwidthError('ACTIVE_CONFLICT');
-      const { candidate } = await loadRuntimeCandidate(policy, job.generation);
-      const binaryPath = await verifyBinary(policy);
-      const executable = await lstat(binaryPath);
-      if (executable.uid !== 0 || (executable.mode & 0o022) !== 0) throw bandwidthError('BANDWIDTH_CONFIG_INVALID');
-      if (!(await runtime.observe(job.generation)).ready) throw bandwidthError('CONTROLLER_UNAVAILABLE');
       let limits: TransferInput['limits'] = { ...BANDWIDTH_LIMITS };
       let verification: TransferInput['verification'];
       if (job.kind === 'automatic') {
@@ -86,9 +82,13 @@ export function createBandwidthWorkerHost(settings: BandwidthWorkerSettings): Ba
         const group = edits?.automatic?.[job.group!], s = group?.bandwidth;
         if (workspace.runMode === 'direct' || group?.enabled === false || !s?.enabled
             || ![...(group?.preferred ?? []), ...(group?.fallback ?? [])].includes(job.node)) throw bandwidthError('BANDWIDTH_DISABLED');
-        limits = { durationMs: s.durationSeconds * 1000, maxBytes: s.taskMiB * 1048576, timeoutMs: s.timeoutSeconds * 1000 };
-        verification = { targetMbps: s.targetMbps, warmupMs: s.warmupSeconds * 1000, minSampleMs: s.minSampleSeconds * 1000 };
+        ({ limits, verification } = automaticBandwidthTransfer(s, job.limited));
       }
+      const { candidate } = await loadRuntimeCandidate(policy, job.generation);
+      const binaryPath = await verifyBinary(policy);
+      const executable = await lstat(binaryPath);
+      if (executable.uid !== 0 || (executable.mode & 0o022) !== 0) throw bandwidthError('BANDWIDTH_CONFIG_INVALID');
+      if (!(await runtime.observe(job.generation)).ready) throw bandwidthError('CONTROLLER_UNAVAILABLE');
       const isolated = buildBandwidthConfig(candidate.config, job.node, 23456);
       checkBandwidthEgress(isolated, process.platform, await readFile('/proc/self/status', 'utf8'));
       signal.throwIfAborted();

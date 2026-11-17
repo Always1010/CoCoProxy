@@ -9,9 +9,10 @@ import { parseBandwidthHistory, type BandwidthRound } from '../packages/manageme
 function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateMbps?: number; currentMbps?: number;
   preferred?: string[]; fallback?: string[]; rates?: Record<string, number[]>; delays?: Record<string, number>;
   settings?: Partial<BandwidthSettings>; bytes?: number; ledger?: BandwidthLedger; blocked?: boolean; storageFails?: boolean;
-  measureSeconds?: number; load?: () => Promise<BandwidthLedger>; save?: (value: BandwidthLedger, attempt: number) => Promise<void> } = {}) {
+  measureSeconds?: number; measureError?: string; load?: () => Promise<BandwidthLedger>; save?: (value: BandwidthLedger, attempt: number) => Promise<void> } = {}) {
   let now = 0, total = 0, loads = 0, saves = 0, aborted = false;
   const diagnostics: BandwidthStorageDiagnostic[] = [];
+  const limitedModes: boolean[] = [];
   const measures: string[] = [], switches: string[] = [], saved: BandwidthLedger[] = [], probes: string[] = [];
   const starts: { node: string; at: number }[] = [];
   const traces = new Map<string, BandwidthRound>();
@@ -27,7 +28,9 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
     save: async value => { saves++; if (options.storageFails) throw new Error('synthetic ledger failure'); await options.save?.(value, saves); saved.push(structuredClone(value)); },
     probe: async (_s, node) => { probes.push(node); return { ok: true, delay: options.delays?.[node] ?? (node === 'a' ? 80 : 150) }; },
     select: async (_s, _g, node) => { switches.push(node); snapshot.groups[0].current = node; snapshot.generation = String(Number(snapshot.generation) + 1); return true; },
-    measure: async (_s, node, _settings, signal, report) => {
+    measure: async (_s, node, _settings, signal, report, _group, phase, limited) => {
+      if (options.measureError) throw Object.assign(new Error(options.measureError), { code: options.measureError });
+      limitedModes.push(!!limited); if (limited) phase('download');
       measures.push(node); starts.push({ node, at: now }); report(options.bytes ?? 1000000);
       if (options.measureSeconds) await new Promise<void>(resolve => { completion = { at: now + options.measureSeconds! * 1000, resolve }; });
       if (options.blocked) await new Promise<void>(resolve => signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true }));
@@ -37,7 +40,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
       return signal.aborted || mbps === -1 ? null : { delayMs: 999, mbps, bytes: options.bytes ?? 1000000 };
     } });
   engine.update(snapshot);
-  return { engine, snapshot, measures, starts, switches, saved, probes, traces, diagnostics, get aborted() { return aborted; }, get loads() { return loads; }, get saves() { return saves; }, get now() { return now; },
+  return { engine, snapshot, measures, limitedModes, starts, switches, saved, probes, traces, diagnostics, get aborted() { return aborted; }, get loads() { return loads; }, get saves() { return saves; }, get now() { return now; },
     async step(bytes = 0, ready = true) {
       now += 1000; total += bytes;
       if (completion && now >= completion.at) { const done = completion; completion = undefined; done.resolve(); await new Promise<void>(resolve => setImmediate(resolve)); }
@@ -477,4 +480,62 @@ test('diagnostic reserve usage survives restart and a healthy single sample cann
   assert.deepEqual(daily.measures, []);
   assert.equal(daily.engine.status('media')!.nextAt, 86400000);
   await daily.engine.close();
+});
+
+
+test('busy confirmation is opt-in, once-only, persistently charged and never capacity evidence', async () => {
+  const off = fixture();
+  for (let i = 0; i < 120; i++) await off.step(312500); // Synthetic 2.5 Mbps.
+  assert.deepEqual(off.measures, []); await off.engine.close();
+  const f = fixture({ settings: { allowBusyConfirmation: true }, bytes: 100000, measureSeconds: 4 });
+  for (let i = 0; i < 240; i++) await f.step(312500);
+  assert.deepEqual(f.measures, ['a']); assert.deepEqual(f.limitedModes, [true]);
+  assert.deepEqual(f.switches, []); assert.equal(f.aborted, false);
+  assert.ok(f.saved.some(v => v.charges.some(c => c.limited && c.bytes === 512 * 1024 && c.diagnostic?.group === 'media')));
+  const settled = f.saved.at(-1)!;
+  assert.equal(settled.charges[0].bytes, 100000); assert.equal(settled.charges[0].limited, true);
+  const sample = [...f.traces.values()].flatMap(r => r.events).find(e => e.sample?.limited)!;
+  assert.equal(sample.reason, 'limited-evidence'); assert.equal(sample.sample!.valid, false); assert.equal(sample.sample!.mbps, null);
+  assert.ok([...f.traces.values()].every(r => !r.events.some(e => e.comparison)));
+  assert.doesNotThrow(() => parseBandwidthHistory(JSON.parse(JSON.stringify({ version: 1, since: 0, evicted: false, rounds: [...f.traces.values()] }))));
+  for (let i = 0; i < 20; i++) await f.step();
+  assert.ok(f.measures.length > 1); assert.equal(f.limitedModes[1], false); // Quiet windows resume full verification before the hourly retry.
+  await f.engine.close();
+  const restarted = fixture({ settings: { allowBusyConfirmation: true }, ledger: { ...settled,
+    charges: settled.charges.map(c => ({ ...c, bytes: 0 })) } });
+  for (let i = 0; i < 240; i++) await restarted.step(312500);
+  assert.deepEqual(restarted.measures, []); await restarted.engine.close();
+});
+
+test('busy confirmation obeys diagnosis allowance and stops on growth from the launch baseline', async () => {
+  const spent = fixture({ settings: { allowBusyConfirmation: true }, ledger: { version: 1, switches: [],
+    charges: [{ at: 0, bytes: 8 * 1048576, diagnostic: { scope: 'scope', group: 'media' } }] } });
+  for (let i = 0; i < 150; i++) await spent.step(312500);
+  assert.deepEqual(spent.measures, []); await spent.engine.close();
+  const f = fixture({ settings: { allowBusyConfirmation: true }, blocked: true });
+  for (let i = 0; i < 120 && !f.measures.length; i++) await f.step(312500);
+  assert.deepEqual(f.measures, ['a']); assert.equal(f.aborted, false);
+  await f.step(500000); await f.step(500000);
+  assert.equal(f.aborted, true); assert.deepEqual(f.switches, []);
+  assert.ok([...f.traces.values()].some(r => r.reason === 'business-busy' && r.events.some(e => e.sample?.limited && e.reason === 'business-busy')));
+  await f.engine.close();
+});
+
+
+test('limited preparation failures emit no sample and cancellation preserves the original deadline', async () => {
+  const unavailable = fixture({ settings: { allowBusyConfirmation: true }, measureError: 'BANDWIDTH_WORKER_UNAVAILABLE' });
+  for (let i = 0; i < 120; i++) await unavailable.step(312500);
+  const failed = [...unavailable.traces.values()][0];
+  assert.equal(failed.reason, 'measurement-worker-unavailable'); assert.ok(failed.endedAt);
+  assert.equal(failed.events.some(e => e.sample), false); await unavailable.engine.close();
+  const storage = fixture({ settings: { allowBusyConfirmation: true }, storageFails: true });
+  for (let i = 0; i < 120; i++) await storage.step(312500);
+  assert.deepEqual(storage.measures, []);
+  assert.equal([...storage.traces.values()].some(r => r.events.some(e => e.sample)), false); await storage.engine.close();
+  const deadline = fixture({ settings: { allowBusyConfirmation: true, campaignSeconds: 120 }, blocked: true });
+  for (let i = 0; i < 190; i++) { await deadline.step(312500); deadline.engine.noteLatency('media', 80, 80); }
+  assert.equal(deadline.aborted, true);
+  const ended = [...deadline.traces.values()][0];
+  assert.equal(ended.reason, 'check-expired'); assert.ok(ended.events.some(e => e.sample?.limited && e.reason === 'check-expired'));
+  await deadline.engine.close();
 });

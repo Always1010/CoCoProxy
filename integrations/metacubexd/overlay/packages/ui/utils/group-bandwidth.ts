@@ -14,7 +14,7 @@ export const bandwidthPages = [
   { id: 'protection', label: 'coco.protection', summary: 'coco.protectionSummary', description: 'coco.protectionDescription', keys: ['holdSeconds', 'maxSwitches', 'switchCostSeconds', 'recentCostSeconds', 'reverseCostSeconds', 'reverseWindowSeconds', 'horizonSeconds'] },
   { id: 'sampling', label: 'coco.sampling', summary: 'coco.samplingSummary', description: 'coco.samplingDescription', keys: ['durationSeconds', 'warmupSeconds', 'minSampleSeconds', 'timeoutSeconds', 'taskMiB', 'confirmRounds', 'roundIntervalSeconds'] },
   { id: 'evidence', label: 'coco.evidence', summary: 'coco.evidenceSummary', description: 'coco.evidenceDescription', keys: ['freshSeconds', 'latestSeconds', 'positiveSeconds', 'marginMs', 'agingMs'] },
-  { id: 'trigger', label: 'coco.trigger', summary: 'coco.triggerSummary', description: 'coco.triggerDescription', keys: ['suspectRatio', 'activeSeconds', 'minTrafficMiB', 'busyStartMbps', 'busyStopMbps', 'quietSeconds'] },
+  { id: 'trigger', label: 'coco.trigger', summary: 'coco.triggerSummary', description: 'coco.triggerDescription', keys: ['suspectRatio', 'activeSeconds', 'minTrafficMiB', 'busyStartMbps', 'busyStopMbps', 'quietSeconds', 'allowBusyConfirmation'] },
   { id: 'search', label: 'coco.search', summary: 'coco.searchSummary', description: 'coco.searchDescription', keys: ['campaignSeconds', 'searchMiB', 'yieldSeconds', 'cooldownSeconds'] },
 ] as const
 

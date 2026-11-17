@@ -41,7 +41,7 @@ export function createBandwidthWorkerClient(options: { socketPath?: string; sett
       if (input.signal.aborted) throw bandwidthError('BANDWIDTH_CANCELLED');
       if (!(await availability()).available) throw bandwidthError();
       const job = parseBandwidthJob({ version: 1, id: randomUUID(), generation: input.generation, node: input.node,
-        kind: input.verification ? 'automatic' : 'manual', ...(input.verification ? { group: input.group, workspaceRevision: input.workspaceRevision } : {}) });
+        kind: input.verification ? 'automatic' : 'manual', ...(input.verification ? { group: input.group, workspaceRevision: input.workspaceRevision, ...(input.verification.limited ? { limited: true } : {}) } : {}) });
       return new Promise((resolve, reject) => {
         const socket = connect(path);
         let buffer = '', sent = false, cancelling = false, timedOut = false, observedBytes = 0;

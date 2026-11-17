@@ -675,6 +675,7 @@
     "usageRouteUnrecorded": "Policy path not recorded. The known exit is retained; historical paths cannot be recovered.",
     "usageMatchedRule": "View the rule matched at the time",
     "process": {
+      "limitedEvidence": "Limited evidence",
       "trace": {
         "chooseRound": "Select a recorded round",
         "initial": "Initial selection",
@@ -718,7 +719,7 @@
         "ordinaryAvailable": "Ordinary available balance (after reserves)",
         "budgetMode": "Allowance mode",
         "stageBudget": "Current stage needed / available",
-        "diagnosticRemaining": "Remaining round diagnosis allowance",
+        "diagnosticRemaining": "Available limited diagnosis allowance",
         "reserve": "Hourly / daily reserve",
         "holdUntil": "Hold until",
         "limitUntil": "Rate limit until",
@@ -741,8 +742,11 @@
           "state": "State change"
         },
         "reason": {
+          "limited-confirmation": "Starting a small current-node trial; this may briefly add load",
+          "limited-evidence": "No full bandwidth evidence obtained; await the normal quiet window",
+          "other-group-switched": "Another group switched; current outbound and test configuration match, continuing this round",
           "probe-quota": "Lightweight probe quota unavailable",
-          "protection-stale": "Protection evidence expired",
+          "protection-stale": "Download latency protection expired",
           "check-expired": "Round deadline reached",
           "search-limit": "Search allowance exhausted",
           "recheck-cooldown": "Sufficient-node recheck cooldown",
@@ -806,7 +810,7 @@
       "finalState": "Final state",
       "deadline": "Round deadline",
       "stage": {"current": "Current-node diagnosis", "comparison": "Full comparison"},
-      "budgetMode": {"ordinary": "Ordinary comparison allowance", "diagnostic": "Current-node diagnosis allowance", "recovery": "Failure recovery allowance"},
+      "budgetMode": {"ordinary": "Ordinary comparison allowance", "diagnostic": "Current-node diagnosis allowance", "recovery": "Degradation evidence allowance"},
       "triggerSnapshot": "Traffic observation at trigger: active {active} / {activeLimit} seconds, download {traffic} / {trafficLimit} MiB, throughput {rate} Mbps, suspicion threshold {rateLimit} Mbps.",
       "progress": "Valid evidence: {count} / {total} samples",
       "coverage": "Nodes covered in this round",
@@ -913,12 +917,15 @@
         "return": "Preferred recovery check"
       },
       "reason": {
+        "limited-confirmation": "Starting a small current-node trial; this may briefly add load",
+        "limited-evidence": "No full bandwidth evidence obtained; await the normal quiet window",
+        "other-group-switched": "Another group switched; current outbound and test configuration match, continuing this round",
         "probe-quota": "Lightweight probe quota is unavailable; waiting for scheduler resources",
-        "protection-stale": "Fresh evidence required for switching protection has expired and must be rechecked",
+        "protection-stale": "Latency protection observations expired during the download; this measurement stopped",
         "check-expired": "This round has reached its deadline; further sampling stopped",
         "search-limit": "This search has reached its traffic limit",
         "recheck-cooldown": "The recheck cooldown after sufficient current-node performance has not ended",
-        "diagnosing-current": "Collecting current-node evidence with the diagnosis allowance; full comparison has not started",
+        "diagnosing-current": "First checking whether the current node meets the target; full comparison has not finished",
         "insufficient-evidence": "Both sides do not yet have enough valid evidence for a full comparison",
         "evidence-expired": "Evidence expired or no longer meets contiguous sampling requirements; fresh samples are needed",
         "requested": "Check requested; waiting for scheduling",
@@ -1148,7 +1155,9 @@
     "statusSitedenied": "Not permitted",
     "statusSitebusy": "Tests are busy. Retry later.",
     "statusSiteunavailable": "Core unavailable. Refresh.",
+    "busyConfirmationHelp": "When sustained slow traffic has no quiet window, allow one small current-node trial per round and at most once per hour. Up to 512 KiB, 5 seconds at an offered 0.5 Mbps may briefly add load. This does not provide full bandwidth evidence or permit switching.",
     "bandwidthField": {
+      "allowBusyConfirmation": "Allow limited confirmation during busy traffic",
       "targetMbps": "Target download throughput",
       "delayReferenceMs": "Latency reference (not a hard upper limit)",
       "throughputReferenceMbps": "Throughput reference (not a hard lower limit)",

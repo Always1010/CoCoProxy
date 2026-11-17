@@ -46,10 +46,10 @@ export const BANDWIDTH_FIELDS = {
   busyStopMbps: field('检测中业务流量中止阈值', 2, 0.2, 20, 'Mbps', false, false),
   quietSeconds: field('启动前低负载保持时间', 10, 5, 60, '秒'),
 } as const;
-export type BandwidthSettings = { enabled: boolean; observeOnly: boolean }
+export type BandwidthSettings = { enabled: boolean; observeOnly: boolean; allowBusyConfirmation: boolean }
   & { -readonly [K in keyof typeof BANDWIDTH_FIELDS]: number };
 export const DEFAULT_BANDWIDTH_SETTINGS: BandwidthSettings = Object.freeze({
-  enabled: false, observeOnly: false,
+  enabled: false, observeOnly: false, allowBusyConfirmation: false,
   ...Object.fromEntries(Object.entries(BANDWIDTH_FIELDS).map(([key, value]) => [key, value.default])),
 } as BandwidthSettings);
 
@@ -78,7 +78,7 @@ export function parseBandwidthSettings(value: unknown): BandwidthSettings {
     if (key === 'activeProbes') {
       // Accept old settings without retaining a separate download permission.
       if (typeof value !== 'boolean') return fail();
-    } else if (key === 'enabled' || key === 'observeOnly') {
+    } else if (key === 'enabled' || key === 'observeOnly' || key === 'allowBusyConfirmation') {
       if (typeof value !== 'boolean') return fail();
       result[key] = value;
     } else {
@@ -172,4 +172,20 @@ export function bandwidthDecision(current: BandwidthSample[], candidate: Bandwid
   return { current: from, candidate: to, gain, cost, threshold, uncertainty, guard,
     rank: to.high + uncertainty + (preference.candidatePreferred === false ? settings.fallbackPenaltyMs / 1000 : 0),
     worthwhile: guard && gain > threshold };
+}
+
+/** Trusted automatic limits; the socket carries only the limited intent. */
+export const BUSY_CONFIRMATION = Object.freeze({ maxBytes: 512 * 1024, durationMs: 5000,
+  warmupMs: 1000, minSampleMs: 3000, offeredMbps: 0.5, waitMs: 30000, retryMs: 3600000,
+  maxBusinessMbps: 5 });
+export function automaticBandwidthTransfer(settings: BandwidthSettings, limited = false) {
+  if (limited && !settings.allowBusyConfirmation) throw Object.assign(new Error('BANDWIDTH_DISABLED'), { code: 'BANDWIDTH_DISABLED' });
+  return limited ? {
+    limits: { durationMs: BUSY_CONFIRMATION.durationMs, maxBytes: BUSY_CONFIRMATION.maxBytes, timeoutMs: settings.timeoutSeconds * 1000 },
+    verification: { targetMbps: settings.targetMbps, warmupMs: BUSY_CONFIRMATION.warmupMs,
+      minSampleMs: BUSY_CONFIRMATION.minSampleMs, limited: true, offeredMbps: BUSY_CONFIRMATION.offeredMbps },
+  } : {
+    limits: { durationMs: settings.durationSeconds * 1000, maxBytes: settings.taskMiB * 1048576, timeoutMs: settings.timeoutSeconds * 1000 },
+    verification: { targetMbps: settings.targetMbps, warmupMs: settings.warmupSeconds * 1000, minSampleMs: settings.minSampleSeconds * 1000 },
+  };
 }

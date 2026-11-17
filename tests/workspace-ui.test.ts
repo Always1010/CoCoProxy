@@ -127,7 +127,7 @@ test('bandwidth validation remains available across pages and checks shared budg
   }
   const keys = bandwidthPages.flatMap(page => [...page.keys]);
   assert.equal(new Set(keys).size, keys.length);
-  assert.deepEqual([...keys].sort(), Object.keys(BANDWIDTH_FIELDS).sort());
+  assert.deepEqual([...keys].sort(), [...Object.keys(BANDWIDTH_FIELDS), 'allowBusyConfirmation'].sort());
   current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, busyStopMbps: 0.5 };
   assert.equal(bandwidthIssue(current, definitions, {}, 'Stream')?.page, 'trigger');
   current = { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, targetMbps: NaN };
@@ -144,7 +144,7 @@ test('bandwidth switches retain subordinate settings and restore affects only th
     + '\nexport { toggle, restore };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const props = { modelValue: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, targetMbps: 7, hourMiB: 80 },
-    definitions: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS }, page: 'budget', disabled: false };
+    definitions: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS }, page: 'budget' as string, disabled: false };
   const exports: Record<string, any> = {};
   new Script(code).runInNewContext({ ...uiTestContext,
     exports, bandwidthPages, defineProps: () => props, defineEmits: () => (_event: string, value: typeof props.modelValue) => { props.modelValue = value; },
@@ -169,6 +169,11 @@ test('bandwidth switches retain subordinate settings and restore affects only th
   assert.equal(props.modelValue.enabled, false);
   props.disabled = false;
   exports.toggle('enabled', { target: { checked: true } });
+  assert.equal(props.modelValue.observeOnly, true);
+  exports.toggle('allowBusyConfirmation', { target: { checked: true } });
+  assert.equal(props.modelValue.allowBusyConfirmation, true);
+  props.page = 'trigger'; exports.restore();
+  assert.equal(props.modelValue.allowBusyConfirmation, false);
   assert.equal(props.modelValue.observeOnly, true);
 });
 test('group status checks only saved active policies and binds requests to the displayed scope and revision', async () => {

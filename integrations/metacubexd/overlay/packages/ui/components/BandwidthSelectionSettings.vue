@@ -17,11 +17,11 @@ const fields = computed(() => definition.value.keys.flatMap(key => {
   const field = props.definitions.fields[key]
   return field ? [[key, field] as const] : []
 }))
-const customCount = computed(() => fields.value.filter(([key]) => settings.value[key] !== props.definitions.defaults[key]).length)
+const customCount = computed(() => definition.value.keys.filter(key => settings.value[key] !== props.definitions.defaults[key]).length)
 const tuningCount = computed(() => bandwidthPages.filter(page => page.id !== 'bandwidth' && page.id !== 'budget')
   .flatMap(page => [...page.keys]).filter(key => settings.value[key] !== props.definitions.defaults[key]).length)
-function toggle(key: 'enabled' | 'observeOnly', event: Event) {
-  if (props.disabled || (key === 'observeOnly' && !settings.value.enabled)) return
+function toggle(key: 'enabled' | 'observeOnly' | 'allowBusyConfirmation', event: Event) {
+  if (props.disabled || (key !== 'enabled' && !settings.value.enabled)) return
   emit('update:modelValue', { ...settings.value, [key]: (event.target as HTMLInputElement).checked })
 }
 function number(key: string, event: Event) {
@@ -32,7 +32,7 @@ function number(key: string, event: Event) {
 function restore() {
   if (props.disabled || !settings.value.enabled) return
   const next = { ...settings.value }
-  for (const [key] of fields.value) next[key] = props.definitions.defaults[key]!
+  for (const key of definition.value.keys) next[key] = props.definitions.defaults[key]!
   emit('update:modelValue', next)
 }
 watch(() => props.page, () => { explanation.value = false })
@@ -60,6 +60,13 @@ watch(() => props.page, () => { explanation.value = false })
           <input id="group-bandwidth-observe" :checked="settings.observeOnly" type="checkbox" class="toggle toggle-primary" :disabled="disabled" @change="toggle('observeOnly', $event)" />
         </div>
         <p v-else class="text-xs text-base-content/60">{{ customCount ? t('coco.anCustomizedCount', { count: customCount }) : t('coco.anUsingRecommendedParameters') }}</p>
+        <div v-if="page === 'trigger'" class="space-y-2 text-sm">
+          <label class="flex min-h-11 items-center justify-between gap-4" for="group-bandwidth-busy-confirmation">
+            <span>{{ t('coco.bandwidthField.allowBusyConfirmation') }}</span>
+            <input id="group-bandwidth-busy-confirmation" :checked="!!settings.allowBusyConfirmation" type="checkbox" class="toggle toggle-primary" :disabled="disabled" @change="toggle('allowBusyConfirmation', $event)" />
+          </label>
+          <SettingsNotice warning>{{ t('coco.busyConfirmationHelp') }}</SettingsNotice>
+        </div>
         <div :class="page === 'bandwidth' ? 'space-y-4' : 'grid gap-x-5 gap-y-4 sm:grid-cols-2'">
           <label v-for="[key, field] in fields" :key="key" class="block text-sm" :for="'group-bandwidth-' + key">
             <span class="mb-1.5 block">{{ t('coco.bandwidthField.' + key) }}</span>

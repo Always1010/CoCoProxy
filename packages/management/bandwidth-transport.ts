@@ -1,3 +1,4 @@
+import { BUSY_CONFIRMATION } from './bandwidth-policy.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -16,7 +17,7 @@ export type BandwidthReport = { phase?: BandwidthPhase; bytesUsed?: number; down
 export type TransferInput = { config: JsonObject; node: string; binaryPath: string; stateDirectory: string; signal: AbortSignal;
   generation?: string; group?: string; workspaceRevision?: number;
   limits: { durationMs: number; maxBytes: number; timeoutMs: number }; report: (update: BandwidthReport) => void;
-  verification?: { targetMbps: number; warmupMs: number; minSampleMs: number } };
+  verification?: { targetMbps: number; warmupMs: number; minSampleMs: number; limited?: boolean; offeredMbps?: number } };
 type TransportRuntime = { start: (binary: string, args: string[]) => ChildProcess };
 const failure = (code = 'BANDWIDTH_UNAVAILABLE') => Object.assign(new Error(code), { code });
 const object = (value: unknown): value is JsonObject => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -232,6 +233,10 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
       || !Number.isSafeInteger(input.verification.warmupMs) || input.verification.warmupMs < 1000
       || !Number.isSafeInteger(input.verification.minSampleMs) || input.verification.minSampleMs < 3000
       || input.verification.warmupMs + input.verification.minSampleMs > input.limits.durationMs)) throw failure();
+  if (input.verification?.limited && (input.limits.maxBytes !== BUSY_CONFIRMATION.maxBytes
+      || input.limits.durationMs !== BUSY_CONFIRMATION.durationMs || input.verification.offeredMbps !== BUSY_CONFIRMATION.offeredMbps
+      || input.verification.warmupMs !== BUSY_CONFIRMATION.warmupMs || input.verification.minSampleMs !== BUSY_CONFIRMATION.minSampleMs)
+    || input.verification?.offeredMbps !== undefined && !input.verification.limited) throw failure();
   const lifetime = new AbortController();
   let timedOut = false, directory: string | undefined, child: ChildProcess | undefined, proxy: ReturnType<typeof proxyAgent> | undefined;
   const cancel = () => lifetime.abort();
@@ -369,7 +374,7 @@ export async function runBandwidthTransfer(input: TransferInput, runtime: Transp
 
 /** Shared download window and warmup accounting; optional pacing proves at most targetMbps. */
 export async function runDownloadVerification(input: {
-  targetMbps?: number; warmupMs: number; minSampleMs: number; durationMs: number; signal: AbortSignal;
+  targetMbps?: number; offeredMbps?: number; warmupMs: number; minSampleMs: number; durationMs: number; signal: AbortSignal;
   budget: BandwidthByteBudget; maxBytes?: number;
   request: (size: number, signal: AbortSignal, onBytes: (bytes: number) => void) => Promise<{ bytes: number; elapsedMs: number }>;
   report: (bytes: number) => void;
@@ -378,20 +383,27 @@ export async function runDownloadVerification(input: {
   const timer = setTimeout(() => phase.abort(), input.durationMs);
   const started = performance.now();
   let bytes = 0, sampleBytes = 0, sampleAt = 0, failed = false;
-  const offeredBytesPerMs = input.targetMbps === undefined ? null : input.targetMbps * 125 * 1.25;
+  const offeredBytesPerMs = input.offeredMbps !== undefined ? input.offeredMbps * 125
+    : input.targetMbps === undefined ? null : input.targetMbps * 125 * 1.25;
   let chunk = offeredBytesPerMs === null ? 16384 : Math.max(16384, Math.min(1048576, Math.floor(offeredBytesPerMs * 500)));
   try {
     while (!signal.aborted && input.budget.remaining > 131072) {
       const size = Math.min(chunk, input.budget.remaining - 65536, (input.maxBytes ?? Infinity) - bytes), slot = performance.now();
       if (size < 1024) break;
+      // Limited supply earns each request before sending it, so timer rounding
+      // and the final chunk cannot exceed the offered payload rate.
+      if (input.offeredMbps !== undefined) {
+        await pause(Math.max(0, (bytes + size) / offeredBytesPerMs! - (performance.now() - started)), signal);
+        if (signal.aborted) break;
+      }
       const response = await input.request(size, signal, count => {
         bytes += count;
         const at = performance.now();
         if (!sampleAt && at - started >= input.warmupMs) { sampleAt = at; sampleBytes = bytes; }
         input.report(bytes);
       });
-      if (offeredBytesPerMs !== null) await pause(Math.max(0, size / offeredBytesPerMs - (performance.now() - slot)), signal);
-      else chunk = Math.max(16384, Math.min(1048576, Math.floor(response.bytes / Math.max(1, response.elapsedMs) * 500)));
+      if (offeredBytesPerMs !== null && input.offeredMbps === undefined) await pause(Math.max(0, size / offeredBytesPerMs - (performance.now() - slot)), signal);
+      else if (offeredBytesPerMs === null) chunk = Math.max(16384, Math.min(1048576, Math.floor(response.bytes / Math.max(1, response.elapsedMs) * 500)));
     }
   } catch { failed = !signal.aborted; }
   finally { clearTimeout(timer); phase.abort(); }

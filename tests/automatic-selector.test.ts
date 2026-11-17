@@ -630,3 +630,34 @@ test('enhanced switch probes promptly and recovers a failing new node without di
   assert.equal(node.reason, 'post-switch-failure'); assert.ok(node.nextAt >= changes[0].at + 300000);
   await engine.close();
 });
+
+
+test('retry-after still maintains in-flight download business protection without starting new work', async () => {
+  let now = 0, total = 0, started = false, aborted = false, retryAt = 0;
+  const probes: number[] = [], changes: string[] = [];
+  const snapshot: AutoSnapshot = { key: 'retry-protection', generation: '1', probes: DEFAULT_AUTO_PROBES,
+    groups: [{ name: 'group', current: 'a', policy: { preferred: ['a', 'b'], fallback: [], returnToPreferred: false,
+      bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true } } }] };
+  const engine = createAutomaticSelector({ now: () => now, snapshot: async () => snapshot,
+    probe: async () => {
+      probes.push(now);
+      if (started && !retryAt) { retryAt = now; return { ok: false, delay: null, retryAfterMs: 10000 }; }
+      return good();
+    }, switch: async (_s, _g, node) => { changes.push(node); return true; },
+    bandwidth: { measure: async (_s, _n, _settings, signal, _report, _group, phase) => {
+      started = true; phase('download');
+      await new Promise<void>(resolve => signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true }));
+      return null;
+    } },
+  });
+  for (let i = 0; i < 25 && !aborted; i++) {
+    now = i * 1000;
+    if (retryAt) total += 500000;
+    engine.observeUsage({ epoch: 'retry', download: total, upload: 0, connections: [] });
+    await engine.tick(); await new Promise<void>(resolve => setImmediate(resolve));
+    if (i === 1) engine.requestBandwidthCheck('group');
+  }
+  assert.ok(retryAt > 0); assert.equal(aborted, true); assert.ok(now < retryAt + 10000);
+  assert.equal(probes.at(-1), retryAt); assert.deepEqual(changes, []);
+  await engine.close();
+});

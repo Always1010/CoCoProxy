@@ -27,7 +27,7 @@ test('the UI supports only English and Chinese and all referenced custom message
       if (!key.endsWith('.')) assert.ok(key in en, `${file}: missing ${key}`);
     }
   }
-  assert.deepEqual(Object.keys(uiMessages.en.coco.bandwidthField).sort(), Object.keys(BANDWIDTH_FIELDS).sort());
+  assert.deepEqual(Object.keys(uiMessages.en.coco.bandwidthField).sort(), [...Object.keys(BANDWIDTH_FIELDS), 'allowBusyConfirmation'].sort());
 });
 
 test('existing errors, feedback, and rule descriptions change language while preserving user input', () => {

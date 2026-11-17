@@ -675,6 +675,7 @@
     "usageRouteUnrecorded": "策略路径未记录，保留已知出口；旧历史无法补录。",
     "usageMatchedRule": "查看当时命中的规则",
     "process": {
+      "limitedEvidence": "有限证据",
       "trace": {
         "chooseRound": "选择一轮记录",
         "initial": "起始出口",
@@ -741,8 +742,11 @@
           "state": "状态变更"
         },
         "reason": {
+          "limited-confirmation": "开始当前节点的小额试探，可能短暂增加负载",
+          "limited-evidence": "未取得完整带宽证据，等待正常空闲窗口",
+          "other-group-switched": "其他组已切换，当前出口与检测配置核验一致，继续本轮",
           "probe-quota": "轻量检测额度不足",
-          "protection-stale": "保护证据过期",
+          "protection-stale": "下载延迟保护观测过期",
           "check-expired": "本轮检查到期",
           "search-limit": "本次搜索额度已用尽",
           "recheck-cooldown": "达标复查冷却",
@@ -913,12 +917,15 @@
         "return": "优选恢复回查"
       },
       "reason": {
+        "limited-confirmation": "开始当前节点的小额试探，可能短暂增加负载",
+        "limited-evidence": "未取得完整带宽证据，等待正常空闲窗口",
+        "other-group-switched": "其他组已切换，当前出口与检测配置核验一致，继续本轮",
         "probe-quota": "轻量检测额度不足，等待调度资源",
-        "protection-stale": "切换保护所需的新鲜证据已过期，需复核",
+        "protection-stale": "下载期间延迟保护观测已过期，本次测量停止",
         "check-expired": "本轮检查已到截止时间，停止继续补测",
         "search-limit": "本次搜索已达到流量上限",
         "recheck-cooldown": "当前节点达标后的复查冷却期尚未结束",
-        "diagnosing-current": "使用当前节点诊断额度补充证据，尚未进入双方完整比较",
+        "diagnosing-current": "先确认当前节点是否满足目标，尚未完成双方比较",
         "insufficient-evidence": "双方有效证据尚不足以进行完整比较",
         "evidence-expired": "证据已过期或不再满足连续采样要求，需重新补测",
         "requested": "检查已请求，等待调度",
@@ -1148,7 +1155,9 @@
     "statusSitedenied": "目标受限",
     "statusSitebusy": "检测繁忙",
     "statusSiteunavailable": "核心不可用",
+    "busyConfirmationHelp": "持续疑似低速且长期没有空闲窗口时，允许本轮对当前节点进行一次小额试探，同组每小时最多一次。最多512 KiB、下载5秒、供给0.5 Mbps，可能短暂增加负载；不会取得完整带宽证据，也不能据此切换。",
     "bandwidthField": {
+      "allowBusyConfirmation": "业务繁忙时允许有限确认",
       "targetMbps": "目标下载吞吐",
       "delayReferenceMs": "延迟参考线（非绝对上限）",
       "throughputReferenceMbps": "吞吐参考线（非绝对下限）",

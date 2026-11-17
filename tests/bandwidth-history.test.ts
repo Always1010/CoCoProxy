@@ -52,6 +52,8 @@ test('archive failures are reported without leaking contents or affecting the tr
   });
   assert.equal(round!.truncated, true); assert.ok(round!.events.length <= 200); assert.equal(round!.reason, 'stopped');
   const incomplete = JSON.parse(JSON.stringify({ version: 1, since: 0, evicted: false, rounds: [round] }));
+  delete incomplete.rounds[0].settings.allowBusyConfirmation;
+  assert.equal(parseBandwidthHistory(incomplete).rounds[0].settings.allowBusyConfirmation, false);
   delete incomplete.rounds[0].settings.targetMbps;
   assert.throws(() => parseBandwidthHistory(incomplete), /^Error: BANDWIDTH_HISTORY_INVALID$/);
   const writable = join(root, 'write-failure'); await mkdir(writable, { mode: 0o700 });

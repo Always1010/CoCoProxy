@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { JsonObject } from '../config/index.ts';
 import { ManagementError, exactRecord, readJsonBody, type Principal } from './http.ts';
 import { runBandwidthTransfer, type BandwidthDirection, type BandwidthPhase, type BandwidthReport } from './bandwidth-transport.ts';
-import type { BandwidthSettings } from './bandwidth-policy.ts';
+import { automaticBandwidthTransfer, type BandwidthSettings } from './bandwidth-policy.ts';
 
 export const BANDWIDTH_LIMITS = Object.freeze({ durationMs: 6000, maxBytes: 200_000_000, timeoutMs: 30_000 });
 export const BANDWIDTH_SERVER = Object.freeze({ name: 'Cloudflare', url: 'https://speed.cloudflare.com' });
@@ -111,7 +111,7 @@ export function createBandwidthService(options: {
     busy: () => !!current?.task.running || !!automatic,
     async verify(node: string, generation: string, settings: BandwidthSettings, signal: AbortSignal,
       reportBytes: (bytes: number) => void, group?: string, workspaceRevision?: number,
-      reportPhase?: (phase: import('./bandwidth-transport.ts').BandwidthPhase) => void): Promise<{ mbps: number; delayMs: number; bytes: number; sampleMs?: number; warmupMs?: number } | null> {
+      reportPhase?: (phase: import('./bandwidth-transport.ts').BandwidthPhase) => void, limited = false): Promise<{ mbps: number; delayMs: number; bytes: number; sampleMs?: number; warmupMs?: number } | null> {
       if (stopped || options.enabled === false || current?.task.running || automatic || signal.aborted) return null;
       const abort = new AbortController();
       const job = { abort, done: Promise.resolve<unknown>(undefined) };
@@ -124,8 +124,7 @@ export function createBandwidthService(options: {
           const target = await options.snapshot(node, generation, joined);
           joined.throwIfAborted();
           const result = await transfer({ ...target, node, generation, group, workspaceRevision, signal: joined,
-            limits: { durationMs: settings.durationSeconds * 1000, maxBytes: settings.taskMiB * 1048576, timeoutMs: settings.timeoutSeconds * 1000 },
-            verification: { targetMbps: settings.targetMbps, warmupMs: settings.warmupSeconds * 1000, minSampleMs: settings.minSampleSeconds * 1000 },
+            ...automaticBandwidthTransfer(settings, limited),
             report: value => {
               if (value.phase) reportPhase?.(value.phase);
               if (value.bytesUsed !== undefined) { bytes = value.bytesUsed; reportBytes(bytes); }

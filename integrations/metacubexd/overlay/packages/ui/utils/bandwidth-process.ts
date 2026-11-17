@@ -14,7 +14,7 @@ export type ProcessEvent = {
   probe?: { ok: boolean; delayMs: number | null; retryAfterMs?: number }
   observation?: { fresh: boolean; activeSeconds: number; trafficMiB: number; mbps: number | null;
     requiredActiveSeconds: number; requiredTrafficMiB: number; suspectMbps: number; positiveUntil: number }
-  sample?: { startedAt: number; elapsedMs: number; delayMs: number | null; mbps: number | null; bytes: number; valid: boolean; sampleMs?: number; warmupMs?: number }
+  sample?: { startedAt: number; elapsedMs: number; delayMs: number | null; mbps: number | null; bytes: number; valid: boolean; limited?: boolean; sampleMs?: number; warmupMs?: number }
   comparison?: ProcessComparison
   screening?: { currentLow: number; bestCandidateLoss: number; uncertainty: number; threshold: number; delayLimit: number; delayMs: number }
   protection?: { recentSwitches: number; maxSwitches: number; holdUntil: number; limitUntil: number; severe: boolean }
@@ -90,6 +90,9 @@ export function processSampleLoss(sample: ProcessSample, settings: BandwidthSett
 
 // Reuse the existing explanations so the overview and process never disagree on a reason.
 const existingReasons: Record<string, string> = {
+  'limited-evidence': 'coco.process.reason.limited-evidence',
+  'limited-confirmation': 'coco.process.reason.limited-confirmation',
+  'other-group-switched': 'coco.process.reason.other-group-switched',
   'measurement-path-unavailable': 'coco.bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE',
   'measurement-worker-unavailable': 'coco.bandwidthErrorBANDWIDTH_WORKER_UNAVAILABLE',
   'preparing-measurement': 'coco.bandwidthPreparingMeasurement',

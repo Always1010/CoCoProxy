@@ -10,6 +10,7 @@ import { createBandwidthWorkerClient } from '../packages/management/bandwidth-wo
 import { createBandwidthWorkerHost, createBandwidthWorkerServer, type BandwidthWorkerHost } from '../packages/runtime/bandwidth-worker.ts';
 import { bandwidthError, parseBandwidthJob } from '../packages/runtime/bandwidth-protocol.ts';
 import type { TransferInput } from '../packages/management/bandwidth-transport.ts';
+import { automaticBandwidthTransfer, DEFAULT_BANDWIDTH_SETTINGS, BUSY_CONFIRMATION } from '../packages/management/bandwidth-policy.ts';
 import { initialWorkspace } from '../packages/management/workspace.ts';
 
 const generation = 'a'.repeat(64);
@@ -37,6 +38,11 @@ test('worker protocol rejects supplied programs, endpoints and configurations', 
   assert.equal(parseBandwidthJob(automatic).workspaceRevision, 3);
   for (const workspaceRevision of [undefined, -1, 0.5, '3']) assert.throws(() => parseBandwidthJob({ ...automatic, workspaceRevision }));
   assert.throws(() => parseBandwidthJob({ ...job, workspaceRevision: 3 }));
+  assert.throws(() => parseBandwidthJob({ ...job, limited: true }));
+  assert.equal(parseBandwidthJob({ ...automatic, limited: true }).limited, true);
+  for (const limited of [1, 'true', null]) assert.throws(() => parseBandwidthJob({ ...automatic, limited }));
+  for (const extra of [{ offeredMbps: 100 }, { maxBytes: 123 }, { verification: {} }])
+    assert.throws(() => parseBandwidthJob({ ...automatic, limited: true, ...extra }));
 });
 
 test('a socket-activated single-task instance stops accepting before reporting completion', async () => {
@@ -93,6 +99,7 @@ test('automatic work rejects a stale workspace revision before loading or starti
     const job = parseBandwidthJob({ version: 1, id: '12345678-1234-1234-1234-123456789abc', generation,
       node: 'node-a', kind: 'automatic', group: 'synthetic-group', workspaceRevision: 3 });
     assert.equal(await host.current(job), true);
+    await assert.rejects(host.prepare({ ...job, limited: true }, new AbortController().signal), { code: 'BANDWIDTH_DISABLED' });
     assert.equal(await host.current({ ...job, workspaceRevision: 2 }), false);
     await assert.rejects(host.prepare({ ...job, workspaceRevision: 2 }, new AbortController().signal), { code: 'ACTIVE_CONFLICT' });
     await writeFile(join(root, 'workspace.json'), JSON.stringify({ version: 1, revision: 4, settings }));
@@ -200,4 +207,28 @@ test('lost or incompatible responses retain the reservation and failures after b
       assert.equal(reports.at(-1)?.bytesUsed, mode === 'after-bytes' ? 1000 : task.limits.maxBytes);
     }
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('trusted automatic configuration alone enables fixed busy-confirmation limits', async () => {
+  assert.throws(() => automaticBandwidthTransfer(DEFAULT_BANDWIDTH_SETTINGS, true), { code: 'BANDWIDTH_DISABLED' });
+  const s = { ...DEFAULT_BANDWIDTH_SETTINGS, allowBusyConfirmation: true, taskMiB: 64, durationSeconds: 15 };
+  const limited = automaticBandwidthTransfer(s, true);
+  assert.deepEqual(limited.limits, { maxBytes: BUSY_CONFIRMATION.maxBytes, durationMs: 5000, timeoutMs: 20000 });
+  assert.equal(limited.verification.offeredMbps, 0.5); assert.equal(limited.verification.limited, true);
+  assert.equal(limited.verification.warmupMs, 1000); assert.equal(limited.verification.minSampleMs, 3000);
+  assert.equal(automaticBandwidthTransfer(s).limits.maxBytes, 64 * 1048576);
+  const f = await fixture(root => ({ current: async () => true,
+    prepare: async job => {
+      assert.equal(job.kind, 'automatic'); assert.equal(job.limited, true);
+      assert.equal(Object.hasOwn(job, 'offeredMbps'), false);
+      return { ...input(root), ...automaticBandwidthTransfer(s, job.limited) };
+    }, transfer: async task => {
+      assert.deepEqual(task.limits, limited.limits); assert.deepEqual(task.verification, limited.verification);
+      return { reason: null };
+    } }));
+  try {
+    await f.client.transfer({ ...input(f.root), group: 'synthetic-group', workspaceRevision: 3,
+      verification: { targetMbps: 100, warmupMs: 5000, minSampleMs: 3000, limited: true, offeredMbps: 100 } });
+  } finally { await f.close(); }
 });

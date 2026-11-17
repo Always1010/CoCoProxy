@@ -3,12 +3,12 @@ import type { UsageSnapshot } from './usage.ts';
 import type { BandwidthPhase } from './bandwidth-transport.ts';
 import { createBandwidthTrace, type BandwidthRound } from './bandwidth-history.ts';
 import type { AutoSuspensionReason } from './automatic-diagnostics.ts';
-import { BANDWIDTH_SAFETY_INTERVAL_MS, bandwidthBudgetLimits, bandwidthDecision, bandwidthDegraded, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold,
+import { BANDWIDTH_SAFETY_INTERVAL_MS, BUSY_CONFIRMATION, bandwidthBudgetLimits, bandwidthDecision, bandwidthDegraded, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold,
   type BandwidthSettings, type BandwidthSample } from './bandwidth-policy.ts';
 
 const MiB = 1048576, HOUR = 3600000, DAY = 24 * HOUR, PROBE_FRESH = 30000, UNKNOWN_WAIT = 30000;
 const ACTIVE_CANDIDATES = 3;
-export type BandwidthLedger = { version: 1; charges: { at: number; bytes: number; diagnostic?: { scope: string; group: string } }[];
+export type BandwidthLedger = { version: 1; charges: { at: number; bytes: number; limited?: boolean; diagnostic?: { scope: string; group: string } }[];
   switches: { at: number; scope: string; group: string; from: string; to: string }[] };
 type StorageFault = { operation: 'load' | 'save'; code: string; since: number; at: number; count: number; nextAt: number };
 export type BandwidthStorageDiagnostic = StorageFault & { event: 'failure' | 'recovered' };
@@ -18,6 +18,7 @@ export function parseBandwidthLedger(input: unknown): BandwidthLedger {
   const text = (s: unknown): s is string => typeof s === 'string' && s.length <= 4096;
   if (!value || value.version !== 1 || !Array.isArray(value.charges) || value.charges.length > 4096 || !Array.isArray(value.switches)
       || value.switches.length > 4096 || value.charges.some(c => !c || !integer(c.at) || !integer(c.bytes)
+        || c.limited !== undefined && (c.limited !== true || !c.diagnostic)
         || c.diagnostic !== undefined && (!c.diagnostic || !text(c.diagnostic.scope) || !text(c.diagnostic.group)))
       || value.switches.some(s => !s || !integer(s.at) || !text(s.scope) || !text(s.group) || !text(s.from) || !text(s.to))) throw new Error('BANDWIDTH_LEDGER_INVALID');
   return value;
@@ -43,7 +44,7 @@ type Pool = { name: string; current: string; nodes: Map<string, Node>; active: s
 export function createBandwidthSelector(options: {
   now: () => number;
   measure?: (snapshot: AutoSnapshot, node: string, settings: BandwidthSettings, signal: AbortSignal,
-    bytes: (used: number) => void, group: string, phase: (value: BandwidthPhase) => void) => Promise<{ delayMs: number; mbps: number; bytes: number; sampleMs?: number; warmupMs?: number } | null>;
+    bytes: (used: number) => void, group: string, phase: (value: BandwidthPhase) => void, limited?: boolean) => Promise<{ delayMs: number; mbps: number; bytes: number; sampleMs?: number; warmupMs?: number } | null>;
   measurementKey?: () => string;
   probe: (snapshot: AutoSnapshot, node: string, signal: AbortSignal, group: string) => Promise<ProbeResult>;
   select: (snapshot: AutoSnapshot, group: string, node: string) => Promise<boolean>;
@@ -59,7 +60,7 @@ export function createBandwidthSelector(options: {
   let flight: { abort: AbortController; done: Promise<void>; pool?: Pool; node?: Node; kind: 'load' | 'save' | 'probe' | 'download' | 'select'; startedAt?: number; used?: number; sampleInterrupted?: boolean } | undefined;
   let ledger: BandwidthLedger = { version: 1, charges: [], switches: [] };
   let previous: { at: number; snapshot: UsageSnapshot } | undefined;
-  let pressure: { group: string; baseline?: number; count: number; phase: BandwidthPhase; observedAt: number } | undefined;
+  let pressure: { group: string; baseline?: number; count: number; phase: BandwidthPhase; observedAt: number; businessBaseline?: number } | undefined;
   let expected: { key: string; revision?: number; until: number; currents: Map<string, string> } | undefined;
   let retainedForTransaction = false;
   let lastIdentity = '', lastGeneration: string | undefined;
@@ -196,7 +197,8 @@ export function createBandwidthSelector(options: {
     if (flight.kind === 'download' && !flight.sampleInterrupted) {
       trace.event(flight.pool.name, { kind: 'sample', reason, node: flight.node?.name,
         sample: { startedAt: flight.startedAt!, elapsedMs: options.now() - flight.startedAt!, delayMs: flight.node?.probe?.delay ?? null,
-          mbps: null, bytes: flight.used ?? 0, valid: false } });
+          mbps: null, bytes: flight.used ?? 0, valid: false,
+          ...(pressure?.businessBaseline === undefined ? {} : { limited: true }) } });
       flight.sampleInterrupted = true;
     }
     flight.abort.abort();
@@ -291,6 +293,32 @@ export function createBandwidthSelector(options: {
     const rows = observations.get('\0total')?.filter(r => r.at > options.now() - s.quietSeconds * 1000) ?? [];
     return !!previous && options.now() - previous.at < 3000 && rows.reduce((n, r) => n + r.elapsed, 0) >= s.quietSeconds * 1000 - 1500
       && rows.every(r => r.bytes * 8 / r.elapsed / 1000 < s.busyStartMbps);
+  }
+  function businessRate() {
+    const rows = observations.get('\0total')?.filter(r => r.at > options.now() - 2000) ?? [];
+    const elapsed = rows.reduce((sum, r) => sum + r.elapsed, 0);
+    return previous && options.now() - previous.at < 3000 && elapsed >= 1500
+      ? rows.reduce((sum, r) => sum + r.bytes, 0) * 8 / elapsed / 1000 : Infinity;
+  }
+  function limitedRetry(p: Pool) {
+    return Math.max(0, ...ledger.charges.filter(c => c.limited && c.diagnostic?.scope === (snapshot?.scope ?? snapshot?.key)
+      && c.diagnostic?.group === p.name).map(c => c.at + BUSY_CONFIRMATION.retryMs));
+  }
+  async function limitedConfirmation(p: Pool, current: Node, s: BandwidthSettings, snap: AutoSnapshot, signal: AbortSignal) {
+    const startedAt = options.now(), before = p.spent, job = flight;
+    // Preparation and storage errors retain launch's normal failure handling.
+    await measure(p, current, s, snap, signal, 'diagnostic', true);
+    if (job?.sampleInterrupted || signal.aborted) {
+      // Preserve the actual cancellation; expire/update may already have ended it.
+      if (!closed && p.trigger && pools.get(p.name) === p && snapshot?.key === snap.key && snapshot.generation === snap.generation)
+        endCheck(p, s, p.reason);
+      return;
+    }
+    if (!p.trigger || !alive(p, snap, signal)) return;
+    trace.event(p.name, { kind: 'sample', reason: 'limited-evidence', node: current.name,
+      sample: { startedAt, elapsedMs: options.now() - startedAt, delayMs: current.probe?.delay ?? null,
+        mbps: null, bytes: Math.max(0, p.spent - before), valid: false, limited: true } });
+    endCheck(p, s, 'limited-evidence');
   }
   function suspect(p: Pool, s: BandwidthSettings) {
     const positiveAt = Math.max(p.positiveUntil ? p.positiveUntil - s.positiveSeconds * 1000 : -Infinity,
@@ -420,18 +448,20 @@ export function createBandwidthSelector(options: {
     p.trigger = null; p.started = null; p.pauseUntil = nextAt;
     p.active = []; p.candidate = null; p.testingNode = null;
   }
-  async function measure(p: Pool, n: Node, s: BandwidthSettings, snap: AutoSnapshot, signal: AbortSignal, mode: BudgetMode) {
-    const charge: BandwidthLedger['charges'][number] = { at: options.now(), bytes: s.taskMiB * MiB,
+  async function measure(p: Pool, n: Node, s: BandwidthSettings, snap: AutoSnapshot, signal: AbortSignal, mode: BudgetMode, limited = false) {
+    const charge: BandwidthLedger['charges'][number] = { at: options.now(), bytes: limited ? BUSY_CONFIRMATION.maxBytes : s.taskMiB * MiB,
+      ...(limited ? { limited: true } : {}),
       ...(mode === 'diagnostic' ? { diagnostic: { scope: snap.scope ?? snap.key, group: p.name } } : {}) };
     ledger.charges.push(charge);
     try { await store(); } // Durable maximum before any network I/O.
     catch (error) { charge.bytes = 0; throw error; } // No transfer started; settle this reservation on recovery.
     let used = 0;
-    const measurementPressure: NonNullable<typeof pressure> = { group: p.name, count: 0, phase: 'preparing', observedAt: options.now() };
+    const measurementPressure: NonNullable<typeof pressure> = { group: p.name, count: 0, phase: 'preparing', observedAt: options.now(),
+      ...(limited ? { businessBaseline: businessRate() } : {}) };
     const measurementFlight = flight;
     pressure = measurementPressure;
     try {
-      if (signal.aborted) return null;
+      if (signal.aborted || limited && (measurementPressure.businessBaseline! > BUSY_CONFIRMATION.maxBusinessMbps || options.busy?.())) return null;
       return await options.measure!(snap, n.name, s, signal, bytes => {
         if (pressure !== measurementPressure || flight !== measurementFlight) return;
         if (Number.isFinite(bytes) && bytes >= 0) used = Math.min(charge.bytes, Math.max(used, bytes));
@@ -443,7 +473,7 @@ export function createBandwidthSelector(options: {
         if (pressure !== measurementPressure || signal.aborted) return;
         if (pressure.phase !== phase) pressure.observedAt = options.now();
         pressure.phase = phase;
-      });
+      }, limited);
     } finally {
       if (pressure === measurementPressure) pressure = undefined;
       charge.bytes = used; p.spent += used;
@@ -502,7 +532,7 @@ export function createBandwidthSelector(options: {
       endCheck(p, s, 'check-expired');
     }
   }
-  function tick(contexts: Context[]) {
+  function maintain(contexts: Context[]) {
     if (closed || !snapshot) { interrupt('suspended'); return; }
     const at = options.now();
     expire();
@@ -513,9 +543,17 @@ export function createBandwidthSelector(options: {
         interrupt('protection-stale');
       else if (flight.kind === 'download') {
         const rows = observations.get('\0total')?.filter(r => r.at > at - 2000) ?? [];
-        if (rows.length >= 2 && rows.every(r => r.bytes * 8 / r.elapsed / 1000 > s.busyStopMbps)) interrupt('business-busy');
+        const baseline = pressure?.businessBaseline;
+        const stopMbps = baseline === undefined ? s.busyStopMbps
+          : Math.min(BUSY_CONFIRMATION.maxBusinessMbps, baseline + Math.max(0.5, baseline * 0.25));
+        if (rows.length >= 2 && rows.every(r => r.bytes * 8 / r.elapsed / 1000 > stopMbps)) interrupt('business-busy');
       }
     }
+  }
+  function tick(contexts: Context[]) {
+    maintain(contexts);
+    if (closed || !snapshot) return;
+    const at = options.now();
     if (flight) return;
     if (storageFault) {
       for (const p of pools.values()) if (p.trigger) { begin(p); note(p, 'waiting', 'storage-unavailable', storageFault.nextAt); }
@@ -540,7 +578,7 @@ export function createBandwidthSelector(options: {
       if (p.pathUnavailable) continue;
       if (!options.measure) { note(p, 'waiting', 'measurement-unavailable'); continue; }
       if (!p.trigger && suspect(p, s)) {
-        if (at < Math.max(p.pauseUntil, p.recheckUntil) && !context?.degraded) {
+        if (at < Math.max(p.pauseUntil, p.recheckUntil) && !context?.degraded && !(p.reason === 'limited-evidence' && quiet(s))) {
           note(p, 'observing', p.recheckUntil > at ? 'recheck-cooldown' : p.reason, Math.max(p.pauseUntil, p.recheckUntil)); continue;
         }
         p.trigger = 'traffic'; p.degradedMbps = undefined; p.positiveUntil = 0;
@@ -617,6 +655,30 @@ export function createBandwidthSelector(options: {
         const due = [...p.nodes.values()].filter(n => n.name !== p.current).map(n => n.nextAt).filter(t => t > at);
         endCheck(p, s, p.decision ? p.decision.guard ? 'no-clear-gain' : 'shortfall-guard' : due.length ? 'pool-backoff' : 'no-candidate',
           due.length ? Math.min(...due) : at + s.yieldSeconds * 1000); continue;
+      }
+      // Explicit opt-in: one small current-node diagnostic after sustained busy suspicion.
+      // Every attempt, including zero-byte failure, is durably throttled across restarts.
+      if (s.allowBusyConfirmation && p.trigger === 'traffic' && suspect(p, s) && !quiet(s)
+          && at - p.started >= BUSY_CONFIRMATION.waitMs) {
+        const retryAt = limitedRetry(p);
+        if (retryAt > at) { endCheck(p, s, 'limited-evidence', retryAt); continue; }
+        const needed = BUSY_CONFIRMATION.maxBytes;
+        p.budgetMode = 'diagnostic'; p.neededBytes = needed;
+        if (available(p, s, 'diagnostic') < needed || ledger.charges.length > 4000) {
+          note(p, 'waiting', 'budget-exhausted', diagnosticDue(p, s, needed)); continue;
+        }
+        if (p.spent + needed > s.searchMiB * MiB) { endCheck(p, s, 'search-limit'); continue; }
+        if (context?.canStart === false) { note(p, 'waiting', 'probe-quota', context.nextProbeAt ?? null); continue; }
+        if (options.busy?.() || businessRate() > BUSY_CONFIRMATION.maxBusinessMbps) { note(p, 'waiting', 'waiting-idle'); continue; }
+        if (at < current.nextAt) { note(p, 'waiting', 'waiting-sample', current.nextAt); continue; }
+        if (!current.probe || at - current.probe.at > PROBE_FRESH) {
+          launchProbe(p, current, s, context); fairCursor = (index + 1) % names.length; return;
+        }
+        if (!current.probe.ok || current.probe.delay === null) { endCheck(p, s, 'candidate-unavailable'); continue; }
+        const snap = structuredClone(snapshot);
+        p.testingNode = current.name; note(p, 'testing', 'limited-confirmation');
+        launch('download', signal => limitedConfirmation(p, current, s, snap, signal), p, current);
+        fairCursor = (index + 1) % names.length; return;
       }
       if (p.spent + s.taskMiB * MiB > s.searchMiB * MiB || at - p.started > s.campaignSeconds * 1000) {
         endCheck(p, s, 'search-limit'); continue;
@@ -729,7 +791,7 @@ export function createBandwidthSelector(options: {
       else if (n.name !== p.current && !potential(p, n, s)) reject(p, n, s, 'no-potential-gain');
     }, p, n);
   }
-  return { update, observe, tick, expire, request, observeProbe, selected, failure,
+  return { update, observe, tick, maintain, expire, request, observeProbe, selected, failure,
     requestCheck(name: string) {
       const p = pools.get(name);
       if (!p || !options.measure || closed || p.nodes.size < 2) return false;

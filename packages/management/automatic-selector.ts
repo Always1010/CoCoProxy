@@ -398,7 +398,12 @@ export function createAutomaticSelector(options: Options) {
     reconcile(fresh, now());
     bandwidth.expire();
     const s = snapshot;
-    if (!s || now() < blockedUntil) return;
+    if (!s) return;
+    if (now() < blockedUntil) {
+      bandwidth.maintain([...groups.values()].map(g => ({ name: g.name,
+        ready: g.health === 'healthy' && !g.search && !g.returning && g.secondaryAt === null && !selecting })));
+      return;
+    }
     const epoch = evidenceEpoch;
     // Rebuild priorities every tick; one batch must not drain an old queue while new faults wait.
     const at = now(), jobs: Job[] = [];

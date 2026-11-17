@@ -30,6 +30,17 @@ const phases = computed<Record<string, string>>(() => ({
   'failure-confirmation': t('coco.anRecheckingTheCurrentNode'), 'return-confirmation': t('coco.anConfirmingPreferredNodeRecovery'), backup: t('coco.anUsingFallback'), monitoring: t('coco.anMonitoringTheCurrentNode'),
 }))
 const reasons = computed<Record<string, string>>(() => ({
+  'probe-quota': t('coco.process.reason.probe-quota'),
+  'protection-stale': t('coco.process.reason.protection-stale'),
+  'check-expired': t('coco.process.reason.check-expired'),
+  'search-limit': t('coco.process.reason.search-limit'),
+  'recheck-cooldown': t('coco.process.reason.recheck-cooldown'),
+  'diagnosing-current': t('coco.process.reason.diagnosing-current'),
+  'insufficient-evidence': t('coco.process.reason.insufficient-evidence'),
+  'probe-target-changed': t('coco.process.reason.probe-target-changed'),
+  'other-group-switched': t('coco.process.reason.other-group-switched'),
+  'limited-confirmation': t('coco.process.reason.limited-confirmation'),
+  'limited-evidence': t('coco.process.reason.limited-evidence'),
   'measurement-path-unavailable': t('coco.bandwidthErrorBANDWIDTH_PATH_UNAVAILABLE'),
   'measurement-worker-unavailable': t('coco.bandwidthErrorBANDWIDTH_WORKER_UNAVAILABLE'),
   'preparing-measurement': t('coco.bandwidthPreparingMeasurement'),
@@ -99,7 +110,7 @@ async function check() {
         <h4 class="font-medium">{{ t('coco.anAutomaticCheckUsage') }}</h4>
         <p>{{ t('coco.anRollingHourMib', { value: amount(bandwidthStatus.hourBytes), value2: amount(bandwidthStatus.hourLimit) }) }}</p>
         <p>{{ t('coco.anRollingHoursMib', { value: amount(bandwidthStatus.dayBytes), value2: amount(bandwidthStatus.dayLimit) }) }}</p>
-        <p v-if="bandwidthStatus.hourReserve !== undefined && bandwidthStatus.dayReserve !== undefined" class="text-xs text-base-content/65">{{ t('coco.anReserveWithinTotalHourlyMibHours', { value: amount(bandwidthStatus.hourReserve), value2: amount(bandwidthStatus.dayReserve), value3: bandwidthStatus.urgent ? t('coco.anDegradationConfirmedReserveIsAvailable') : t('coco.anNormalExplorationPreservesTheEmergencyReserve') }) }}</p>
+        <p v-if="bandwidthStatus.hourReserve !== undefined && bandwidthStatus.dayReserve !== undefined" class="text-xs text-base-content/65">{{ t('coco.anReserveWithinTotalHourlyMibHours', { value: amount(bandwidthStatus.hourReserve), value2: amount(bandwidthStatus.dayReserve), value3: bandwidthStatus.budgetMode ? t('coco.process.budgetMode.' + bandwidthStatus.budgetMode) : bandwidthStatus.urgent ? t('coco.anDegradationConfirmedReserveIsAvailable') : t('coco.anNormalExplorationPreservesTheEmergencyReserve') }) }}</p>
       </div>
       <div v-if="bandwidth?.enabled" class="space-y-2">
         <button type="button" class="btn btn-outline min-h-11" :disabled="!canCheck" @click="check"><span v-if="checking" class="loading loading-spinner loading-xs" /><IconBrandSpeedtest v-else :size="16" /><span>{{ checking ? t('coco.anQueuing') : t('coco.anCheckThisGroupSCandidates') }}</span></button>

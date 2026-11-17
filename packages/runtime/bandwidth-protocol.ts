@@ -2,7 +2,7 @@ import type { BandwidthDirection, BandwidthReport } from '../management/bandwidt
 
 export const BANDWIDTH_PROTOCOL_VERSION = 1;
 export const BANDWIDTH_FRAME_LIMIT = 16384;
-export type BandwidthJob = { version: 1; id: string; generation: string; node: string; kind: 'manual' | 'automatic'; group?: string; workspaceRevision?: number };
+export type BandwidthJob = { version: 1; id: string; generation: string; node: string; kind: 'manual' | 'automatic'; group?: string; workspaceRevision?: number; limited?: boolean };
 export const BANDWIDTH_WORKER_ERRORS = new Set(['BANDWIDTH_WORKER_UNAVAILABLE', 'BANDWIDTH_PATH_UNAVAILABLE', 'BANDWIDTH_BUSY',
   'BANDWIDTH_CANCELLED', 'BANDWIDTH_TIMEOUT', 'BANDWIDTH_UNAVAILABLE', 'BANDWIDTH_CONFIG_INVALID', 'BANDWIDTH_BYTE_LIMIT',
   'BANDWIDTH_SAMPLE_INSUFFICIENT', 'BANDWIDTH_DISABLED', 'ACTIVE_CONFLICT', 'CONTROLLER_UNAVAILABLE', 'BANDWIDTH_NODE_INVALID']);
@@ -17,14 +17,15 @@ function exact(value: unknown, keys: string[], optional: string[] = []): Record<
   return value as Record<string, unknown>;
 }
 export function parseBandwidthJob(input: unknown): BandwidthJob {
-  const value = exact(input, ['version', 'id', 'generation', 'node', 'kind'], ['group', 'workspaceRevision']);
+  const value = exact(input, ['version', 'id', 'generation', 'node', 'kind'], ['group', 'workspaceRevision', 'limited']);
   if (value.version !== BANDWIDTH_PROTOCOL_VERSION || typeof value.id !== 'string' || !/^[a-f0-9-]{36}$/.test(value.id)
       || typeof value.generation !== 'string' || !/^[a-f0-9]{64}$/.test(value.generation)
       || typeof value.node !== 'string' || !value.node.trim() || value.node.length > 256 || /[\u0000-\u001f\u007f]/u.test(value.node)
       || !['manual', 'automatic'].includes(String(value.kind))
+      || (value.limited !== undefined && typeof value.limited !== 'boolean')
       || (value.kind === 'automatic' ? typeof value.group !== 'string' || !value.group.trim() || value.group.length > 256
         || /[\u0000-\u001f\u007f]/u.test(value.group) || !Number.isSafeInteger(value.workspaceRevision) || Number(value.workspaceRevision) < 0
-        : value.group !== undefined || value.workspaceRevision !== undefined)) throw bandwidthError();
+        : value.group !== undefined || value.workspaceRevision !== undefined || value.limited !== undefined)) throw bandwidthError();
   return value as BandwidthJob;
 }
 const number = (v: unknown, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max;

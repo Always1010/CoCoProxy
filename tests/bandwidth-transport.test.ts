@@ -178,3 +178,16 @@ if(process.argv[3]==='tls-failure')setTimeout(()=>s.end('HTTP/1.1 200 not TLS\\r
     assert.deepEqual((await readdir(root)).sort(), ['keep.txt', 'synthetic-core.cjs']);
   }
 });
+
+
+test('limited download uses its offered rate rather than the full target demand', async () => {
+  const budget = new BandwidthByteBudget(512 * 1024);
+  const result = await runDownloadVerification({ targetMbps: 8, offeredMbps: 0.5,
+    warmupMs: 1000, minSampleMs: 3000, durationMs: 5000,
+    signal: new AbortController().signal, budget, report: () => {},
+    request: async (size, _signal, progress) => { budget.take(size); progress(size); return { bytes: size, elapsedMs: 1 }; } });
+  assert.ok(result.bytes > 0 && result.bytes <= 312500); // Five seconds of offered payload, no target multiplier.
+  assert.equal(result.status, 'success');
+  assert.ok(result.mbps! > 0 && result.mbps! <= 0.51);
+  assert.ok(result.warmupMs! >= 1000);
+});

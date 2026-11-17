@@ -17,7 +17,7 @@ export type BandwidthTraceEvent = {
   probe?: { ok: boolean; delayMs: number | null; retryAfterMs?: number };
   observation?: { fresh: boolean; activeSeconds: number; trafficMiB: number; mbps: number | null;
     requiredActiveSeconds: number; requiredTrafficMiB: number; suspectMbps: number; positiveUntil: number };
-  sample?: { startedAt: number; elapsedMs: number; delayMs: number | null; mbps: number | null; bytes: number; valid: boolean; sampleMs?: number; warmupMs?: number };
+  sample?: { startedAt: number; elapsedMs: number; delayMs: number | null; mbps: number | null; bytes: number; valid: boolean; limited?: boolean; sampleMs?: number; warmupMs?: number };
   comparison?: BandwidthComparison;
   screening?: { currentLow: number; bestCandidateLoss: number; uncertainty: number; threshold: number; delayLimit: number; delayMs: number };
   protection?: { recentSwitches: number; maxSwitches: number; holdUntil: number; limitUntil: number; severe: boolean };
@@ -57,7 +57,8 @@ export function parseBandwidthHistory(input: unknown): BandwidthArchive {
           || !Array.isArray(r.nodes) || r.nodes.length > 32 || r.nodes.some(n => !n || !name(n.name) || typeof n.preferred !== 'boolean')
           || !Array.isArray(r.events) || r.events.length > 200 || Buffer.byteLength(JSON.stringify(r)) > 524288) throw new Error();
       const settings = parseBandwidthSettings(r.settings);
-      if (Object.keys(settings).some(key => !Object.hasOwn(r.settings, key))) throw new Error();
+      if (Object.keys(settings).some(key => key !== 'allowBusyConfirmation' && !Object.hasOwn(r.settings, key))) throw new Error();
+      r.settings = settings;
       if (ids.has(r.id)) throw new Error();
       ids.add(r.id);
       for (const e of r.events) {
@@ -68,6 +69,7 @@ export function parseBandwidthHistory(input: unknown): BandwidthArchive {
             || (e.probe.retryAfterMs !== undefined && !number(e.probe.retryAfterMs)))) throw new Error();
         if (e.sample && (!number(e.sample.startedAt) || !number(e.sample.elapsedMs) || !number(e.sample.bytes) || typeof e.sample.valid !== 'boolean'
             || (e.sample.delayMs !== null && !number(e.sample.delayMs)) || (e.sample.mbps !== null && !number(e.sample.mbps))
+            || (e.sample.limited !== undefined && typeof e.sample.limited !== 'boolean') || (e.sample.limited === true && e.sample.valid)
             || (e.sample.valid && (e.sample.mbps === null || e.sample.mbps <= 0))
             || [e.sample.sampleMs, e.sample.warmupMs].some(n => n !== undefined && !number(n)))) throw new Error();
         const o = e.observation, b = e.budget, p = e.protection, s = e.screening;
