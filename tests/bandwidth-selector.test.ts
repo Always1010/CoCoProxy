@@ -10,7 +10,7 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
   preferred?: string[]; fallback?: string[]; rates?: Record<string, number[]>; delays?: Record<string, number>;
   settings?: Partial<BandwidthSettings>; bytes?: number; ledger?: BandwidthLedger; blocked?: boolean; storageFails?: boolean;
   measureSeconds?: number; load?: () => Promise<BandwidthLedger>; save?: (value: BandwidthLedger, attempt: number) => Promise<void> } = {}) {
-  let now = 0, total = 0, loads = 0, saves = 0;
+  let now = 0, total = 0, loads = 0, saves = 0, aborted = false;
   const diagnostics: BandwidthStorageDiagnostic[] = [];
   const measures: string[] = [], switches: string[] = [], saved: BandwidthLedger[] = [], probes: string[] = [];
   const starts: { node: string; at: number }[] = [];
@@ -30,14 +30,14 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
     measure: async (_s, node, _settings, signal, report) => {
       measures.push(node); starts.push({ node, at: now }); report(options.bytes ?? 1000000);
       if (options.measureSeconds) await new Promise<void>(resolve => { completion = { at: now + options.measureSeconds! * 1000, resolve }; });
-      if (options.blocked) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+      if (options.blocked) await new Promise<void>(resolve => signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true }));
       const count = counts.get(node) ?? 0; counts.set(node, count + 1);
       const rates = options.rates?.[node];
       const mbps = rates ? rates[Math.min(count, rates.length - 1)] : node === 'a' ? options.currentMbps ?? 4 : options.candidateMbps ?? 8;
       return signal.aborted || mbps === -1 ? null : { delayMs: 999, mbps, bytes: options.bytes ?? 1000000 };
     } });
   engine.update(snapshot);
-  return { engine, snapshot, measures, starts, switches, saved, probes, traces, diagnostics, get loads() { return loads; }, get saves() { return saves; }, get now() { return now; },
+  return { engine, snapshot, measures, starts, switches, saved, probes, traces, diagnostics, get aborted() { return aborted; }, get loads() { return loads; }, get saves() { return saves; }, get now() { return now; },
     async step(bytes = 0, ready = true) {
       now += 1000; total += bytes;
       if (completion && now >= completion.at) { const done = completion; completion = undefined; done.resolve(); await new Promise<void>(resolve => setImmediate(resolve)); }
@@ -123,6 +123,20 @@ test('changing only the lightweight target rechecks latency without discarding f
   f.engine.observeProbe('media', 'b', { ok: true, delay: 150 });
   for (let i = 0; i < 60 && !f.switches.length; i++) await f.step();
   assert.deepEqual(f.switches, ['b']); assert.equal(f.measures.length, 4);
+  await f.engine.close();
+});
+
+test('target refresh stays inside the original investigation and never cancels its in-flight download', async () => {
+  const f = fixture({ blocked: true }); f.engine.requestCheck('media');
+  while (!f.measures.length && f.now < 30000) await f.step();
+  assert.equal(f.measures.length, 1);
+  f.engine.invalidateProbeTarget('unrelated');
+  assert.equal(f.aborted, false);
+  f.engine.invalidateProbeTarget('media');
+  assert.equal(f.aborted, false);
+  assert.equal(f.traces.size, 1);
+  assert.equal([...f.traces.values()][0].endedAt, null);
+  assert.equal([...f.traces.values()][0].events.at(-1)?.reason, 'probe-target-changed');
   await f.engine.close();
 });
 

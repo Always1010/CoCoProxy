@@ -42,7 +42,7 @@ export function createBandwidthSelector(options: {
   measure?: (snapshot: AutoSnapshot, node: string, settings: BandwidthSettings, signal: AbortSignal,
     bytes: (used: number) => void, group: string, phase: (value: BandwidthPhase) => void) => Promise<{ delayMs: number; mbps: number; bytes: number; sampleMs?: number; warmupMs?: number } | null>;
   measurementKey?: () => string;
-  probe: (snapshot: AutoSnapshot, node: string, signal: AbortSignal) => Promise<ProbeResult>;
+  probe: (snapshot: AutoSnapshot, node: string, signal: AbortSignal, group: string) => Promise<ProbeResult>;
   select: (snapshot: AutoSnapshot, group: string, node: string) => Promise<boolean>;
   busy?: () => boolean;
   load?: () => Promise<BandwidthLedger>;
@@ -619,7 +619,7 @@ export function createBandwidthSelector(options: {
     const snap = structuredClone(snapshot!);
     p.testingNode = n.name; note(p, 'screening', 'screening-latency');
     launch('probe', async signal => {
-      const result = await options.probe(snap, n.name, signal);
+      const result = await options.probe(snap, n.name, signal, p.name);
       if (!alive(p, snap, signal)) return;
       trace.event(p.name, { kind: 'probe', reason: result.retryAfterMs ? 'probe-retry' : result.ok && result.delay !== null ? 'probe-ready' : 'candidate-unavailable', node: n.name,
         probe: { ok: result.ok, delayMs: result.delay, ...(result.retryAfterMs ? { retryAfterMs: result.retryAfterMs } : {}) } });
@@ -645,15 +645,17 @@ export function createBandwidthSelector(options: {
     noteLatency(group: string, delay: number | null, baseline: number) {
       if (pressure?.group !== group || pressure.phase !== 'download' || !flight) return;
       pressure.observedAt = options.now();
-      pressure.baseline ??= baseline;
-      pressure.count = delay === null || delay - pressure.baseline > Math.max(50, pressure.baseline * 0.5) ? pressure.count + 1 : 0;
+      if (delay !== null) pressure.baseline ??= baseline || delay;
+      pressure.count = delay === null || pressure.baseline !== undefined && delay - pressure.baseline > Math.max(50, pressure.baseline * 0.5) ? pressure.count + 1 : 0;
       if (pressure.count >= 2) interrupt('latency-pressure');
     },
-    invalidateProbeTarget() {
-      interrupt('configuration-changed');
+    invalidateProbeTarget(group?: string) {
+      if ((!group || flight?.pool?.name === group) && flight?.kind === 'probe') interrupt('probe-target-changed');
       for (const p of pools.values()) {
-        trace.end(p.name, 'probe-target-changed'); p.decision = null;
+        if (group && p.name !== group) continue;
+        trace.event(p.name, { kind: 'state', reason: 'probe-target-changed' }); p.decision = null;
         for (const n of p.nodes.values()) { n.probe = null; n.delayNeedsRefresh = true; }
+        if (pressure?.group === p.name) { pressure.baseline = undefined; pressure.count = 0; pressure.observedAt = options.now(); }
       }
     },
     status(name: string) {

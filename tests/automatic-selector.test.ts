@@ -526,7 +526,7 @@ test('late probes cannot switch after snapshot changes or close; close waits for
   await pending.at(60_000); assert.equal(pending.calls.length, 1);
 });
 
-test('a failing primary target changes the global active target and recovers through only one current node every 15 minutes', async () => {
+test('group target recovery coalesces identical probes and requires two healthy primary checks', async () => {
   let primaryAvailable = false;
   const h = harness({ names: ['one', 'two'], probe: (_node, secondary) => secondary || primaryAvailable ? good() : bad() });
   // Real snapshots can recreate settings objects on every read.
@@ -543,10 +543,44 @@ test('a failing primary target changes the global active target and recovers thr
   await h.at(1_801_999);
   assert.equal(h.calls.filter(call => !call.secondary).length, primaryBefore + 1);
   primaryAvailable = true;
-  await h.at(1_802_000); await h.at(1_832_000);
+  await h.at(1_802_000);
+  assert.ok(h.engine.status().groups.every(g => g.probeTarget === 'secondary'));
+  await h.at(1_832_000);
+  assert.ok(h.engine.status().groups.every(g => g.probeTarget === 'primary'));
   assert.equal(h.calls.at(-1)!.secondary, false);
   assert.equal(h.switches.length, 0);
   await h.engine.close();
+});
+
+test('a group target fallback cannot change another group or misroute its overlapping candidate probe', async () => {
+  let time = 0;
+  const calls: { node: string; secondary: boolean }[] = [], changes: string[] = [];
+  const snapshot: AutoSnapshot = { key: 'target-isolation', generation: '1', probes: structuredClone(DEFAULT_AUTO_PROBES),
+    groups: ['a', 'c'].map((current, i) => ({ name: `group-${i}`, current, policy: {
+      preferred: [current, 'shared'], fallback: [], returnToPreferred: false,
+      bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true },
+    } })) };
+  const engine = createAutomaticSelector({ now: () => time, snapshot: async () => snapshot,
+    probe: async (_s, node, target) => {
+      const secondary = target.url === DEFAULT_AUTO_PROBES.secondary.url; calls.push({ node, secondary });
+      return node === 'a' && !secondary ? bad() : good();
+    }, switch: async (_s, group, node) => {
+      changes.push(group); snapshot.groups.find(g => g.name === group)!.current = node;
+      snapshot.generation = String(Number(snapshot.generation) + 1); return true;
+    }, bandwidth: { measure: async (_s, node) => ({ mbps: node === 'shared' ? 8 : 2, delayMs: 100, bytes: 0 }) } });
+  for (let second = 0; second < 150 && !changes.length; second++) {
+    time = second * 1000;
+    engine.observeUsage({ epoch: 'isolation-core', download: 0, upload: 0, connections: [] });
+    await engine.tick(); await new Promise<void>(resolve => setImmediate(resolve));
+    if (second === 3) {
+      assert.deepEqual(engine.status().groups.map(g => g.probeTarget), ['secondary', 'primary']);
+      engine.requestBandwidthCheck('group-1');
+    }
+  }
+  assert.deepEqual(changes, ['group-1']);
+  assert.ok(calls.some(c => c.node === 'shared'));
+  assert.ok(calls.filter(c => c.node === 'shared').every(c => !c.secondary));
+  await engine.close();
 });
 
 test('bandwidth enhancement cannot block confirmed latency rescue or justify an unprofitable preferred return', async () => {

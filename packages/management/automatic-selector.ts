@@ -32,6 +32,7 @@ type Group = {
   returnCursor: number; outageRound: number; outageCursor: number;
   returnedAt: number | null; flapCount: number; returnNotBefore: number;
   bandwidthSwitchedAt?: number;
+  usePrimary: boolean; primaryRecoveryAt: number | null; primaryRecoveryChecks: number; targetVersion: number;
   latestProbe?: { at: number; delay: number; target: ProbeTarget };
 };
 type Job = { group: Group; node: string; target: ProbeTarget; priority: number; auxiliary?: boolean; run: (result: ProbeResult, at: number) => Promise<void> | void };
@@ -57,7 +58,6 @@ export function createAutomaticSelector(options: Options) {
   let closed = false, timer: ReturnType<typeof setInterval> | undefined;
   let running: Promise<void> | null = null;
   let starts: number[] = [], blockedUntil = 0, fairCursor = 0;
-  let targetIdentity: string | null = null, usePrimary = true, primaryRecoveryAt: number | null = null;
   const events: Event[] = [];
   let selecting = 0;
   let evidenceEpoch = 0, evidenceInvalid = false, lastGeneration: string | undefined;
@@ -80,11 +80,11 @@ export function createAutomaticSelector(options: Options) {
       return { value: null, failed: true };
     }
   }
-  const bandwidthProbes: { snapshot: AutoSnapshot; node: string; signal: AbortSignal; done: (result: ProbeResult) => void }[] = [];
+  const bandwidthProbes: { snapshot: AutoSnapshot; group: string; targetVersion: number; node: string; signal: AbortSignal; done: (result: ProbeResult) => void }[] = [];
   const safetyAt = new Map<string, number>();
   const bandwidth = createBandwidthSelector({ now, ...options.bandwidth,
-    probe: (s, node, signal) => new Promise(resolve => {
-      const entry = { snapshot: s, node, signal, done: (result: ProbeResult) => {
+    probe: (s, node, signal, group) => new Promise(resolve => {
+      const entry = { snapshot: s, group, targetVersion: groups.get(group)?.targetVersion ?? -1, node, signal, done: (result: ProbeResult) => {
         const index = bandwidthProbes.indexOf(entry); if (index >= 0) bandwidthProbes.splice(index, 1);
         signal.removeEventListener('abort', abort); resolve(result);
       } };
@@ -102,13 +102,13 @@ export function createAutomaticSelector(options: Options) {
     ? at + Math.max(1000, r.retryAfterMs) : null;
   const isBackup = (g: Group) => !g.policy.preferred.includes(g.current);
   const returnLimit = (s: AutoSnapshot) => s.probes.slowMs * 2 / 3;
-  const activeTarget = (s: AutoSnapshot) => usePrimary ? s.probes.primary : s.probes.secondary;
+  const activeTarget = (s: AutoSnapshot, g: Group) => g.usePrimary ? s.probes.primary : s.probes.secondary;
   const sameTarget = (a: ProbeTarget, b: ProbeTarget) => a.url === b.url && a.expectedStatus === b.expectedStatus;
   const isPrimary = (s: AutoSnapshot, target: ProbeTarget) => sameTarget(target, s.probes.primary);
 
   function latencyWorthwhile(s: AutoSnapshot, g: Group, node: string, delay: number, at: number) {
     const current = g.latestProbe, settings = g.policy.bandwidth ?? DEFAULT_BANDWIDTH_SETTINGS;
-    if (!current || at - current.at > 60000 || !sameTarget(current.target, activeTarget(s))) return false;
+    if (!current || at - current.at > 60000 || !sameTarget(current.target, activeTarget(s, g))) return false;
     const recent = events.filter(e => e.group === g.name && e.at > at - 3600000 && e.reason !== 'failure-recovery');
     const { threshold } = bandwidthThreshold(current.delay / 1000, settings, recent.length,
       recent.some(e => e.from === node && e.at > at - settings.reverseWindowSeconds * 1000),
@@ -116,17 +116,21 @@ export function createAutomaticSelector(options: Options) {
     return (current.delay - delay - settings.marginMs * 2) / 1000 > threshold;
   }
 
-  function activateTarget(s: AutoSnapshot, target: ProbeTarget, at: number) {
-    if (usePrimary !== isPrimary(s, target)) bandwidth.invalidateProbeTarget();
-    usePrimary = isPrimary(s, target);
-    primaryRecoveryAt = usePrimary ? null : at + 900_000;
+  function activateTarget(s: AutoSnapshot, g: Group, target: ProbeTarget, at: number) {
+    const primary = isPrimary(s, target);
+    if (g.usePrimary !== primary) {
+      g.targetVersion++; bandwidth.invalidateProbeTarget(g.name); safetyAt.delete(g.name);
+      g.slowDelay = 0; g.slowCount = 0;
+      g.returning = undefined;
+      if (g.search?.kind === 'slow') g.search = undefined;
+    }
+    g.usePrimary = primary; g.primaryRecoveryChecks = 0;
+    g.primaryRecoveryAt = primary ? null : at + 900_000;
   }
 
   function reconcile(s: AutoSnapshot | null, at: number) {
     const expired = evidenceInvalid || lastGeneration !== s?.generation;
     if (lastGeneration !== s?.generation) evidenceEpoch++;
-    const targets = s ? JSON.stringify([s.key, s.probes]) : null;
-    if (targets !== targetIdentity) { targetIdentity = targets; usePrimary = true; primaryRecoveryAt = null; }
     const next = new Map<string, Group>();
     for (const item of s?.groups ?? []) {
       const old = groups.get(item.name), id = identity(s!, item);
@@ -147,6 +151,7 @@ export function createAutomaticSelector(options: Options) {
         residenceUntil: at, reason: null, health: 'unknown', returnAt: item.policy.returnToPreferred && !item.policy.preferred.includes(item.current) ? at + 300_000 : null,
         returnRound: 0, returnCursor: 0, outageRound: 0, outageCursor: 0,
         returnedAt: null, flapCount: 0, returnNotBefore: 0,
+        usePrimary: true, primaryRecoveryAt: null, primaryRecoveryChecks: 0, targetVersion: 0,
       });
     }
     lastGeneration = s?.generation; evidenceInvalid = false; selectedSinceSnapshot.clear();
@@ -162,6 +167,7 @@ export function createAutomaticSelector(options: Options) {
   async function select(s: AutoSnapshot, g: Group, node: string, reason: string, at: number): Promise<boolean> {
     if (closed || evidenceInvalid || groups.get(g.name) !== g) return false;
     const epoch = evidenceEpoch;
+    const targetVersion = g.targetVersion;
     if (reason === 'bandwidth-improvement' && selecting > 0) return false;
     selecting++;
     try {
@@ -170,7 +176,8 @@ export function createAutomaticSelector(options: Options) {
     if (failed) return false;
     const item = live?.groups.find(item => item.name === g.name);
     if (live?.generation !== s.generation) invalidateEvidence();
-    if (closed || evidenceInvalid || epoch !== evidenceEpoch || !live || !item || identity(live, item) !== g.identity || item.current !== g.current || groups.get(g.name) !== g) return false;
+    if (closed || evidenceInvalid || epoch !== evidenceEpoch || g.targetVersion !== targetVersion || !live || !item || identity(live, item) !== g.identity || item.current !== g.current || groups.get(g.name) !== g) return false;
+    if (reason === 'bandwidth-improvement' && (g.health !== 'healthy' || g.search || g.secondaryAt !== null)) return false;
     const from = g.current;
     let applied = node === from;
     if (!applied) {
@@ -237,7 +244,7 @@ export function createAutomaticSelector(options: Options) {
     if (g.search?.kind === 'failure' || g.search?.kind === 'outage') return [];
     const secondary = g.secondaryAt !== null;
     if (at < (g.secondaryAt ?? g.monitorAt)) return [];
-    const target = secondary ? g.failureTarget! : activeTarget(s);
+    const target = secondary ? g.failureTarget! : activeTarget(s, g);
     return [{ group: g, node: g.current, target,
       priority: secondary ? 0 : 1, run: (result, end) => {
         const retry = retryAt(result, end);
@@ -254,7 +261,7 @@ export function createAutomaticSelector(options: Options) {
         g.monitorAt = end + (g.policy.bandwidth?.enabled && g.bandwidthSwitchedAt !== undefined && end - g.bandwidthSwitchedAt < 30000 ? 5000 : 30000);
         if (secondary) {
           g.slowCount = 0; g.failureTarget = null;
-          activateTarget(s, target, end);
+          activateTarget(s, g, target, end);
           return;
         }
         g.slowCount = result.delay! > s.probes.slowMs ? g.slowCount + 1 : 0;
@@ -291,12 +298,12 @@ export function createAutomaticSelector(options: Options) {
       if (at < candidate.due) return [];
       return [{ group: g, node: candidate.node, target: candidate.target, priority, run: async (result, end) => {
         if (g.search !== search) return;
-        if (search.kind === 'slow' && !sameTarget(candidate.target, activeTarget(s))) { finishSearch(g, end); return; }
+        if (search.kind === 'slow' && !sameTarget(candidate.target, activeTarget(s, g))) { finishSearch(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { candidate.due = retry; return; }
         if (healthy(result) && better(candidate.node, Math.max(candidate.delay, result.delay!), end)) {
           const selected = await select(s, g, candidate.node, search.kind === 'slow' ? 'faster-candidate' : 'failure-recovery', end);
-          if (selected && search.kind !== 'slow') activateTarget(s, candidate.target, now());
+          if (selected && search.kind !== 'slow') activateTarget(s, g, candidate.target, now());
           if (!selected && evidenceInvalid) return;
           // If the transactional adapter refuses, retry on a later round instead of spinning.
           if (g.search === search) finishSearch(g, end);
@@ -317,13 +324,13 @@ export function createAutomaticSelector(options: Options) {
       const nodes: string[] = [];
       while (search.index < search.queue.length && nodes.length < 2
         && (search.kind === 'outage' || g.policy.preferred.includes(search.queue[search.index]) === tier)) nodes.push(search.queue[search.index++]);
-      search.batch = { nodes, results: new Map(), target: activeTarget(s) };
+      search.batch = { nodes, results: new Map(), target: activeTarget(s, g) };
     }
     const batch = search.batch;
     return batch.nodes.filter(node => !batch.results.has(node)).map(node => ({ group: g, node, target: batch.target, priority,
       run: (result: ProbeResult, end: number) => {
         if (g.search !== search) return;
-        if (search.kind === 'slow' && !sameTarget(batch.target, activeTarget(s))) { finishSearch(g, end); return; }
+        if (search.kind === 'slow' && !sameTarget(batch.target, activeTarget(s, g))) { finishSearch(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { search.due = retry; return; }
         batch.results.set(node, result);
@@ -343,17 +350,17 @@ export function createAutomaticSelector(options: Options) {
       const nodes: string[] = [], count = Math.min(2, g.policy.preferred.length);
       for (let i = 0; i < count; i++) nodes.push(g.policy.preferred[(g.returnCursor + i) % g.policy.preferred.length]);
       g.returnCursor = g.policy.preferred.length ? (g.returnCursor + count) % g.policy.preferred.length : 0;
-      g.returning = { due: at, index: 0, nodes, results: new Map(), target: activeTarget(s) };
+      g.returning = { due: at, index: 0, nodes, results: new Map(), target: activeTarget(s, g) };
       if (!nodes.length) { returnFailed(g, at); return []; }
     }
     const returning = g.returning;
     if (!returning || at < returning.due) return [];
-    if (!sameTarget(returning.target, activeTarget(s))) { returnFailed(g, at); return []; }
+    if (!sameTarget(returning.target, activeTarget(s, g))) { returnFailed(g, at); return []; }
     const candidate = returning.candidate;
     if (candidate) {
-      return [{ group: g, node: candidate.node, target: activeTarget(s), priority: 2, run: async (result, end) => {
+      return [{ group: g, node: candidate.node, target: activeTarget(s, g), priority: 2, run: async (result, end) => {
         if (g.returning !== returning || g.search || g.secondaryAt !== null) return;
-        if (!sameTarget(returning.target, activeTarget(s))) { returnFailed(g, end); return; }
+        if (!sameTarget(returning.target, activeTarget(s, g))) { returnFailed(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { returning.due = retry; return; }
         candidate.delay = Math.max(candidate.delay, result.delay ?? Infinity);
@@ -364,10 +371,10 @@ export function createAutomaticSelector(options: Options) {
         } else returning.due = Math.max(candidate.firstAt + 60_000, end + 30_000);
       } }];
     }
-    return returning.nodes.filter(node => !returning.results.has(node)).map(node => ({ group: g, node, target: activeTarget(s), priority: 2,
+    return returning.nodes.filter(node => !returning.results.has(node)).map(node => ({ group: g, node, target: activeTarget(s, g), priority: 2,
       run: (result: ProbeResult, end: number) => {
         if (g.returning !== returning || g.search || g.secondaryAt !== null) return;
-        if (!sameTarget(returning.target, activeTarget(s))) { returnFailed(g, end); return; }
+        if (!sameTarget(returning.target, activeTarget(s, g))) { returnFailed(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { returning.due = retry; return; }
         returning.results.set(node, result);
@@ -396,30 +403,33 @@ export function createAutomaticSelector(options: Options) {
     const at = now(), jobs: Job[] = [];
     for (const g of groups.values()) jobs.push(...monitorJobs(s, g, at), ...searchJobs(s, g, at), ...returnJobs(s, g, at));
     for (const g of groups.values()) if (bandwidth.isMeasuring(g.name) && at >= (safetyAt.get(g.name) ?? 0)) {
-      jobs.push({ group: g, node: g.current, target: activeTarget(s), priority: 3, auxiliary: true, run: (result, end) => {
+      jobs.push({ group: g, node: g.current, target: activeTarget(s, g), priority: 3, auxiliary: true, run: (result, end) => {
         safetyAt.set(g.name, end + BANDWIDTH_SAFETY_INTERVAL_MS);
-        bandwidth.noteLatency(g.name, healthy(result) ? result.delay : null, g.slowDelay || result.delay || 0);
+        const baseline = g.latestProbe && sameTarget(g.latestProbe.target, activeTarget(s, g)) ? g.latestProbe.delay : result.delay ?? 0;
+        bandwidth.noteLatency(g.name, healthy(result) ? result.delay : null, baseline);
       } });
     }
     for (const entry of [...bandwidthProbes]) {
-      const g = [...groups.values()].find(g => g.policy.bandwidth?.enabled && [g.current, ...g.policy.preferred, ...g.policy.fallback].includes(entry.node));
-      if (!g || entry.signal.aborted || entry.snapshot.key !== s.key || entry.snapshot.generation !== s.generation) entry.done({ ok: false, delay: null });
-      else jobs.push({ group: g, node: entry.node, target: activeTarget(s), priority: 4, auxiliary: true, run: result => entry.done(result) });
+      const g = groups.get(entry.group);
+      if (!g?.policy.bandwidth?.enabled || g.targetVersion !== entry.targetVersion || entry.signal.aborted || entry.snapshot.key !== s.key || entry.snapshot.generation !== s.generation) entry.done({ ok: false, delay: null });
+      else jobs.push({ group: g, node: entry.node, target: activeTarget(s, g), priority: 4, auxiliary: true, run: result => entry.done(result) });
     }
-    // Target recovery shares the same scheduler/budget and uses only one already-current node.
-    if (!usePrimary && primaryRecoveryAt !== null && at >= primaryRecoveryAt) {
-      const eligible = [...groups.values()].filter(g => !g.search && g.secondaryAt === null);
-      const g = eligible[fairCursor % Math.max(1, eligible.length)];
-      if (g) jobs.push({ group: g, node: g.current, target: s.probes.primary, priority: 3, run: (result, end) => {
+    // Recovery is group-scoped and shares the same physical probe budget.
+    for (const g of groups.values()) if (!g.usePrimary && g.primaryRecoveryAt !== null && at >= g.primaryRecoveryAt
+      && !g.search && !g.returning && !selecting && g.secondaryAt === null) {
+      jobs.push({ group: g, node: g.current, target: s.probes.primary, priority: 3, run: (result, end) => {
         const retry = retryAt(result, end);
-        if (retry !== null) { primaryRecoveryAt = retry; return; }
-        if (healthy(result)) { bandwidth.invalidateProbeTarget(); usePrimary = true; primaryRecoveryAt = null; }
-        else primaryRecoveryAt = end + 900_000;
+        if (retry !== null) { g.primaryRecoveryAt = retry; return; }
+        if (healthy(result)) {
+          if (++g.primaryRecoveryChecks >= 2) activateTarget(s, g, s.probes.primary, end);
+          else g.primaryRecoveryAt = end + 30000;
+        } else { g.primaryRecoveryChecks = 0; g.primaryRecoveryAt = end + 900000; }
       } });
     }
     const names = [...groups.keys()];
     const fairness = (g: Group) => (names.indexOf(g.name) - fairCursor + names.length) % names.length;
     jobs.sort((a, b) => a.priority - b.priority || fairness(a.group) - fairness(b.group));
+    const targetVersions = new Map(jobs.map(job => [job, job.group.targetVersion]));
     const shared = new Map<string, Job[]>();
     for (const job of jobs) {
       const key = JSON.stringify([job.node, job.target, s.probes]);
@@ -430,7 +440,7 @@ export function createAutomaticSelector(options: Options) {
       else {
         const previous = duplicate.run;
         duplicate.auxiliary = duplicate.auxiliary && job.auxiliary;
-        duplicate.run = async (result, at) => { await previous(result, at); if (epoch === evidenceEpoch) await job.run(result, at); };
+        duplicate.run = async (result, at) => { await previous(result, at); if (epoch === evidenceEpoch && job.group.targetVersion === targetVersions.get(job)) await job.run(result, at); };
       }
       shared.set(key, entries);
     }
@@ -460,11 +470,12 @@ export function createAutomaticSelector(options: Options) {
         if (closed || epoch !== evidenceEpoch) return;
         const retry = retryAt(result, end);
         if (retry !== null) blockedUntil = Math.max(blockedUntil, retry);
-        for (const job of entries) if (groups.get(job.group.name) === job.group) {
+        for (const job of entries) if (groups.get(job.group.name) === job.group
+          && job.group.targetVersion === targetVersions.get(job)) {
           if (epoch !== evidenceEpoch) break;
           await job.run(result, end);
           if ((!evidenceInvalid || selectedSinceSnapshot.has(job.group) && job.node === job.group.current)
-            && job.group.policy.bandwidth?.enabled && sameTarget(job.target, activeTarget(s))) bandwidth.observeProbe(job.group.name, job.node, result);
+            && job.group.policy.bandwidth?.enabled && sameTarget(job.target, activeTarget(s, job.group))) bandwidth.observeProbe(job.group.name, job.node, result);
         }
       }));
       if (probeFailed) diagnostics.fail('probe'); else if (observed) diagnostics.success('probe');
@@ -513,6 +524,7 @@ export function createAutomaticSelector(options: Options) {
         })(),
         scope: snapshot?.scope,
         groups: [...groups.values()].map(g => ({ name: g.name, current: g.current,
+          probeTarget: g.usePrimary ? 'primary' : 'secondary', probeTargetVersion: g.targetVersion,
           health: g.health, phase: g.search?.kind === 'outage' ? 'outage' : g.search ? g.search.kind === 'slow' ? 'slow-search' : 'failure-search'
             : g.secondaryAt !== null ? 'failure-confirmation' : g.returning ? 'return-confirmation' : g.policy.fallback.includes(g.current) ? 'backup' : 'monitoring',
           bandwidth: bandwidth.status(g.name),
