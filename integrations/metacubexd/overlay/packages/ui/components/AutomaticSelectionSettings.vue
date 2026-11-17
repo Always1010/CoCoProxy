@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { IconAdjustments, IconArrowLeft, IconCheck, IconChevronDown, IconChevronRight, IconChevronUp, IconEdit, IconList, IconReload, IconSettings, IconWorld, IconX } from '@tabler/icons-vue'
-import type { AutomaticStatus, AutoGroupPolicy, BandwidthSettings } from '~/composables/useWorkspace'
+import type { AutomaticStatus, AutoGroupPolicy, BandwidthSettings, ResponsiveLatencySettings } from '~/composables/useWorkspace'
 import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import GroupMatchingRules from '~/components/GroupMatchingRules.vue'
 import BandwidthSelectionSettings from '~/components/BandwidthSelectionSettings.vue'
@@ -30,6 +30,8 @@ const enabled = ref(false)
 const preferred = ref<string[]>([])
 const fallback = ref<string[]>([])
 const returnToPreferred = ref(true)
+const latency = ref<ResponsiveLatencySettings>()
+const latencyDefaults = ref<ResponsiveLatencySettings>()
 const bandwidth = ref<BandwidthSettings>()
 const definitions = ref<BandwidthDefinitions>()
 const definitionsLoading = ref(false)
@@ -81,7 +83,11 @@ const nodes = computed(() => {
     .filter(name => realNodes.has(name) && !/^(DIRECT|REJECT|REJECT-DROP|PASS|COMPATIBLE)$/i.test(name))
 })
 const totalSelected = computed(() => preferred.value.length + fallback.value.length)
-function draftSignature() { return JSON.stringify([enabled.value, preferred.value, fallback.value, returnToPreferred.value, bandwidth.value ?? null]) }
+function draftSignature() { return JSON.stringify([enabled.value, preferred.value, fallback.value, returnToPreferred.value, bandwidth.value ?? null, latency.value ?? null]) }
+function toggleLatency(event: Event) {
+  if (locked.value || !enabled.value || !latencyDefaults.value) return
+  latency.value = (event.target as HTMLInputElement).checked ? { ...latencyDefaults.value } : undefined
+}
 const changed = computed(() => draftSignature() !== initialDraft.value)
 const dirtyTabs = computed(() => [
   changed.value && props.selectable ? t('coco.anAutomaticSelectionSettings') : '',
@@ -121,8 +127,8 @@ function pageDirty(page: string, descendants = false): boolean {
   if (page === 'advanced') return tunePages.some(item => pageDirty(item.id))
   if (page === 'bandwidth' && descendants) return bandwidthPages.some(item => pageDirty(item.id))
   if (!initialDraft.value) return false
-  const initial = JSON.parse(initialDraft.value) as [boolean, string[], string[], boolean, BandwidthSettings | null]
-  if (page === 'selection') return enabled.value !== initial[0] || returnToPreferred.value !== initial[3]
+  const initial = JSON.parse(initialDraft.value) as [boolean, string[], string[], boolean, BandwidthSettings | null, ResponsiveLatencySettings | null]
+  if (page === 'selection') return enabled.value !== initial[0] || returnToPreferred.value !== initial[3] || JSON.stringify(latency.value ?? null) !== JSON.stringify(initial[5])
   if (page === 'pool') return JSON.stringify([preferred.value, fallback.value]) !== JSON.stringify([initial[1], initial[2]])
   const section = bandwidthPages.find(item => item.id === page)
   if (!section) return false
@@ -139,7 +145,7 @@ function customCount(page: BandwidthPage) {
 function locateInvalid() {
   if (!invalidPage.value) return
   if (!enabled.value) { selectTab('selection'); void nextTick(() => document.getElementById('group-automatic-enabled')?.focus()); return }
-  if (invalidPage.value !== 'pool' && !effectiveBandwidth.value?.enabled) { selectTab('bandwidth'); void nextTick(() => document.getElementById('group-bandwidth-enabled')?.focus()); return }
+  if (!['pool', 'selection'].includes(invalidPage.value) && !effectiveBandwidth.value?.enabled) { selectTab('bandwidth'); void nextTick(() => document.getElementById('group-bandwidth-enabled')?.focus()); return }
   selectTab(invalidPage.value)
   const key = invalidPage.value === bandwidthError.value?.page ? bandwidthError.value?.key : undefined
   void nextTick(() => document.getElementById(key ? `group-bandwidth-${key}` : 'group-settings-page')?.focus())
@@ -177,12 +183,15 @@ function toggleNode(name: string) {
   if (!editorSelected.value.includes(name)) editorSelected.value.push(name)
 }
 const bandwidthError = computed(() => bandwidthIssue(bandwidth.value, definitions.value, overrides.value.automatic ?? {}, props.groupName, enabled.value, t))
+const latencyInvalid = computed(() => !!latency.value && (!Number.isInteger(latency.value.slowMs) || latency.value.slowMs < 500 || latency.value.slowMs > 10000))
 const invalidPage = computed<SettingsPage | undefined>(() => {
+  if (latencyInvalid.value) return 'selection'
   if (!enabled.value) return bandwidthError.value?.page
   if (!preferred.value.length || totalSelected.value > 32 || [...preferred.value, ...fallback.value].some(name => !nodes.value.includes(name)) || preferred.value.some(name => fallback.value.includes(name))) return 'pool'
   return bandwidthError.value?.page
 })
 const invalid = computed(() => {
+  if (latencyInvalid.value) return t('coco.response.invalid')
   if (!enabled.value) return bandwidthError.value?.message ?? ''
   if (!preferred.value.length) return t('coco.anSelectAtLeastOnePreferredNode')
   if (preferred.value.length + fallback.value.length > 32) return t('coco.anPreferredAndFallbackPoolsMayContain')
@@ -198,8 +207,11 @@ async function readDefinitions() {
   const requestSession = session
   definitionsLoading.value = true; definitionsError.value = ''
   try {
-    const result = await api.request<{ bandwidth: BandwidthDefinitions }>('/api/cocoproxy/automatic/probes')
-    if (visible.value && !disposed && requestSession === session) definitions.value = result.bandwidth
+    const result = await api.request<{ bandwidth: BandwidthDefinitions; latency?: { defaults: ResponsiveLatencySettings } }>('/api/cocoproxy/automatic/probes')
+    if (visible.value && !disposed && requestSession === session) {
+      definitions.value = result.bandwidth
+      latencyDefaults.value = result.latency?.defaults
+    }
   } catch (cause) { if (visible.value && !disposed && requestSession === session) definitionsError.value = () => cocoproxyErrorMessage(cause, t) }
   finally { if (requestSession === session) definitionsLoading.value = false }
 }
@@ -211,7 +223,10 @@ async function readStatus(background = false) {
   reading = true; statusReading.value = !background
   try {
     const result = await api.request<AutomaticStatus>('/api/cocoproxy/automatic/status')
-    if (visible.value && !disposed && requestSession === session && id === statusRequest) { status.value = result; statusError.value = '' }
+    if (visible.value && !disposed && requestSession === session && id === statusRequest) {
+      if (JSON.stringify(status.value) !== JSON.stringify(result)) status.value = result
+      statusError.value = ''
+    }
   } catch (cause) {
     if (visible.value && !disposed && requestSession === session && id === statusRequest) statusError.value = () => cocoproxyErrorMessage(cause, t)
   } finally { if (requestSession === session && id === statusRequest) { reading = false; statusReading.value = false } }
@@ -257,6 +272,7 @@ function open() {
   preferred.value = [...(policy?.preferred ?? [])]
   fallback.value = [...(policy?.fallback ?? [])]
   returnToPreferred.value = policy?.returnToPreferred ?? true
+  latency.value = policy?.latency ? { ...policy.latency } : undefined
   bandwidth.value = policy?.bandwidth ? JSON.parse(JSON.stringify(policy.bandwidth)) as BandwidthSettings : undefined
   initialDraft.value = draftSignature()
   search.value = ''
@@ -279,6 +295,7 @@ async function persist() {
     await run(async () => {
       try {
         const policy: AutoGroupPolicy = { enabled: enabled.value, preferred: [...preferred.value], fallback: [...fallback.value], returnToPreferred: returnToPreferred.value }
+        if (latency.value) policy.latency = { ...latency.value }
         if (bandwidth.value) policy.bandwidth = JSON.parse(JSON.stringify(bandwidth.value)) as BandwidthSettings
         await save(settings => {
           const target = editOverrides(settings)
@@ -309,7 +326,7 @@ async function reread() {
   try {
     await load()
     const policy = overrides.value.automatic?.[props.groupName]
-    const current = JSON.stringify([!!policy && policy.enabled !== false, policy?.preferred ?? [], policy?.fallback ?? [], policy?.returnToPreferred ?? true, policy?.bandwidth ?? null])
+    const current = JSON.stringify([!!policy && policy.enabled !== false, policy?.preferred ?? [], policy?.fallback ?? [], policy?.returnToPreferred ?? true, policy?.bandwidth ?? null, policy?.latency ?? null])
     if (current === draftSignature() && !view.value?.pending) {
       initialDraft.value = current; saved.value = true; saveError.value = ''
     } else saveError.value = () => t('coco.anStatusReloadedTheChangesHaveNot')
@@ -378,6 +395,13 @@ onUnmounted(() => { disposed = true; close() })
               <HelpTip :label="t('coco.anAboutAutomaticSelection')">{{ t('coco.anAutomaticallyChooseAnExitFromSelected') }}</HelpTip>
               <SettingsNotice v-if="!enabled">{{ t('coco.anAfterSavingAutomaticSelectionStopsAnd') }}</SettingsNotice>
               <div v-else class="automatic-options space-y-5 pl-4">
+                <div class="space-y-2">
+                  <label class="flex min-h-11 items-center justify-between gap-4 text-sm" for="group-latency-responsive">{{ t('coco.response.enable') }}<input id="group-latency-responsive" :checked="!!latency" type="checkbox" class="toggle toggle-primary" :disabled="locked || !latencyDefaults" @change="toggleLatency" /></label>
+                  <SettingsNotice>{{ t('coco.response.help') }}</SettingsNotice>
+                  <label v-if="latency" class="flex min-h-11 items-center justify-between gap-4 text-sm" for="group-latency-slow">{{ t('coco.response.threshold') }}<input id="group-latency-slow" v-model.number="latency.slowMs" type="number" min="500" max="10000" required class="input input-sm w-28" :class="{ 'input-error': latencyInvalid }" :disabled="locked" :aria-invalid="latencyInvalid || undefined" /></label>
+                  <p v-if="latencyInvalid" role="alert" class="text-xs text-error">{{ t('coco.response.invalid') }}</p>
+                  <p v-if="definitionsError" role="alert" class="text-xs text-warning">{{ definitionsError }}</p>
+                </div>
                 <div class="space-y-1">
                   <label class="flex min-h-11 items-center justify-between gap-4 text-sm">{{ t('coco.anReturnAutomaticallyWhenPreferredNodesRecover') }}<input v-model="returnToPreferred" type="checkbox" class="toggle toggle-primary" :disabled="locked" /></label>
                   <HelpTip :label="t('coco.anAboutReturningToPreferred')">{{ t('coco.anControlsDedicatedPreferredRecoveryChecksWith') }}</HelpTip>

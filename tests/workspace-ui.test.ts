@@ -641,7 +641,7 @@ test('host proxy settings guard writes and distinguish saved settings from the a
 test('automatic settings retain ordered pools, stage edits and disable the other pool at the end', async () => {
   const component = await readFile(new URL('../integrations/metacubexd/overlay/packages/ui/components/AutomaticSelectionSettings.vue', import.meta.url), 'utf8');
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
-    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving, pageDirty, invalidPage, invalid, activeNavigation, readStatus, checkingStatus, statusReading, status };';
+    .replace(/^import .*$/gm, '') + '\nexport { open, persist, enabled, preferred, fallback, returnToPreferred, bandwidth, latency, toggleLatency, editPool, editorKind, onlySelected, search, visibleNodes, nodeDisabled, toggleNode, saved, changed, saveError, refreshWarning, needsRead, reread, beforeClose, confirmClose, continueEditing, discardAndClose, requestNavigation, selectTab, tab, rulesEditor, sitesEditor, dialog, saving, pageDirty, invalidPage, invalid, activeNavigation, readStatus, checkingStatus, statusReading, status };';
   const code = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const original = { preferred: ['second', 'first'], fallback: ['backup'], returnToPreferred: false };
   const settings = { local: { selections: {}, automatic: { Stream: structuredClone(original) } } };
@@ -660,7 +660,7 @@ test('automatic settings retain ordered pools, stage edits and disable the other
     navigateTo: (target: unknown) => navigations.push(target),
     useProxyRefresh: () => ({ error: proxyError, refresh: async () => { proxyError.value = refreshFails ? '合成刷新失败' : ''; } }),
     useWorkspace: () => ({ view, workspace: { value: { mode: 'local' } }, overrides: { value: settings.local }, busy: { value: false }, error: { value: '' },
-      api: { request: async (path: string) => path.endsWith('/status') && statusReply ? statusReply() : ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS } }) },
+      api: { request: async (path: string) => path.endsWith('/status') && statusReply ? statusReply() : ({ bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS }, latency: { defaults: { mode: 'responsive', slowMs: 500 } } }) },
       run: async (fn: () => Promise<void>) => fn(), load: async () => {},
       save: async (edit: (value: unknown) => void) => {
         saves++;
@@ -872,6 +872,34 @@ test('automatic settings retain ordered pools, stage edits and disable the other
   await manual;
   assert.equal(exports.statusReading.value, false);
   assert.equal(exports.status.value.groups[0].name, 'fresh');
+  const unchanged = exports.status.value;
+  const background = exports.readStatus(true);
+  finishStatus(JSON.parse(JSON.stringify(unchanged)));
+  await background;
+  assert.equal(exports.status.value, unchanged);
+
+  document.hidden = true;
+  exports.open();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  exports.enabled.value = true;
+  exports.preferred.value = ['first'];
+  exports.toggleLatency({ target: { checked: true } });
+  assert.equal(exports.latency.value.slowMs, 500);
+  assert.equal(exports.pageDirty('selection'), true);
+  exports.latency.value.slowMs = 499;
+  assert.equal(exports.invalidPage.value, 'selection');
+  const invalidLatency = saves;
+  await exports.persist();
+  assert.equal(saves, invalidLatency);
+  exports.latency.value.slowMs = 650;
+  await exports.persist();
+  exports.open();
+  assert.equal(exports.latency.value.slowMs, 650);
+  exports.latency.value.slowMs = 800;
+  assert.equal((settings.local.automatic.Stream as any).latency.slowMs, 650);
+  exports.toggleLatency({ target: { checked: false } });
+  await exports.persist();
+  assert.equal(Object.hasOwn(settings.local.automatic.Stream, 'latency'), false);
 });
 
 test('site settings retain failed drafts and reconcile an interrupted save before allowing another write', async () => {

@@ -8,6 +8,7 @@ import { describeTcpNode, probeTcpEndpoint, tcpEndpoint } from './tcp-delay.ts';
 import { memoizePolicyCompiler } from './shared-work.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_AUTO_PROBES, parseAutoProbeSettings, type AutoGroupPolicy, type AutoProbeSettings, type ProbeTarget } from './automatic-policy.ts';
+import { DEFAULT_RESPONSIVE_LATENCY } from './latency-policy.ts';
 import { BANDWIDTH_FIELDS, DEFAULT_BANDWIDTH_SETTINGS } from './bandwidth-policy.ts';
 import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
 import type { AutoEngineStatus, AutoSuspensionReason } from './automatic-diagnostics.ts';
@@ -627,6 +628,7 @@ export function createWorkspaceApplication(options: {
       });
     }
     if (path === '/api/cocoproxy/automatic/probes' && request.method === 'GET') return { defaults: DEFAULT_AUTO_PROBES,
+      latency: { defaults: DEFAULT_RESPONSIVE_LATENCY },
       bandwidth: { defaults: DEFAULT_BANDWIDTH_SETTINGS, fields: BANDWIDTH_FIELDS },
       allowedOrigins: [...(options.allowedProbeOrigins ?? ['https://www.gstatic.com'])] };
     if (path === '/api/cocoproxy/automatic/test' && request.method === 'POST') {

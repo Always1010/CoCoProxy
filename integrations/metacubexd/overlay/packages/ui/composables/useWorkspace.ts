@@ -3,15 +3,33 @@ import { CoCoProxyError, cocoproxyErrorMessage, useCoCoProxy } from './useCoCoPr
 import type { BandwidthSettings } from '../utils/group-bandwidth'
 export type { BandwidthSettings } from '../utils/group-bandwidth'
 
+export interface ResponsiveLatencySettings { mode: 'responsive'; slowMs: number }
+export interface ResponsiveLatencyStatus {
+  mode: 'responsive'
+  slowMs: number
+  samples: { at: number; delayMs: number }[]
+  slowCount: number
+  requiredSlowCount: number
+  medianMs: number | null
+  fresh: boolean
+  degraded: boolean
+  burstRemaining: number
+  reason: string
+  decision: { node: string; currentMs: number; candidateMs: number; gainMs: number; requiredGainMs: number; worthwhile: boolean } | null
+}
+
 export interface AutoGroupPolicy {
   enabled?: boolean
   preferred: string[]
   fallback: string[]
   returnToPreferred: boolean
+  latency?: ResponsiveLatencySettings
   bandwidth?: BandwidthSettings
 }
 
 export interface BandwidthSelectionStatus {
+  recheckUntil?: number
+  sufficientChecks?: number
   observation?: { observedAt: number | null; fresh: boolean; activeSeconds: number; trafficMiB: number; mbps: number | null;
     requiredActiveSeconds: number; requiredTrafficMiB: number; suspectMbps: number; positiveUntil: number; quiet: boolean; trigger: string | null }
   phase: string
@@ -66,7 +84,8 @@ export interface AutomaticStatus {
   paused?: boolean
   suspended?: boolean
   error?: string
-  groups: { name: string; phase: string; current: string | null; nextAt: number | null; reason: string | null; bandwidth?: BandwidthSelectionStatus }[]
+  groups: { name: string; phase: string; current: string | null; nextAt: number | null; reason: string | null;
+    latency?: ResponsiveLatencyStatus; bandwidth?: BandwidthSelectionStatus }[]
   events: { id?: string; at: number; group: string; from: string | null; to: string | null; reason: string;
     fromPool?: 'preferred' | 'fallback'; toPool?: 'preferred' | 'fallback' }[]
 }

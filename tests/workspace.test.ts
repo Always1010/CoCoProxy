@@ -685,6 +685,8 @@ test('automatic configuration rejects group aliases, foreign candidates, native 
 
 test('automatic probe settings are validated through active concrete nodes without persisting failed or stale settings', async t => {
   const f = await fixture(t);
+  const definitions = await f.call<{ latency: { defaults: { mode: string; slowMs: number } } }>('/automatic/probes');
+  assert.deepEqual(definitions.latency.defaults, { mode: 'responsive', slowMs: 500 });
   await f.source('pool', { proxies: [node] });
   const saved = await f.save(settings({ sourceIds: ['pool'] }), 0), applied = await f.apply(saved, null);
   f.observe({ Proxy: 'synthetic-node' });

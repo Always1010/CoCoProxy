@@ -3,6 +3,7 @@ import { IconArrowLeft, IconBrandSpeedtest, IconChevronRight, IconList, IconRefr
 import type { AutomaticStatus, BandwidthSettings } from '~/composables/useWorkspace'
 import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 import BandwidthDecisionProcess from '~/components/BandwidthDecisionProcess.vue'
+import LatencySelectionStatus from '~/components/LatencySelectionStatus.vue'
 const { t, locale } = useI18n()
 
 const props = defineProps<{ groupName: string; status?: AutomaticStatus; policyEnabled: boolean; bandwidth?: BandwidthSettings; dirty: boolean; disabled: boolean; reading: boolean; error: string }>()
@@ -30,6 +31,7 @@ const phases = computed<Record<string, string>>(() => ({
   'failure-confirmation': t('coco.anRecheckingTheCurrentNode'), 'return-confirmation': t('coco.anConfirmingPreferredNodeRecovery'), backup: t('coco.anUsingFallback'), monitoring: t('coco.anMonitoringTheCurrentNode'),
 }))
 const reasons = computed<Record<string, string>>(() => ({
+  'current-recovered': t('coco.response.reason.current-recovered'),
   'probe-quota': t('coco.process.reason.probe-quota'),
   'protection-stale': t('coco.process.reason.protection-stale'),
   'check-expired': t('coco.process.reason.check-expired'),
@@ -104,12 +106,14 @@ async function check() {
         </template>
         <dt>{{ t('coco.anBandwidthAssistedDecisions2') }}</dt><dd>{{ !bandwidth?.enabled ? t('coco.anOff') : !policyEnabled ? t('coco.anAutomaticSelectionIsOffAndNot') : bandwidthStatus ? reason(bandwidthStatus.reason) : t('coco.anWaitingForOperationStatus') }}{{ bandwidth?.enabled && bandwidth.observeOnly ? t('coco.anObserveOnly') : '' }}</dd>
       </dl>
+      <LatencySelectionStatus v-if="group?.latency" :status="group.latency" :engine="engine" />
       <p v-if="engine?.state === 'running' && (engine.pendingProbes || engine.nextStartAt != null)" role="status" class="text-sm text-base-content/70">{{ t('coco.autoEngineQueue', { count: engine.pendingProbes }) }} <span v-if="engine.nextStartAt != null">{{ t('coco.autoEngineNextStart', { time: time(engine.nextStartAt) }) }}</span></p>
       <div v-if="bandwidth?.enabled" class="flex min-h-10 items-start gap-2 text-sm" role="status"><span v-if="bandwidthStatus?.testingNode" class="loading loading-spinner loading-sm shrink-0" /><span class="break-all">{{ bandwidthStatus?.testingNode ? t('coco.anValidatingValidSamples', { value: bandwidthStatus.testingNode, value2: bandwidthStatus.round, value3: bandwidth?.confirmRounds }) : t('coco.anNoNodeIsCurrentlyBeingValidated') }}</span></div>
       <div v-if="bandwidthStatus" class="space-y-2 border-t border-base-content/10 pt-4 text-sm">
         <h4 class="font-medium">{{ t('coco.anAutomaticCheckUsage') }}</h4>
         <p>{{ t('coco.anRollingHourMib', { value: amount(bandwidthStatus.hourBytes), value2: amount(bandwidthStatus.hourLimit) }) }}</p>
         <p>{{ t('coco.anRollingHoursMib', { value: amount(bandwidthStatus.dayBytes), value2: amount(bandwidthStatus.dayLimit) }) }}</p>
+        <p v-if="bandwidthStatus.recheckUntil && ['current-sufficient', 'recheck-cooldown'].includes(bandwidthStatus.reason)" class="text-xs text-base-content/65">{{ t('coco.response.bandwidthRecheck', { count: bandwidthStatus.sufficientChecks ?? 0, time: time(bandwidthStatus.recheckUntil) }) }}</p>
         <p v-if="bandwidthStatus.hourReserve !== undefined && bandwidthStatus.dayReserve !== undefined" class="text-xs text-base-content/65">{{ t('coco.anReserveWithinTotalHourlyMibHours', { value: amount(bandwidthStatus.hourReserve), value2: amount(bandwidthStatus.dayReserve), value3: bandwidthStatus.budgetMode ? t('coco.process.budgetMode.' + bandwidthStatus.budgetMode) : bandwidthStatus.urgent ? t('coco.anDegradationConfirmedReserveIsAvailable') : t('coco.anNormalExplorationPreservesTheEmergencyReserve') }) }}</p>
       </div>
       <div v-if="bandwidth?.enabled" class="space-y-2">

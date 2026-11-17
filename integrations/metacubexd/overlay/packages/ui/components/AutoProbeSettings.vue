@@ -79,6 +79,7 @@ onUnmounted(() => { disposed = true })
         </fieldset>
         <label class="flex items-center justify-between gap-3 text-sm">{{ t('coco.anTimeoutMs') }}<input v-model.number="draft.timeoutMs" type="number" min="1000" max="10000" required class="input input-sm w-28" :disabled="busy" /></label>
         <label class="flex items-center justify-between gap-3 text-sm">{{ t('coco.anSlowThresholdMs') }}<input v-model.number="draft.slowMs" type="number" min="500" max="10000" required class="input input-sm w-28" :disabled="busy" /></label>
+        <SettingsNotice>{{ t('coco.response.globalHelp') }}</SettingsNotice>
         <p class="break-all text-xs text-base-content/55">{{ t('coco.anCurrentlyPermittedOriginsThisDeploymentMay', { value: allowedOrigins.length ? allowedOrigins.join('、') : t('coco.anNone') }) }}</p>
         <p v-if="validation" role="alert" class="text-sm text-warning">{{ validation }}</p>
         <p v-if="testResult" role="status" class="text-sm text-success">{{ testResult }}</p>
