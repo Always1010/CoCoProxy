@@ -125,13 +125,14 @@ test('automatic selections preserve manual intent, use confirmed transactions, p
   const f = await fixture(t);
   await f.source('pool', { proxies: [node, { ...node, name: 'spare' }, { ...node, name: 'outside' }] });
   const initial = settings({ sourceIds: ['pool'], local: { selections: { Proxy: 'synthetic-node' }, rules: [], automatic: {
-    Proxy: { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true },
+    Proxy: { preferred: ['synthetic-node'], fallback: ['spare'], returnToPreferred: true, latency: { mode: 'responsive', slowMs: 500 } },
   } } });
   const saved = await f.save(initial, 0), applied = await f.apply(saved, null);
   f.observe({ Proxy: 'synthetic-node' });
   const snapshot = await f.action.automaticSnapshot();
   assert.ok(snapshot);
   assert.equal(snapshot.workspaceRevision, saved.revision);
+  assert.deepEqual(snapshot.groups[0].policy.latency, { mode: 'responsive', slowMs: 500 });
   assert.equal(await f.action.automaticSwitch(snapshot, 'Proxy', 'outside', 'failure-recovery'), false);
   const attempts = await Promise.all([
     f.action.automaticSwitch(snapshot, 'Proxy', 'spare', 'failure-recovery'),

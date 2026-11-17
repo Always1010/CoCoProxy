@@ -3,6 +3,7 @@ import { createBandwidthSelector } from './bandwidth-selector.ts';
 import { BANDWIDTH_SAFETY_INTERVAL_MS, bandwidthThreshold, DEFAULT_BANDWIDTH_SETTINGS } from './bandwidth-policy.ts';
 import { ManagementError } from './http.ts';
 import { createAutomaticDiagnostics, type AutoDiagnostic, type AutoSuspensionReason } from './automatic-diagnostics.ts';
+import { latencyDecision, latencyWindow, RESPONSIVE_LATENCY, type LatencySample } from './latency-policy.ts';
 
 export type AutoSnapshot = {
   key: string; generation: string; probes: AutoProbeSettings; scope?: string; workspaceRevision?: number;
@@ -34,6 +35,8 @@ type Group = {
   bandwidthSwitchedAt?: number;
   usePrimary: boolean; primaryRecoveryAt: number | null; primaryRecoveryChecks: number; targetVersion: number;
   latestProbe?: { at: number; delay: number; target: ProbeTarget };
+  response?: { samples: LatencySample[]; burstRemaining: number; nextBurstAt: number; cursor: number;
+    reason: string; decision: (ReturnType<typeof latencyDecision> & { node: string }) | null };
 };
 type Job = { group: Group; node: string; target: ProbeTarget; priority: number; auxiliary?: boolean; run: (result: ProbeResult, at: number) => Promise<void> | void };
 type Event = { at: number; group: string; from: string; to: string; reason: string };
@@ -101,15 +104,31 @@ export function createAutomaticSelector(options: Options) {
   const retryAt = (r: ProbeResult, at: number) => typeof r.retryAfterMs === 'number' && Number.isFinite(r.retryAfterMs) && r.retryAfterMs > 0
     ? at + Math.max(1000, r.retryAfterMs) : null;
   const isBackup = (g: Group) => !g.policy.preferred.includes(g.current);
-  const returnLimit = (s: AutoSnapshot) => s.probes.slowMs * 2 / 3;
+  const returnLimit = (s: AutoSnapshot, g: Group) => g.policy.latency?.slowMs ?? s.probes.slowMs * 2 / 3;
   const activeTarget = (s: AutoSnapshot, g: Group) => g.usePrimary ? s.probes.primary : s.probes.secondary;
   const sameTarget = (a: ProbeTarget, b: ProbeTarget) => a.url === b.url && a.expectedStatus === b.expectedStatus;
   const isPrimary = (s: AutoSnapshot, target: ProbeTarget) => sameTarget(target, s.probes.primary);
+  const newResponse = (): NonNullable<Group['response']> => ({ samples: [], burstRemaining: 0, nextBurstAt: 0, cursor: 0,
+    reason: 'insufficient-evidence', decision: null });
+  const responseWindow = (g: Group, at: number) => g.response && g.policy.latency
+    ? latencyWindow(g.response.samples, g.policy.latency, at) : null;
+  const degraded = (g: Group, at: number) => responseWindow(g, at)?.degraded ?? g.slowCount >= 3;
 
   function latencyWorthwhile(s: AutoSnapshot, g: Group, node: string, delay: number, at: number) {
-    const current = g.latestProbe, settings = g.policy.bandwidth ?? DEFAULT_BANDWIDTH_SETTINGS;
+    const current = g.latestProbe;
     if (!current || at - current.at > 60000 || !sameTarget(current.target, activeTarget(s, g))) return false;
     const recent = events.filter(e => e.group === g.name && e.at > at - 3600000 && e.reason !== 'failure-recovery');
+    if (g.response) {
+      const window = responseWindow(g, at)!;
+      if (!window.fresh || window.samples.length < 3 || window.baselineMs === null) return false;
+      const decision = latencyDecision(window.baselineMs, delay, recent.length,
+        recent.some(e => e.from === node && e.at > at - 3600000),
+        g.policy.preferred.includes(g.current) && !g.policy.preferred.includes(node));
+      g.response.decision = { ...decision, node };
+      g.response.reason = decision.worthwhile ? 'candidate-confirmation' : 'gain-insufficient';
+      return decision.worthwhile;
+    }
+    const settings = g.policy.bandwidth ?? DEFAULT_BANDWIDTH_SETTINGS;
     const { threshold } = bandwidthThreshold(current.delay / 1000, settings, recent.length,
       recent.some(e => e.from === node && e.at > at - settings.reverseWindowSeconds * 1000),
       { currentPreferred: g.policy.preferred.includes(g.current), candidatePreferred: g.policy.preferred.includes(node) });
@@ -121,6 +140,7 @@ export function createAutomaticSelector(options: Options) {
     if (g.usePrimary !== primary) {
       g.targetVersion++; bandwidth.invalidateProbeTarget(g.name); safetyAt.delete(g.name);
       g.slowDelay = 0; g.slowCount = 0;
+      if (g.response) g.response = newResponse();
       g.returning = undefined;
       if (g.search?.kind === 'slow') g.search = undefined;
     }
@@ -139,6 +159,7 @@ export function createAutomaticSelector(options: Options) {
           old.monitorAt = at; old.secondaryAt = null; old.failureTarget = null;
           old.slowCount = 0; old.slowDelay = 0; old.returning = undefined; old.health = 'unknown';
           old.latestProbe = undefined;
+          if (old.response) old.response = newResponse();
           // An outage round keeps its three-node queue and backoff, but no old measurement.
           if (old.search?.kind === 'outage') { old.search.index = 0; old.search.batch = undefined; old.search.confirming = undefined; }
           else old.search = undefined;
@@ -152,6 +173,7 @@ export function createAutomaticSelector(options: Options) {
         returnRound: 0, returnCursor: 0, outageRound: 0, outageCursor: 0,
         returnedAt: null, flapCount: 0, returnNotBefore: 0,
         usePrimary: true, primaryRecoveryAt: null, primaryRecoveryChecks: 0, targetVersion: 0,
+        ...(item.policy.latency ? { response: newResponse() } : {}),
       });
     }
     lastGeneration = s?.generation; evidenceInvalid = false; selectedSinceSnapshot.clear();
@@ -177,6 +199,11 @@ export function createAutomaticSelector(options: Options) {
     const item = live?.groups.find(item => item.name === g.name);
     if (live?.generation !== s.generation) invalidateEvidence();
     if (closed || evidenceInvalid || epoch !== evidenceEpoch || g.targetVersion !== targetVersion || !live || !item || identity(live, item) !== g.identity || item.current !== g.current || groups.get(g.name) !== g) return false;
+    if (g.response && (reason === 'faster-candidate' || reason === 'preferred-restored')) {
+      const decision = g.response.decision;
+      if (!decision || decision.node !== node || reason === 'faster-candidate' && !degraded(g, now())
+        || !latencyWorthwhile(s, g, node, decision.candidateMs, now())) return false;
+    }
     if (reason === 'bandwidth-improvement' && (g.health !== 'healthy' || g.search || g.secondaryAt !== null)) return false;
     const from = g.current;
     let applied = node === from;
@@ -200,6 +227,7 @@ export function createAutomaticSelector(options: Options) {
     }
     g.current = node; g.search = undefined; g.returning = undefined; g.secondaryAt = null; g.failureTarget = null;
     g.slowCount = 0; g.monitorAt = at + 30_000; g.residenceUntil = at + 120_000;
+    if (g.response) { g.response = newResponse(); g.response.reason = 'holding'; }
     g.outageRound = 0; g.reason = reason; g.health = 'healthy'; g.returnRound = 0;
     if (reason === 'preferred-restored') g.returnedAt = at;
     if (reason === 'bandwidth-improvement') { g.bandwidthSwitchedAt = at; g.monitorAt = at + 5000; }
@@ -215,6 +243,12 @@ export function createAutomaticSelector(options: Options) {
       g.flapCount++; g.returnNotBefore = at + (g.flapCount === 1 ? 900_000 : 1_800_000); g.returnedAt = null;
     }
     let all = [...g.policy.preferred, ...g.policy.fallback].filter(node => node !== g.current);
+    if (kind === 'slow' && g.response && all.length) {
+      const count = Math.min(RESPONSIVE_LATENCY.candidates, all.length), cursor = g.response.cursor % all.length;
+      g.response.cursor = (cursor + count) % all.length;
+      all = Array.from({ length: count }, (_, i) => all[(cursor + i) % all.length]);
+      g.response.burstRemaining = 0; g.response.reason = 'current-degraded'; g.response.decision = null;
+    }
     if (kind === 'failure' && g.policy.bandwidth?.enabled) {
       bandwidth.failure(g.name, g.current);
       all = bandwidth.recoveryOrder(g.name, all);
@@ -236,7 +270,10 @@ export function createAutomaticSelector(options: Options) {
 
   function finishSearch(g: Group, at: number) {
     if (g.search?.kind === 'slow') {
-      g.search = undefined; g.slowCooldown = at + 300_000; g.slowCount = 0; g.reason = 'no-better-candidate';
+      const recovered = !!g.response && !degraded(g, at);
+      g.search = undefined; g.slowCooldown = at + (recovered ? 60_000 : 300_000); g.slowCount = 0;
+      g.reason = recovered ? 'current-recovered' : 'no-better-candidate';
+      if (g.response) { g.response.reason = g.reason; g.response.burstRemaining = 0; }
     } else outage(g, at);
   }
 
@@ -245,13 +282,15 @@ export function createAutomaticSelector(options: Options) {
     const secondary = g.secondaryAt !== null;
     if (at < (g.secondaryAt ?? g.monitorAt)) return [];
     const target = secondary ? g.failureTarget! : activeTarget(s, g);
+    const rapid = !secondary && !!g.response?.burstRemaining;
     return [{ group: g, node: g.current, target,
-      priority: secondary ? 0 : 1, run: (result, end) => {
+      priority: secondary ? 0 : 1, ...(rapid ? { auxiliary: true } : {}), run: (result, end) => {
         const retry = retryAt(result, end);
         if (retry !== null) { if (secondary) g.secondaryAt = retry; else g.monitorAt = retry; return; }
         if (!healthy(result)) {
           g.latestProbe = undefined;
           g.slowCount = 0;
+          if (g.response) { g.response.samples = []; g.response.burstRemaining = 0; g.response.reason = 'failure-confirmation'; }
           if (secondary) beginSearch(g, 'failure', end);
           else { g.secondaryAt = end + 2000; g.failureTarget = isPrimary(s, target) ? s.probes.secondary : s.probes.primary; }
           return;
@@ -262,6 +301,26 @@ export function createAutomaticSelector(options: Options) {
         if (secondary) {
           g.slowCount = 0; g.failureTarget = null;
           activateTarget(s, g, target, end);
+          if (g.response) g.response.samples = [{ at: end, delayMs: result.delay! }];
+          return;
+        }
+        if (g.response && g.policy.latency) {
+          const response = g.response;
+          response.samples = latencyWindow([...response.samples, { at: end, delayMs: result.delay! }], g.policy.latency, end).samples;
+          const window = responseWindow(g, end)!;
+          g.slowCount = window.slowCount; g.slowDelay = window.baselineMs ?? result.delay!;
+          if (rapid) response.burstRemaining--;
+          if (g.search?.kind === 'slow' && !window.degraded) { finishSearch(g, end); return; }
+          if (!g.search && end >= g.slowCooldown && end >= g.residenceUntil) {
+            if (window.degraded) { beginSearch(g, 'slow', end); return; }
+            if (!rapid && result.delay! > g.policy.latency.slowMs && end >= response.nextBurstAt) {
+              response.burstRemaining = RESPONSIVE_LATENCY.burstChecks;
+              response.nextBurstAt = end + RESPONSIVE_LATENCY.burstCooldownMs;
+            }
+          }
+          if (response.burstRemaining > 0 && !g.search) {
+            response.reason = 'checking-response'; g.monitorAt = end + RESPONSIVE_LATENCY.burstMs;
+          } else if (!g.search && end >= g.slowCooldown) response.reason = window.samples.length < 3 ? 'insufficient-evidence' : 'monitoring';
           return;
         }
         g.slowCount = result.delay! > s.probes.slowMs ? g.slowCount + 1 : 0;
@@ -276,9 +335,11 @@ export function createAutomaticSelector(options: Options) {
     const search = g.search;
     if (!search || at < search.due) return [];
     const priority = search.kind === 'slow' ? 1 : 0;
+    const auxiliary = search.kind === 'slow' && !!g.response;
     const better = (node: string, delay: number, at: number) => search.kind !== 'slow'
-      || (delay <= Math.min(search.baseline, g.slowDelay) * 0.6 && Math.min(search.baseline, g.slowDelay) - delay >= 300
-        && latencyWorthwhile(s, g, node, delay, at));
+      || (g.response ? degraded(g, at) && latencyWorthwhile(s, g, node, delay, at)
+        : delay <= Math.min(search.baseline, g.slowDelay) * 0.6 && Math.min(search.baseline, g.slowDelay) - delay >= 300
+          && latencyWorthwhile(s, g, node, delay, at));
     const exhaustedBatch = (end: number) => {
       const batch = search.batch!;
       // A dead current node cannot establish which endpoint is usable. Give each
@@ -296,7 +357,7 @@ export function createAutomaticSelector(options: Options) {
     if (search.confirming) {
       const candidate = search.confirming;
       if (at < candidate.due) return [];
-      return [{ group: g, node: candidate.node, target: candidate.target, priority, run: async (result, end) => {
+      return [{ group: g, node: candidate.node, target: candidate.target, priority, auxiliary, run: async (result, end) => {
         if (g.search !== search) return;
         if (search.kind === 'slow' && !sameTarget(candidate.target, activeTarget(s, g))) { finishSearch(g, end); return; }
         const retry = retryAt(result, end);
@@ -327,7 +388,7 @@ export function createAutomaticSelector(options: Options) {
       search.batch = { nodes, results: new Map(), target: activeTarget(s, g) };
     }
     const batch = search.batch;
-    return batch.nodes.filter(node => !batch.results.has(node)).map(node => ({ group: g, node, target: batch.target, priority,
+    return batch.nodes.filter(node => !batch.results.has(node)).map(node => ({ group: g, node, target: batch.target, priority, auxiliary,
       run: (result: ProbeResult, end: number) => {
         if (g.search !== search) return;
         if (search.kind === 'slow' && !sameTarget(batch.target, activeTarget(s, g))) { finishSearch(g, end); return; }
@@ -358,20 +419,20 @@ export function createAutomaticSelector(options: Options) {
     if (!sameTarget(returning.target, activeTarget(s, g))) { returnFailed(g, at); return []; }
     const candidate = returning.candidate;
     if (candidate) {
-      return [{ group: g, node: candidate.node, target: activeTarget(s, g), priority: 2, run: async (result, end) => {
+      return [{ group: g, node: candidate.node, target: activeTarget(s, g), priority: 2, auxiliary: !!g.response, run: async (result, end) => {
         if (g.returning !== returning || g.search || g.secondaryAt !== null) return;
         if (!sameTarget(returning.target, activeTarget(s, g))) { returnFailed(g, end); return; }
         const retry = retryAt(result, end);
         if (retry !== null) { returning.due = retry; return; }
         candidate.delay = Math.max(candidate.delay, result.delay ?? Infinity);
-        if (!healthy(result) || candidate.delay > returnLimit(s) || !latencyWorthwhile(s, g, candidate.node, candidate.delay, end)) { returnFailed(g, end); return; }
+        if (!healthy(result) || candidate.delay > returnLimit(s, g) || !latencyWorthwhile(s, g, candidate.node, candidate.delay, end)) { returnFailed(g, end); return; }
         candidate.checks++;
         if (candidate.checks === 2) {
           if (!await select(s, g, candidate.node, 'preferred-restored', end) && !evidenceInvalid) returnFailed(g, end);
         } else returning.due = Math.max(candidate.firstAt + 60_000, end + 30_000);
       } }];
     }
-    return returning.nodes.filter(node => !returning.results.has(node)).map(node => ({ group: g, node, target: activeTarget(s, g), priority: 2,
+    return returning.nodes.filter(node => !returning.results.has(node)).map(node => ({ group: g, node, target: activeTarget(s, g), priority: 2, auxiliary: !!g.response,
       run: (result: ProbeResult, end: number) => {
         if (g.returning !== returning || g.search || g.secondaryAt !== null) return;
         if (!sameTarget(returning.target, activeTarget(s, g))) { returnFailed(g, end); return; }
@@ -379,7 +440,7 @@ export function createAutomaticSelector(options: Options) {
         if (retry !== null) { returning.due = retry; return; }
         returning.results.set(node, result);
         if (returning.results.size !== returning.nodes.length) return;
-        const match = returning.nodes.find(node => healthy(returning.results.get(node)!) && returning.results.get(node)!.delay! <= returnLimit(s)
+        const match = returning.nodes.find(node => healthy(returning.results.get(node)!) && returning.results.get(node)!.delay! <= returnLimit(s, g)
           && latencyWorthwhile(s, g, node, returning.results.get(node)!.delay!, end));
         if (!match) returnFailed(g, end);
         else { returning.candidate = { node: match, firstAt: end, checks: 0, delay: returning.results.get(match)!.delay! }; returning.due = end + 30_000; }
@@ -487,7 +548,7 @@ export function createAutomaticSelector(options: Options) {
       if (probeFailed) diagnostics.fail('probe'); else if (observed) diagnostics.success('probe');
     }
     if (epoch !== evidenceEpoch) return;
-    bandwidth.tick([...groups.values()].map(g => ({ name: g.name, degraded: g.slowCount >= 3,
+    bandwidth.tick([...groups.values()].map(g => ({ name: g.name, degraded: degraded(g, now()),
       ready: g.health === 'healthy' && !g.search && !g.returning && g.secondaryAt === null && !selecting,
       // Keep enough auxiliary starts for the download's safety checks. Quotas
       // constrain admission, never the health of an already running transfer.
@@ -534,6 +595,11 @@ export function createAutomaticSelector(options: Options) {
           health: g.health, phase: g.search?.kind === 'outage' ? 'outage' : g.search ? g.search.kind === 'slow' ? 'slow-search' : 'failure-search'
             : g.secondaryAt !== null ? 'failure-confirmation' : g.returning ? 'return-confirmation' : g.policy.fallback.includes(g.current) ? 'backup' : 'monitoring',
           bandwidth: bandwidth.status(g.name),
+          ...(g.response ? { latency: { mode: 'responsive' as const, slowMs: g.policy.latency!.slowMs,
+            ...responseWindow(g, now())!, burstRemaining: g.response.burstRemaining,
+            reason: now() < g.residenceUntil ? 'holding' : !responseWindow(g, now())!.fresh ? 'insufficient-evidence'
+              : g.search ? g.response.reason : now() < g.slowCooldown ? g.reason : g.response.reason,
+            decision: g.response.decision ? { ...g.response.decision } : null } } : {}),
           nextAt: g.search ? g.search.confirming?.due ?? g.search.due
             : Math.min(g.secondaryAt ?? g.monitorAt, g.returning?.due ?? g.returnAt ?? Infinity), reason: g.reason })),
         events: events.map(event => ({ ...event })),

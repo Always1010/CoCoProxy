@@ -6,6 +6,7 @@ import { createAutomaticSelector, type AutoSnapshot, type ProbeResult } from '..
 import { ManagementError } from '../packages/management/http.ts';
 import { createAutomaticDiagnostics, type AutoDiagnostic } from '../packages/management/automatic-diagnostics.ts';
 import type { BandwidthRound } from '../packages/management/bandwidth-history.ts';
+import { latencyWindow } from '../packages/management/latency-policy.ts';
 
 const good = (delay = 100): ProbeResult => ({ ok: true, delay });
 const bad = (): ProbeResult => ({ ok: false, delay: null });
@@ -118,10 +119,11 @@ test('bandwidth opt-in cannot block legacy fault recovery or apply a late downlo
   await engine.close();
 });
 function harness(options: { current?: string; preferred?: string[]; fallback?: string[]; names?: string[];
-  bandwidth?: boolean;
+  bandwidth?: boolean; responsive?: boolean;
   probe?: (node: string, secondary: boolean, at: number) => ProbeResult | Promise<ProbeResult> } = {}) {
   let time = 0;
   const policy = { preferred: options.preferred ?? ['primary', 'alternate'], fallback: options.fallback ?? ['backup'], returnToPreferred: true,
+    ...(options.responsive ? { latency: { mode: 'responsive' as const, slowMs: 500 } } : {}),
     ...(options.bandwidth === undefined ? {} : { bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: options.bandwidth } }) };
   let snapshot: AutoSnapshot | null = { key: 'synthetic-config', generation: '1', probes: structuredClone(DEFAULT_AUTO_PROBES),
     groups: (options.names ?? ['group']).map(name => ({ name, current: options.current ?? 'primary', policy: structuredClone(policy) })) };
@@ -161,9 +163,76 @@ test('automatic policy validates bounded disjoint nodes and safe HTTPS probe set
   invalid(() => parseAutoGroupPolicy({ enabled: true, preferred: [], fallback: ['a'], returnToPreferred: true }));
   invalid(() => parseAutoGroupPolicy({ enabled: 'false', preferred: ['a'], fallback: [], returnToPreferred: true }));
   invalid(() => parseAutoGroupPolicy({ preferred: ['a'], fallback: [], returnToPreferred: true, extra: true }));
+  assert.deepEqual(parseAutoGroupPolicy({ preferred: ['a'], fallback: [], returnToPreferred: true, latency: { mode: 'responsive' } }).latency,
+    { mode: 'responsive', slowMs: 500 });
+  for (const latency of [{ mode: 'responsive', slowMs: 499 }, { mode: 'responsive', slowMs: null },
+    { mode: 'unknown', slowMs: 500 }, { mode: 'responsive', extra: true }]) {
+    invalid(() => parseAutoGroupPolicy({ preferred: ['a'], fallback: [], returnToPreferred: true, latency }));
+  }
   for (const url of ['http://example.test/', 'https://user:SECRET@example.test/', 'https://example.test/?token=SECRET', 'https://example.test/#SECRET']) {
     invalid(() => parseAutoProbeSettings({ ...DEFAULT_AUTO_PROBES, primary: { url, expectedStatus: 204 } }));
   }
+});
+
+test('responsive selection confirms intermittent deterioration independently of throughput parameters', async () => {
+  let checks = 0;
+  const h = harness({ responsive: true, bandwidth: false, probe: node => good(node === 'primary' ? [680, 1050, 280][Math.min(checks++, 2)] : 190) });
+  h.snapshot!.groups[0].policy.bandwidth!.marginMs = 500;
+  h.snapshot!.groups[0].policy.bandwidth!.minGainMs = 2000;
+  for (const at of [0, 5000, 10000, 11000, 13000]) await h.at(at);
+  assert.deepEqual(h.switches, [{ node: 'alternate', at: 13000, reason: 'faster-candidate' }]);
+  assert.equal(h.calls.filter(c => c.node === 'alternate').length, 2);
+  await h.engine.close();
+});
+
+test('responsive windows expire, tolerate one recovery and reject two recent recoveries', () => {
+  const policy = { mode: 'responsive' as const, slowMs: 500 };
+  const samples = [800, 950, 700, 180, 160].map((delayMs, i) => ({ at: i * 5000, delayMs }));
+  assert.equal(latencyWindow(samples.slice(0, 4), policy, 15000).degraded, true);
+  assert.equal(latencyWindow(samples, policy, 20000).degraded, false);
+  assert.equal(latencyWindow(samples.slice(0, 3), policy, 100000).degraded, false);
+});
+
+test('responsive spike checks are bounded and external generations invalidate their evidence', async () => {
+  let checks = 0;
+  const h = harness({ responsive: true, probe: () => good(checks++ ? 140 : 2300) });
+  for (const at of [0, 5000, 10000, 15000, 44000]) await h.at(at);
+  assert.equal(h.calls.length, 4); assert.equal(h.switches.length, 0);
+  assert.ok(h.calls.every(c => c.node === 'primary'));
+  h.snapshot!.generation = 'external';
+  await h.at(45000);
+  assert.equal(h.engine.status().groups[0].latency!.samples.length, 1);
+  assert.equal(h.engine.status().groups[0].latency!.decision, null);
+  await h.engine.close();
+});
+
+test('responsive searches examine two rotating candidates and retain current when no gain exists', async () => {
+  const h = harness({ responsive: true, preferred: ['primary', 'first', 'second', 'third'], fallback: [], probe: () => good(750) });
+  for (let at = 0; at <= 370000; at += 1000) await h.at(at);
+  const candidates = h.calls.filter(c => c.node !== 'primary');
+  assert.deepEqual(candidates.slice(0, 2).map(c => c.node), ['first', 'second']);
+  assert.deepEqual(candidates.slice(2, 4).map(c => c.node), ['third', 'first']);
+  assert.equal(h.switches.length, 0);
+  assert.equal(h.engine.status().groups[0].latency!.decision!.worthwhile, false);
+  await h.engine.close();
+});
+
+test('responsive search traffic shares the physical quota and leaves hard failure recovery available', async () => {
+  let time = 0;
+  const starts: number[] = [], changes: { group: string; reason: string }[] = [];
+  const snapshot: AutoSnapshot = { key: 'responsive-quota', generation: '1', probes: DEFAULT_AUTO_PROBES,
+    groups: ['one', 'two', 'three', 'four', 'fault'].map(name => ({ name, current: name,
+      policy: { latency: { mode: 'responsive', slowMs: 500 }, preferred: [name, name + '-next'], fallback: [], returnToPreferred: false } })) };
+  const engine = createAutomaticSelector({ now: () => time, snapshot: async () => snapshot,
+    probe: async (_s, node) => { starts.push(time); return node === 'fault' && time >= 30000 ? bad() : good(node.endsWith('-next') ? 700 : 800); },
+    switch: async (_s, group, node, reason) => {
+      changes.push({ group, reason }); snapshot.groups.find(g => g.name === group)!.current = node;
+      snapshot.generation = String(Number(snapshot.generation) + 1); return true;
+    } });
+  for (time = 0; time <= 100000; time += 1000) await engine.tick();
+  assert.ok(changes.some(c => c.group === 'fault' && c.reason === 'failure-recovery'));
+  for (const at of starts) assert.ok(starts.filter(s => s <= at && s > at - 60000).length <= 24);
+  await engine.close();
 });
 
 test('healthy monitoring includes manual outside nodes, measures only unique currents every 30 seconds and coalesces results', async () => {

@@ -1,6 +1,8 @@
 import { parseBandwidthSettings, type BandwidthSettings } from './bandwidth-policy.ts';
+import { parseResponsiveLatency, type ResponsiveLatencySettings } from './latency-policy.ts';
 // Older policies omit enabled and remain active. Bandwidth remains opt-in.
-export type AutoGroupPolicy = { enabled?: boolean; preferred: string[]; fallback: string[]; returnToPreferred: boolean; bandwidth?: BandwidthSettings };
+export type AutoGroupPolicy = { enabled?: boolean; preferred: string[]; fallback: string[]; returnToPreferred: boolean;
+  latency?: ResponsiveLatencySettings; bandwidth?: BandwidthSettings };
 export type ProbeTarget = { url: string; expectedStatus: number };
 export type AutoProbeSettings = { primary: ProbeTarget; secondary: ProbeTarget; timeoutMs: number; slowMs: number };
 
@@ -25,7 +27,7 @@ function record(value: unknown, keys: string[]): Record<string, unknown> {
 
 /** Node existence and group aliases are checked against the active configuration by the adapter. */
 export function parseAutoGroupPolicy(value: unknown): AutoGroupPolicy {
-  const input = record(value, ['enabled', 'preferred', 'fallback', 'returnToPreferred', 'bandwidth']);
+  const input = record(value, ['enabled', 'preferred', 'fallback', 'returnToPreferred', 'latency', 'bandwidth']);
   if ('enabled' in input && typeof input.enabled !== 'boolean') return invalid();
   const names = (value: unknown): string[] => {
     if (!Array.isArray(value) || value.some(name => typeof name !== 'string' || !name.trim()
@@ -38,7 +40,10 @@ export function parseAutoGroupPolicy(value: unknown): AutoGroupPolicy {
   if ((!preferred.length && input.enabled !== false) || all.length > 32 || new Set(all).size !== all.length || typeof input.returnToPreferred !== 'boolean') return invalid();
   let bandwidth: BandwidthSettings | undefined;
   if ('bandwidth' in input) { try { bandwidth = parseBandwidthSettings(input.bandwidth); } catch { return invalid(); } }
+  let latency: ResponsiveLatencySettings | undefined;
+  if ('latency' in input) { try { latency = parseResponsiveLatency(input.latency); } catch { return invalid(); } }
   return { ...('enabled' in input ? { enabled: input.enabled as boolean } : {}), preferred, fallback, returnToPreferred: input.returnToPreferred,
+    ...(latency ? { latency } : {}),
     ...(bandwidth ? { bandwidth } : {}) };
 }
 
