@@ -167,7 +167,7 @@ export async function loadManagementGateway(path: string) {
         storageDiagnostic: ({ event: transition, ...detail }) => console.info(JSON.stringify({ event: 'COCOPROXY_BANDWIDTH_STORAGE_DIAGNOSTIC', transition, ...detail })),
         busy: () => bandwidth?.busy() ?? true,
         measurementKey: () => bandwidthWorker.state().key,
-        measure: (snapshot, node, settings, signal, report, group) => bandwidth?.verify(node, snapshot.generation, settings, signal, report, group, snapshot.workspaceRevision) ?? Promise.resolve(null),
+        measure: (snapshot, node, settings, signal, report, group, phase) => bandwidth?.verify(node, snapshot.generation, settings, signal, report, group, snapshot.workspaceRevision, phase) ?? Promise.resolve(null),
         load: async () => {
           try { return parseBandwidthLedger(JSON.parse(await privateRead(join(runtimeSettings.stateDirectory, 'automatic-bandwidth.json'), 1048576))); }
           catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, charges: [], switches: [] }; throw error; }

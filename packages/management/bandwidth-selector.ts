@@ -1,8 +1,9 @@
 import type { AutoSnapshot, ProbeResult } from './automatic-selector.ts';
 import type { UsageSnapshot } from './usage.ts';
+import type { BandwidthPhase } from './bandwidth-transport.ts';
 import { createBandwidthTrace, type BandwidthRound } from './bandwidth-history.ts';
 import type { AutoSuspensionReason } from './automatic-diagnostics.ts';
-import { bandwidthBudgetLimits, bandwidthDecision, bandwidthDegraded, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold,
+import { BANDWIDTH_SAFETY_INTERVAL_MS, bandwidthBudgetLimits, bandwidthDecision, bandwidthDegraded, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold,
   type BandwidthSettings, type BandwidthSample } from './bandwidth-policy.ts';
 
 const MiB = 1048576, HOUR = 3600000, DAY = 24 * HOUR, PROBE_FRESH = 30000, UNKNOWN_WAIT = 30000;
@@ -20,7 +21,7 @@ export function parseBandwidthLedger(input: unknown): BandwidthLedger {
       || value.switches.some(s => !s || !integer(s.at) || !text(s.scope) || !text(s.group) || !text(s.from) || !text(s.to))) throw new Error('BANDWIDTH_LEDGER_INVALID');
   return value;
 }
-type Context = { name: string; ready: boolean; degraded?: boolean };
+type Context = { name: string; ready: boolean; degraded?: boolean; canStart?: boolean; nextProbeAt?: number | null };
 type Observation = { at: number; elapsed: number; bytes: number };
 type Trigger = 'traffic' | 'manual' | 'latency' | 'return';
 type NodeState = 'pending' | 'confirming' | 'verified' | 'backoff' | 'unavailable';
@@ -39,7 +40,7 @@ type Pool = { name: string; current: string; nodes: Map<string, Node>; active: s
 export function createBandwidthSelector(options: {
   now: () => number;
   measure?: (snapshot: AutoSnapshot, node: string, settings: BandwidthSettings, signal: AbortSignal,
-    bytes: (used: number) => void, group: string) => Promise<{ delayMs: number; mbps: number; bytes: number; sampleMs?: number; warmupMs?: number } | null>;
+    bytes: (used: number) => void, group: string, phase: (value: BandwidthPhase) => void) => Promise<{ delayMs: number; mbps: number; bytes: number; sampleMs?: number; warmupMs?: number } | null>;
   measurementKey?: () => string;
   probe: (snapshot: AutoSnapshot, node: string, signal: AbortSignal) => Promise<ProbeResult>;
   select: (snapshot: AutoSnapshot, group: string, node: string) => Promise<boolean>;
@@ -55,7 +56,7 @@ export function createBandwidthSelector(options: {
   let flight: { abort: AbortController; done: Promise<void>; pool?: Pool; node?: Node; kind: 'load' | 'save' | 'probe' | 'download' | 'select'; startedAt?: number; used?: number; sampleInterrupted?: boolean } | undefined;
   let ledger: BandwidthLedger = { version: 1, charges: [], switches: [] };
   let previous: { at: number; snapshot: UsageSnapshot } | undefined;
-  let pressure: { group: string; baseline?: number; count: number } | undefined;
+  let pressure: { group: string; baseline?: number; count: number; phase: BandwidthPhase; observedAt: number } | undefined;
   let expected: { key: string; until: number; currents: Map<string, string> } | undefined;
   let lastIdentity = '', lastGeneration: string | undefined;
   const pools = new Map<string, Pool>(), observations = new Map<string, Observation[]>(), positives = new Map<string, number>();
@@ -369,18 +370,26 @@ export function createBandwidthSelector(options: {
     try { await store(); } // Durable maximum before any network I/O.
     catch (error) { charge.bytes = 0; throw error; } // No transfer started; settle this reservation on recovery.
     let used = 0;
-    pressure = { group: p.name, count: 0 };
+    const measurementPressure: NonNullable<typeof pressure> = { group: p.name, count: 0, phase: 'preparing', observedAt: options.now() };
+    const measurementFlight = flight;
+    pressure = measurementPressure;
     try {
       if (signal.aborted) return null;
       return await options.measure!(snap, n.name, s, signal, bytes => {
+        if (pressure !== measurementPressure || flight !== measurementFlight) return;
         if (Number.isFinite(bytes) && bytes >= 0) used = Math.min(charge.bytes, Math.max(used, bytes));
         if (flight?.pool === p && flight.node === n) {
           if (used > 0 && !flight.used) note(p, 'testing', 'collecting');
           flight.used = used;
         }
-      }, p.name);
+      }, p.name, phase => {
+        if (pressure !== measurementPressure || signal.aborted) return;
+        if (pressure.phase !== phase) pressure.observedAt = options.now();
+        pressure.phase = phase;
+      });
     } finally {
-      pressure = undefined; charge.bytes = used; p.spent += used;
+      if (pressure === measurementPressure) pressure = undefined;
+      charge.bytes = used; p.spent += used;
       // Retain the measured result and pending settlement. The scheduler blocks all
       // further bandwidth work until this exact in-memory ledger is saved.
       await store().catch(() => {});
@@ -425,6 +434,8 @@ export function createBandwidthSelector(options: {
     if (flight?.pool && ['probe', 'download'].includes(flight.kind)) {
       const p = flight.pool, s = settingsFor(p);
       if (!s || !contexts.find(c => c.name === p.name)?.ready || !previous || at - previous.at > 3000) interrupt('latency-priority');
+      else if (pressure?.phase === 'download' && at - pressure.observedAt > BANDWIDTH_SAFETY_INTERVAL_MS + snapshot.probes.timeoutMs + 1000)
+        interrupt('protection-stale');
       else if (flight.kind === 'download') {
         const rows = observations.get('\0total')?.filter(r => r.at > at - 2000) ?? [];
         if (rows.length >= 2 && rows.every(r => r.bytes * 8 / r.elapsed / 1000 > s.busyStopMbps)) interrupt('business-busy');
@@ -446,6 +457,7 @@ export function createBandwidthSelector(options: {
     const names = [...pools.keys()];
     for (let i = 0; i < names.length; i++) {
       const index = (fairCursor + i) % names.length, p = pools.get(names[index])!, s = settingsFor(p)!;
+      const context = contexts.find(c => c.name === p.name);
       if (p.pathUnavailable && options.measurementKey && p.blockedMeasurementKey !== options.measurementKey()) p.pathUnavailable = false;
       if (p.pathUnavailable) continue;
       if (!options.measure) { note(p, 'waiting', 'measurement-unavailable'); continue; }
@@ -463,7 +475,7 @@ export function createBandwidthSelector(options: {
       if (p.started === null) { p.started = at; p.spent = 0; }
       const current = p.nodes.get(p.current)!;
       if (current.delayNeedsRefresh && (!current.probe || at - current.probe.at > PROBE_FRESH)) {
-        launchProbe(p, current, s); fairCursor = (index + 1) % names.length; return;
+        launchProbe(p, current, s, context); fairCursor = (index + 1) % names.length; return;
       }
       if (bandwidthDegraded(values(current, s), s, at)) {
         const baseline = Math.max(...current.samples.map(v => v.mbps));
@@ -488,7 +500,7 @@ export function createBandwidthSelector(options: {
       if (ready.length && !holding(p, s)) {
         const { n, d } = ready[0]; p.decision = d; p.candidate = n.name;
         if (!n.probe || at - n.probe.at > PROBE_FRESH || !n.probe.ok) {
-          launchProbe(p, n, s); fairCursor = (index + 1) % names.length; return;
+          launchProbe(p, n, s, context); fairCursor = (index + 1) % names.length; return;
         }
         if (!bandwidthGuard({ delay: interval!.delay, mbps: interval!.mbps }, { delay: n.probe.delay!, mbps: d!.candidate.mbps }, s)) {
           reject(p, n, s, 'shortfall-guard'); continue;
@@ -529,7 +541,7 @@ export function createBandwidthSelector(options: {
         ?? candidates.find(n => !n.probe || at - n.probe.at > PROBE_FRESH) ?? candidates[0];
       const unprobed = interval ? focus : current;
       if (unprobed && (!unprobed.probe || at - unprobed.probe.at > PROBE_FRESH) && unprobed.nextAt <= at) {
-        launchProbe(p, unprobed, s); fairCursor = (index + 1) % names.length; return;
+        launchProbe(p, unprobed, s, context); fairCursor = (index + 1) % names.length; return;
       }
       for (const n of candidates) {
         if (n.probe?.ok && !potential(p, n, s)) reject(p, n, s, 'no-potential-gain');
@@ -554,6 +566,7 @@ export function createBandwidthSelector(options: {
       if (!node) continue;
       const due = sampleDue(node, s);
       if (at < due) { note(p, 'confirming', 'waiting-sample', due); continue; }
+      if (context?.canStart === false) { note(p, 'waiting', 'probe-quota', context.nextProbeAt ?? null); continue; }
       if (!quiet(s) || options.busy?.()) { note(p, 'waiting', 'waiting-idle'); continue; }
       const isUrgent = urgent(p, s);
       // Reserve the missing current/candidate confirmation tasks before exploring a new candidate.
@@ -563,7 +576,7 @@ export function createBandwidthSelector(options: {
       }
       if (p.spent + needed > s.searchMiB * MiB) { yieldSearch(p, s, 'search-yield'); continue; }
       if (!node.probe || at - node.probe.at > PROBE_FRESH) {
-        launchProbe(p, node, s); fairCursor = (index + 1) % names.length; return;
+        launchProbe(p, node, s, context); fairCursor = (index + 1) % names.length; return;
       }
       if (!node.probe.ok || node.probe.delay === null) { reject(p, node, s, 'candidate-unavailable', true); continue; }
       const snap = structuredClone(snapshot), delayMs = node.probe.delay, selectedNode = node, startedAt = at;
@@ -601,7 +614,8 @@ export function createBandwidthSelector(options: {
       fairCursor = (index + 1) % names.length; return;
     }
   }
-  function launchProbe(p: Pool, n: Node, s: BandwidthSettings) {
+  function launchProbe(p: Pool, n: Node, s: BandwidthSettings, context?: Context) {
+    if (context?.canStart === false) { note(p, 'waiting', 'probe-quota', context.nextProbeAt ?? null); return; }
     const snap = structuredClone(snapshot!);
     p.testingNode = n.name; note(p, 'screening', 'screening-latency');
     launch('probe', async signal => {
@@ -621,7 +635,7 @@ export function createBandwidthSelector(options: {
       if (!p || !options.measure || closed || p.nodes.size < 2) return false;
       return request(name, undefined, 'manual');
     },
-    isMeasuring(group: string) { return pressure?.group === group; },
+    isMeasuring(group: string) { return pressure?.group === group && pressure.phase === 'download'; },
     isComparing(group: string) { return !!pools.get(group)?.trigger; },
     recoveryOrder(group: string, nodes: string[]) {
       const p = pools.get(group);
@@ -629,7 +643,8 @@ export function createBandwidthSelector(options: {
         || Number(b === p.lastSwitch?.from) - Number(a === p.lastSwitch?.from)) : nodes;
     },
     noteLatency(group: string, delay: number | null, baseline: number) {
-      if (pressure?.group !== group || !flight) return;
+      if (pressure?.group !== group || pressure.phase !== 'download' || !flight) return;
+      pressure.observedAt = options.now();
       pressure.baseline ??= baseline;
       pressure.count = delay === null || delay - pressure.baseline > Math.max(50, pressure.baseline * 0.5) ? pressure.count + 1 : 0;
       if (pressure.count >= 2) interrupt('latency-pressure');

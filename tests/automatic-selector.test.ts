@@ -10,6 +10,59 @@ import type { BandwidthRound } from '../packages/management/bandwidth-history.ts
 const good = (delay = 100): ProbeResult => ({ ok: true, delay });
 const bad = (): ProbeResult => ({ ok: false, delay: null });
 
+test('two groups finish timed bandwidth confirmation without cancelling their own probe quota', async () => {
+  for (const duration of [14000, 20000]) {
+    let time = 0;
+    const pending: { due: number; progress: () => void; resolve: () => void; signal: AbortSignal }[] = [];
+    const samples = new Map<string, { valid: boolean; reason: string }>();
+    const probes: number[] = [], changes: string[] = [];
+    const snapshot: AutoSnapshot = { key: 'timed-bandwidth', generation: '1', probes: structuredClone(DEFAULT_AUTO_PROBES),
+      groups: [0, 1].map(i => ({ name: `group-${i}`, current: `current-${i}`, policy: {
+        preferred: [`current-${i}`, `candidate-${i}`], fallback: [], returnToPreferred: false,
+        bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, targetMbps: i ? 4 : 6,
+          confirmRounds: i ? 2 : 3, roundIntervalSeconds: i ? 30 : 60, searchMiB: i ? 32 : 48 },
+      } })) };
+    const engine = createAutomaticSelector({ now: () => time, snapshot: async () => snapshot,
+      probe: async () => { probes.push(time); return good(); },
+      switch: async (_s, name, node) => {
+        changes.push(name); snapshot.groups.find(g => g.name === name)!.current = node;
+        snapshot.generation = String(Number(snapshot.generation) + 1); return true;
+      },
+      bandwidth: {
+        trace: round => { for (const e of round.events) if (e.sample)
+          samples.set(`${round.group}:${e.sample.startedAt}`, { valid: e.sample.valid, reason: e.reason }); },
+        measure: async (_s, node, settings, signal, report, _group, phase) => {
+          const started = time; phase('preparing');
+          const progress = () => {
+            const elapsed = Math.max(0, time - started - (duration - 8000));
+            if (elapsed) phase('download');
+            report(Math.floor((node.startsWith('current') ? 2 : settings.targetMbps * 1.25) * 125 * elapsed));
+          };
+          await new Promise<void>(resolve => {
+            pending.push({ due: time + duration, progress, resolve, signal });
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+          return signal.aborted ? null : { mbps: node.startsWith('current') ? 2 : settings.targetMbps, delayMs: 100, bytes: 0 };
+        },
+      },
+    });
+    for (let second = 0; second < 450 && !changes.length; second++) {
+      time = second * 1000;
+      for (const task of pending.splice(0)) if (!task.signal.aborted) {
+        task.progress(); if (time >= task.due) task.resolve(); else pending.push(task);
+      }
+      await new Promise<void>(resolve => setImmediate(resolve));
+      engine.observeUsage({ epoch: 'timed-core', download: 0, upload: 0, connections: [] });
+      await engine.tick(); await new Promise<void>(resolve => setImmediate(resolve));
+      if (second === 1) for (const group of snapshot.groups) engine.requestBandwidthCheck(group.name);
+    }
+    assert.ok(changes.length, `no confirmed switch for ${duration}ms tasks`);
+    assert.ok([...samples.values()].every(s => s.valid), JSON.stringify([...samples.values()]));
+    assert.ok(probes.every(at => probes.filter(p => p > at - 60000 && p <= at).length <= 24));
+    await engine.close();
+  }
+});
+
 test('bandwidth history preserves specific suspension causes without storing raw errors', async () => {
   for (const mode of ['paused', 'transaction', 'locked', 'failed'] as const) {
     let unavailable = false;

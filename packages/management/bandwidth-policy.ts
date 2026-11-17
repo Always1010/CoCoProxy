@@ -1,4 +1,5 @@
 /** All bandwidth settings are opt-in. Missing fields inherit these versioned defaults. */
+export const BANDWIDTH_SAFETY_INTERVAL_MS = 5000;
 const field = (label: string, value: number, min: number, max: number, unit: string, basic = false, integer = true) =>
   ({ label, default: value, min, max, unit, basic, integer });
 export const BANDWIDTH_FIELDS = {

@@ -23,14 +23,17 @@ const success = { status: 'success' as const, mbps: 123, liveMbps: null, bytes: 
 
 test('automatic download verification shares the manual task slot until abort cleanup completes', async () => {
   const entered = deferred(), cleanup = deferred(), stop = new AbortController();
+  const phases: string[] = [];
   const service = createBandwidthService({ snapshot: async () => target, isCurrent: async () => true,
     transfer: async input => {
       assert.ok(input.verification); entered.resolve();
+      input.report({ phase: 'download' });
       await new Promise<void>(resolve => input.signal.addEventListener('abort', () => resolve(), { once: true }));
       await cleanup.promise; return { reason: 'BANDWIDTH_CANCELLED' };
     } });
-  const running = service.verify('node-b', generation, DEFAULT_BANDWIDTH_SETTINGS, stop.signal, () => {});
+  const running = service.verify('node-b', generation, DEFAULT_BANDWIDTH_SETTINGS, stop.signal, () => {}, undefined, undefined, phase => phases.push(phase));
   await entered.promise;
+  assert.deepEqual(phases, ['preparing', 'download']);
   assert.equal((await service.fetch(request(), principal)).automaticRunning, true);
   await assert.rejects(service.fetch(request('POST', { node: 'node-b', expectedActive: generation }), principal), { code: 'BANDWIDTH_BUSY' });
   stop.abort(); assert.equal(service.busy(), true);

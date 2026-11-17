@@ -1,6 +1,6 @@
 import type { AutoGroupPolicy, AutoProbeSettings, ProbeTarget } from './automatic-policy.ts';
 import { createBandwidthSelector } from './bandwidth-selector.ts';
-import { bandwidthThreshold, DEFAULT_BANDWIDTH_SETTINGS } from './bandwidth-policy.ts';
+import { BANDWIDTH_SAFETY_INTERVAL_MS, bandwidthThreshold, DEFAULT_BANDWIDTH_SETTINGS } from './bandwidth-policy.ts';
 import { ManagementError } from './http.ts';
 import { createAutomaticDiagnostics, type AutoDiagnostic, type AutoSuspensionReason } from './automatic-diagnostics.ts';
 
@@ -397,7 +397,7 @@ export function createAutomaticSelector(options: Options) {
     for (const g of groups.values()) jobs.push(...monitorJobs(s, g, at), ...searchJobs(s, g, at), ...returnJobs(s, g, at));
     for (const g of groups.values()) if (bandwidth.isMeasuring(g.name) && at >= (safetyAt.get(g.name) ?? 0)) {
       jobs.push({ group: g, node: g.current, target: activeTarget(s), priority: 3, auxiliary: true, run: (result, end) => {
-        safetyAt.set(g.name, end + 2000);
+        safetyAt.set(g.name, end + BANDWIDTH_SAFETY_INTERVAL_MS);
         bandwidth.noteLatency(g.name, healthy(result) ? result.delay : null, g.slowDelay || result.delay || 0);
       } });
     }
@@ -471,8 +471,12 @@ export function createAutomaticSelector(options: Options) {
     }
     if (epoch !== evidenceEpoch) return;
     bandwidth.tick([...groups.values()].map(g => ({ name: g.name, degraded: g.slowCount >= 3,
-      ready: g.health === 'healthy' && !g.search && !g.returning && g.secondaryAt === null
-      && !selecting && starts.filter(start => start > now() - 60000).length < 18 })));
+      ready: g.health === 'healthy' && !g.search && !g.returning && g.secondaryAt === null && !selecting,
+      // Keep enough auxiliary starts for the download's safety checks. Quotas
+      // constrain admission, never the health of an already running transfer.
+      canStart: starts.filter(start => start > now() - 60000).length
+        + Math.ceil((g.policy.bandwidth?.durationSeconds ?? 8) * 1000 / BANDWIDTH_SAFETY_INTERVAL_MS) + 1 < 18,
+      nextProbeAt: starts.length ? Math.min(...starts) + 60000 : null })));
   }
 
   function tick(): Promise<void> {

@@ -110,7 +110,8 @@ export function createBandwidthService(options: {
   return {
     busy: () => !!current?.task.running || !!automatic,
     async verify(node: string, generation: string, settings: BandwidthSettings, signal: AbortSignal,
-      reportBytes: (bytes: number) => void, group?: string, workspaceRevision?: number): Promise<{ mbps: number; delayMs: number; bytes: number; sampleMs?: number; warmupMs?: number } | null> {
+      reportBytes: (bytes: number) => void, group?: string, workspaceRevision?: number,
+      reportPhase?: (phase: import('./bandwidth-transport.ts').BandwidthPhase) => void): Promise<{ mbps: number; delayMs: number; bytes: number; sampleMs?: number; warmupMs?: number } | null> {
       if (stopped || options.enabled === false || current?.task.running || automatic || signal.aborted) return null;
       const abort = new AbortController();
       const job = { abort, done: Promise.resolve<unknown>(undefined) };
@@ -119,12 +120,14 @@ export function createBandwidthService(options: {
         let bytes = 0, mbps: number | null = null, delayMs: number | null = null, sampleMs: number | undefined, warmupMs: number | undefined;
         const joined = AbortSignal.any([signal, abort.signal]);
         try {
+          reportPhase?.('preparing');
           const target = await options.snapshot(node, generation, joined);
           joined.throwIfAborted();
           const result = await transfer({ ...target, node, generation, group, workspaceRevision, signal: joined,
             limits: { durationMs: settings.durationSeconds * 1000, maxBytes: settings.taskMiB * 1048576, timeoutMs: settings.timeoutSeconds * 1000 },
             verification: { targetMbps: settings.targetMbps, warmupMs: settings.warmupSeconds * 1000, minSampleMs: settings.minSampleSeconds * 1000 },
             report: value => {
+              if (value.phase) reportPhase?.(value.phase);
               if (value.bytesUsed !== undefined) { bytes = value.bytesUsed; reportBytes(bytes); }
               if (value.latency?.idle !== undefined) delayMs = value.latency.idle;
               if (value.download?.status === 'success') { mbps = value.download.mbps; sampleMs = value.download.sampleMs; warmupMs = value.download.warmupMs; }
