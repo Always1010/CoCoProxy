@@ -32,7 +32,7 @@ type Node = { name: string; preferred: boolean; samples: BandwidthSample[];
   state: NodeState; reason: string; nextAt: number; checkedAt: number | null; measuredAt: number | null;
   failures: number; misses: number; earlyFailures: number; activeMs: number; useSince: number; delayNeedsRefresh?: boolean };
 type Pool = { name: string; current: string; nodes: Map<string, Node>; active: string[];
-  trigger: Trigger | null; urgentUntil: number; positiveUntil: number; pauseUntil: number;
+  trigger: Trigger | null; urgentUntil: number; positiveUntil: number; pauseUntil: number; recheckUntil: number;
   started: number | null; spent: number; degradedMbps?: number;
   lastSwitch: { at: number; from: string; to: string } | null;
   phase: string; reason: string; candidate: string | null; testingNode: string | null; nextAt: number | null;
@@ -60,7 +60,8 @@ export function createBandwidthSelector(options: {
   let ledger: BandwidthLedger = { version: 1, charges: [], switches: [] };
   let previous: { at: number; snapshot: UsageSnapshot } | undefined;
   let pressure: { group: string; baseline?: number; count: number; phase: BandwidthPhase; observedAt: number } | undefined;
-  let expected: { key: string; until: number; currents: Map<string, string> } | undefined;
+  let expected: { key: string; revision?: number; until: number; currents: Map<string, string> } | undefined;
+  let retainedForTransaction = false;
   let lastIdentity = '', lastGeneration: string | undefined;
   const pools = new Map<string, Pool>(), observations = new Map<string, Observation[]>(), positives = new Map<string, number>();
   const enabled = (s: AutoSnapshot | null) => s?.groups.filter(g => g.policy.bandwidth?.enabled) ?? [];
@@ -206,29 +207,43 @@ export function createBandwidthSelector(options: {
     p.active = []; p.decision = null; p.candidate = null; p.testingNode = null;
     for (const n of p.nodes.values()) { n.samples = []; n.probe = null; if (n.nextAt <= options.now()) n.state = 'pending'; }
   }
-  function update(next: AutoSnapshot | null, reason: 'suspended' | `runtime-${AutoSuspensionReason}` | 'snapshot-locked' | 'snapshot-failed' | 'scheduler-error' = 'suspended') {
+  function update(next: AutoSnapshot | null, reason: 'suspended' | `runtime-${AutoSuspensionReason}` | 'snapshot-locked' | 'snapshot-failed' | 'scheduler-error' = 'suspended', ownTransaction = false) {
     const identity = (s: AutoSnapshot | null) => JSON.stringify([s?.key, s?.scope, s?.probes, enabled(s).map(g => [g.name, g.policy])]);
     if (!next) {
-      interrupt(reason); for (const p of pools.values()) { trace.end(p.name, reason); clearEvidence(p); }
+      retainedForTransaction = ownTransaction;
+      interrupt(reason); for (const p of pools.values()) {
+        if (ownTransaction) trace.event(p.name, { kind: 'state', reason });
+        else { trace.end(p.name, reason); p.trigger = null; p.started = null; }
+        if (!ownTransaction) clearEvidence(p);
+      }
       snapshot = null; previous = undefined; observations.clear(); positives.clear(); return;
     }
     const changed = lastIdentity !== identity(next);
     const generation = lastGeneration !== next.generation;
     const own = !changed && !!next && !!expected && expected.key === next.key && options.now() <= expected.until
+      && expected.revision === next.workspaceRevision && next.groups.length === expected.currents.size
       && next.groups.every(g => expected!.currents.get(g.name) === g.current);
-    if (changed || generation) {
+    if (changed || generation || retainedForTransaction) {
       interrupt('configuration-changed'); previous = undefined; observations.clear(); positives.clear();
       if (changed || !own) for (const p of pools.values()) trace.end(p.name, 'configuration-changed');
       if (changed || !own) pools.clear();
-      else for (const p of pools.values()) { clearEvidence(p); p.pathUnavailable = false; p.trigger = null; p.started = null; p.positiveUntil = 0; }
+      else for (const p of pools.values()) {
+        // The transaction changed only the expected group's selection. The key,
+        // policies and all observed currents match; other measurement paths are
+        // unchanged. External generations still discard every pool above.
+        if (!p.trigger) { clearEvidence(p); p.started = null; }
+        else trace.event(p.name, { kind: 'state', reason: 'other-group-switched' });
+        p.pathUnavailable = false;
+      }
       expected = undefined;
     }
+    retainedForTransaction = false;
     lastIdentity = identity(next); lastGeneration = next.generation; snapshot = structuredClone(next);
     for (const name of pools.keys()) if (!enabled(next).some(g => g.name === name)) pools.delete(name);
     for (const g of enabled(next)) {
       let p = pools.get(g.name);
       if (!p) {
-        p = { name: g.name, current: g.current, nodes: new Map(), active: [], trigger: null, urgentUntil: 0, positiveUntil: 0, pauseUntil: 0,
+        p = { name: g.name, current: g.current, nodes: new Map(), active: [], trigger: null, urgentUntil: 0, positiveUntil: 0, pauseUntil: 0, recheckUntil: 0,
           started: null, spent: 0, lastSwitch: null, phase: 'observing', reason: 'waiting-traffic',
           candidate: null, testingNode: null, nextAt: null, decision: null };
         pools.set(g.name, p);
@@ -400,9 +415,10 @@ export function createBandwidthSelector(options: {
     const samples = values(n, s);
     return Math.max(samples.at(-1) && options.now() - samples.at(-1)!.at > s.latestSeconds * 1000 ? 1 : 0, s.confirmRounds - samples.length);
   }
-  function yieldSearch(p: Pool, s: BandwidthSettings, reason: string) {
-    p.pauseUntil = options.now() + s.yieldSeconds * 1000; p.started = null;
-    note(p, 'waiting', reason, p.pauseUntil);
+  function endCheck(p: Pool, s: BandwidthSettings, reason: string, nextAt = options.now() + s.yieldSeconds * 1000) {
+    note(p, 'observing', reason, nextAt); trace.end(p.name, reason);
+    p.trigger = null; p.started = null; p.pauseUntil = nextAt;
+    p.active = []; p.candidate = null; p.testingNode = null;
   }
   async function measure(p: Pool, n: Node, s: BandwidthSettings, snap: AutoSnapshot, signal: AbortSignal, mode: BudgetMode) {
     const charge: BandwidthLedger['charges'][number] = { at: options.now(), bytes: s.taskMiB * MiB,
@@ -438,10 +454,12 @@ export function createBandwidthSelector(options: {
   }
   function request(name: string, _node?: string, reason: Trigger = 'latency') {
     const p = pools.get(name);
-    if (!p || closed) return false;
+    if (!p || closed || flight?.pool === p && flight.abort.signal.aborted) return false;
     if (reason === 'manual') p.pathUnavailable = false;
     if (reason === 'latency') { p.urgentUntil = options.now() + 90000; p.positiveUntil = 0; }
     const previousTrigger = p.trigger;
+    if (!previousTrigger) { p.started = options.now(); p.spent = 0; }
+    if (reason === 'manual' || reason === 'latency') { p.pauseUntil = 0; p.recheckUntil = 0; p.reason = 'requested'; p.nextAt = null; }
     if (!p.trigger || reason === 'manual' || reason === 'latency') p.trigger = reason;
     begin(p);
     if (previousTrigger && previousTrigger !== reason) trace.event(p.name, { kind: 'trigger', reason });
@@ -450,11 +468,12 @@ export function createBandwidthSelector(options: {
   function selected(name: string, from: string, to: string, reason: string, source = snapshot) {
     const p = pools.get(name);
     if (!p || !source || from === to) return;
-    expected = { key: source.key, until: options.now() + 30000, currents: new Map(source.groups.map(g => [g.name, g.name === name ? to : g.current])) };
+    expected = { key: source.key, revision: source.workspaceRevision, until: options.now() + 30000,
+      currents: new Map(source.groups.map(g => [g.name, g.name === name ? to : g.current])) };
     if (p.current === to) return;
     trace.event(p.name, { kind: 'state', reason, node: to });
     trace.end(p.name, reason === 'bandwidth-improvement' ? reason : 'selection-changed');
-    p.current = to; p.trigger = null; p.urgentUntil = 0; p.started = null; p.pauseUntil = 0;
+    p.current = to; p.trigger = null; p.urgentUntil = 0; p.started = null; p.pauseUntil = 0; p.recheckUntil = 0;
     p.degradedMbps = undefined; p.positiveUntil = 0;
     p.active = p.active.filter(n => n !== to);
     if (reason === 'bandwidth-improvement') p.lastSwitch = { at: options.now(), from, to };
@@ -469,9 +488,24 @@ export function createBandwidthSelector(options: {
       n.reason = 'post-switch-failure';
     }
   }
+  function expire() {
+    if (closed || !snapshot) return;
+    const at = options.now();
+    // Deadlines apply to every pending group, including storage and queue waits.
+    // A configuration transaction already submitted to select must settle through
+    // its existing transaction protocol rather than be cancelled halfway through.
+    for (const p of pools.values()) {
+      const s = settingsFor(p);
+      if (!s || !p.trigger || p.started === null || at < p.started + s.campaignSeconds * 1000
+        || flight?.pool === p && flight.kind === 'select') continue;
+      if (flight?.pool === p) interrupt('check-expired');
+      endCheck(p, s, 'check-expired');
+    }
+  }
   function tick(contexts: Context[]) {
     if (closed || !snapshot) { interrupt('suspended'); return; }
     const at = options.now();
+    expire();
     if (flight?.pool && ['probe', 'download'].includes(flight.kind)) {
       const p = flight.pool, s = settingsFor(p);
       if (!s || !contexts.find(c => c.name === p.name)?.ready || !previous || at - previous.at > 3000) interrupt('latency-priority');
@@ -484,7 +518,7 @@ export function createBandwidthSelector(options: {
     }
     if (flight) return;
     if (storageFault) {
-      for (const p of pools.values()) { begin(p); note(p, 'waiting', 'storage-unavailable', storageFault.nextAt); }
+      for (const p of pools.values()) if (p.trigger) { begin(p); note(p, 'waiting', 'storage-unavailable', storageFault.nextAt); }
       if (at < storageFault.nextAt) return;
       if (loaded) { launch('save', async () => { await store(); }); return; }
     }
@@ -496,20 +530,31 @@ export function createBandwidthSelector(options: {
       return;
     }
     const names = [...pools.keys()];
+    const owner = [...pools.values()].find(p => p.trigger && p.candidate && p.active.includes(p.candidate));
+    const order = names.map((_, i) => (fairCursor + i) % names.length);
+    if (owner) order.sort((a, b) => Number(names[b] === owner.name) - Number(names[a] === owner.name));
     for (let i = 0; i < names.length; i++) {
-      const index = (fairCursor + i) % names.length, p = pools.get(names[index])!, s = settingsFor(p)!;
+      const index = order[i], p = pools.get(names[index])!, s = settingsFor(p)!;
       const context = contexts.find(c => c.name === p.name);
       if (p.pathUnavailable && options.measurementKey && p.blockedMeasurementKey !== options.measurementKey()) p.pathUnavailable = false;
       if (p.pathUnavailable) continue;
       if (!options.measure) { note(p, 'waiting', 'measurement-unavailable'); continue; }
       if (!p.trigger && suspect(p, s)) {
+        if (at < Math.max(p.pauseUntil, p.recheckUntil) && !context?.degraded) {
+          note(p, 'observing', p.recheckUntil > at ? 'recheck-cooldown' : p.reason, Math.max(p.pauseUntil, p.recheckUntil)); continue;
+        }
         p.trigger = 'traffic'; p.degradedMbps = undefined; p.positiveUntil = 0;
+        p.started = at; p.spent = 0; p.pauseUntil = 0; p.reason = 'requested'; p.nextAt = null;
         // An old good sample cannot close the new investigation that contradicts it.
         p.nodes.get(p.current)!.samples = [];
         positives.delete(p.name + '\0' + p.current);
       }
       if (!p.trigger) continue;
       begin(p);
+      if (p.started !== null && at >= p.started + s.campaignSeconds * 1000) { endCheck(p, s, 'check-expired'); continue; }
+      if (p.reason === 'budget-exhausted' && p.nextAt !== null && p.started !== null && p.nextAt >= p.started + s.campaignSeconds * 1000) {
+        endCheck(p, s, 'budget-exhausted', p.nextAt); continue;
+      }
       if (contexts.find(c => c.name === p.name)?.degraded) p.urgentUntil = at + 90000;
       if (!contexts.find(c => c.name === p.name)?.ready) { note(p, 'waiting', 'latency-priority'); continue; }
       if (at < p.pauseUntil) { note(p, 'waiting', 'search-yield', p.pauseUntil); continue; }
@@ -531,9 +576,10 @@ export function createBandwidthSelector(options: {
       const interval = bandwidthInterval(effectiveSamples(current, s), s, at, false);
       const confirmed = bandwidthInterval(effectiveSamples(current, s), s, at);
       if ((p.trigger === 'traffic' || p.trigger === 'manual') && confirmed && confirmed.mbps >= s.targetMbps && confirmed.delay <= s.delayReferenceMs) {
-        p.trigger = null; p.started = null; p.positiveUntil = at + s.positiveSeconds * 1000;
+        p.positiveUntil = at + s.positiveSeconds * 1000;
+        p.recheckUntil = at + Math.min(120, s.positiveSeconds) * 1000;
         p.degradedMbps = undefined;
-        note(p, 'observing', 'current-sufficient', p.positiveUntil); trace.end(p.name, 'current-sufficient'); continue;
+        endCheck(p, s, 'current-sufficient', p.recheckUntil); continue;
       }
       // First choose among already confirmed nodes. Download permission is not required to use fresh evidence.
       const ready = candidates.map(n => ({ n, d: comparison(p, n, s) })).filter(e => e.d?.worthwhile)
@@ -547,8 +593,8 @@ export function createBandwidthSelector(options: {
           reject(p, n, s, 'shortfall-guard'); continue;
         }
         if (s.observeOnly) {
-          p.trigger = null; p.started = null; p.positiveUntil = at + s.positiveSeconds * 1000;
-          note(p, 'observing', 'would-switch', p.positiveUntil); trace.end(p.name, 'would-switch'); continue;
+          p.positiveUntil = at + s.positiveSeconds * 1000;
+          endCheck(p, s, 'would-switch', p.positiveUntil); continue;
         }
         const snap = structuredClone(snapshot);
         launch('select', async signal => {
@@ -569,10 +615,11 @@ export function createBandwidthSelector(options: {
       }
       if (!candidates.length && !held && !missing(current, s)) {
         const due = [...p.nodes.values()].filter(n => n.name !== p.current).map(n => n.nextAt).filter(t => t > at);
-        note(p, 'waiting', due.length ? 'pool-backoff' : 'no-candidate', due.length ? Math.min(...due) : null); continue;
+        endCheck(p, s, p.decision ? p.decision.guard ? 'no-clear-gain' : 'shortfall-guard' : due.length ? 'pool-backoff' : 'no-candidate',
+          due.length ? Math.min(...due) : at + s.yieldSeconds * 1000); continue;
       }
       if (p.spent + s.taskMiB * MiB > s.searchMiB * MiB || at - p.started > s.campaignSeconds * 1000) {
-        yieldSearch(p, s, 'search-yield'); continue;
+        endCheck(p, s, 'search-limit'); continue;
       }
       const basicMode: BudgetMode = urgent(p, s) || recoveryEvidence(p, s) ? 'recovery'
         : !values(current, s).length && p.trigger === 'traffic' && available(p, s, 'ordinary') < s.taskMiB * MiB ? 'diagnostic' : 'ordinary';
@@ -626,7 +673,7 @@ export function createBandwidthSelector(options: {
         note(p, 'waiting', 'budget-exhausted', mode === 'diagnostic' ? diagnosticDue(p, s, needed)
           : budgetDue(mode !== 'ordinary', needed)); continue;
       }
-      if (p.spent + needed > s.searchMiB * MiB) { yieldSearch(p, s, 'search-yield'); continue; }
+      if (p.spent + needed > s.searchMiB * MiB) { endCheck(p, s, 'search-limit'); continue; }
       if (!node.probe || at - node.probe.at > PROBE_FRESH) {
         launchProbe(p, node, s, context); fairCursor = (index + 1) % names.length; return;
       }
@@ -634,6 +681,7 @@ export function createBandwidthSelector(options: {
       const snap = structuredClone(snapshot), delayMs = node.probe.delay, selectedNode = node, startedAt = at;
       if (node.name !== p.current) p.candidate = node.name;
       p.testingNode = node.name;
+      if (diagnosing) note(p, 'testing', 'diagnosing-current');
       note(p, 'testing', 'preparing-measurement');
       launch('download', async signal => {
         const before = p.spent, job = flight;
@@ -681,7 +729,7 @@ export function createBandwidthSelector(options: {
       else if (n.name !== p.current && !potential(p, n, s)) reject(p, n, s, 'no-potential-gain');
     }, p, n);
   }
-  return { update, observe, tick, request, observeProbe, selected, failure,
+  return { update, observe, tick, expire, request, observeProbe, selected, failure,
     requestCheck(name: string) {
       const p = pools.get(name);
       if (!p || !options.measure || closed || p.nodes.size < 2) return false;
@@ -714,6 +762,7 @@ export function createBandwidthSelector(options: {
       const p = pools.get(name), s = p && settingsFor(p);
       if (!p || !s) return undefined;
       return { phase: p.phase, reason: p.reason, candidate: p.candidate, testingNode: p.testingNode,
+        deadlineAt: p.started === null ? null : p.started + s.campaignSeconds * 1000,
         observation: observation(p, s),
         round: p.candidate ? values(p.nodes.get(p.candidate)!, s).length : 0, nextAt: p.nextAt, decision: p.decision,
         storage: storageFault ? { ...storageFault } : null,

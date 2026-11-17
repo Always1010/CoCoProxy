@@ -12,7 +12,7 @@ const bad = (): ProbeResult => ({ ok: false, delay: null });
 
 test('two groups finish timed bandwidth confirmation without cancelling their own probe quota', async () => {
   for (const duration of [14000, 20000]) {
-    let time = 0;
+    let time = 0, suspended = false;
     const pending: { due: number; progress: () => void; resolve: () => void; signal: AbortSignal }[] = [];
     const samples = new Map<string, { valid: boolean; reason: string }>();
     const probes: number[] = [], changes: string[] = [];
@@ -22,9 +22,10 @@ test('two groups finish timed bandwidth confirmation without cancelling their ow
         bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true, targetMbps: i ? 4 : 6,
           confirmRounds: i ? 2 : 3, roundIntervalSeconds: i ? 30 : 60, searchMiB: i ? 32 : 48 },
       } })) };
-    const engine = createAutomaticSelector({ now: () => time, snapshot: async () => snapshot,
+    const engine = createAutomaticSelector({ now: () => time, snapshot: async () => suspended ? null : snapshot,
       probe: async () => { probes.push(time); return good(); },
       switch: async (_s, name, node) => {
+        suspended = true; await new Promise<void>(resolve => setImmediate(resolve)); await engine.tick(); suspended = false;
         changes.push(name); snapshot.groups.find(g => g.name === name)!.current = node;
         snapshot.generation = String(Number(snapshot.generation) + 1); return true;
       },
@@ -46,7 +47,7 @@ test('two groups finish timed bandwidth confirmation without cancelling their ow
         },
       },
     });
-    for (let second = 0; second < 450 && !changes.length; second++) {
+    for (let second = 0; second < 450 && changes.length < 2; second++) {
       time = second * 1000;
       for (const task of pending.splice(0)) if (!task.signal.aborted) {
         task.progress(); if (time >= task.due) task.resolve(); else pending.push(task);
@@ -56,7 +57,7 @@ test('two groups finish timed bandwidth confirmation without cancelling their ow
       await engine.tick(); await new Promise<void>(resolve => setImmediate(resolve));
       if (second === 1) for (const group of snapshot.groups) engine.requestBandwidthCheck(group.name);
     }
-    assert.ok(changes.length, `no confirmed switch for ${duration}ms tasks`);
+    assert.equal(new Set(changes).size, 2, `both groups must finish for ${duration}ms tasks`);
     assert.ok([...samples.values()].every(s => s.valid), JSON.stringify([...samples.values()]));
     assert.ok(probes.every(at => probes.filter(p => p > at - 60000 && p <= at).length <= 24));
     await engine.close();

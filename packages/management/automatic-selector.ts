@@ -394,8 +394,9 @@ export function createAutomaticSelector(options: Options) {
     pendingProbes = 0;
     // A confirmed enhanced selection may briefly suspend runtime snapshots while its transaction applies.
     // Keep its post-switch/failure state, but discard measurement evidence during the suspension.
-    if (!fresh && selecting && [...groups.values()].some(g => g.policy.bandwidth?.enabled)) { bandwidth.update(null, `runtime-${suspension}`); return; }
+    if (!fresh && selecting && [...groups.values()].some(g => g.policy.bandwidth?.enabled)) { bandwidth.update(null, `runtime-${suspension}`, true); return; }
     reconcile(fresh, now());
+    bandwidth.expire();
     const s = snapshot;
     if (!s || now() < blockedUntil) return;
     const epoch = evidenceEpoch;

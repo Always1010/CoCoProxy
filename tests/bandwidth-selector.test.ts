@@ -108,8 +108,10 @@ test('one healthy sample cannot end a traffic investigation and new sustained sl
   assert.equal([...f.traces.values()][0].reason, 'current-sufficient');
   assert.equal(f.measures.filter(n => n === 'a').length, 2);
   for (let i = 0; i < 65; i++) await f.step(50000);
+  assert.equal(f.traces.size, 1);
+  assert.ok([...f.traces.values()][0].endedAt);
+  for (let i = 0; i < 65; i++) await f.step(50000);
   assert.ok(f.traces.size >= 2);
-  assert.equal([...f.traces.values()].at(-1)!.endedAt, null);
   assert.ok(f.now < 900000);
   await f.engine.close();
 });
@@ -138,6 +140,44 @@ test('target refresh stays inside the original investigation and never cancels i
   assert.equal([...f.traces.values()][0].endedAt, null);
   assert.equal([...f.traces.values()][0].events.at(-1)?.reason, 'probe-target-changed');
   await f.engine.close();
+});
+
+test('the original check deadline bounds busy waits, storage failures and in-flight work', async () => {
+  for (const mode of ['download', 'busy', 'storage']) {
+    const f = fixture({ blocked: mode === 'download', storageFails: mode === 'storage', settings: { campaignSeconds: 120 } });
+    if (mode !== 'busy') f.engine.requestCheck('media');
+    for (let i = 0; i < 220; i++) await f.step(mode === 'busy' ? 500000 : 0);
+    const round = [...f.traces.values()][0];
+    assert.equal(round.reason, 'check-expired');
+    assert.ok(round.endedAt! - round.startedAt <= 120000);
+    assert.equal(f.engine.isComparing('media'), false);
+    assert.equal(f.engine.status('media')!.deadlineAt, null);
+    assert.equal(f.engine.status('media')!.candidate, null);
+    assert.equal(f.measures.length, mode === 'download' ? 1 : 0);
+    if (mode === 'download') assert.equal(f.aborted, true);
+    await f.engine.close();
+  }
+});
+
+test('transaction evidence is discarded after a failed switch or a changed workspace revision', async () => {
+  for (const revisionChanged of [false, true]) {
+    const f = fixture();
+    f.snapshot.workspaceRevision = 1;
+    f.snapshot.groups.push({ name: 'other', current: 'x', policy: { preferred: ['x', 'y'], fallback: [], returnToPreferred: false,
+      bandwidth: { ...DEFAULT_BANDWIDTH_SETTINGS, enabled: true } } });
+    f.engine.update(f.snapshot); f.engine.requestCheck('media');
+    while (f.measures.length < 2 && f.now < 30000) await f.step();
+    assert.ok(f.engine.status('media')!.pool.some(n => n.samples > 0));
+    f.engine.update(null, 'runtime-switching', true);
+    if (revisionChanged) {
+      f.engine.selected('other', 'x', 'y', 'bandwidth-improvement', f.snapshot);
+      f.snapshot.groups[1].current = 'y'; f.snapshot.generation = '2'; f.snapshot.workspaceRevision = 2;
+    }
+    f.engine.update(f.snapshot);
+    assert.ok(f.engine.status('media')!.pool.every(n => n.samples === 0));
+    assert.equal(f.engine.isComparing('media'), false);
+    await f.engine.close();
+  }
 });
 
 test('uncertain candidate and observation mode keep the current selection; persisted budget survives restart', async () => {
@@ -214,7 +254,7 @@ test('reserves protect degradation work, search yield preserves the pool and led
   const yielded = fixture({ preferred: ['a', 'b', 'c'], rates: { b: [8, 1] }, bytes: 8 * 1048576 }); yielded.engine.requestCheck('media');
   for (let i = 0; i < 100; i++) await yielded.step();
   assert.ok(yielded.engine.status('media')!.pool.some(n => n.name === 'c'));
-  assert.ok(['search-yield', 'budget-exhausted'].includes(yielded.engine.status('media')!.reason));
+  assert.ok(['search-limit', 'budget-exhausted'].includes(yielded.engine.status('media')!.reason));
   assert.ok(yielded.measures.length <= 4); await yielded.engine.close();
 });
 
@@ -347,6 +387,8 @@ test('custom no-gain backoff cap is honored on repeated unsuccessful comparisons
   const delays: number[] = [];
   let previous = 0;
   for (let i = 0; i < 1000 && delays.length < 3; i++) {
+    const status = f.engine.status('media')!;
+    if (!f.engine.isComparing('media') && f.now >= (status.nextAt ?? 0)) f.engine.requestCheck('media');
     await f.step();
     const retry = f.engine.status('media')!.pool.find(n => n.name === 'b')!.nextAt;
     if (retry > previous) { delays.push(retry - f.now); previous = retry; }
