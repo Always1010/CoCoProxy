@@ -29,6 +29,12 @@ export interface BandwidthSelectionStatus {
   searchBytes?: number
   searchLimit?: number
   urgent?: boolean
+  deadlineAt?: number | null
+  stage?: 'current' | 'comparison'
+  budgetMode?: 'ordinary' | 'diagnostic' | 'recovery'
+  neededBytes?: number
+  availableBytes?: number
+  diagnosticRemainingBytes?: number
   pool?: { name: string; preferred: boolean; current: boolean; state: string; reason: string; samples: number;
     delayMs: number | null; mbps: number | null; measuredAt: number | null; nextAt: number; active: boolean }[]
   decision: { current: { low: number; high: number }; candidate: { low: number; high: number }; gain: number; cost: number; threshold: number;

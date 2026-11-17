@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { IconChevronDown } from '@tabler/icons-vue'
-import { processAction, processReason, processRelativeTime, processSampleLoss } from '~/utils/bandwidth-process'
+import { processAction, processBudget, processReason, processRelativeTime, processSampleLoss } from '~/utils/bandwidth-process'
 import type { ProcessTraceRow } from '~/utils/bandwidth-process'
 import type { BandwidthSettings } from '~/composables/useWorkspace'
 
@@ -11,12 +11,14 @@ const event = computed(() => props.row.event)
 const action = computed(() => processAction(event.value))
 const comparison = computed(() => event.value.comparison)
 const budget = computed(() => event.value.budget ?? props.row.context?.budget)
+const budgetBalance = computed(() => budget.value ? processBudget(budget.value) : null)
 const protection = computed(() => event.value.protection ?? props.row.context?.protection)
 const shortReason = computed(() => {
   const key = 'coco.process.trace.reason.' + event.value.reason
   return te(key) ? t(key) : processReason(event.value.reason, t)
 })
-const number = (value: number | null | undefined, digits = 2) => value === null || value === undefined ? '—' : value.toFixed(digits)
+const number = (value: number | null | undefined, digits = 2) => value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits)
+const mib = (value: number | null | undefined) => number(value == null ? null : value / 1048576)
 const setting = (key: string) => Number(props.settings[key] ?? 0)
 const relative = (at: number) => processRelativeTime(at, props.start)
 const time = (at: number) => new Date(at).toLocaleString(locale.value)
@@ -94,13 +96,27 @@ const samples = computed(() => comparison.value ? (['current', 'candidate'] as c
             <dt>{{ t('coco.process.trace.threshold') }}</dt><dd>max({{ number(setting('minGainMs') / 1000, 3) }}, {{ number(comparison.current.low * setting('minGainRatio'), 3) }}) + {{ number(comparison.cost, 3) }} = {{ number(comparison.threshold, 3) }}</dd>
             <dt>{{ t('coco.process.trace.delayGuard') }}</dt><dd>{{ number(comparison.candidate.delay, 0) }} ≤ {{ number(Math.max(setting('delayReferenceMs'), comparison.current.delay * (1 + setting('tradeoffRatio'))), 0) }} ms {{ flag(comparison.candidate.delay <= Math.max(setting('delayReferenceMs'), comparison.current.delay * (1 + setting('tradeoffRatio')))) }}</dd>
             <dt>{{ t('coco.process.trace.rateGuard') }}</dt><dd>{{ number(comparison.candidate.mbps) }} ≥ {{ number(Math.min(setting('throughputReferenceMbps'), comparison.current.mbps * (1 - setting('tradeoffRatio')))) }} Mbps {{ flag(comparison.candidate.mbps >= Math.min(setting('throughputReferenceMbps'), comparison.current.mbps * (1 - setting('tradeoffRatio')))) }}</dd>
+            <dt>{{ t('coco.process.gainPassed') }}</dt><dd>{{ flag(comparison.worthwhile) }} · {{ t('coco.process.rank', { value: number(comparison.rank, 3) }) }}</dd>
             <dt>{{ t('coco.process.trace.recentSwitches') }}</dt><dd>{{ comparison.recentSwitches }}</dd>
             <dt>{{ t('coco.process.trace.reverse') }}</dt><dd>{{ flag(comparison.reverse) }}</dd>
           </dl>
           <details><summary class="cursor-pointer py-2 text-base-content/65">{{ t('coco.process.calculation') }}</summary><div class="overflow-x-auto"><table class="table table-xs"><thead><tr><th>{{ t('coco.process.trace.node') }}</th><th>{{ t('coco.process.trace.timestamp') }}</th><th>{{ t('coco.process.trace.delay') }}</th><th>Mbps</th><th>{{ t('coco.process.trace.loss') }}</th></tr></thead><tbody><tr v-for="(sample, index) in samples" :key="index"><td class="max-w-40 break-all">{{ sample.node }}</td><td>{{ relative(sample.at) }}</td><td>{{ sample.delayMs }} ms</td><td>{{ number(sample.mbps) }}</td><td>{{ number(sample.delay, 3) }} + {{ number(sample.shortfall, 3) }} = {{ number(sample.total, 3) }}</td></tr></tbody></table></div></details>
         </template>
         <dl v-if="event.screening" class="trace-facts"><dt>{{ t('coco.process.trace.gain') }}</dt><dd>{{ number(event.screening.currentLow, 3) }} − {{ number(event.screening.bestCandidateLoss, 3) }} − {{ number(event.screening.uncertainty, 3) }} = {{ number(event.screening.currentLow - event.screening.bestCandidateLoss - event.screening.uncertainty, 3) }}</dd><dt>{{ t('coco.process.trace.threshold') }}</dt><dd>{{ number(event.screening.threshold, 3) }}</dd></dl>
-        <dl v-if="budget" class="trace-facts"><dt>{{ t('coco.process.trace.hour') }}</dt><dd>{{ number(budget.hourBytes / 1048576) }} / {{ number(budget.hourLimit / 1048576) }} MiB</dd><dt>{{ t('coco.process.trace.day') }}</dt><dd>{{ number(budget.dayBytes / 1048576) }} / {{ number(budget.dayLimit / 1048576) }} MiB</dd><dt>{{ t('coco.process.trace.search') }}</dt><dd>{{ number(budget.searchBytes / 1048576) }} / {{ number(budget.searchLimit / 1048576) }} MiB</dd><dt>{{ t('coco.process.trace.reserve') }}</dt><dd>{{ number(budget.hourReserve / 1048576) }} / {{ number(budget.dayReserve / 1048576) }} MiB · {{ t(budget.urgent ? 'coco.process.reserveAllowed' : 'coco.process.reserveProtected') }}</dd></dl>
+        <template v-if="budget && budgetBalance">
+          <p class="text-base-content/65">{{ t('coco.process.sharedBudget') }}</p>
+          <dl class="trace-facts">
+            <dt>{{ t('coco.process.trace.hour') }}</dt><dd>{{ mib(budget.hourBytes) }} / {{ mib(budget.hourLimit) }} MiB</dd>
+            <dt>{{ t('coco.process.trace.day') }}</dt><dd>{{ mib(budget.dayBytes) }} / {{ mib(budget.dayLimit) }} MiB</dd>
+            <dt>{{ t('coco.process.trace.sharedRemaining') }}</dt><dd>{{ mib(budgetBalance.remaining) }} MiB</dd>
+            <dt>{{ t('coco.process.trace.reserve') }}</dt><dd>{{ mib(budget.hourReserve) }} / {{ mib(budget.dayReserve) }} MiB</dd>
+            <dt>{{ t('coco.process.trace.ordinaryAvailable') }}</dt><dd>{{ mib(budgetBalance.ordinary) }} MiB</dd>
+            <dt>{{ t('coco.process.trace.budgetMode') }}</dt><dd>{{ budget.mode ? t('coco.process.budgetMode.' + budget.mode) : '—' }}</dd>
+            <dt>{{ t('coco.process.trace.stageBudget') }}</dt><dd>{{ mib(budget.neededBytes) }} / {{ mib(budget.availableBytes) }} MiB</dd>
+            <dt>{{ t('coco.process.trace.diagnosticRemaining') }}</dt><dd>{{ mib(budget.diagnosticRemainingBytes) }} MiB</dd>
+            <dt>{{ t('coco.process.trace.search') }}</dt><dd>{{ mib(budget.searchBytes) }} / {{ mib(budget.searchLimit) }} MiB</dd>
+          </dl>
+        </template>
         <dl v-if="protection" class="trace-facts"><dt>{{ t('coco.process.trace.recentSwitches') }}</dt><dd>{{ protection.recentSwitches }} / {{ protection.maxSwitches }}</dd><dt>{{ t('coco.process.trace.holdUntil') }}</dt><dd>{{ time(protection.holdUntil) }}</dd><dt>{{ t('coco.process.trace.limitUntil') }}</dt><dd>{{ protection.limitUntil ? time(protection.limitUntil) : '—' }}</dd></dl>
         <p class="text-base-content/50">{{ t('coco.process.trace.unrecorded') }}</p>
       </div>

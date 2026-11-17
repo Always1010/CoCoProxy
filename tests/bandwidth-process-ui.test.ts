@@ -35,7 +35,7 @@ test('process viewer reads without triggering checks, keeps failed refreshes and
   let scheduled!: () => void;
   const exports: Record<string, any> = {};
   new Script(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText).runInNewContext({
-    ...uiTestContext, exports, URLSearchParams, AbortController, processReason: helpers.processReason, processTraceRows: helpers.processTraceRows,
+    ...uiTestContext, exports, URLSearchParams, AbortController, ...helpers,
     ref: (value: unknown) => ({ value }), defineProps: () => ({ groupName: 'Stream', selectable: true }), withDefaults: (p: unknown) => p,
     defineExpose() {}, watch: (read: () => unknown, changed: () => void) => watched.push({ read, changed, previous: JSON.stringify(read()) }),
     onMounted() {}, onUnmounted() {}, setTimeout: (callback: () => void) => { scheduled = callback; return 1; }, clearTimeout() {},
@@ -186,7 +186,19 @@ test('trace rows keep recorded order and inputs when combining only adjacent sta
   assert.equal(rows[3].event.reason, 'snapshot-failed');
   assert.equal(JSON.stringify(events), before);
   assert.equal(helpers.processAction(events[5]), 'end');
+  assert.equal(helpers.processAction({ kind: 'state', reason: 'probe-target-changed' }), 'refreshEvidence');
   assert.equal(helpers.processRelativeTime(92000, 0), '01:32');
   const differentNode = [events[0], { ...events[1], node: 'other' }];
   assert.equal(helpers.processTraceRows(differentNode).length, 2);
+  const budget = { hourBytes: 50, dayBytes: 100, hourLimit: 200, dayLimit: 500, hourReserve: 70, dayReserve: 90 };
+  assert.equal(helpers.processBudget(budget).remaining, 150);
+  assert.equal(helpers.processBudget(budget).ordinary, 80);
+  assert.equal(helpers.processBudget({ ...budget, hourBytes: 250 }).ordinary, 0);
+  assert.equal(helpers.processBudget({ ...budget, hourReserve: undefined }).ordinary, null);
+  assert.equal(helpers.processBudget({ ...budget, hourReserve: 0 }).ordinary, 150);
+  const round = { startedAt: 1000, settings: { campaignSeconds: 120 } };
+  assert.equal(helpers.processDeadline(round), 121000);
+  assert.equal(helpers.processDeadline(round, 150000), 150000);
+  assert.equal(helpers.processDeadline(round, null), null);
+  assert.equal(helpers.processDeadline({ ...round, settings: {} }), null);
 });

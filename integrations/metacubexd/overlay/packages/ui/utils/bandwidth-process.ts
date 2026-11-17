@@ -18,7 +18,8 @@ export type ProcessEvent = {
   comparison?: ProcessComparison
   screening?: { currentLow: number; bestCandidateLoss: number; uncertainty: number; threshold: number; delayLimit: number; delayMs: number }
   protection?: { recentSwitches: number; maxSwitches: number; holdUntil: number; limitUntil: number; severe: boolean }
-  budget?: { hourBytes: number; dayBytes: number; hourLimit: number; dayLimit: number; hourReserve: number; dayReserve: number; urgent: boolean; searchBytes: number; searchLimit: number }
+  budget?: { hourBytes: number; dayBytes: number; hourLimit: number; dayLimit: number; hourReserve: number; dayReserve: number; urgent: boolean; searchBytes: number; searchLimit: number;
+    mode?: 'ordinary' | 'diagnostic' | 'recovery'; neededBytes?: number; availableBytes?: number; diagnosticRemainingBytes?: number }
 }
 export type ProcessRoundSummary = {
   id: string; startedAt: number; updatedAt: number; endedAt: number | null; current: string; trigger: string; reason: string
@@ -60,10 +61,25 @@ export function processAction(event: ProcessEvent) {
   if (['measurement-path-unavailable', 'measurement-worker-unavailable'].includes(event.reason)) return 'notStarted'
   if (event.reason === 'collecting') return 'sample'
   if (['bandwidth-improvement', 'preferred-restored', 'failure-recovery', 'faster-candidate'].includes(event.reason)) return 'switch'
-  if (['configuration-changed', 'probe-target-changed', 'evidence-expired'].includes(event.reason)) return 'invalidate'
+  if (event.reason === 'probe-target-changed') return 'refreshEvidence'
+  if (['configuration-changed', 'evidence-expired'].includes(event.reason)) return 'invalidate'
   if (event.reason === 'current-sufficient') return 'verify'
   if (event.reason === 'would-switch') return 'observe'
   return 'wait'
+}
+
+/** Missing historical reserves stay unknown; zero is a recorded value. */
+export function processBudget(budget: { hourBytes: number; dayBytes: number; hourLimit: number; dayLimit: number; hourReserve?: number; dayReserve?: number }) {
+  const remaining = Math.max(0, Math.min(budget.hourLimit - budget.hourBytes, budget.dayLimit - budget.dayBytes))
+  const ordinary = budget.hourReserve == null || budget.dayReserve == null ? null
+    : Math.max(0, Math.min(budget.hourLimit - budget.hourBytes - budget.hourReserve, budget.dayLimit - budget.dayBytes - budget.dayReserve))
+  return { remaining, ordinary }
+}
+
+export function processDeadline(round: ProcessRound, deadlineAt?: number | null) {
+  if (deadlineAt !== undefined) return deadlineAt
+  const seconds = Number(round.settings.campaignSeconds)
+  return Number.isFinite(seconds) && seconds > 0 ? round.startedAt + seconds * 1000 : null
 }
 
 export function processSampleLoss(sample: ProcessSample, settings: BandwidthSettings) {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { IconArrowLeft, IconChevronRight, IconRefresh, IconRoute } from '@tabler/icons-vue'
 import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
-import { processReason, processTraceRows } from '~/utils/bandwidth-process'
+import { processBudget, processDeadline, processReason, processTraceRows } from '~/utils/bandwidth-process'
 import type { ProcessResponse } from '~/utils/bandwidth-process'
 import type { WorkspaceView } from '~/composables/useWorkspace'
 import BandwidthTraceEvent from '~/components/BandwidthTraceEvent.vue'
@@ -32,6 +32,22 @@ const rounds = computed(() => [...(data.value?.rounds ?? [])].sort((a, b) => b.s
 const empty = computed(() => !!data.value && !data.value.error && !rounds.value.length)
 const detail = computed(() => data.value?.detail?.id === selectedId.value ? data.value.detail : null)
 const rows = computed(() => processTraceRows(detail.value?.events ?? []))
+const liveGroup = computed(() => detail.value?.endedAt === null ? data.value?.status.groups.find(group => group.name === props.groupName) : undefined)
+const bandwidth = computed(() => liveGroup.value?.bandwidth)
+const originalTrigger = computed(() => detail.value?.events.find(event => event.kind === 'trigger'))
+const latestComparison = computed(() => detail.value?.events.findLast(event => event.comparison)?.comparison)
+const progress = computed(() => {
+  if (bandwidth.value?.pool) {
+    const pool = bandwidth.value.pool, candidate = bandwidth.value.candidate ?? (bandwidth.value.testingNode !== liveGroup.value?.current ? bandwidth.value.testingNode : null)
+    return [pool.find(node => node.current), pool.find(node => node.name === candidate)].map(node => ({ name: node?.name, count: node?.samples }))
+  }
+  const comparison = latestComparison.value
+  return comparison ? [{ name: comparison.currentNode, count: comparison.effectiveCurrent.length }, { name: comparison.candidateNode, count: comparison.effectiveCandidate.length }] : []
+})
+const budgetBalance = computed(() => bandwidth.value ? processBudget(bandwidth.value) : null)
+const deadline = computed(() => detail.value ? processDeadline(detail.value, bandwidth.value?.deadlineAt) : null)
+const number = (value: number | null | undefined, digits = 2) => value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits)
+const mib = (value: number | null | undefined) => number(value == null ? null : value / 1048576)
 const time = (at: number | null | undefined) => at === null || at === undefined ? t('coco.process.unknown') : new Date(at).toLocaleString(locale.value)
 const shortTime = (at: number) => new Date(at).toLocaleTimeString(locale.value)
 const reason = (value: string) => {
@@ -126,6 +142,24 @@ defineExpose({ open })
         </template>
         <template v-else-if="detail">
           <div class="mb-3 flex flex-wrap gap-x-5 gap-y-1 border-b border-base-content/10 pb-3 text-xs text-base-content/65"><span>{{ t('coco.process.trace.initial') }} <span class="break-all text-base-content">{{ detail.current }}</span></span><span>{{ shortTime(detail.startedAt) }} → {{ detail.endedAt === null ? t('coco.process.ongoing') : shortTime(detail.endedAt) }}</span><span>{{ t(detail.settings.observeOnly ? 'coco.process.observeOnly' : 'coco.process.automatic') }}</span></div>
+          <dl class="process-facts mb-4 text-xs">
+            <dt>{{ t('coco.process.originalTrigger') }}</dt><dd>{{ t('coco.process.trigger.' + detail.trigger) }}</dd>
+            <dt>{{ t(detail.endedAt === null ? 'coco.process.currentState' : 'coco.process.finalState') }}</dt><dd>{{ reason(bandwidth?.reason ?? detail.reason) }}<span v-if="bandwidth?.stage"> · {{ t('coco.process.stage.' + bandwidth.stage) }}</span></dd>
+            <dt>{{ t('coco.process.deadline') }}</dt><dd>{{ time(deadline) }}</dd>
+            <template v-for="(node, index) in progress" :key="index"><dt>{{ t('coco.process.side.' + (index === 0 ? 'current' : 'candidate')) }}</dt><dd>{{ node.name ?? '—' }} · {{ t('coco.process.progress', { count: node.count ?? '—', total: detail.settings.confirmRounds }) }}</dd></template>
+          </dl>
+          <p v-if="originalTrigger?.observation" class="mb-3 text-xs text-base-content/65">{{ t('coco.process.triggerSnapshot', { active: number(originalTrigger.observation.activeSeconds, 0), activeLimit: originalTrigger.observation.requiredActiveSeconds, traffic: number(originalTrigger.observation.trafficMiB), trafficLimit: originalTrigger.observation.requiredTrafficMiB, rate: number(originalTrigger.observation.mbps), rateLimit: originalTrigger.observation.suspectMbps }) }}</p>
+          <div v-if="bandwidth && budgetBalance" class="mb-4 space-y-2 text-xs">
+            <p class="text-base-content/65">{{ t('coco.process.sharedBudget') }}</p>
+            <dl class="process-facts">
+              <dt>{{ t('coco.process.trace.sharedRemaining') }}</dt><dd>{{ mib(budgetBalance.remaining) }} MiB</dd>
+              <dt>{{ t('coco.process.trace.reserve') }}</dt><dd>{{ mib(bandwidth.hourReserve) }} / {{ mib(bandwidth.dayReserve) }} MiB</dd>
+              <dt>{{ t('coco.process.trace.ordinaryAvailable') }}</dt><dd>{{ mib(budgetBalance.ordinary) }} MiB</dd>
+              <dt>{{ t('coco.process.trace.budgetMode') }}</dt><dd>{{ bandwidth.budgetMode ? t('coco.process.budgetMode.' + bandwidth.budgetMode) : '—' }}</dd>
+              <dt>{{ t('coco.process.trace.stageBudget') }}</dt><dd>{{ mib(bandwidth.neededBytes) }} / {{ mib(bandwidth.availableBytes) }} MiB</dd>
+              <dt>{{ t('coco.process.trace.diagnosticRemaining') }}</dt><dd>{{ mib(bandwidth.diagnosticRemainingBytes) }} MiB</dd>
+            </dl>
+          </div>
           <p v-if="detail.truncated" class="mb-3 text-xs text-warning">{{ t('coco.process.truncated') }}</p>
           <div class="trace-head text-xs text-base-content/50" aria-hidden="true"><span>{{ t('coco.process.trace.relativeTime') }}</span><span></span><span>{{ t('coco.process.trace.actionColumn') }}</span><span>{{ t('coco.process.trace.dataColumn') }}</span></div>
           <ol :aria-label="t('coco.process.timeline')"><BandwidthTraceEvent v-for="row in rows" :key="row.key" :row="row" :start="detail.startedAt" :current="detail.current" :settings="detail.settings" /></ol>
