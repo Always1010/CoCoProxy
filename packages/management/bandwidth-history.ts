@@ -22,7 +22,8 @@ export type BandwidthTraceEvent = {
   screening?: { currentLow: number; bestCandidateLoss: number; uncertainty: number; threshold: number; delayLimit: number; delayMs: number };
   protection?: { recentSwitches: number; maxSwitches: number; holdUntil: number; limitUntil: number; severe: boolean };
   budget?: { hourBytes: number; dayBytes: number; hourLimit: number; dayLimit: number; hourReserve: number; dayReserve: number;
-    urgent: boolean; searchBytes: number; searchLimit: number };
+    urgent: boolean; searchBytes: number; searchLimit: number; mode?: 'ordinary' | 'diagnostic' | 'recovery';
+    neededBytes?: number; availableBytes?: number; diagnosticRemainingBytes?: number };
 };
 export type BandwidthRound = {
   id: string; scope: string; group: string; generation: string; startedAt: number; updatedAt: number; endedAt: number | null;
@@ -73,6 +74,8 @@ export function parseBandwidthHistory(input: unknown): BandwidthArchive {
         if (o && (typeof o.fresh !== 'boolean' || !numbers([o.activeSeconds, o.trafficMiB, o.requiredActiveSeconds, o.requiredTrafficMiB, o.suspectMbps, o.positiveUntil])
             || (o.mbps !== null && !number(o.mbps)))) throw new Error();
         if (b && (typeof b.urgent !== 'boolean' || !numbers([b.hourBytes, b.dayBytes, b.hourLimit, b.dayLimit, b.hourReserve, b.dayReserve, b.searchBytes, b.searchLimit]))) throw new Error();
+        if (b && (b.mode !== undefined && !['ordinary', 'diagnostic', 'recovery'].includes(b.mode)
+          || [b.neededBytes, b.availableBytes, b.diagnosticRemainingBytes].some(n => n !== undefined && !number(n)))) throw new Error();
         if (p && (typeof p.severe !== 'boolean' || !numbers([p.recentSwitches, p.maxSwitches, p.holdUntil, p.limitUntil]))) throw new Error();
         if (s && !numbers([s.currentLow, s.bestCandidateLoss, s.uncertainty, s.threshold, s.delayLimit, s.delayMs])) throw new Error();
         const d = e.comparison;

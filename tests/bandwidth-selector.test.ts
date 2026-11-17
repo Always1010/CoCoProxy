@@ -193,8 +193,8 @@ test('latency screening orders downloads, stops hopeless probes and permits rela
   await sorted.engine.close();
   const healthy = fixture({ currentMbps: 8 }); healthy.engine.requestCheck('media');
   for (let i = 0; i < 100; i++) await healthy.step();
-  assert.deepEqual(healthy.measures, ['a']); assert.deepEqual(healthy.switches, []); await healthy.engine.close();
-  assert.ok([...healthy.traces.values()][0].events.some(e => e.screening && e.node === 'b'));
+  assert.deepEqual(healthy.measures, ['a', 'a']); assert.deepEqual(healthy.switches, []); await healthy.engine.close();
+  assert.equal([...healthy.traces.values()][0].reason, 'current-sufficient');
   const poor = fixture({ currentMbps: 0.5, candidateMbps: 2, delays: { a: 2000, b: 800 } }); poor.engine.requestCheck('media');
   for (let i = 0; i < 100; i++) await poor.step();
   assert.deepEqual(poor.switches, ['b']); await poor.engine.close();
@@ -202,9 +202,9 @@ test('latency screening orders downloads, stops hopeless probes and permits rela
 
 test('reserves protect degradation work, search yield preserves the pool and ledger failure prevents transfers', async () => {
   const ledger: BandwidthLedger = { version: 1, charges: [{ at: 0, bytes: (DEFAULT_BANDWIDTH_SETTINGS.hourMiB - 32) * 1048576 }], switches: [] };
-  const f = fixture({ ledger }); f.engine.requestCheck('media');
+  const f = fixture({ ledger, currentMbps: 6.5, delays: { a: 400, b: 50 } }); f.engine.requestCheck('media');
   for (let i = 0; i < 40; i++) await f.step();
-  assert.ok(f.measures.length <= 1); assert.equal(f.engine.status('media')!.reason, 'budget-exhausted');
+  assert.ok(f.measures.length <= 1); assert.ok([...f.traces.values()][0].events.some(e => e.reason === 'budget-exhausted'));
   f.engine.request('media', undefined, 'latency');
   for (let i = 0; i < 100; i++) await f.step();
   assert.ok(f.measures.length > 1); await f.engine.close();
@@ -329,7 +329,7 @@ test('unavailable measurement egress pauses the pool without repeated charges or
 
 test('fresh latency deterioration or incumbent recovery invalidates an otherwise worthwhile switch', async () => {
   for (const recovery of [false, true]) {
-    const f = fixture({ currentMbps: recovery ? 8 : 5, delays: { a: recovery ? 500 : 80, b: 100 } });
+    const f = fixture({ currentMbps: recovery ? 8 : 5, delays: { a: recovery ? 800 : 80, b: 100 } });
     f.engine.requestCheck('media');
     for (let i = 0; i < 100 && f.measures.filter(n => n === 'b').length < 2; i++) await f.step();
     assert.equal(f.measures.filter(n => n === 'b').length, 2);
@@ -342,7 +342,7 @@ test('fresh latency deterioration or incumbent recovery invalidates an otherwise
 });
 
 test('custom no-gain backoff cap is honored on repeated unsuccessful comparisons', async () => {
-  const f = fixture({ currentMbps: 8, settings: { cooldownSeconds: 300 } });
+  const f = fixture({ currentMbps: 6.5, settings: { cooldownSeconds: 300 } });
   f.engine.requestCheck('media');
   const delays: number[] = [];
   let previous = 0;
@@ -391,4 +391,48 @@ test('an accepted minimum ordinary budget completes a comparison without needing
     assert.equal(status.hourBytes, 32 * 1048576);
     await f.engine.close();
   }
+});
+
+test('one current diagnostic unlocks bounded recovery traffic while switching still needs complete evidence', async () => {
+  for (const usedMiB of [88, 96]) {
+    const f = fixture({ bytes: 8 * 1048576, currentMbps: 2,
+      settings: { hourMiB: 128, dayMiB: 128 },
+      ledger: { version: 1, charges: [{ at: 0, bytes: usedMiB * 1048576 }], switches: [] } });
+    if (usedMiB === 88) f.engine.requestCheck('media');
+    for (let i = 0; i < 65 && !f.measures.length; i++) await f.step(usedMiB === 96 ? 50000 : 0);
+    assert.deepEqual(f.measures, ['a']);
+    assert.equal(f.engine.status('media')!.urgent, false);
+    assert.deepEqual(f.switches, []);
+    if (usedMiB === 96) assert.ok(f.saved.some(v => v.charges.some(c => c.diagnostic?.group === 'media')));
+    for (let i = 0; i < 120 && !f.switches.length; i++) await f.step();
+    assert.deepEqual(f.switches, ['b']);
+    assert.deepEqual(f.measures, ['a', 'b', 'a', 'b']);
+    assert.ok(f.engine.status('media')!.dayBytes <= 128 * 1048576);
+    assert.ok([...f.traces.values()][0].events.some(e => e.budget?.mode === 'recovery'));
+    await f.engine.close();
+  }
+});
+
+test('diagnostic reserve usage survives restart and a healthy single sample cannot end confirmation', async () => {
+  const f = fixture({ currentMbps: 8, bytes: 8 * 1048576, settings: { hourMiB: 128, dayMiB: 128 },
+    ledger: { version: 1, charges: [{ at: 0, bytes: 96 * 1048576 }], switches: [] } });
+  for (let i = 0; i < 100; i++) await f.step(50000);
+  assert.deepEqual(f.measures, ['a']);
+  assert.notEqual([...f.traces.values()][0].reason, 'current-sufficient');
+  const ledger = structuredClone(f.saved.at(-1)!);
+  assert.doesNotThrow(() => parseBandwidthLedger(ledger));
+  assert.throws(() => parseBandwidthLedger({ ...ledger, charges: [{ at: 0, bytes: 1, diagnostic: { scope: null, group: 'media' } }] }));
+  await f.engine.close();
+  const restarted = fixture({ ledger, currentMbps: 8, bytes: 8 * 1048576, settings: { hourMiB: 128, dayMiB: 128 } });
+  for (let i = 0; i < 100; i++) await restarted.step(50000);
+  assert.deepEqual(restarted.measures, []);
+  assert.equal(restarted.engine.status('media')!.diagnosticRemainingBytes, 0);
+  await restarted.engine.close();
+  const daily = fixture({ settings: { hourMiB: 128, dayMiB: 128 }, ledger: { version: 1, switches: [], charges: [
+    { at: 0, bytes: 32 * 1048576, diagnostic: { scope: 'scope', group: 'other' } }, { at: 0, bytes: 64 * 1048576 },
+  ] } });
+  for (let i = 0; i < 100; i++) await daily.step(50000);
+  assert.deepEqual(daily.measures, []);
+  assert.equal(daily.engine.status('media')!.nextAt, 86400000);
+  await daily.engine.close();
 });

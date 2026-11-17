@@ -8,7 +8,7 @@ import { BANDWIDTH_SAFETY_INTERVAL_MS, bandwidthBudgetLimits, bandwidthDecision,
 
 const MiB = 1048576, HOUR = 3600000, DAY = 24 * HOUR, PROBE_FRESH = 30000, UNKNOWN_WAIT = 30000;
 const ACTIVE_CANDIDATES = 3;
-export type BandwidthLedger = { version: 1; charges: { at: number; bytes: number }[];
+export type BandwidthLedger = { version: 1; charges: { at: number; bytes: number; diagnostic?: { scope: string; group: string } }[];
   switches: { at: number; scope: string; group: string; from: string; to: string }[] };
 type StorageFault = { operation: 'load' | 'save'; code: string; since: number; at: number; count: number; nextAt: number };
 export type BandwidthStorageDiagnostic = StorageFault & { event: 'failure' | 'recovered' };
@@ -17,13 +17,15 @@ export function parseBandwidthLedger(input: unknown): BandwidthLedger {
   const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
   const text = (s: unknown): s is string => typeof s === 'string' && s.length <= 4096;
   if (!value || value.version !== 1 || !Array.isArray(value.charges) || value.charges.length > 4096 || !Array.isArray(value.switches)
-      || value.switches.length > 4096 || value.charges.some(c => !c || !integer(c.at) || !integer(c.bytes))
+      || value.switches.length > 4096 || value.charges.some(c => !c || !integer(c.at) || !integer(c.bytes)
+        || c.diagnostic !== undefined && (!c.diagnostic || !text(c.diagnostic.scope) || !text(c.diagnostic.group)))
       || value.switches.some(s => !s || !integer(s.at) || !text(s.scope) || !text(s.group) || !text(s.from) || !text(s.to))) throw new Error('BANDWIDTH_LEDGER_INVALID');
   return value;
 }
 type Context = { name: string; ready: boolean; degraded?: boolean; canStart?: boolean; nextProbeAt?: number | null };
 type Observation = { at: number; elapsed: number; bytes: number };
 type Trigger = 'traffic' | 'manual' | 'latency' | 'return';
+type BudgetMode = 'ordinary' | 'diagnostic' | 'recovery';
 type NodeState = 'pending' | 'confirming' | 'verified' | 'backoff' | 'unavailable';
 type Node = { name: string; preferred: boolean; samples: BandwidthSample[];
   probe: { at: number; delay: number | null; ok: boolean } | null;
@@ -34,7 +36,8 @@ type Pool = { name: string; current: string; nodes: Map<string, Node>; active: s
   started: number | null; spent: number; degradedMbps?: number;
   lastSwitch: { at: number; from: string; to: string } | null;
   phase: string; reason: string; candidate: string | null; testingNode: string | null; nextAt: number | null;
-  decision: ReturnType<typeof bandwidthDecision>; pathUnavailable?: boolean; blockedMeasurementKey?: string };
+  decision: ReturnType<typeof bandwidthDecision>; pathUnavailable?: boolean; blockedMeasurementKey?: string;
+  budgetMode?: BudgetMode; neededBytes?: number };
 
 /** Low-priority, single-flight pool: a node's failed comparison never cools down its group. */
 export function createBandwidthSelector(options: {
@@ -81,7 +84,10 @@ export function createBandwidthSelector(options: {
       ...(switches.length && s ? { protection: { recentSwitches: switches.length, maxSwitches: s.maxSwitches,
         holdUntil: switches.at(-1)!.at + (isSevere ? 60000 : s.holdSeconds * 1000),
         limitUntil: !isSevere && switches.length >= s.maxSwitches ? switches[switches.length - s.maxSwitches].at + HOUR : 0, severe: !!isSevere } } : {}),
-      budget: { ...budget(), urgent: isUrgent, searchBytes: p.spent, searchLimit: (s?.searchMiB ?? 0) * MiB } });
+      budget: { ...budget(), urgent: isUrgent, searchBytes: p.spent, searchLimit: (s?.searchMiB ?? 0) * MiB,
+        mode: p.budgetMode ?? 'ordinary', neededBytes: p.neededBytes ?? 0,
+        availableBytes: s ? available(p, s, p.budgetMode ?? 'ordinary') : 0,
+        diagnosticRemainingBytes: s ? diagnosticAllowance(p, s) : 0 } });
   };
   const recent = (p: Pool) => ledger.switches.filter(s => s.scope === (snapshot?.scope ?? snapshot?.key) && s.group === p.name && s.at > options.now() - HOUR);
   function prune() {
@@ -102,6 +108,40 @@ export function createBandwidthSelector(options: {
     const b = budget();
     return Math.max(0, Math.min(b.hourLimit - b.hourBytes - (urgent ? 0 : b.hourReserve),
       b.dayLimit - b.dayBytes - (urgent ? 0 : b.dayReserve)));
+  }
+  function diagnosticAllowance(p: Pool, s: BandwidthSettings, at = options.now()) {
+    const b = budget(), all = ledger.charges.filter(c => c.at > at - DAY), rows = all.filter(c => c.diagnostic);
+    const scope = snapshot?.scope ?? snapshot?.key;
+    const used = (entries: typeof rows) => entries.reduce((n, c) => n + c.bytes, 0);
+    const hour = rows.filter(c => c.at > at - HOUR);
+    return Math.max(0, Math.min(b.hourLimit - used(all.filter(c => c.at > at - HOUR)), b.dayLimit - used(all),
+      b.hourReserve - used(hour), b.dayReserve - used(rows),
+      s.taskMiB * MiB - used(hour.filter(c => c.diagnostic!.scope === scope && c.diagnostic!.group === p.name))));
+  }
+  function diagnosticDue(p: Pool, s: BandwidthSettings, bytes: number) {
+    const at = options.now(), events = ledger.charges.flatMap(c => [c.at + HOUR, c.at + DAY])
+      .filter(t => t > at).sort((a, b) => a - b);
+    return events.find(t => diagnosticAllowance(p, s, t) >= bytes) ?? null;
+  }
+  function commitments(except: Pool) {
+    let bytes = 0;
+    for (const p of pools.values()) {
+      const s = settingsFor(p), candidate = p.candidate && p.nodes.get(p.candidate);
+      if (p === except || !s || !p.trigger || !candidate || !p.active.includes(candidate.name) || candidate.nextAt > options.now()) continue;
+      bytes += (missing(p.nodes.get(p.current)!, s) + missing(candidate, s)) * s.taskMiB * MiB;
+    }
+    return bytes;
+  }
+  function available(p: Pool, s: BandwidthSettings, mode: BudgetMode) {
+    const limit = mode === 'diagnostic' ? diagnosticAllowance(p, s) : allowance(mode === 'recovery');
+    return Math.max(0, Math.min(limit, allowance(true) - commitments(p)));
+  }
+  function recoveryEvidence(p: Pool, s: BandwidthSettings) {
+    const samples = values(p.nodes.get(p.current)!, s);
+    // A trial may access recovery traffic without weakening confirmed degradation,
+    // switching limits, preference costs or the required number of samples.
+    return !!samples.length && options.now() - samples.at(-1)!.at <= s.latestSeconds * 1000
+      && samples.every(v => v.mbps < s.targetMbps * s.suspectRatio);
   }
   function budgetDue(urgent: boolean, bytes: number) {
     const b = budget(), at = options.now(), events = ledger.charges.flatMap(c => [c.at + HOUR, c.at + DAY]).filter(t => t > at).sort((a, b) => a - b);
@@ -364,8 +404,9 @@ export function createBandwidthSelector(options: {
     p.pauseUntil = options.now() + s.yieldSeconds * 1000; p.started = null;
     note(p, 'waiting', reason, p.pauseUntil);
   }
-  async function measure(p: Pool, n: Node, s: BandwidthSettings, snap: AutoSnapshot, signal: AbortSignal) {
-    const charge = { at: options.now(), bytes: s.taskMiB * MiB };
+  async function measure(p: Pool, n: Node, s: BandwidthSettings, snap: AutoSnapshot, signal: AbortSignal, mode: BudgetMode) {
+    const charge: BandwidthLedger['charges'][number] = { at: options.now(), bytes: s.taskMiB * MiB,
+      ...(mode === 'diagnostic' ? { diagnostic: { scope: snap.scope ?? snap.key, group: p.name } } : {}) };
     ledger.charges.push(charge);
     try { await store(); } // Durable maximum before any network I/O.
     catch (error) { charge.bytes = 0; throw error; } // No transfer started; settle this reservation on recovery.
@@ -489,7 +530,7 @@ export function createBandwidthSelector(options: {
       const candidates = fill(p, s);
       const interval = bandwidthInterval(effectiveSamples(current, s), s, at, false);
       const confirmed = bandwidthInterval(effectiveSamples(current, s), s, at);
-      if (p.trigger === 'traffic' && confirmed && confirmed.mbps >= s.targetMbps && confirmed.delay <= s.delayReferenceMs) {
+      if ((p.trigger === 'traffic' || p.trigger === 'manual') && confirmed && confirmed.mbps >= s.targetMbps && confirmed.delay <= s.delayReferenceMs) {
         p.trigger = null; p.started = null; p.positiveUntil = at + s.positiveSeconds * 1000;
         p.degradedMbps = undefined;
         note(p, 'observing', 'current-sufficient', p.positiveUntil); trace.end(p.name, 'current-sufficient'); continue;
@@ -526,20 +567,26 @@ export function createBandwidthSelector(options: {
       if (held && (p.trigger !== 'traffic' || values(current, s).length >= s.confirmRounds)) {
         note(p, 'holding', 'switch-limit', recent(p).at(-1)!.at + s.holdSeconds * 1000); continue;
       }
-      if (!candidates.length && !held && !(p.trigger === 'traffic' && p.degradedMbps === undefined && missing(current, s))) {
+      if (!candidates.length && !held && !missing(current, s)) {
         const due = [...p.nodes.values()].filter(n => n.name !== p.current).map(n => n.nextAt).filter(t => t > at);
         note(p, 'waiting', due.length ? 'pool-backoff' : 'no-candidate', due.length ? Math.min(...due) : null); continue;
       }
       if (p.spent + s.taskMiB * MiB > s.searchMiB * MiB || at - p.started > s.campaignSeconds * 1000) {
         yieldSearch(p, s, 'search-yield'); continue;
       }
-      if (allowance(urgent(p, s)) < s.taskMiB * MiB) {
-        note(p, 'waiting', 'budget-exhausted', budgetDue(urgent(p, s), s.taskMiB * MiB)); continue;
+      const basicMode: BudgetMode = urgent(p, s) || recoveryEvidence(p, s) ? 'recovery'
+        : !values(current, s).length && p.trigger === 'traffic' && available(p, s, 'ordinary') < s.taskMiB * MiB ? 'diagnostic' : 'ordinary';
+      if (available(p, s, basicMode) < s.taskMiB * MiB) {
+        p.budgetMode = basicMode; p.neededBytes = s.taskMiB * MiB;
+        note(p, 'waiting', 'budget-exhausted', basicMode === 'diagnostic' ? diagnosticDue(p, s, p.neededBytes)
+          : budgetDue(basicMode !== 'ordinary', p.neededBytes)); continue;
       }
       // Lightweight screening of the small active queue precedes bandwidth ranking.
       const focus = candidates.find(n => n.name === p.candidate)
         ?? candidates.find(n => !n.probe || at - n.probe.at > PROBE_FRESH) ?? candidates[0];
-      const unprobed = interval ? focus : current;
+      const confirmingCurrent = values(current, s).every(v => v.mbps >= s.targetMbps)
+        && (!interval || interval.delay <= s.delayReferenceMs);
+      const unprobed = !interval || confirmingCurrent ? current : focus;
       if (unprobed && (!unprobed.probe || at - unprobed.probe.at > PROBE_FRESH) && unprobed.nextAt <= at) {
         launchProbe(p, unprobed, s, context); fairCursor = (index + 1) % names.length; return;
       }
@@ -559,8 +606,10 @@ export function createBandwidthSelector(options: {
         bandwidthInterval(a.samples, s, at, false)!.high + (a.preferred ? 0 : s.fallbackPenaltyMs / 1000)
         - bandwidthInterval(b.samples, s, at, false)!.high - (b.preferred ? 0 : s.fallbackPenaltyMs / 1000));
       const candidate = eligible.find(n => n.name === p.candidate) ?? promising[0] ?? explored[0];
+      const diagnosing = !values(current, s).length;
+      const currentOnly = diagnosing || confirmingCurrent || held || !candidate;
       // Finish one pair in due order instead of repeatedly delaying its candidate to refresh the incumbent.
-      const pair = (held || !candidate ? [current] : [current, candidate]).filter(n => missing(n, s))
+      const pair = (currentOnly ? [current] : [current, candidate]).filter(n => missing(n, s))
         .sort((a, b) => sampleDue(a, s) - sampleDue(b, s) || values(a, s).length - values(b, s).length);
       const node = pair[0];
       if (!node) continue;
@@ -568,11 +617,14 @@ export function createBandwidthSelector(options: {
       if (at < due) { note(p, 'confirming', 'waiting-sample', due); continue; }
       if (context?.canStart === false) { note(p, 'waiting', 'probe-quota', context.nextProbeAt ?? null); continue; }
       if (!quiet(s) || options.busy?.()) { note(p, 'waiting', 'waiting-idle'); continue; }
-      const isUrgent = urgent(p, s);
-      // Reserve the missing current/candidate confirmation tasks before exploring a new candidate.
-      const needed = candidate ? Math.max(1, missing(current, s) + missing(candidate, s)) * s.taskMiB * MiB : s.taskMiB * MiB;
-      if (ledger.charges.length > 4000 || allowance(isUrgent) < needed) {
-        note(p, 'waiting', 'budget-exhausted', budgetDue(isUrgent, needed)); continue;
+      const recovery = urgent(p, s) || recoveryEvidence(p, s);
+      const needed = currentOnly ? s.taskMiB * MiB : Math.max(1, missing(current, s) + missing(candidate, s)) * s.taskMiB * MiB;
+      const mode: BudgetMode = recovery ? 'recovery'
+        : diagnosing && p.trigger === 'traffic' && available(p, s, 'ordinary') < needed ? 'diagnostic' : 'ordinary';
+      p.budgetMode = mode; p.neededBytes = needed;
+      if (ledger.charges.length > 4000 || available(p, s, mode) < needed) {
+        note(p, 'waiting', 'budget-exhausted', mode === 'diagnostic' ? diagnosticDue(p, s, needed)
+          : budgetDue(mode !== 'ordinary', needed)); continue;
       }
       if (p.spent + needed > s.searchMiB * MiB) { yieldSearch(p, s, 'search-yield'); continue; }
       if (!node.probe || at - node.probe.at > PROBE_FRESH) {
@@ -587,7 +639,7 @@ export function createBandwidthSelector(options: {
         const before = p.spent, job = flight;
         let result: Awaited<ReturnType<typeof measure>> = null;
         let notStarted = false;
-        try { result = await measure(p, selectedNode, s, snap, signal); }
+        try { result = await measure(p, selectedNode, s, snap, signal, mode); }
         catch (error) {
           notStarted = p.spent === before && ['BANDWIDTH_PATH_UNAVAILABLE', 'BANDWIDTH_WORKER_UNAVAILABLE']
             .includes(String((error as { code?: unknown })?.code));
@@ -665,6 +717,8 @@ export function createBandwidthSelector(options: {
         observation: observation(p, s),
         round: p.candidate ? values(p.nodes.get(p.candidate)!, s).length : 0, nextAt: p.nextAt, decision: p.decision,
         storage: storageFault ? { ...storageFault } : null,
+        stage: p.candidate ? 'comparison' : 'current', budgetMode: p.budgetMode ?? 'ordinary', neededBytes: p.neededBytes ?? 0,
+        availableBytes: available(p, s, p.budgetMode ?? 'ordinary'), diagnosticRemainingBytes: diagnosticAllowance(p, s),
         ...budget(), searchBytes: p.spent, searchLimit: s.searchMiB * MiB, urgent: urgent(p, s),
         pool: [...p.nodes.values()].map(n => { const samples = values(n, s); return { name: n.name, preferred: n.preferred, current: n.name === p.current,
           state: n.state, reason: n.reason, samples: samples.length, delayMs: n.probe?.delay ?? null,
