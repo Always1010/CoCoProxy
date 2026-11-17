@@ -235,6 +235,36 @@ test('responsive search traffic shares the physical quota and leaves hard failur
   await engine.close();
 });
 
+test('queued responsive checks can use reserved starts once ordinary health monitoring is overdue', async () => {
+  let time = 0, serviced = false;
+  const starts: { at: number; node: string }[] = [];
+  const snapshot: AutoSnapshot = { key: 'responsive-reserve', generation: '1', probes: DEFAULT_AUTO_PROBES,
+    groups: Array.from({ length: 7 }, (_, i) => ({ name: 'group-' + i, current: 'current-' + i,
+      policy: { latency: { mode: 'responsive', slowMs: 500 }, preferred: ['current-' + i, 'spare-' + i], fallback: [], returnToPreferred: false } })) };
+  const engine = createAutomaticSelector({ now: () => time, snapshot: async () => snapshot,
+    probe: async (_s, node) => { starts.push({ at: time, node }); return good(node.startsWith('current') ? 800 : 700); },
+    switch: async () => false });
+  for (time = 0; time <= 60000; time += 1000) {
+    const overdue = engine.status().groups.filter(g => g.latency?.burstRemaining && g.latency.samples.length
+      && time - g.latency.samples.at(-1)!.at >= 30000).map(g => g.current);
+    const used = starts.filter(s => s.at > time - 60000).length, previous = starts.length;
+    await engine.tick();
+    if (used >= 18 && used < 24 && starts.slice(previous).some(s => overdue.includes(s.node))) serviced = true;
+  }
+  assert.equal(serviced, true);
+  await engine.close();
+});
+
+test('responsive preferred return uses its group threshold independently of the original global threshold', async () => {
+  const h = harness({ responsive: true, current: 'backup', preferred: ['primary'], fallback: ['backup'],
+    probe: node => good(node === 'backup' ? 1500 : 700) });
+  h.snapshot!.probes.slowMs = 500;
+  h.snapshot!.groups[0].policy.latency!.slowMs = 2000;
+  for (let at = 0; at <= 365000; at += 1000) await h.at(at);
+  assert.deepEqual(h.switches.map(s => s.reason), ['preferred-restored']);
+  await h.engine.close();
+});
+
 test('healthy monitoring includes manual outside nodes, measures only unique currents every 30 seconds and coalesces results', async () => {
   const h = harness({ names: ['one', 'two'], current: 'outside' });
   await h.at(0); await h.at(29_999);

@@ -283,8 +283,11 @@ export function createAutomaticSelector(options: Options) {
     if (at < (g.secondaryAt ?? g.monitorAt)) return [];
     const target = secondary ? g.failureTarget! : activeTarget(s, g);
     const rapid = !secondary && !!g.response?.burstRemaining;
+    // A queued rapid check becomes an ordinary health check when the normal
+    // monitoring deadline is due; it may then use the reserved health starts.
+    const supplemental = rapid && !!g.latestProbe && at - g.latestProbe.at < AUTO_INTERVALS.monitor;
     return [{ group: g, node: g.current, target,
-      priority: secondary ? 0 : 1, ...(rapid ? { auxiliary: true } : {}), run: (result, end) => {
+      priority: secondary ? 0 : 1, ...(supplemental ? { auxiliary: true } : {}), run: (result, end) => {
         const retry = retryAt(result, end);
         if (retry !== null) { if (secondary) g.secondaryAt = retry; else g.monitorAt = retry; return; }
         if (!healthy(result)) {
