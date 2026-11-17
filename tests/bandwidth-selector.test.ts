@@ -41,13 +41,13 @@ function fixture(options: { enabled?: boolean; observeOnly?: boolean; candidateM
     } });
   engine.update(snapshot);
   return { engine, snapshot, measures, limitedModes, starts, switches, saved, probes, traces, diagnostics, get aborted() { return aborted; }, get loads() { return loads; }, get saves() { return saves; }, get now() { return now; },
-    async step(bytes = 0, ready = true) {
+    async step(bytes = 0, ready = true, degraded = false) {
       now += 1000; total += bytes;
       if (completion && now >= completion.at) { const done = completion; completion = undefined; done.resolve(); await new Promise<void>(resolve => setImmediate(resolve)); }
       engine.update(snapshot);
       engine.observe({ epoch: 'one', download: total, upload: 0,
         connections: [{ id: 'one', outbound: 'a', download: total, upload: 0, sourceIP: '192.0.2.1', host: 'media.example', process: 'Unknown', inboundUser: 'Unknown' }] });
-      engine.tick([{ name: 'media', ready }]);
+      engine.tick([{ name: 'media', ready, degraded }]);
       await new Promise<void>(resolve => setImmediate(resolve));
     } };
 }
@@ -101,7 +101,7 @@ test('a manual current node outside the pool participates in comparison without 
   await f.engine.close();
 });
 
-test('one healthy sample cannot end a traffic investigation and new sustained slow traffic overrides old positive evidence', async () => {
+test('confirmed sufficient throughput backs off low-demand rechecks for 15 then 30 minutes', async () => {
   const f = fixture({ currentMbps: 8 });
   for (let i = 0; i < 65; i++) await f.step(50000);
   while (f.measures.length < 1) await f.step();
@@ -110,13 +110,38 @@ test('one healthy sample cannot end a traffic investigation and new sustained sl
   for (let i = 0; i < 60 && ![...f.traces.values()][0].endedAt; i++) await f.step();
   assert.equal([...f.traces.values()][0].reason, 'current-sufficient');
   assert.equal(f.measures.filter(n => n === 'a').length, 2);
-  for (let i = 0; i < 65; i++) await f.step(50000);
+  const firstEnd = [...f.traces.values()][0].endedAt!;
+  while (f.now < firstEnd + 899000) await f.step(50000);
   assert.equal(f.traces.size, 1);
   assert.ok([...f.traces.values()][0].endedAt);
-  for (let i = 0; i < 65; i++) await f.step(50000);
-  assert.ok(f.traces.size >= 2);
-  assert.ok(f.now < 900000);
+  for (let i = 0; i < 180 && (f.traces.size < 2 || ![...f.traces.values()][1].endedAt); i++) await f.step(50000);
+  const second = [...f.traces.values()][1];
+  assert.ok(second.startedAt - firstEnd >= 900000);
+  assert.equal(f.engine.status('media')?.nextAt, second.endedAt! + 1800000);
+  assert.equal(f.measures.length, 4);
+  while (f.now < second.endedAt! + 1799000) await f.step(50000);
+  assert.equal(f.traces.size, 2);
+  for (let i = 0; i < 180 && (f.traces.size < 3 || ![...f.traces.values()][2].endedAt); i++) await f.step(50000);
+  const third = [...f.traces.values()][2];
+  assert.equal(f.engine.status('media')?.nextAt, third.endedAt! + 3600000);
+  assert.equal(f.measures.length, 6);
   await f.engine.close();
+});
+
+test('manual checks and independently degraded latency can bypass a sufficient-throughput recheck deadline', async () => {
+  for (const manual of [true, false]) {
+    const f = fixture({ rates: { a: [8, 8, 2, 2] } });
+    for (let i = 0; i < 180; i++) await f.step(50000);
+    assert.equal(f.engine.status('media')?.sufficientChecks, 1);
+    assert.equal(f.measures.length, 2);
+    const deadline = f.engine.status('media')!.recheckUntil;
+    if (manual) assert.equal(f.engine.requestCheck('media'), true);
+    for (let i = 0; i < 150 && !f.switches.length; i++) await f.step(50000, true, !manual);
+    assert.deepEqual(f.switches, ['b'], manual ? 'manual recheck' : 'independent latency degradation');
+    assert.ok(f.now < deadline);
+    assert.equal(f.engine.status('media')?.sufficientChecks, 0);
+    await f.engine.close();
+  }
 });
 
 test('changing only the lightweight target rechecks latency without discarding fresh download evidence', async () => {

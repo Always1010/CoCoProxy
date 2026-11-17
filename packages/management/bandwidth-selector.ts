@@ -3,7 +3,7 @@ import type { UsageSnapshot } from './usage.ts';
 import type { BandwidthPhase } from './bandwidth-transport.ts';
 import { createBandwidthTrace, type BandwidthRound } from './bandwidth-history.ts';
 import type { AutoSuspensionReason } from './automatic-diagnostics.ts';
-import { BANDWIDTH_SAFETY_INTERVAL_MS, BUSY_CONFIRMATION, bandwidthBudgetLimits, bandwidthDecision, bandwidthDegraded, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold,
+import { BANDWIDTH_SAFETY_INTERVAL_MS, BUSY_CONFIRMATION, bandwidthBudgetLimits, bandwidthDecision, bandwidthDegraded, bandwidthGuard, bandwidthInterval, bandwidthSamples, bandwidthThreshold, bandwidthRecheckMs,
   type BandwidthSettings, type BandwidthSample } from './bandwidth-policy.ts';
 
 const MiB = 1048576, HOUR = 3600000, DAY = 24 * HOUR, PROBE_FRESH = 30000, UNKNOWN_WAIT = 30000;
@@ -33,7 +33,7 @@ type Node = { name: string; preferred: boolean; samples: BandwidthSample[];
   state: NodeState; reason: string; nextAt: number; checkedAt: number | null; measuredAt: number | null;
   failures: number; misses: number; earlyFailures: number; activeMs: number; useSince: number; delayNeedsRefresh?: boolean };
 type Pool = { name: string; current: string; nodes: Map<string, Node>; active: string[];
-  trigger: Trigger | null; urgentUntil: number; positiveUntil: number; pauseUntil: number; recheckUntil: number;
+  trigger: Trigger | null; urgentUntil: number; positiveUntil: number; pauseUntil: number; recheckUntil: number; sufficientChecks: number;
   started: number | null; spent: number; degradedMbps?: number;
   lastSwitch: { at: number; from: string; to: string } | null;
   phase: string; reason: string; candidate: string | null; testingNode: string | null; nextAt: number | null;
@@ -245,7 +245,7 @@ export function createBandwidthSelector(options: {
     for (const g of enabled(next)) {
       let p = pools.get(g.name);
       if (!p) {
-        p = { name: g.name, current: g.current, nodes: new Map(), active: [], trigger: null, urgentUntil: 0, positiveUntil: 0, pauseUntil: 0, recheckUntil: 0,
+        p = { name: g.name, current: g.current, nodes: new Map(), active: [], trigger: null, urgentUntil: 0, positiveUntil: 0, pauseUntil: 0, recheckUntil: 0, sufficientChecks: 0,
           started: null, spent: 0, lastSwitch: null, phase: 'observing', reason: 'waiting-traffic',
           candidate: null, testingNode: null, nextAt: null, decision: null };
         pools.set(g.name, p);
@@ -323,7 +323,7 @@ export function createBandwidthSelector(options: {
   function suspect(p: Pool, s: BandwidthSettings) {
     const positiveAt = Math.max(p.positiveUntil ? p.positiveUntil - s.positiveSeconds * 1000 : -Infinity,
       positives.get(p.name + '\0' + p.current) ?? -Infinity);
-    // New sustained slow traffic can contradict an earlier good window, even during its protection period.
+    // Low application demand is suspicion only. tick enforces the independent recheck deadline.
     const active = (observations.get(p.current) ?? []).filter(r => r.bytes > 0 && r.at > positiveAt);
     const elapsed = active.reduce((n, r) => n + r.elapsed, 0), bytes = active.reduce((n, r) => n + r.bytes, 0);
     return elapsed >= s.activeSeconds * 1000 && bytes >= s.minTrafficMiB * MiB && bytes * 8 / elapsed / 1000 < s.targetMbps * s.suspectRatio;
@@ -486,8 +486,13 @@ export function createBandwidthSelector(options: {
     const p = pools.get(name);
     if (!p || closed || flight?.pool === p && flight.abort.signal.aborted) return false;
     if (reason === 'manual') p.pathUnavailable = false;
-    if (reason === 'latency') { p.urgentUntil = options.now() + 90000; p.positiveUntil = 0; }
+    if (reason === 'latency') { p.urgentUntil = options.now() + 90000; p.positiveUntil = 0; p.sufficientChecks = 0; }
     const previousTrigger = p.trigger;
+    if (reason === 'manual' && !previousTrigger && p.recheckUntil > options.now()) {
+      // An explicit recheck of a protected result must collect new current evidence.
+      p.nodes.get(p.current)!.samples = []; p.positiveUntil = 0;
+      positives.delete(p.name + '\0' + p.current);
+    }
     if (!previousTrigger) { p.started = options.now(); p.spent = 0; }
     if (reason === 'manual' || reason === 'latency') { p.pauseUntil = 0; p.recheckUntil = 0; p.reason = 'requested'; p.nextAt = null; }
     if (!p.trigger || reason === 'manual' || reason === 'latency') p.trigger = reason;
@@ -504,6 +509,7 @@ export function createBandwidthSelector(options: {
     trace.event(p.name, { kind: 'state', reason, node: to });
     trace.end(p.name, reason === 'bandwidth-improvement' ? reason : 'selection-changed');
     p.current = to; p.trigger = null; p.urgentUntil = 0; p.started = null; p.pauseUntil = 0; p.recheckUntil = 0;
+    p.sufficientChecks = 0;
     p.degradedMbps = undefined; p.positiveUntil = 0;
     p.active = p.active.filter(n => n !== to);
     if (reason === 'bandwidth-improvement') p.lastSwitch = { at: options.now(), from, to };
@@ -511,6 +517,7 @@ export function createBandwidthSelector(options: {
   function failure(name: string, node: string) {
     const p = pools.get(name), n = p?.nodes.get(node), s = p && settingsFor(p);
     if (!p || !n || !s) return;
+    if (node === p.current) { p.sufficientChecks = 0; p.recheckUntil = 0; p.positiveUntil = 0; }
     if (flight?.pool === p) interrupt('latency-priority');
     reject(p, n, s, 'candidate-unavailable', true);
     if (p.lastSwitch?.to === node && options.now() - p.lastSwitch.at <= 120000) {
@@ -581,6 +588,7 @@ export function createBandwidthSelector(options: {
         if (at < Math.max(p.pauseUntil, p.recheckUntil) && !context?.degraded && !(p.reason === 'limited-evidence' && quiet(s))) {
           note(p, 'observing', p.recheckUntil > at ? 'recheck-cooldown' : p.reason, Math.max(p.pauseUntil, p.recheckUntil)); continue;
         }
+        if (context?.degraded) { p.sufficientChecks = 0; p.recheckUntil = 0; }
         p.trigger = 'traffic'; p.degradedMbps = undefined; p.positiveUntil = 0;
         p.started = at; p.spent = 0; p.pauseUntil = 0; p.reason = 'requested'; p.nextAt = null;
         // An old good sample cannot close the new investigation that contradicts it.
@@ -614,8 +622,10 @@ export function createBandwidthSelector(options: {
       const interval = bandwidthInterval(effectiveSamples(current, s), s, at, false);
       const confirmed = bandwidthInterval(effectiveSamples(current, s), s, at);
       if ((p.trigger === 'traffic' || p.trigger === 'manual') && confirmed && confirmed.mbps >= s.targetMbps && confirmed.delay <= s.delayReferenceMs) {
+        const previousCheck = p.positiveUntil ? p.positiveUntil - s.positiveSeconds * 1000 : -Infinity;
+        if (values(current, s).some(sample => sample.at > previousCheck)) p.sufficientChecks = Math.min(3, p.sufficientChecks + 1);
         p.positiveUntil = at + s.positiveSeconds * 1000;
-        p.recheckUntil = at + Math.min(120, s.positiveSeconds) * 1000;
+        p.recheckUntil = at + bandwidthRecheckMs(s, p.sufficientChecks);
         p.degradedMbps = undefined;
         endCheck(p, s, 'current-sufficient', p.recheckUntil); continue;
       }
@@ -768,6 +778,9 @@ export function createBandwidthSelector(options: {
         if (!result || !Number.isFinite(result.mbps) || result.mbps <= 0) { unknown(p, selectedNode, 'sample-unknown'); return; }
         // All scores and screening use the same automatic probe target, not the transfer service's RTT.
         selectedNode.samples.push({ at: options.now(), startedAt, delayMs, mbps: result.mbps });
+        if (selectedNode.name === p.current && result.mbps < s.targetMbps * s.suspectRatio) {
+          p.sufficientChecks = 0; p.recheckUntil = 0; p.positiveUntil = 0;
+        }
         values(selectedNode, s); selectedNode.reason = 'evidence-ready'; selectedNode.nextAt = 0;
         selectedNode.state = selectedNode.samples.length >= s.confirmRounds ? 'verified' : 'confirming';
         if (storageFault) note(p, 'waiting', 'storage-unavailable', storageFault.nextAt);
@@ -824,6 +837,7 @@ export function createBandwidthSelector(options: {
       const p = pools.get(name), s = p && settingsFor(p);
       if (!p || !s) return undefined;
       return { phase: p.phase, reason: p.reason, candidate: p.candidate, testingNode: p.testingNode,
+        recheckUntil: p.recheckUntil, sufficientChecks: p.sufficientChecks,
         deadlineAt: p.started === null ? null : p.started + s.campaignSeconds * 1000,
         observation: observation(p, s),
         round: p.candidate ? values(p.nodes.get(p.candidate)!, s).length : 0, nextAt: p.nextAt, decision: p.decision,

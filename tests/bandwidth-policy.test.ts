@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_BANDWIDTH_SETTINGS as defaults, parseBandwidthSettings, bandwidthLoss, bandwidthDecision, bandwidthGuard, bandwidthSamples } from '../packages/management/bandwidth-policy.ts';
+import { DEFAULT_BANDWIDTH_SETTINGS as defaults, parseBandwidthSettings, bandwidthLoss, bandwidthDecision, bandwidthGuard, bandwidthSamples, bandwidthBudgetFits } from '../packages/management/bandwidth-policy.ts';
 import { parseAutoGroupPolicy } from '../packages/management/automatic-policy.ts';
 
 test('bandwidth settings preserve legacy policies and validate coupled time and traffic limits', () => {
@@ -22,6 +22,10 @@ test('bandwidth settings preserve legacy policies and validate coupled time and 
   assert.equal(Object.hasOwn(optedOut, 'activeProbes'), false);
   assert.equal(parseBandwidthSettings({ ...optedOut, enabled: true }).enabled, true);
   assert.equal(defaults.confirmRounds, 2);
+  const compact = { enabled: true, durationSeconds: 6, warmupSeconds: 2, minSampleSeconds: 3, confirmRounds: 2,
+    roundIntervalSeconds: 30, hourMiB: 64, dayMiB: 128, reserveHourMiB: 16, reserveDayMiB: 32, searchMiB: 32 };
+  assert.ok(bandwidthBudgetFits([parseBandwidthSettings({ ...compact, targetMbps: 6, taskMiB: 6 }),
+    parseBandwidthSettings({ ...compact, targetMbps: 4, taskMiB: 4 })]));
   assert.equal(parseBandwidthSettings({ confirmRounds: 3, roundIntervalSeconds: 60 }).searchMiB, 48);
   const old = parseBandwidthSettings({ confirmRounds: 3, roundIntervalSeconds: 300, campaignSeconds: 900, freshSeconds: 180 });
   assert.equal(old.roundIntervalSeconds, 120); assert.equal(old.freshSeconds, 260);
