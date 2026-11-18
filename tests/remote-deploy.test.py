@@ -21,6 +21,35 @@ spec.loader.exec_module(deploy)
 
 
 class RemoteDeploymentTests(unittest.TestCase):
+    def test_prepare_allows_five_minutes_including_pinned_recheck_and_times_out_before_maintenance(self):
+        for expire in [False, True]:
+            temporary, stack, private, _, events, router, args = self.scenario(preserve_runtime=True)
+            args.preview = not expire
+            with self.subTest(expire=expire), temporary, stack:
+                original = deploy.run
+                budgets = []
+
+                def run(command, timeout=120, **kwargs):
+                    if 'prepare' in command:
+                        budgets.append(timeout)
+                        if len(budgets) == 2 and expire:
+                            raise subprocess.TimeoutExpired(command, timeout)
+                    return original(command, timeout=timeout, **kwargs)
+
+                def begin_deployment():
+                    self.fail('preparation entered maintenance')
+
+                with patch.object(deploy, 'run', run):
+                    if expire:
+                        with self.assertRaisesRegex(RuntimeError, '^REMOTE_PREPARE_TIMEOUT$'):
+                            deploy.main_locked(args, begin_deployment)
+                    else:
+                        deploy.main_locked(args, begin_deployment)
+                self.assertEqual(budgets, [300, 300])
+                self.assertFalse((private / 'remote-last.json').exists())
+                self.assertFalse(any('--apply' in command for command in events))
+                self.assertTrue(router['enabled'])
+
     def test_deployment_deadline_enters_recovery_and_recovery_has_a_separate_bound(self):
         temporary, stack, private, before, events, router, args = self.scenario()
         with temporary, stack:

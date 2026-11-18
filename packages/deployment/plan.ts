@@ -9,6 +9,7 @@ import { DEFAULT_LATENCY_PROBE_ORIGIN } from '../management/controller.ts';
 import type { HttpsClientOptions } from '../subscriptions/http.ts';
 import { renderAutomaticGatewayHostPlan } from '../gateway/host-plan.ts';
 import { renderManagedWeb } from '../setup/https.ts';
+import { UPDATER_STOP_TIMEOUT_SECONDS } from '../updater/deadlines.ts';
 
 export class DeploymentPlanError extends Error {
   readonly code = 'DEPLOYMENT_PLAN_INVALID';
@@ -274,7 +275,7 @@ function render(input: unknown): DeploymentPlan {
     '[Service]', 'Type=exec', 'User=root',
     `ExecStart=${[nodePath, '--experimental-strip-types', posix.join(updaterSourceDirectory, 'apps/updater/main.ts'),
       '--settings', updaterSettingsPath].map(argument => quote(argument, true)).join(' ')}`,
-    'Restart=on-failure', 'RestartSec=2', 'KillMode=mixed', 'TimeoutStopSec=1320', 'UMask=0077',
+    'Restart=on-failure', 'RestartSec=2', 'KillMode=mixed', `TimeoutStopSec=${UPDATER_STOP_TIMEOUT_SECONDS}`, 'UMask=0077',
     'RuntimeDirectory=cocoproxy-updater', 'RuntimeDirectoryMode=0755',
     'StateDirectory=cocoproxy-updater', 'StateDirectoryMode=0700', '', '[Install]', 'WantedBy=multi-user.target', '',
   ].join('\n');

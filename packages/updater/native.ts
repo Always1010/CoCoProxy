@@ -13,6 +13,7 @@ import type { Platform, VerifiedUpdate } from './release.ts';
 import type { InstalledUpdate, UpdaterHost, UpdateState } from './engine.ts';
 import { initialUpdateState, parseUpdateState } from './engine.ts';
 import { UpdateError } from './types.ts';
+import { UPDATER_APPLY_TIMEOUT_MS, UPDATER_PREVIEW_TIMEOUT_MS, UPDATER_RECOVERY_GRACE_MS } from './deadlines.ts';
 
 export const UPDATER_STATE_DIRECTORY = '/var/lib/cocoproxy-updater';
 export const UPDATER_RUNTIME_DIRECTORY = '/run/cocoproxy-updater';
@@ -174,8 +175,8 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
   async function coordinator(payload: string, update: VerifiedUpdate, original: InstalledUpdate, preview: boolean, signal?: AbortSignal) {
     return runUpdaterTool('/usr/bin/python3', [payload + '/source/scripts/remote-deploy.py', '--payload', payload,
       '--manifest-sha256', update.manifestSha256, '--expected-manifest-sha256', original.manifestSha256,
-      ...(preview ? ['--preview'] : [])], { signal, timeout: preview ? 300_000 : 630_000,
-      ...(preview ? {} : { killAfterMs: 620_000 }) });
+      ...(preview ? ['--preview'] : [])], { signal, timeout: preview ? UPDATER_PREVIEW_TIMEOUT_MS : UPDATER_APPLY_TIMEOUT_MS,
+      ...(preview ? {} : { killAfterMs: UPDATER_RECOVERY_GRACE_MS }) });
   }
   return {
     now: Date.now,

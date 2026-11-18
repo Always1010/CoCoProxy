@@ -27,6 +27,9 @@ PRIVATE = Path('/etc/cocoproxy-install')
 RECEIPT = Path('/var/lib/cocoproxy-deployment/receipt.json')
 INCOMING = Path('/opt/cocoproxy/incoming')
 NETWORK_RECEIPT = Path('/var/lib/cocoproxy-gateway-network/network-receipt.json')
+# A runtime-preserving upgrade can also require a second, pinned-runtime prepare.
+PREPARE_TIMEOUT = 300
+PREPARATION_TIMEOUT = 2 * PREPARE_TIMEOUT + 60
 DEPLOYMENT_TIMEOUT = 600
 RECOVERY_TIMEOUT = 600
 
@@ -39,10 +42,14 @@ def deployment_deadline(seconds, code):
     started = time.monotonic()
     def expired(_signum, _frame):
         raise RuntimeError(code)
+    def reset(seconds, next_code):
+        nonlocal code
+        code = next_code
+        signal.setitimer(signal.ITIMER_REAL, seconds)
     signal.signal(signal.SIGALRM, expired)
     signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
-        yield
+        yield reset
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
@@ -85,8 +92,8 @@ class DeploymentClock:
             self.candidate_verification.append({'phase': phase, **{key: stats[key] for key in ['recompiled', 'reused', 'durationMs']}})
 
 
-def installer_result(args):
-    result = json.loads(run(args))
+def installer_result(args, timeout=120):
+    result = json.loads(run(args, timeout=timeout))
     evidence = result.pop('candidateEvidence', None)
     if evidence is not None:
         need('--candidate-evidence' in args and isinstance(evidence, dict) and set(evidence) == {'schemaVersion', 'binding', 'verified'} and evidence.get('schemaVersion') == 1 and
@@ -95,6 +102,13 @@ def installer_result(args):
              'REMOTE_CANDIDATE_EVIDENCE_INVALID')
         replace(Path(args[args.index('--candidate-evidence') + 1]), evidence)
     return result
+
+
+def prepare_installation(args):
+    try:
+        return installer_result(args, timeout=PREPARE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('REMOTE_PREPARE_TIMEOUT') from None
 
 
 def preinstall_release(installer, common):
@@ -661,7 +675,7 @@ def management_ready(management):
 
 
 def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
-                    systemctl, service, node, inspect_complete, web_unit, journal, clock, components='frontend'):
+                    systemctl, service, node, inspect_complete, web_unit, journal, clock, begin_deployment, components='frontend'):
     """Only management-side maintenance. The installer proves the pinned runtime."""
     update = manifest.get('frontendUpdate')
     if components == 'frontend':
@@ -690,6 +704,7 @@ def deploy_frontend(options, payload, manifest, receipt, candidate, next_path, i
         print(json.dumps({'prepared': True, 'apply': False, 'components': components, 'commit': manifest['commit'],
                           'deployment': 'preserve-runtime', 'services': managed, 'preservedServices': preserved}))
         return
+    begin_deployment()
     original_input = json.loads(regular(input_path, True))
     baseline = None
     maintenance_started = False
@@ -813,8 +828,8 @@ def main(argv=None):
             raise RuntimeError('REMOTE_DEPLOYMENT_INTERRUPTED')
         for name in ['SIGINT', 'SIGTERM', 'SIGHUP']:
             signal.signal(getattr(signal, name), interrupted)
-        with deployment_deadline(DEPLOYMENT_TIMEOUT, 'REMOTE_DEPLOYMENT_TIMEOUT'):
-            result = main_locked(options)
+        with deployment_deadline(PREPARATION_TIMEOUT, 'REMOTE_PREPARATION_TIMEOUT') as reset:
+            result = main_locked(options, lambda: reset(DEPLOYMENT_TIMEOUT, 'REMOTE_DEPLOYMENT_TIMEOUT'))
         if not options.preview:
             try:
                 cleanup_successful_payload(options.manifest_sha256)
@@ -829,7 +844,7 @@ def main(argv=None):
         os.close(lock)
 
 
-def main_locked(options):
+def main_locked(options, begin_deployment=lambda: None):
     # The shared deployment lock is already held. Bind the updater's installed
     # identity before staging, preparing or changing any deployment files.
     expected = getattr(options, 'expected_manifest_sha256', None)
@@ -916,7 +931,7 @@ def main_locked(options):
             print(json.dumps({'installed': True, 'unchanged': True, 'commit': manifest['commit'],
                 'preservation': {'status': 'not-run', 'code': 'REMOTE_UNCHANGED_NO_PRESERVATION_WINDOW'}}))
             return
-        preparation = clock.measure('prepare', installer_result, installer + ['--operation', 'prepare' if installed else 'install', *common])
+        preparation = clock.measure('prepare', prepare_installation, installer + ['--operation', 'prepare' if installed else 'install', *common])
         clock.candidates('prepare', preparation)
         clock.mark('installation-preflight-complete')
         if installed:
@@ -940,18 +955,18 @@ def main_locked(options):
             run([node, '--experimental-strip-types', payload / 'source/apps/cli/main.ts', 'admin-init', '--input', admin, '--output', initial_credential])
         if frontend:
             return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
-                                   systemctl, service, node, inspect_complete, web_unit, journal, clock)
+                                   systemctl, service, node, inspect_complete, web_unit, journal, clock, begin_deployment)
         if installed and components != 'core' and preparation.get('runtimePreservation', {}).get('eligible') is True:
             candidate = new_input(old, options.manifest_sha256, runtime['binarySha256'], True)
             replace(next_path, candidate)
             common += ['--preserve-runtime']
-            pinned = clock.measure('prepare-preserve-runtime', installer_result, installer + ['--operation', 'prepare', *common])
+            pinned = clock.measure('prepare-preserve-runtime', prepare_installation, installer + ['--operation', 'prepare', *common])
             clock.candidates('prepare-preserve-runtime', pinned)
             clock.mark('runtime-preservation-preflight-complete')
             need(pinned.get('readiness') == 'prepared-not-applied' and pinned.get('review', {}).get('configurationChanged') is False,
                  'REMOTE_RUNTIME_PRESERVATION_NOT_READY')
             return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
-                                   systemctl, service, node, inspect_complete, web_unit, journal, clock, components)
+                                   systemctl, service, node, inspect_complete, web_unit, journal, clock, begin_deployment, components)
         gateway = bool(runtime.get('automaticGateway'))
         need(not installed or not gateway or router_command, 'REMOTE_ROUTER_HOOK_REQUIRED')
         router_enabled = False
@@ -980,6 +995,7 @@ def main_locked(options):
             print(json.dumps({'prepared': True, 'apply': False, 'operation': 'upgrade' if installed else 'install', 'commit': manifest['commit'],
                 'components': components, 'deployment': 'full-maintenance', 'runtimePreservation': preparation.get('runtimePreservation')}))
             return
+        begin_deployment()
         worker_units = ['cocoproxy-bandwidth.socket', 'cocoproxy-bandwidth.service']
         existing_workers = [unit for unit in worker_units if installed and any(item['path'] == '/etc/systemd/system/' + unit for item in receipt['files'])]
         units = ['cocoproxy-management.service', 'cocoproxy-mihomo.service', *existing_workers]
