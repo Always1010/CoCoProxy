@@ -152,7 +152,7 @@ function referencedCandidates(observations: StateObservation[]): { references: S
 
 export async function createUpgradeAssessment(context: UpgradeAssessmentContext, host: UpgradeStateHost,
   inspectedState?: Awaited<ReturnType<typeof inspectStateCompatibility>>,
-  memo?: { manifestSha256: string; evidence: CandidateEvidence }) {
+  memo?: { manifestSha256: string; evidence: CandidateEvidence }, onCandidates?: (completed: number, total: number) => void) {
   const state = inspectedState ?? await inspectStateCompatibility(host, context.targetDeclaration);
   const { observations } = state, references = referencedCandidates(observations);
   const started = performance.now(); let recompiled = 0, reused = 0;
@@ -165,9 +165,14 @@ export async function createUpgradeAssessment(context: UpgradeAssessmentContext,
   try {
     const names = await host.list('candidates') ?? [];
     if (names.length > 4096) throw new Error();
+    const candidateName = /^[a-f0-9]{64}\.json$/;
+    const total = onCandidates ? names.filter(name => candidateName.test(name)).length : 0;
+    let completed = 0;
     for (const name of names) {
       if (/^\.write-[a-f0-9-]{36}$/.test(name)) continue;
-      if (!/^[a-f0-9]{64}\.json$/.test(name)) { enumerationComplete = false; continue; }
+      if (!candidateName.test(name)) { enumerationComplete = false; continue; }
+      onCandidates?.(completed, total);
+      completed++;
       const generation = name.slice(0, -5); found.add(generation);
       let bytes: string | null;
       try { bytes = await host.read('candidates/' + name, 4 * 1024 * 1024); }
@@ -193,6 +198,7 @@ export async function createUpgradeAssessment(context: UpgradeAssessmentContext,
         historyChecks.push(invalid);
       }
     }
+    onCandidates?.(completed, total);
   } catch { enumerationComplete = false; }
   if (memo) for (const id of memo.evidence.verified) if (!found.has(id)) memo.evidence.verified.delete(id);
   if (!enumerationComplete || references.uncertain) {

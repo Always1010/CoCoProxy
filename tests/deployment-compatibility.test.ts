@@ -149,7 +149,9 @@ test('transaction candidate evidence reuses only matching bytes, source manifest
 
 test('upgrade preparation checks observed formats and identity without running a core or disclosing private values', async () => {
   const fixture = upgradeFixture();
-  const result = await createUpgradeAssessment(fixture.context, fixture.host);
+  const counts: number[][] = [];
+  const result = await createUpgradeAssessment(fixture.context, fixture.host, undefined, undefined, (completed, total) => counts.push([completed, total]));
+  assert.deepEqual(counts, [[0, 2], [1, 2], [2, 2]]);
   assert.deepEqual(Object.keys(result.assessments), ['state', 'configuration', 'historyCandidates', 'network', 'identity']);
   for (const assessment of Object.values(result.assessments)) assert.equal(assessment.status, 'supported', assessment.code);
   assert.ok(fixture.calls.every(call => /^(read|list):/.test(call)));

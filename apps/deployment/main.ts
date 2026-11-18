@@ -1,5 +1,18 @@
+import { writeSync } from 'node:fs';
 import { deployRelease, prepareUpgrade, stageUpgrade, InstallError, type InstallOptions } from '../../packages/deployment/install.ts';
 import { inspectDeployment, recoverDeployment } from '../../packages/deployment/maintenance.ts';
+
+function reportCandidates(): InstallOptions['onCandidates'] {
+  if (process.env.COCOPROXY_UPDATE_REPORT !== '1') return undefined;
+  let last = -Infinity;
+  return (completed, total) => {
+    const now = performance.now();
+    if (completed !== 0 && completed !== total && now - last < 500) return;
+    try { writeSync(3, JSON.stringify({ event: 'candidates', completed, total }) + '\n'); }
+    catch { /* Deployment must be able to finish when telemetry is disconnected. */ }
+    last = now;
+  };
+}
 
 try {
   const args = process.argv.slice(2), values: Record<string, string> = {};
@@ -26,7 +39,7 @@ try {
       operation === 'prepare' && (apply || values['--reviewed-configuration-sha256'])) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
     if (operation === 'stage' && (!apply || values['--reviewed-configuration-sha256'])) throw new InstallError('INSTALL_ARGUMENTS_INVALID');
     const options = { payload: values['--payload'], input: values['--input'], manifestSha256: values['--manifest-sha256'], preserveRuntime,
-      candidateEvidence: values['--candidate-evidence'] };
+      candidateEvidence: values['--candidate-evidence'], onCandidates: reportCandidates() };
     result = operation === 'prepare' ? await prepareUpgrade(options) : operation === 'stage' ? await stageUpgrade(options) : await deployRelease({ ...options,
       operation: operation as InstallOptions['operation'], reviewedConfigurationSha256: values['--reviewed-configuration-sha256'], apply });
   }

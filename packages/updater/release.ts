@@ -8,6 +8,7 @@ export type VerifiedUpdate = {
   version: string; tag: string; commit: string; platform: Platform; manifestSha256: string;
   asset: { name: string; url: string; size: number; sha256: string }; automatic: boolean;
 };
+type DownloadProgress = { phase: 'downloading'; completed: number; total: number } | { phase: 'verifying' };
 type Dependencies = { fetch?: typeof fetch; nodeVersion?: string };
 const repository = 'Always1010/CoCoProxy';
 const origin = `https://github.com/${repository}/releases/download/`;
@@ -208,7 +209,7 @@ with tarfile.open(fileobj=raw, mode='r:') as tar:
   os.chmod(path, 0o755 if entry.mode & 0o111 else 0o644)
 `;
 export async function downloadRelease(update: VerifiedUpdate, directory: string, signal: AbortSignal,
-  dependencies: Dependencies = {}): Promise<{ payload: string; manifestSha256: string }> {
+  dependencies: Dependencies & { onProgress?: (value: DownloadProgress) => void } = {}): Promise<{ payload: string; manifestSha256: string }> {
   need(update.asset.url === `${origin}${update.tag}/${update.asset.name}` && update.tag === `v${update.version}`
     && version(update.version) && ['linux-arm64', 'linux-amd64'].includes(update.platform)
     && update.asset.name === `cocoproxy-${update.version}-${update.platform}.tar.gz`
@@ -218,13 +219,21 @@ export async function downloadRelease(update: VerifiedUpdate, directory: string,
   const archive = join(destination, 'download.tar.gz'), extracted = join(destination, 'extracted');
   await mkdir(extracted, { mode: 0o700 });
   try {
+    let reportedAt = performance.now();
+    dependencies.onProgress?.({ phase: 'downloading', completed: 0, total: update.asset.size });
     const file = await open(archive, 'wx', 0o600);
     let downloaded = 0; const digest = createHash('sha256');
     try {
       await request(update.asset.url, update.asset.size, signal, dependencies.fetch ?? fetch, async chunk => {
         downloaded += chunk.byteLength; digest.update(chunk); await file.writeFile(chunk);
+        const now = performance.now();
+        if (dependencies.onProgress && (downloaded === update.asset.size || now - reportedAt >= 500)) {
+          dependencies.onProgress({ phase: 'downloading', completed: downloaded, total: update.asset.size });
+          reportedAt = now;
+        }
       });
     } finally { await file.close(); }
+    dependencies.onProgress?.({ phase: 'verifying' });
     need(downloaded === update.asset.size && digest.digest('hex') === update.asset.sha256, 'UPDATE_PACKAGE_HASH_MISMATCH');
     await new Promise<void>((accept, reject) => {
       const child = spawn('/usr/bin/python3', ['-I', '-B', '-c', extractor, archive, extracted, update.asset.name.slice(0, -7)],

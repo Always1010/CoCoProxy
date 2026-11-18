@@ -162,7 +162,10 @@ test('streamed valid payload passes complete existing manifest verification and 
       for (let offset = 0; offset < bytes.length; offset += 17) controller.enqueue(bytes.subarray(offset, offset + 17));
       controller.close();
     } }))) as typeof fetch;
-    const downloaded = await downloadRelease(update, join(directory, 'download'), signal(), { fetch: fetcher });
+    const progress: unknown[] = [];
+    const downloaded = await downloadRelease(update, join(directory, 'download'), signal(), { fetch: fetcher, onProgress: value => progress.push(value) });
+    assert.deepEqual(progress[0], { phase: 'downloading', completed: 0, total: bytes.length });
+    assert.deepEqual(progress.slice(-2), [{ phase: 'downloading', completed: bytes.length, total: bytes.length }, { phase: 'verifying' }]);
     assert.equal(downloaded.manifestSha256, sha256(manifest));
     assert.deepEqual(await readFile(join(downloaded.payload, 'manifest.json')), manifest);
     await assert.rejects(downloadRelease({ ...update, commit: 'd'.repeat(40) }, join(directory, 'wrong-commit'), signal(), { fetch: fetcher }), /IDENTITY/);

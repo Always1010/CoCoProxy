@@ -54,13 +54,18 @@ test('coordinator failure reports preserve the stage code and exclude raw diagno
     'os.write(2, fake)',
     'os.write(3, b"x" * 513 + fake)',
     'os.write(3, b\'{"event":"failure","code":"REMOTE_PREPARE_TIMEOUT","extra":"private"}\\n\')',
+    'os.write(3, b\'{"event":"step","step":"check-state"}\\n\')',
+    'os.write(3, b\'{"event":"candidates","completed":87,"total":200}\\n\')',
+    'os.write(3, b\'{"event":"candidates","completed":201,"total":200}\\n\')',
     'os.write(3, b\'{"event":"failure","code":"REMOTE_\')',
     'os.write(3, b\'PREPARE_TIMEOUT"}\\n\')',
     'sys.exit(1)',
   ].join('\n')], { onReport: value => reports.push(value) });
   assert.equal(result.code, 1);
-  assert.deepEqual(reports, [{ event: 'failure', code: 'REMOTE_PREPARE_TIMEOUT' }]);
-  assert.equal(coordinatorError(reports[0].code, 'UPDATER_PREFLIGHT_FAILED'), 'UPDATER_PREPARE_TIMEOUT');
+  assert.deepEqual(reports, [{ event: 'step', step: 'check-state' }, { event: 'candidates', completed: 87, total: 200 },
+    { event: 'failure', code: 'REMOTE_PREPARE_TIMEOUT' }]);
+  const failure = reports.find(report => report.event === 'failure');
+  assert.equal(coordinatorError(failure?.code, 'UPDATER_PREFLIGHT_FAILED'), 'UPDATER_PREPARE_TIMEOUT');
 });
 
 test('native cancellation waits until child cleanup finishes before download scratch can be removed', { timeout: 10_000 }, async () => {

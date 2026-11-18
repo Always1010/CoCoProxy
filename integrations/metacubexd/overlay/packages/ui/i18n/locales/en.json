@@ -2184,7 +2184,7 @@
     },
     "updatesTitle": "Software updates",
     "updatesDescription": "Automatically check and install stable CoCoProxy releases using your saved interval and update window.",
-    "updatesOffline": "Management is temporarily unavailable. The current status is retained; reconnection is automatic.",
+    "updatesOffline": "Update status is temporarily unavailable. The page will keep the last progress and reconnect automatically.",
     "updatesUnavailable": "Automatic updates are unavailable on this installation.",
     "updatesInstalled": "Installed version",
     "updatesLatest": "Latest version",
@@ -2229,8 +2229,45 @@
       "recovered": "Recovered",
       "manual-review-required": "Manual review required"
     },
+    "updatesProgress": {
+      "title": "Update progress",
+      "doneCount": "{done} of {total} steps complete",
+      "bytes": "Downloaded {done} of {total} MiB",
+      "candidates": "Checked {done} of {total} saved configurations. {remaining} remaining.",
+      "step": {
+        "checking": "Check the release",
+        "downloading": "Download and validate the package",
+        "preparing": "Check installation readiness",
+        "staging": "Stage the new release",
+        "installing": "Install the release",
+        "finishing": "Restore and verify services"
+      },
+      "status": {
+        "done": "Complete",
+        "running": "In progress",
+        "pending": "Pending",
+        "stopped": "Stopped"
+      },
+      "detail": {
+        "verify-download": "Validating and unpacking the package",
+        "verify-payload": "Checking the installed and target releases",
+        "check-state": "Validating saved data and configuration",
+        "recheck-state": "Rechecking saved data and configuration before installation",
+        "check-pinned-state": "Rechecking with the retained runtime settings",
+        "check-router": "Checking the router maintenance adapter",
+        "handover": "Waiting for the deployment coordinator to recheck and prepare installation",
+        "stage-release": "Preparing installation files",
+        "stop-services": "Pausing affected services",
+        "apply-release": "Switching to the new release",
+        "restore-services": "Restoring services",
+        "verify-services": "Verifying services and preserved data",
+        "restore-router": "Restoring and verifying router forwarding",
+        "recover-services": "Attempting to restore the previous installation and services"
+      }
+    },
     "updatesTaskError": "The update did not complete. The coordinator did not report a recognized reason.",
     "updatesErrors": {
+      "UPDATER_INSTALLATION_INVALID": "The installed version could not be verified from its installation record.",
       "UPDATER_PREPARE_TIMEOUT": "The installation preflight did not finish within five minutes.",
       "UPDATER_PREPARATION_TIMEOUT": "Preparation and rechecks exceeded the overall time limit.",
       "UPDATER_PREFLIGHT_FAILED": "The installation preflight failed. The deployment coordinator did not report a specific reason.",

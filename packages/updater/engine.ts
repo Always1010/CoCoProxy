@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { DEFAULT_UPDATE_SETTINGS, parseUpdateSettings, nextUpdateWindow, addDays, scheduleChanged } from './policy.ts';
 import type { UpdateSettings } from './policy.ts';
 import { UpdateError } from './types.ts';
-import type { UpdateCommand, UpdateJob, UpdateOutcome, UpdateView } from './types.ts';
+import type { UpdateCommand, UpdateJob, UpdateOutcome, UpdateProgress, UpdateProgressListener, UpdateView } from './types.ts';
 import type { VerifiedUpdate } from './release.ts';
 import { coordinatorError } from './reports.ts';
 
@@ -18,9 +18,9 @@ export interface UpdaterHost {
   installed(): Promise<InstalledUpdate>;
   configured(): Promise<boolean>;
   find(currentVersion: string, signal: AbortSignal): Promise<VerifiedUpdate | null>;
-  download(update: VerifiedUpdate, id: string, signal: AbortSignal): Promise<string>;
-  prepare(payload: string, update: VerifiedUpdate, original: InstalledUpdate, signal: AbortSignal): Promise<void>;
-  apply(payload: string, update: VerifiedUpdate, original: InstalledUpdate): Promise<UpdateOutcome>;
+  download(update: VerifiedUpdate, id: string, signal: AbortSignal, report: UpdateProgressListener): Promise<string>;
+  prepare(payload: string, update: VerifiedUpdate, original: InstalledUpdate, signal: AbortSignal, report: UpdateProgressListener): Promise<void>;
+  apply(payload: string, update: VerifiedUpdate, original: InstalledUpdate, report: UpdateProgressListener): Promise<UpdateOutcome>;
   cleanup(id: string): Promise<void>;
   jitter?(): number;
 }
@@ -62,6 +62,7 @@ export class UpdateEngine {
   private readonly host: UpdaterHost;
   private state: UpdateState;
   private writing = Promise.resolve();
+  private progress: UpdateProgress | null = null;
   private active: { controller: AbortController; automatic: boolean; installing: boolean } | null = null;
   private task: Promise<void> = Promise.resolve();
   private closed = false;
@@ -112,7 +113,8 @@ export class UpdateEngine {
       : !installed ? 'UPDATER_INSTALLATION_INVALID' : !configured ? 'UPDATER_PLATFORM_UNSUPPORTED' : null,
       settings: { ...this.state.settings }, revision: this.state.revision, currentVersion: installed?.version ?? null,
       latestVersion: this.state.latestVersion, nextCheckAt: this.state.needsReview ? null : nextCheckAt,
-      lastCheckedAt: this.state.lastCheckedAt, lastResult: this.state.lastResult, job: this.state.job ? { ...this.state.job } : null };
+      lastCheckedAt: this.state.lastCheckedAt, lastResult: this.state.lastResult, job: this.state.job ? { ...this.state.job } : null,
+      ...(this.progress ? { progress: this.progress } : {}) };
   }
   async handle(command: UpdateCommand): Promise<UpdateView> {
     if (this.closed) throw new UpdateError('UPDATER_UNAVAILABLE', 503);
@@ -148,6 +150,7 @@ export class UpdateEngine {
     this.active = task;
     const id = randomUUID(), revision = this.state.revision;
     this.state.job = { id, phase: 'checking', version: null, error: null };
+    this.progress = automatic || expectedVersion ? { step: 'checking' } : null;
     const persisted = this.persist();
     this.task = persisted.then(() => this.run(id, revision, expectedVersion, task)).finally(() => { this.active = null; });
     // The persisted job is observed through the API; native errors never become unhandled rejections.
@@ -161,6 +164,9 @@ export class UpdateEngine {
     let retryAt: number | null = null;
     const window = nextUpdateWindow(this.host.now(), this.state.dueDate, this.state.settings);
     const phase = async (next: string) => { this.state.job!.phase = next; await this.persist(); };
+    const report: UpdateProgressListener = progress => {
+      if (this.state.job?.id === id && !signal.aborted) this.progress = progress;
+    };
     try {
       signal.throwIfAborted();
       const original = await this.host.installed();
@@ -169,17 +175,20 @@ export class UpdateEngine {
       signal.throwIfAborted();
       this.state.lastCheckedAt = this.host.now(); checkSucceeded = true;
       this.state.latestVersion = update?.version ?? null;
-      if (!update) { this.state.lastResult = 'up-to-date'; await phase('completed'); return; }
+      if (!update) { this.progress = null; this.state.lastResult = 'up-to-date'; await phase('completed'); return; }
       this.state.job!.version = update.version;
       if (expectedVersion && update.version !== expectedVersion) throw new UpdateError('UPDATER_VERSION_CHANGED', 409);
       if (!task.automatic && !expectedVersion) { this.state.lastResult = update.automatic ? 'update-available' : 'manual-update-required'; await phase('completed'); return; }
       if (!update.automatic || task.automatic && (this.state.blockedVersion === update.version || original.version.split('.')[0] !== update.version.split('.')[0])) {
-        this.state.lastResult = 'manual-update-required'; await phase('completed'); return;
+        this.progress = null; this.state.lastResult = 'manual-update-required'; await phase('completed'); return;
       }
+      report({ step: 'downloading' });
       await phase('downloading');
-      const payload = await this.host.download(update, id, signal);
-      signal.throwIfAborted(); await phase('preparing');
-      await this.host.prepare(payload, update, original, signal);
+      const payload = await this.host.download(update, id, signal, report);
+      signal.throwIfAborted();
+      report({ step: 'preparing' });
+      await phase('preparing');
+      await this.host.prepare(payload, update, original, signal, report);
       signal.throwIfAborted();
       const current = await this.host.installed();
       signal.throwIfAborted();
@@ -188,8 +197,9 @@ export class UpdateEngine {
         this.state.lastResult = 'cancelled'; await phase('cancelled'); return;
       }
       // Set boundary synchronously before yielding: disabling can no longer interrupt deployment recovery.
+      report({ step: 'preparing', detail: 'handover' });
       task.installing = true; await phase('installing');
-      const outcome = await this.host.apply(payload, update, original);
+      const outcome = await this.host.apply(payload, update, original, report);
       this.state.lastResult = outcome.status;
       if (outcome.status === 'updated') this.state.latestVersion = null;
       else {

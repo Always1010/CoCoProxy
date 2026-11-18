@@ -12,9 +12,9 @@ import { findRelease, downloadRelease } from './release.ts';
 import type { Platform, VerifiedUpdate } from './release.ts';
 import type { InstalledUpdate, UpdaterHost, UpdateState } from './engine.ts';
 import { initialUpdateState, parseUpdateState } from './engine.ts';
-import { UpdateError } from './types.ts';
+import { UpdateError, type UpdateProgress, type UpdateProgressListener } from './types.ts';
 import { UPDATER_APPLY_TIMEOUT_MS, UPDATER_PREVIEW_TIMEOUT_MS, UPDATER_RECOVERY_GRACE_MS } from './deadlines.ts';
-import { coordinatorError, readCoordinatorReports, type CoordinatorReport } from './reports.ts';
+import { coordinatorError, coordinatorSteps, readCoordinatorReports, type CoordinatorReport } from './reports.ts';
 
 export const UPDATER_STATE_DIRECTORY = '/var/lib/cocoproxy-updater';
 export const UPDATER_RUNTIME_DIRECTORY = '/run/cocoproxy-updater';
@@ -178,13 +178,26 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
     need(current.manifestSha256 === original.manifestSha256, 'UPDATER_INSTALLATION_CHANGED');
     return current;
   }
-  async function coordinator(payload: string, update: VerifiedUpdate, original: InstalledUpdate, preview: boolean, signal?: AbortSignal) {
+  async function coordinator(payload: string, update: VerifiedUpdate, original: InstalledUpdate, preview: boolean,
+    onProgress: UpdateProgressListener, signal?: AbortSignal) {
     let failure: string | null = null;
+    let progress: UpdateProgress = { step: 'preparing' };
+    const onReport = (value: CoordinatorReport) => {
+      if (value.event === 'failure') { failure = value.code; return; }
+      if (value.event === 'step') {
+        const step = coordinatorSteps[value.step];
+        progress = { step: step === 'recovering' ? progress.step : step,
+          detail: !preview && value.step === 'check-state' ? 'recheck-state' : value.step };
+      } else if (progress.detail && ['check-state', 'recheck-state', 'check-pinned-state', 'stage-release', 'apply-release'].includes(progress.detail)) {
+        progress = { ...progress, count: { unit: 'candidates', completed: value.completed, total: value.total } };
+      }
+      onProgress(progress);
+    };
     try {
       const result = await runUpdaterTool('/usr/bin/python3', [payload + '/source/scripts/remote-deploy.py', '--payload', payload,
         '--manifest-sha256', update.manifestSha256, '--expected-manifest-sha256', original.manifestSha256,
         ...(preview ? ['--preview'] : [])], { signal, timeout: preview ? UPDATER_PREVIEW_TIMEOUT_MS : UPDATER_APPLY_TIMEOUT_MS,
-        ...(preview ? {} : { killAfterMs: UPDATER_RECOVERY_GRACE_MS }), onReport: value => { failure = value.code; } });
+        ...(preview ? {} : { killAfterMs: UPDATER_RECOVERY_GRACE_MS }), onReport });
       return { code: result.code, failure, timeout: false };
     } catch (error) {
       if (!(error instanceof UpdateError) || error.code !== 'UPDATER_TOOL_TIMEOUT') throw error;
@@ -201,30 +214,33 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
       need(platform, 'UPDATER_PLATFORM_UNSUPPORTED');
       return findRelease(currentVersion, platform!, signal);
     },
-    download: async (update, id, signal) => {
+    download: async (update, id, signal, report) => {
       const scratch = join(UPDATER_STATE_DIRECTORY, 'download-' + id);
       const storage = await statfs(UPDATER_STATE_DIRECTORY, { bigint: true });
       // Space for archive, extraction, incoming copy and installed immutable release, with headroom.
       need(storage.bavail * storage.bsize >= BigInt(update.asset.size) + 3n * 512n * 1024n * 1024n + 64n * 1024n * 1024n, 'UPDATER_DISK_SPACE');
       await mkdir(scratch, { mode: 0o700 });
-      const downloaded = await downloadRelease(update, scratch, signal);
+      const downloaded = await downloadRelease(update, scratch, signal, { onProgress: value => {
+        report(value.phase === 'verifying' ? { step: 'downloading', detail: 'verify-download' }
+          : { step: 'downloading', count: { unit: 'bytes', completed: value.completed, total: value.total } });
+      } });
       return downloaded.payload;
     },
-    prepare: async (payload, update, original, signal) => {
+    prepare: async (payload, update, original, signal, report) => {
       const current = await stable(original);
       // The first release supports only matching reader/writer contracts. Irreversible migrations require manual deployment.
       const next = await verifyRelease(payload, update.manifestSha256);
       need(isDeepStrictEqual(current.manifest.compatibility, next.compatibility), 'UPDATER_MANUAL_MIGRATION_REQUIRED');
       const input = await trustedJSON(DEPLOYMENT, 128 * 1024);
       need(input.runtime?.nodePath === settings.nodePath, 'UPDATER_EXECUTION_SETTINGS_INVALID');
-      const preview = await coordinator(payload, update, original, true, signal);
+      const preview = await coordinator(payload, update, original, true, report, signal);
       need(preview.code === 0, coordinatorError(preview.failure, preview.timeout ? 'UPDATER_PREPARATION_TIMEOUT' : 'UPDATER_PREFLIGHT_FAILED'));
       await stable(original);
     },
-    apply: async (payload, update, original) => {
+    apply: async (payload, update, original, report) => {
       await stable(original);
       const previousJournal = await trustedRead(JOURNAL, 512 * 1024).catch(() => null);
-      const result = await coordinator(payload, update, original, false);
+      const result = await coordinator(payload, update, original, false, report);
       if (result.code === 0) {
         const current = await installed();
         need(current.manifestSha256 === update.manifestSha256 && current.version === update.version, 'UPDATER_VERSION_NOT_RUNNING');

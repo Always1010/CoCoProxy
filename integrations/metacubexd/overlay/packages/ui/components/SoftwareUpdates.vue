@@ -3,7 +3,18 @@ import { IconCheck, IconDownload, IconRefresh, IconRestore } from '@tabler/icons
 import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
 type Settings = { schemaVersion: 1; enabled: boolean; intervalDays: number; timeZone: string; windowStart: string; windowEnd: string }
-type View = { available: boolean; configured: boolean; unavailableReason: string | null; settings: Settings; revision: number; currentVersion: string | null; latestVersion: string | null; nextCheckAt: number | null; lastCheckedAt: number | null; lastResult: string | null; job: { id: string; phase: string; version: string | null; error: string | null } | null }
+const steps = ['checking', 'downloading', 'preparing', 'staging', 'installing', 'finishing'] as const
+type Progress = {
+  step: typeof steps[number]
+  detail?: string
+  count?: { unit: 'bytes' | 'candidates'; completed: number; total: number }
+}
+type View = {
+  available: boolean; configured: boolean; unavailableReason: string | null; settings: Settings; revision: number
+  currentVersion: string | null; latestVersion: string | null; nextCheckAt: number | null; lastCheckedAt: number | null
+  lastResult: string | null; job: { id: string; phase: string; version: string | null; error: string | null } | null
+  progress?: Progress
+}
 const { t, te, locale } = useI18n()
 const api = useCoCoProxy()
 const view = shallowRef<View | null>(null)
@@ -17,12 +28,44 @@ const panel = ref<{ open: () => void; close: (force?: boolean) => void }>()
 const installingVersion = ref<string | null>(null)
 const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== baseline.value)
 const jobActive = computed(() => !!view.value?.job && !['completed', 'succeeded', 'failed', 'idle', 'interrupted', 'cancelled'].includes(view.value.job.phase))
-const usable = computed(() => view.value?.available && view.value.configured)
+const usable = computed(() => view.value?.available && view.value.configured && !view.value.unavailableReason)
+const progress = computed(() => view.value?.progress)
+const activeStep = computed(() => progress.value ? steps.indexOf(progress.value.step) : -1)
+const finished = computed(() => view.value?.job?.phase === 'completed' && view.value.lastResult === 'updated')
+const showProgress = computed(() => finished.value || activeStep.value >= 0)
+const completedSteps = computed(() => finished.value ? steps.length : Math.max(0, activeStep.value))
+const progressTotal = computed(() => t('coco.updatesProgress.doneCount', { done: completedSteps.value, total: steps.length }))
+const progressDetail = computed(() => {
+  const detail = progress.value?.detail
+  if (!detail) return ''
+  const key = `coco.updatesProgress.detail.${detail}`
+  return te(key) ? t(key) : ''
+})
+const progressCount = computed(() => {
+  const count = progress.value?.count
+  if (!count || count.total <= 0) return ''
+  const number = new Intl.NumberFormat(locale.value, { maximumFractionDigits: 1 })
+  if (count.unit === 'bytes') {
+    const mib = 1024 * 1024
+    return t('coco.updatesProgress.bytes', { done: number.format(count.completed / mib), total: number.format(count.total / mib) })
+  }
+  return t('coco.updatesProgress.candidates', { done: number.format(count.completed), total: number.format(count.total),
+    remaining: number.format(count.total - count.completed) })
+})
+function stepStatus(index: number) {
+  if (index < completedSteps.value) return 'done'
+  if (index === activeStep.value) return jobActive.value ? 'running' : 'stopped'
+  return 'pending'
+}
 let reading = false
 let sequence = 0
 let disposed = false
 let timer: ReturnType<typeof setTimeout> | undefined
 function accept(value: View, reset = false) {
+  if (value.unavailableReason === 'UPDATER_UNAVAILABLE' && view.value?.available) {
+    offline.value = true
+    return
+  }
   if (!draft.value || reset || (!dirty.value && revision.value !== value.revision)) {
     draft.value = { ...value.settings }; baseline.value = JSON.stringify(value.settings); revision.value = value.revision
   }
@@ -64,7 +107,7 @@ function taskError(code: string) {
 function visible() { if (document.visibilityState === 'visible') void load() }
 async function poll() {
   if (document.visibilityState === 'visible') await load()
-  if (!disposed) timer = setTimeout(poll, 5000)
+  if (!disposed) timer = setTimeout(poll, jobActive.value ? 2000 : 5000)
 }
 onMounted(() => { void load(true); timer = setTimeout(poll, 5000); document.addEventListener('visibilitychange', visible) })
 onBeforeUnmount(() => { disposed = true; clearTimeout(timer); document.removeEventListener('visibilitychange', visible) })
@@ -80,7 +123,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); document.removeEve
     <p v-if="!view && busy" class="mt-3 text-sm" role="status">{{ t('coco.pzLoading3') }}</p>
     <p v-if="offline" class="mt-3 text-sm text-warning" role="status">{{ t('coco.updatesOffline') }}</p>
     <template v-if="view">
-      <p v-if="!view.available || !view.configured" class="mt-3 text-sm text-warning">{{ t('coco.updatesUnavailable') }}</p>
+      <p v-if="view.unavailableReason" class="mt-3 text-sm text-warning">{{ taskError(view.unavailableReason) }}</p>
       <dl class="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
         <dt>{{ t('coco.updatesInstalled') }}</dt><dd class="break-all">{{ view.currentVersion ?? t('coco.pzUnknown') }}</dd>
         <dt>{{ t('coco.updatesLatest') }}</dt><dd class="break-all">{{ view.latestVersion ?? t('coco.pzUnknown') }}</dd>
@@ -88,7 +131,30 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); document.removeEve
         <dt>{{ t('coco.updatesNextCheck') }}</dt><dd>{{ date(view.nextCheckAt) }}</dd>
       </dl>
       <p v-if="view.lastResult" class="mt-2 break-words text-sm">{{ t('coco.updatesResult') }}: {{ t(`coco.updatesResults.${view.lastResult}`, view.lastResult) }}</p>
-      <p v-if="view.job" class="mt-2 break-words text-sm" role="status">{{ t('coco.updatesJob') }}: {{ t(`coco.updatesPhases.${view.job.phase}`, view.job.phase) }} {{ view.job.version }}</p>
+      <p v-if="view.job && !showProgress" class="mt-2 break-words text-sm" role="status">{{ t('coco.updatesJob') }}: {{ t(`coco.updatesPhases.${view.job.phase}`, view.job.phase) }} {{ view.job.version }}</p>
+      <div v-if="showProgress" class="mt-3 rounded-lg border border-base-content/10 p-3 text-sm">
+        <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <span class="font-medium">{{ t('coco.updatesProgress.title') }} {{ view.job?.version }}</span>
+          <span class="text-xs tabular-nums text-base-content/65">{{ progressTotal }}</span>
+        </div>
+        <progress class="progress progress-primary my-2 h-2 w-full" :value="completedSteps" :max="steps.length"
+          :aria-label="t('coco.updatesProgress.title')" :aria-valuetext="progressTotal" />
+        <ol class="space-y-1.5">
+          <li v-for="(step, index) in steps" :key="step" :aria-current="stepStatus(index) === 'running' ? 'step' : undefined">
+            <div class="flex items-baseline justify-between gap-3">
+              <span :class="{ 'font-medium text-primary': stepStatus(index) === 'running' }">{{ t(`coco.updatesProgress.step.${step}`) }}</span>
+              <span class="shrink-0 text-xs" :class="{
+                'text-success': stepStatus(index) === 'done', 'text-primary': stepStatus(index) === 'running',
+                'text-warning': stepStatus(index) === 'stopped', 'text-base-content/60': stepStatus(index) === 'pending',
+              }">{{ t(`coco.updatesProgress.status.${stepStatus(index)}`) }}</span>
+            </div>
+            <p v-if="index === activeStep && !finished && (progressDetail || progressCount)" class="mt-0.5 space-x-2 text-xs text-base-content/65">
+              <span v-if="progressDetail && (jobActive || progress?.detail !== 'recover-services')">{{ progressDetail }}</span>
+              <span v-if="progressCount" class="tabular-nums">{{ progressCount }}</span>
+            </p>
+          </li>
+        </ol>
+      </div>
       <p v-if="view.job?.error" class="mt-1 break-words text-sm text-error" role="alert">{{ taskError(view.job.error) }} <span class="text-xs">({{ view.job.error }})</span></p>
       <form v-if="draft" class="mt-4 space-y-3" @submit.prevent="save">
         <label class="flex min-h-11 items-center justify-between gap-3 text-sm"><span>{{ t('coco.updatesAutomatic') }}</span><input v-model="draft.enabled" type="checkbox" role="switch" class="toggle toggle-primary" :disabled="busy || !view.available" /></label>

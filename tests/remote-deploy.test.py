@@ -463,8 +463,11 @@ class RemoteDeploymentTests(unittest.TestCase):
         for component in [None, 'backend', 'management']:
             with self.subTest(component=component):
                 temporary, stack, private, before, events, router, args = self.scenario(component=component, preserve_runtime=True, reordered_properties=True)
-                with temporary, stack:
+                with temporary, stack, patch.object(deploy, 'update_report') as reports:
                     deploy.main_locked(args)
+                    self.assertEqual([call.kwargs['step'] for call in reports.call_args_list],
+                        ['verify-payload', 'check-state', 'check-pinned-state', 'stage-release', 'stop-services',
+                         'apply-release', 'restore-services', 'verify-services'])
                     installed = json.loads((private / 'deployment.json').read_text())
                     self.assertEqual(installed['runtime'], before['runtime'])
                     self.assertTrue(any('--preserve-runtime' in event and '--apply' in event for event in events))
@@ -472,6 +475,21 @@ class RemoteDeploymentTests(unittest.TestCase):
                     mutations = [event for event in events if event[0] == '/usr/bin/systemctl' and event[1] in ['start', 'stop', 'enable', 'disable']]
                     self.assertTrue(all(event[2:] == ['cocoproxy-management.service'] or event[1:] == ['enable', 'cocoproxy-updater.service'] for event in mutations))
                     self.assertTrue(router['enabled'])
+
+    def test_installer_reports_counts_on_the_updater_pipe_without_changing_stdout(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            with patch.object(deploy, 'UPDATE_REPORT_FD', write_fd), patch.dict(os.environ, {'COCOPROXY_UPDATE_REPORT': '1'}):
+                result = deploy.installer_result([sys.executable, '-c', (
+                    'import json, os, sys\n'
+                    'os.write(int(sys.argv[1]), b\'{"event":"candidates","completed":1,"total":2}\\n\')\n'
+                    'print(json.dumps({"readiness": "prepared-not-applied"}))'
+                ), str(write_fd)])
+            self.assertEqual(result, {'readiness': 'prepared-not-applied'})
+            self.assertEqual(json.loads(os.read(read_fd, 512)), {'event': 'candidates', 'completed': 1, 'total': 2})
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
 
     def test_preserving_runtime_rejects_state_mutation_core_restart_and_unready_manager(self):
         for options, error in [({'change_during_install': True}, 'REMOTE_PRESERVATION_INSTALL_WINDOW_CHANGED'),

@@ -16,6 +16,14 @@ export interface UpdateJob {
 export type UpdateOutcome = { status: 'updated' }
   | { status: 'failed' | 'recovered' | 'manual-review-required'; error: string };
 
+export type UpdateStep = 'checking' | 'downloading' | 'preparing' | 'staging' | 'installing' | 'finishing';
+export interface UpdateProgress {
+  step: UpdateStep;
+  detail?: string;
+  count?: { unit: 'bytes' | 'candidates'; completed: number; total: number };
+}
+export type UpdateProgressListener = (progress: UpdateProgress) => void;
+
 /** Browser-safe summary. No paths, credentials or native error messages. */
 export interface UpdateView {
   available: boolean;
@@ -29,6 +37,7 @@ export interface UpdateView {
   lastCheckedAt: number | null;
   lastResult: string | null;
   job: UpdateJob | null;
+  progress?: UpdateProgress;
 }
 
 export type UpdateCommand = { action: 'status' } | { action: 'configure'; expectedRevision: number; settings: UpdateSettings }

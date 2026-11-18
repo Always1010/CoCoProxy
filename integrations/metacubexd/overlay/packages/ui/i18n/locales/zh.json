@@ -2184,7 +2184,7 @@
     },
     "updatesTitle": "软件更新",
     "updatesDescription": "自动检查并安装 CoCoProxy 正式版本。开启后按保存的间隔和时段执行。",
-    "updatesOffline": "管理服务暂时离线，当前状态已保留，将自动重新连接。",
+    "updatesOffline": "暂时无法读取更新状态，将保留已显示的进度并自动重新连接。",
     "updatesUnavailable": "当前安装环境不支持自动更新。",
     "updatesInstalled": "已安装版本",
     "updatesLatest": "最新版本",
@@ -2229,8 +2229,45 @@
       "recovered": "已恢复",
       "manual-review-required": "需要人工检查"
     },
+    "updatesProgress": {
+      "title": "更新进度",
+      "doneCount": "已完成 {done} / {total} 步",
+      "bytes": "已下载 {done} / {total} MiB",
+      "candidates": "已检查 {done} / {total} 个历史配置，剩余 {remaining} 个",
+      "step": {
+        "checking": "检查发行版本",
+        "downloading": "下载并校验安装包",
+        "preparing": "检查升级条件",
+        "staging": "预装新版文件",
+        "installing": "安装新版",
+        "finishing": "恢复并验收服务"
+      },
+      "status": {
+        "done": "已完成",
+        "running": "进行中",
+        "pending": "待开始",
+        "stopped": "已停止"
+      },
+      "detail": {
+        "verify-download": "正在校验并解包",
+        "verify-payload": "正在核对现有安装和新版文件",
+        "check-state": "正在校验已保存的数据和配置",
+        "recheck-state": "正在执行安装前复核",
+        "check-pinned-state": "正在按保留的运行设置复核",
+        "check-router": "正在核验路由器维护适配器",
+        "handover": "正在等待部署协调器复核并准备安装",
+        "stage-release": "正在准备安装文件",
+        "stop-services": "正在暂停受影响的服务",
+        "apply-release": "正在切换到新版文件",
+        "restore-services": "正在恢复服务",
+        "verify-services": "正在检查服务和数据保留情况",
+        "restore-router": "正在恢复并验证路由器交付",
+        "recover-services": "正在尝试恢复更新前的安装和服务"
+      }
+    },
     "updatesTaskError": "更新任务未完成，执行器未返回可识别的具体原因。",
     "updatesErrors": {
+      "UPDATER_INSTALLATION_INVALID": "无法从当前安装记录确认已安装版本。",
       "UPDATER_PREPARE_TIMEOUT": "升级预检在五分钟内未完成。",
       "UPDATER_PREPARATION_TIMEOUT": "安装前的准备和复核超过总时限。",
       "UPDATER_PREFLIGHT_FAILED": "安装预检未通过，部署协调器未提供具体原因。",

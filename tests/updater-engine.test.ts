@@ -97,6 +97,38 @@ test('preflight timeout records the real reason without entering installation or
   assert.equal(h.calls.apply, 0);
 });
 
+test('active installation reports measured progress and leaves the persistent update state compatible', async () => {
+  const checking = deferred(), allowInstall = deferred();
+  const restoring = deferred(), allowFinish = deferred();
+  const h = harness({
+    prepare: async (_payload, _update, _installed, _signal, report) => {
+      report({ step: 'preparing', detail: 'check-state', count: { unit: 'candidates', completed: 87, total: 200 } });
+      checking.resolve();
+      await allowInstall.promise;
+    },
+    apply: async (_payload, _update, _installed, report) => {
+      report({ step: 'finishing', detail: 'restore-router' });
+      restoring.resolve();
+      await allowFinish.promise;
+      return { status: 'updated' };
+    },
+  });
+  await h.engine.handle({ action: 'install', expectedVersion: candidate.version });
+  await checking.promise;
+  assert.deepEqual((await h.engine.handle({ action: 'status' })).progress,
+    { step: 'preparing', detail: 'check-state', count: { unit: 'candidates', completed: 87, total: 200 } });
+  assert.equal(Object.hasOwn(h.snapshot(), 'progress'), false);
+  allowInstall.resolve();
+  await restoring.promise;
+  assert.deepEqual((await h.engine.view()).progress, { step: 'finishing', detail: 'restore-router' });
+  allowFinish.resolve();
+  await h.engine.idle();
+  assert.equal(h.snapshot().lastResult, 'updated');
+  await h.engine.handle({ action: 'check' });
+  assert.equal((await h.engine.view()).progress, undefined);
+  await h.engine.idle();
+});
+
 test('unconfirmed installer termination retains scratch and blocks further installation without staying busy', async () => {
   let applies = 0;
   const h = harness({ apply: async () => { applies++; throw new Error('UPDATER_TOOL_STOP_UNCONFIRMED'); } });

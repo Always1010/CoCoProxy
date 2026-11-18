@@ -30,7 +30,11 @@ export type Receipt = { schemaVersion: 1; status: 'pending' | 'complete' | 'unin
   manifestSha256: string; files: Owned[]; serviceUid: number; stateDirectory: string; credentialPath: string;
   runtimeManifestSha256?: string;
   transaction?: { id: string; operation: Operation } };
-export type InstallOptions = { payload: string; input: string; manifestSha256: string; operation: Operation; apply?: boolean; reviewedConfigurationSha256?: string; preserveRuntime?: boolean; candidateEvidence?: string };
+export type InstallOptions = {
+  payload: string; input: string; manifestSha256: string; operation: Operation; apply?: boolean;
+  reviewedConfigurationSha256?: string; preserveRuntime?: boolean; candidateEvidence?: string;
+  onCandidates?: (completed: number, total: number) => void;
+};
 export type DeploymentLock = { schemaVersion: 1; id: string; pid: number; bootId: string; startTime: string };
 export function parseDeploymentLock(value: unknown): DeploymentLock {
   const lock = value as DeploymentLock;
@@ -741,7 +745,7 @@ async function deployment(options: InstallOptions, preparing: boolean, stageOnly
     } catch { networkReceipt = { observation: 'unavailable' }; }
     compatibilityAssessment = await createUpgradeAssessment({ targetDeclaration: declaration, currentRuntime: oldRuntime, targetRuntime: newRuntime,
       currentManagement: oldManagement, targetManagement: newManagement, credential, credentialObserved, networkReceipt }, stateHost, inspectedState,
-      candidateEvidence ? { manifestSha256: options.manifestSha256, evidence: candidateEvidence } : undefined);
+      candidateEvidence ? { manifestSha256: options.manifestSha256, evidence: candidateEvidence } : undefined, options.onCandidates);
     if (!preparing) {
       require(compatibilityAssessment.assessments.historyCandidates.status !== 'unsupported', 'INSTALL_HISTORY_CANDIDATE_UNSUPPORTED');
       require(compatibilityAssessment.assessments.historyCandidates.status !== 'unknown', 'INSTALL_HISTORY_COMPATIBILITY_NOT_DECLARED');
