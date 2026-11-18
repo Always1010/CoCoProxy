@@ -45,6 +45,11 @@ const discoveryCache = new WeakMap<typeof fetch, Map<string, CachedResponse>>();
 async function request(url: string, limit: number, signal: AbortSignal, fetcher: typeof fetch,
   sink?: (chunk: Uint8Array) => Promise<void>, conditional = false): Promise<Buffer> {
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+  const networkFailure = (): never => {
+    signal.throwIfAborted();
+    throw new UpdateReleaseError(bounded.aborted ? 'UPDATE_NETWORK_TIMEOUT' : 'UPDATE_NETWORK_FAILED');
+  };
+  const checkDeadline = () => { if (bounded.aborted) networkFailure(); };
   const original = url;
   let cache = discoveryCache.get(fetcher);
   if (!cache) { cache = new Map(); discoveryCache.set(fetcher, cache); }
@@ -53,7 +58,8 @@ async function request(url: string, limit: number, signal: AbortSignal, fetcher:
     allowedURL(url, redirects > 0);
     const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'CoCoProxy-updater' };
     if (cached && redirects === 0) headers['If-None-Match'] = cached.etag;
-    const response = await fetcher(url, { signal: bounded, redirect: 'manual', headers });
+    checkDeadline();
+    const response = await fetcher(url, { signal: bounded, redirect: 'manual', headers }).catch(networkFailure);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       await response.body?.cancel();
       need(redirects < 4 && response.headers.has('location'), 'UPDATE_REDIRECT_INVALID');
@@ -81,8 +87,8 @@ async function request(url: string, limit: number, signal: AbortSignal, fetcher:
     const reader = response.body.getReader(), chunks: Buffer[] = []; let size = 0;
     try {
       while (true) {
-        bounded.throwIfAborted();
-        const part = await reader.read(); if (part.done) break;
+        checkDeadline();
+        const part = await reader.read().catch(networkFailure); if (part.done) break;
         size += part.value.byteLength; need(size <= limit, 'UPDATE_SIZE_LIMIT');
         if (sink) await sink(part.value); else chunks.push(Buffer.from(part.value));
       }

@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import copy
+import errno
 try:
     import fcntl
 except ImportError:
@@ -32,6 +33,28 @@ PREPARE_TIMEOUT = 300
 PREPARATION_TIMEOUT = 2 * PREPARE_TIMEOUT + 60
 DEPLOYMENT_TIMEOUT = 600
 RECOVERY_TIMEOUT = 600
+UPDATE_REPORT_FD = 3
+
+
+def update_report(event, **fields):
+    # Only the updater opens this descriptor. Keep CLI JSON and raw diagnostics separate.
+    if os.environ.get('COCOPROXY_UPDATE_REPORT') == '1':
+        try:
+            os.write(UPDATE_REPORT_FD, (json.dumps({'event': event, **fields}, separators=(',', ':')) + '\n').encode())
+        except OSError:
+            pass
+
+
+def failure_code(error):
+    if isinstance(error, RuntimeError) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,95}', str(error)):
+        return str(error)
+    if isinstance(error, subprocess.TimeoutExpired):
+        return 'REMOTE_STEP_TIMEOUT'
+    if isinstance(error, OSError) and error.errno == errno.ENOSPC:
+        return 'REMOTE_DISK_SPACE'
+    if isinstance(error, PermissionError):
+        return 'REMOTE_PERMISSION_DENIED'
+    return 'REMOTE_DEPLOYMENT_FAILED'
 
 
 @contextlib.contextmanager
@@ -115,6 +138,32 @@ def preinstall_release(installer, common):
     result = installer_result(installer + ['--operation', 'stage', *common, '--apply'])
     need(result.get('staged') is True and result.get('liveSettingsChanged') is False, 'REMOTE_RELEASE_NOT_PREINSTALLED')
     return result
+
+
+def assert_prepared(preparation):
+    readiness = preparation.get('readiness')
+    changed = preparation.get('review', {}).get('configurationChanged')
+    if readiness == 'prepared-not-applied' and changed is False:
+        return
+    assessments = preparation.get('compatibilityAssessment', {}).get('assessments', {})
+    causes = {'unsupported': set(), 'unknown': set()}
+
+    def collect(item):
+        children = [child for child in item.get('checks', []) if child.get('status') in causes]
+        for child in children:
+            collect(child)
+        code, status = item.get('code', ''), item.get('status')
+        if not children and status in causes and re.fullmatch(r'(UPGRADE|DEPLOYMENT_STATE)_[A-Z_]{1,80}', code):
+            causes[status].add(code)
+
+    for name in ['state', 'configuration', 'historyCandidates']:
+        collect(assessments.get(name, {}))
+    print(json.dumps({'phase': 'prepare', 'readiness': readiness, 'configurationChanged': changed,
+                      'codes': sorted(causes['unsupported'] | causes['unknown'])}), file=sys.stderr)
+    if changed is True:
+        raise RuntimeError('REMOTE_UPGRADE_CONFIGURATION_CHANGED')
+    reasons = sorted(causes['unsupported'] or causes['unknown'])
+    raise RuntimeError(reasons[0] if reasons else 'REMOTE_UPGRADE_COMPATIBILITY_UNVERIFIED')
 
 
 def compare_preservation(before, after, frozen=False):
@@ -514,8 +563,7 @@ def rollback_update(context):
 
 def finish_failed_upgrade(journal, progress, clock, cause, recovery=None, unchanged=None):
     signal.setitimer(signal.ITIMER_REAL, 0)
-    failure = {'phase': progress['phase'], 'code': str(cause) if isinstance(cause, RuntimeError) and
-        re.fullmatch('[A-Z][A-Z0-9_]+', str(cause)) else 'REMOTE_DEPLOYMENT_FAILED'}
+    failure = {'phase': progress['phase'], 'code': failure_code(cause)}
     result = {'status': 'not-needed', 'services': 'unchanged'}
     if recovery is None and unchanged is not None:
         try:
@@ -532,8 +580,8 @@ def finish_failed_upgrade(journal, progress, clock, cause, recovery=None, unchan
             with deployment_deadline(RECOVERY_TIMEOUT, 'REMOTE_ROLLBACK_TIMEOUT'):
                 result = rollback_update(recovery)
         except Exception as error:
-            result = {'status': 'failed', 'code': str(error) if isinstance(error, RuntimeError) and
-                re.fullmatch('[A-Z][A-Z0-9_]+', str(error)) else 'REMOTE_ROLLBACK_FAILED'}
+            code = failure_code(error)
+            result = {'status': 'failed', 'code': 'REMOTE_ROLLBACK_FAILED' if code == 'REMOTE_DEPLOYMENT_FAILED' else code}
     recovered = result['status'] in ['restored', 'not-needed']
     replace(journal, {**progress, 'status': 'recovered' if recovered else 'failed', 'failure': failure,
         'phase': 'previous-version-restored' if result['status'] == 'restored' else 'services-unchanged' if recovered else 'manual-review-required',
@@ -935,19 +983,7 @@ def main_locked(options, begin_deployment=lambda: None):
         clock.candidates('prepare', preparation)
         clock.mark('installation-preflight-complete')
         if installed:
-            if preparation.get('readiness') != 'prepared-not-applied' or preparation.get('review', {}).get('configurationChanged') is not False:
-                # Keep the existing diagnostics without disclosing private input or file paths.
-                pending = list(preparation.get('compatibilityAssessment', {}).get('assessments', {}).values())
-                codes = set()
-                while pending:
-                    assessment = pending.pop()
-                    code = assessment.get('code', '')
-                    if assessment.get('status') in ['unknown', 'unsupported'] and re.fullmatch('[A-Z][A-Z0-9_]+', code):
-                        codes.add(code)
-                    pending.extend(assessment.get('checks', []))
-                print(json.dumps({'phase': 'prepare', 'readiness': preparation.get('readiness'),
-                    'configurationChanged': preparation.get('review', {}).get('configurationChanged'), 'codes': sorted(codes)}), file=sys.stderr)
-                raise RuntimeError('REMOTE_UPGRADE_NOT_READY_OR_CONFIGURATION_CHANGED')
+            assert_prepared(preparation)
         else:
             admin = temporary / 'administrator.json'
             initial_credential = temporary / 'credential.json'
@@ -963,8 +999,7 @@ def main_locked(options, begin_deployment=lambda: None):
             pinned = clock.measure('prepare-preserve-runtime', prepare_installation, installer + ['--operation', 'prepare', *common])
             clock.candidates('prepare-preserve-runtime', pinned)
             clock.mark('runtime-preservation-preflight-complete')
-            need(pinned.get('readiness') == 'prepared-not-applied' and pinned.get('review', {}).get('configurationChanged') is False,
-                 'REMOTE_RUNTIME_PRESERVATION_NOT_READY')
+            assert_prepared(pinned)
             return deploy_frontend(options, payload, manifest, receipt, candidate, next_path, input_path, installer, common,
                                    systemctl, service, node, inspect_complete, web_unit, journal, clock, begin_deployment, components)
         gateway = bool(runtime.get('automaticGateway'))
@@ -1198,5 +1233,7 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print(str(error) if isinstance(error, RuntimeError) and re.fullmatch('[A-Z][A-Z0-9_]+', str(error)) else 'REMOTE_DEPLOYMENT_FAILED', file=sys.stderr)
+        code = failure_code(error)
+        update_report('failure', code=code)
+        print(code, file=sys.stderr)
         raise SystemExit(1)

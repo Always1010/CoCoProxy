@@ -621,7 +621,7 @@ class RemoteDeploymentTests(unittest.TestCase):
                 'reason': 'synthetic-private-value', 'checks': [{'status': 'unknown', 'code': 'UPGRADE_CANDIDATE_READER_NOT_DECLARED'}]}}}}
         temporary, stack, private, _, events, router, args = self.scenario(preparation_report=report)
         with temporary, stack, contextlib.redirect_stderr(io.StringIO()) as errors:
-            with self.assertRaisesRegex(RuntimeError, 'REMOTE_UPGRADE_NOT_READY_OR_CONFIGURATION_CHANGED'):
+            with self.assertRaisesRegex(RuntimeError, '^UPGRADE_CANDIDATE_READER_NOT_DECLARED$'):
                 deploy.main_locked(args)
             diagnostic = json.loads(errors.getvalue())
             self.assertIn('UPGRADE_CANDIDATE_READER_NOT_DECLARED', diagnostic['codes'])
@@ -631,6 +631,14 @@ class RemoteDeploymentTests(unittest.TestCase):
             self.assertFalse(any(any(action in command for action in ['runtime-maintenance-pause', 'disable', 'stop', '--apply']) for command in events))
             self.assertFalse((private / 'remote-last.json').exists())
             self.assertTrue(router['enabled'])
+
+    def test_changed_configuration_has_its_own_failure_reason(self):
+        report = {'readiness': 'prepared-not-applied', 'review': {'configurationChanged': True},
+                  'compatibilityAssessment': {'assessments': {'network': {'status': 'unknown', 'code': 'UPGRADE_NETWORK_RESOURCES_NOT_ASSESSED'}}}}
+        with contextlib.redirect_stderr(io.StringIO()) as diagnostics:
+            with self.assertRaisesRegex(RuntimeError, '^REMOTE_UPGRADE_CONFIGURATION_CHANGED$'):
+                deploy.assert_prepared(report)
+        self.assertEqual(json.loads(diagnostics.getvalue())['codes'], [])
 
     def test_adapter_unknown_incompatible_or_missing_action_fails_before_any_maintenance_in_preview_and_apply(self):
         for preview in [False, True]:

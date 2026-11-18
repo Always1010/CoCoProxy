@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { DEFAULT_UPDATE_SETTINGS, parseUpdateSettings, nextUpdateWindow, addDays, scheduleChanged } from './policy.ts';
 import type { UpdateSettings } from './policy.ts';
 import { UpdateError } from './types.ts';
-import type { UpdateCommand, UpdateJob, UpdateView } from './types.ts';
+import type { UpdateCommand, UpdateJob, UpdateOutcome, UpdateView } from './types.ts';
 import type { VerifiedUpdate } from './release.ts';
+import { coordinatorError } from './reports.ts';
 
 export interface UpdateState {
   schemaVersion: 1; settings: UpdateSettings; revision: number; dueDate: string | null; scheduledAt: number | null;
@@ -19,7 +20,7 @@ export interface UpdaterHost {
   find(currentVersion: string, signal: AbortSignal): Promise<VerifiedUpdate | null>;
   download(update: VerifiedUpdate, id: string, signal: AbortSignal): Promise<string>;
   prepare(payload: string, update: VerifiedUpdate, original: InstalledUpdate, signal: AbortSignal): Promise<void>;
-  apply(payload: string, update: VerifiedUpdate, original: InstalledUpdate): Promise<'updated' | 'recovered' | 'manual-review-required'>;
+  apply(payload: string, update: VerifiedUpdate, original: InstalledUpdate): Promise<UpdateOutcome>;
   cleanup(id: string): Promise<void>;
   jitter?(): number;
 }
@@ -52,7 +53,9 @@ export function parseUpdateState(input: unknown): UpdateState {
 function errorCode(error: unknown): string {
   const value = error instanceof Error ? (error as Error & { code?: string }).code ?? error.message : '';
   if (/^(?:UPDATE|UPDATER)_[A-Z_]+$/.test(value)) return value.replace(/^UPDATE_/, 'UPDATER_');
-  return 'UPDATER_OPERATION_FAILED';
+  if (value === 'ENOSPC') return 'UPDATER_DISK_SPACE';
+  if (value === 'EACCES' || value === 'EPERM') return 'UPDATER_PERMISSION_DENIED';
+  return coordinatorError(value, 'UPDATER_OPERATION_FAILED');
 }
 
 export class UpdateEngine {
@@ -187,10 +190,14 @@ export class UpdateEngine {
       // Set boundary synchronously before yielding: disabling can no longer interrupt deployment recovery.
       task.installing = true; await phase('installing');
       const outcome = await this.host.apply(payload, update, original);
-      this.state.lastResult = outcome;
-      if (outcome !== 'updated') { this.state.blockedVersion = update.version; this.state.needsReview = outcome === 'manual-review-required'; }
-      else this.state.latestVersion = null;
-      await phase(outcome === 'updated' ? 'completed' : 'failed');
+      this.state.lastResult = outcome.status;
+      if (outcome.status === 'updated') this.state.latestVersion = null;
+      else {
+        this.state.job!.error = outcome.error;
+        if (outcome.status !== 'failed') this.state.blockedVersion = update.version;
+        this.state.needsReview = outcome.status === 'manual-review-required';
+      }
+      await phase(outcome.status === 'updated' ? 'completed' : 'failed');
     } catch (error) {
       this.state.job!.error = signal.aborted && !task.installing ? 'UPDATER_CANCELLED' : errorCode(error);
       this.state.job!.phase = signal.aborted && !task.installing ? 'cancelled' : 'failed';

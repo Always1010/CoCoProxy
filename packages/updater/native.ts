@@ -14,6 +14,7 @@ import type { InstalledUpdate, UpdaterHost, UpdateState } from './engine.ts';
 import { initialUpdateState, parseUpdateState } from './engine.ts';
 import { UpdateError } from './types.ts';
 import { UPDATER_APPLY_TIMEOUT_MS, UPDATER_PREVIEW_TIMEOUT_MS, UPDATER_RECOVERY_GRACE_MS } from './deadlines.ts';
+import { coordinatorError, readCoordinatorReports, type CoordinatorReport } from './reports.ts';
 
 export const UPDATER_STATE_DIRECTORY = '/var/lib/cocoproxy-updater';
 export const UPDATER_RUNTIME_DIRECTORY = '/run/cocoproxy-updater';
@@ -77,13 +78,18 @@ export async function loadUpdateState(): Promise<UpdateState> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return initialUpdateState(); throw error; }
 }
 
-/** All subprocess output remains private; callers receive only fixed result codes. */
-export async function runUpdaterTool(command: string, args: string[], options: { signal?: AbortSignal; timeout?: number; killAfterMs?: number } = {}): Promise<{ code: number; stdout: Buffer }> {
+/** Raw subprocess output stays private. Only the separate report pipe reaches update status. */
+export async function runUpdaterTool(command: string, args: string[], options: { signal?: AbortSignal; timeout?: number;
+  killAfterMs?: number; onReport?: (value: CoordinatorReport) => void } = {}): Promise<{ code: number; stdout: Buffer }> {
   await assertTrustedExecutable(command, evidence);
   options.signal?.throwIfAborted();
   return new Promise((resolveRun, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin',
-      LANG: 'C.UTF-8', NODE_NO_WARNINGS: '1' }, detached: process.platform !== 'win32' });
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe', options.onReport ? 'pipe' : 'ignore'],
+      env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8', NODE_NO_WARNINGS: '1',
+        ...(options.onReport ? { COCOPROXY_UPDATE_REPORT: '1' } : {}) }, detached: process.platform !== 'win32' });
+    const stdout = child.stdout!, stderr = child.stderr!;
+    const reports = child.stdio[3] as import('node:stream').Readable | null;
+    if (reports && options.onReport) readCoordinatorReports(reports, options.onReport);
     const chunks: Buffer[] = []; let size = 0, settled = false;
     let failure: Error | null = null;
     let escalation: ReturnType<typeof setTimeout> | undefined, finalWait: ReturnType<typeof setTimeout> | undefined;
@@ -95,7 +101,7 @@ export async function runUpdaterTool(command: string, args: string[], options: {
       if (settled) return; settled = true;
       clearTimeout(timer); clearTimeout(escalation); clearTimeout(finalWait);
       options.signal?.removeEventListener('abort', abort);
-      if (unconfirmed) { child.stdout.destroy(); child.stderr.destroy(); child.unref(); reject(new UpdateError('UPDATER_TOOL_STOP_UNCONFIRMED', 503)); }
+      if (unconfirmed) { stdout.destroy(); stderr.destroy(); reports?.destroy(); child.unref(); reject(new UpdateError('UPDATER_TOOL_STOP_UNCONFIRMED', 503)); }
       else if (failure) reject(failure);
       else resolveRun({ code: code ?? -1, stdout: Buffer.concat(chunks) });
     };
@@ -110,16 +116,16 @@ export async function runUpdaterTool(command: string, args: string[], options: {
       }, options.killAfterMs ?? 5000);
     };
     const abort = () => stop(Object.assign(new Error('UPDATER_CANCELLED'), { name: 'AbortError', code: 'ABORT_ERR' }));
-    const timer = setTimeout(() => stop(new UpdateError('UPDATER_TOOL_LIMIT', 503)), options.timeout ?? 300_000);
+    const timer = setTimeout(() => stop(new UpdateError('UPDATER_TOOL_TIMEOUT', 503)), options.timeout ?? 300_000);
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) abort();
-    child.stdout.on('data', (bytes: Buffer) => {
+    stdout.on('data', (bytes: Buffer) => {
       size += bytes.length;
-      if (size > 2 * 1024 * 1024) stop(new UpdateError('UPDATER_TOOL_LIMIT', 503));
+      if (size > 2 * 1024 * 1024) stop(new UpdateError('UPDATER_TOOL_OUTPUT_LIMIT', 503));
       else chunks.push(bytes);
     });
     // Native diagnostics may contain operational details; never relay them to the UI or journal summary.
-    child.stderr.on('data', () => {});
+    stderr.resume();
     child.once('error', error => { if (!child.pid) { failure = error; finish(null); } else stop(error); });
     // Descendants holding inherited output pipes must not keep `close` pending.
     child.once('exit', killGroup);
@@ -173,10 +179,18 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
     return current;
   }
   async function coordinator(payload: string, update: VerifiedUpdate, original: InstalledUpdate, preview: boolean, signal?: AbortSignal) {
-    return runUpdaterTool('/usr/bin/python3', [payload + '/source/scripts/remote-deploy.py', '--payload', payload,
-      '--manifest-sha256', update.manifestSha256, '--expected-manifest-sha256', original.manifestSha256,
-      ...(preview ? ['--preview'] : [])], { signal, timeout: preview ? UPDATER_PREVIEW_TIMEOUT_MS : UPDATER_APPLY_TIMEOUT_MS,
-      ...(preview ? {} : { killAfterMs: UPDATER_RECOVERY_GRACE_MS }) });
+    let failure: string | null = null;
+    try {
+      const result = await runUpdaterTool('/usr/bin/python3', [payload + '/source/scripts/remote-deploy.py', '--payload', payload,
+        '--manifest-sha256', update.manifestSha256, '--expected-manifest-sha256', original.manifestSha256,
+        ...(preview ? ['--preview'] : [])], { signal, timeout: preview ? UPDATER_PREVIEW_TIMEOUT_MS : UPDATER_APPLY_TIMEOUT_MS,
+        ...(preview ? {} : { killAfterMs: UPDATER_RECOVERY_GRACE_MS }), onReport: value => { failure = value.code; } });
+      return { code: result.code, failure, timeout: false };
+    } catch (error) {
+      if (!(error instanceof UpdateError) || error.code !== 'UPDATER_TOOL_TIMEOUT') throw error;
+      // The coordinator may have restored the old installation during its TERM grace period.
+      return { code: -1, failure: failure === 'REMOTE_DEPLOYMENT_INTERRUPTED' ? null : failure, timeout: true };
+    }
   }
   return {
     now: Date.now,
@@ -204,31 +218,34 @@ export function createNativeUpdaterHost(settings: UpdaterSettings): UpdaterHost 
       const input = await trustedJSON(DEPLOYMENT, 128 * 1024);
       need(input.runtime?.nodePath === settings.nodePath, 'UPDATER_EXECUTION_SETTINGS_INVALID');
       const preview = await coordinator(payload, update, original, true, signal);
-      need(preview.code === 0, 'UPDATER_PREFLIGHT_FAILED');
+      need(preview.code === 0, coordinatorError(preview.failure, preview.timeout ? 'UPDATER_PREPARATION_TIMEOUT' : 'UPDATER_PREFLIGHT_FAILED'));
       await stable(original);
     },
     apply: async (payload, update, original) => {
       await stable(original);
-      const result = await coordinator(payload, update, original, false).catch(error => {
-        // A timed-out coordinator may have completed its independent recovery budget.
-        if (error instanceof UpdateError && error.code === 'UPDATER_TOOL_LIMIT') return { code: -1, stdout: Buffer.alloc(0) };
-        throw error;
-      });
+      const previousJournal = await trustedRead(JOURNAL, 512 * 1024).catch(() => null);
+      const result = await coordinator(payload, update, original, false);
       if (result.code === 0) {
         const current = await installed();
         need(current.manifestSha256 === update.manifestSha256 && current.version === update.version, 'UPDATER_VERSION_NOT_RUNNING');
         const journal = await trustedJSON(JOURNAL, 512 * 1024);
-        need(journal.status === 'complete', 'UPDATER_POSTCHECK_FAILED');
-        return 'updated';
+        need(journal.status === 'complete' && journal.manifestSha256 === update.manifestSha256, 'UPDATER_POSTCHECK_FAILED');
+        return { status: 'updated' };
       }
-      const journal = await trustedJSON(JOURNAL, 512 * 1024).catch(() => null);
+      const journal = await trustedRead(JOURNAL, 512 * 1024).then(bytes =>
+        previousJournal?.equals(bytes) ? null : JSON.parse(bytes.toString('utf8'))).catch(() => null);
+      const attempted = journal?.manifestSha256 === update.manifestSha256 ? journal : null;
+      const recordedFailure = attempted?.failure?.code;
+      const error = coordinatorError(result.failure ?? (result.timeout && recordedFailure === 'REMOTE_DEPLOYMENT_INTERRUPTED' ? null : recordedFailure),
+        result.timeout ? 'UPDATER_DEPLOYMENT_TIMEOUT' : 'UPDATER_INSTALL_FAILED');
       const current = await installed().catch(() => null);
-      if (journal?.status === 'recovered' && journal.manifestSha256 === update.manifestSha256 && current?.manifestSha256 === original.manifestSha256) {
+      if (attempted?.status === 'recovered' && current?.manifestSha256 === original.manifestSha256) {
         const inspected = await runUpdaterTool(settings.nodePath, ['--experimental-strip-types', settings.sourceDirectory + '/apps/deployment/main.ts',
-          '--operation', 'inspect'], { timeout: 30_000 });
-        if (inspected.code === 0 && verifiedUpdateInstallation(JSON.parse(inspected.stdout.toString('utf8')), original.manifestSha256)) return 'recovered';
+          '--operation', 'inspect'], { timeout: 30_000 }).then(report =>
+          report.code === 0 && verifiedUpdateInstallation(JSON.parse(report.stdout.toString('utf8')), original.manifestSha256)).catch(() => false);
+        if (inspected) return { status: attempted.recovery?.status === 'not-needed' ? 'failed' : 'recovered', error };
       }
-      return 'manual-review-required';
+      return { status: 'manual-review-required', error };
     },
     cleanup: id => rm(join(UPDATER_STATE_DIRECTORY, 'download-' + id), { recursive: true, force: true }),
   };

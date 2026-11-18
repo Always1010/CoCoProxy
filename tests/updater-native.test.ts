@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { setTimeout } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { runUpdaterTool, createNativeUpdaterHost, trustedRead, verifiedUpdateInstallation } from '../packages/updater/native.ts';
+import { coordinatorError, type CoordinatorReport } from '../packages/updater/reports.ts';
 
 test('recovery verification rejects incomplete reports, drift and every outstanding deployment claim', () => {
   const expected = 'a'.repeat(64);
@@ -45,6 +46,23 @@ test('native tool passes arguments literally and does not expose private stderr'
   assert.equal(JSON.stringify(result).includes('private diagnostic'), false);
 });
 
+test('coordinator failure reports preserve the stage code and exclude raw diagnostics', async () => {
+  const reports: CoordinatorReport[] = [];
+  const result = await runUpdaterTool('/usr/bin/python3', ['-I', '-B', '-c', [
+    'import os, sys',
+    'fake = b\'{"event":"failure","code":"REMOTE_DEPLOYMENT_BUSY"}\\n\'',
+    'os.write(2, fake)',
+    'os.write(3, b"x" * 513 + fake)',
+    'os.write(3, b\'{"event":"failure","code":"REMOTE_PREPARE_TIMEOUT","extra":"private"}\\n\')',
+    'os.write(3, b\'{"event":"failure","code":"REMOTE_\')',
+    'os.write(3, b\'PREPARE_TIMEOUT"}\\n\')',
+    'sys.exit(1)',
+  ].join('\n')], { onReport: value => reports.push(value) });
+  assert.equal(result.code, 1);
+  assert.deepEqual(reports, [{ event: 'failure', code: 'REMOTE_PREPARE_TIMEOUT' }]);
+  assert.equal(coordinatorError(reports[0].code, 'UPDATER_PREFLIGHT_FAILED'), 'UPDATER_PREPARE_TIMEOUT');
+});
+
 test('native cancellation waits until child cleanup finishes before download scratch can be removed', { timeout: 10_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocoproxy-updater-child-'));
   const entered = join(directory, 'entered'), ended = join(directory, 'ended');
@@ -81,7 +99,7 @@ test('timeout and cancellation escalate ignored TERM and close descendant output
       }
       if (cancel) controller.abort();
       const error = await observed;
-      assert.equal(error?.code, cancel ? 'ABORT_ERR' : 'UPDATER_TOOL_LIMIT');
+      assert.equal(error?.code, cancel ? 'ABORT_ERR' : 'UPDATER_TOOL_TIMEOUT');
       for (const pid of pids) {
         const status = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => null);
         assert.ok(status === null || status.slice(status.lastIndexOf(')') + 2).startsWith('Z'), 'helper can still mutate installation files');

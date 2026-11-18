@@ -16,7 +16,7 @@ function harness(overrides: Partial<UpdaterHost> = {}, input?: UpdateState) {
   const host: UpdaterHost = { now: () => now, jitter: () => 0, save: async state => { saved = structuredClone(state); },
     installed: async () => ({ ...original }), configured: async () => true,
     find: async () => { calls.find++; return candidate; }, download: async () => { calls.download++; return '/synthetic/payload'; },
-    prepare: async () => { calls.prepare++; }, apply: async () => { calls.apply++; return 'updated'; },
+    prepare: async () => { calls.prepare++; }, apply: async () => { calls.apply++; return { status: 'updated' }; },
     cleanup: async () => { calls.cleanup++; }, ...overrides };
   const state = input ?? { ...initialUpdateState(), settings: { ...settings } };
   const engine = new UpdateEngine(host, state);
@@ -53,7 +53,7 @@ test('disabling automation cancels preparation before maintenance, but lets inst
     const entered = deferred(), resume = deferred(); let seenSignal: AbortSignal | undefined;
     const h = harness(boundary === 'prepare' ? { prepare: async (_payload, _update, _original, signal) => {
       seenSignal = signal; entered.resolve(); await resume.promise;
-    } } : { apply: async () => { entered.resolve(); await resume.promise; return 'updated'; } });
+    } } : { apply: async () => { entered.resolve(); await resume.promise; return { status: 'updated' }; } });
     await h.engine.initialize(); await h.engine.tick(); await entered.promise;
     assert.equal(h.engine.installing, boundary === 'apply');
     await h.engine.handle({ action: 'configure', expectedRevision: 0, settings: { ...settings, enabled: false } });
@@ -75,9 +75,10 @@ test('installed manifest changes during preparation prevent apply', async () => 
 
 test('recovered target is blocked on future automatic attempts and interrupted installation requires review', async () => {
   let applies = 0;
-  const h = harness({ apply: async () => { applies++; return 'recovered'; } });
+  const h = harness({ apply: async () => { applies++; return { status: 'recovered', error: 'UPDATER_CORE_NOT_READY' }; } });
   await h.engine.initialize(); await h.engine.tick(); await h.engine.idle();
   assert.equal(h.snapshot().blockedVersion, candidate.version); assert.equal((await h.engine.view()).lastResult, 'recovered');
+  assert.equal(h.snapshot().job?.error, 'UPDATER_CORE_NOT_READY');
   h.advance('2026-11-14T03:10:00Z'); await h.engine.tick(); await h.engine.idle();
   assert.equal(applies, 1); assert.equal((await h.engine.view()).lastResult, 'manual-update-required');
   const state = { ...initialUpdateState(), settings: { ...settings }, job: { id: randomUUID(), phase: 'installing', version: candidate.version, error: null } };
@@ -85,6 +86,15 @@ test('recovered target is blocked on future automatic attempts and interrupted i
   assert.equal(interrupted.calls.find, 0); assert.equal((await interrupted.engine.view()).unavailableReason, 'UPDATER_REVIEW_REQUIRED');
   assert.equal((await interrupted.engine.view()).nextCheckAt, null);
   await assert.rejects(interrupted.engine.handle({ action: 'check' }), (error: any) => error.code === 'UPDATER_REVIEW_REQUIRED');
+});
+
+test('preflight timeout records the real reason without entering installation or blocking a retry', async () => {
+  const h = harness({ prepare: async () => { throw new Error('UPDATER_PREPARE_TIMEOUT'); } });
+  await h.engine.handle({ action: 'install', expectedVersion: candidate.version });
+  await h.engine.idle();
+  assert.equal(h.snapshot().job?.error, 'UPDATER_PREPARE_TIMEOUT');
+  assert.equal(h.snapshot().needsReview, false);
+  assert.equal(h.calls.apply, 0);
 });
 
 test('unconfirmed installer termination retains scratch and blocks further installation without staying busy', async () => {

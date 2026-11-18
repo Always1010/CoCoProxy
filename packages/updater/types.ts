@@ -13,6 +13,9 @@ export interface UpdateJob {
   error: string | null;
 }
 
+export type UpdateOutcome = { status: 'updated' }
+  | { status: 'failed' | 'recovered' | 'manual-review-required'; error: string };
+
 /** Browser-safe summary. No paths, credentials or native error messages. */
 export interface UpdateView {
   available: boolean;

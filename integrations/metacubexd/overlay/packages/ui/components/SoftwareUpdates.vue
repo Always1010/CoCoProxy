@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { IconCheck, IconDownload, IconRefresh, IconRestore } from '@tabler/icons-vue'
-import { cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
+import { CoCoProxyError, cocoproxyErrorMessage } from '~/composables/useCoCoProxy'
 
 type Settings = { schemaVersion: 1; enabled: boolean; intervalDays: number; timeZone: string; windowStart: string; windowEnd: string }
 type View = { available: boolean; configured: boolean; unavailableReason: string | null; settings: Settings; revision: number; currentVersion: string | null; latestVersion: string | null; nextCheckAt: number | null; lastCheckedAt: number | null; lastResult: string | null; job: { id: string; phase: string; version: string | null; error: string | null } | null }
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const api = useCoCoProxy()
 const view = shallowRef<View | null>(null)
 const draft = ref<Settings | null>(null)
@@ -57,6 +57,10 @@ async function install() {
   panel.value?.close()
 }
 function date(value: number | null | undefined) { return value ? new Date(value).toLocaleString(locale.value) : t('coco.pzUnknown') }
+function taskError(code: string) {
+  const key = `coco.updatesErrors.${code}`
+  return te(key) ? t(key) : cocoproxyErrorMessage(new CoCoProxyError(code), t)
+}
 function visible() { if (document.visibilityState === 'visible') void load() }
 async function poll() {
   if (document.visibilityState === 'visible') await load()
@@ -84,7 +88,8 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); document.removeEve
         <dt>{{ t('coco.updatesNextCheck') }}</dt><dd>{{ date(view.nextCheckAt) }}</dd>
       </dl>
       <p v-if="view.lastResult" class="mt-2 break-words text-sm">{{ t('coco.updatesResult') }}: {{ t(`coco.updatesResults.${view.lastResult}`, view.lastResult) }}</p>
-      <p v-if="view.job" class="mt-2 break-words text-sm" role="status">{{ t('coco.updatesJob') }}: {{ t(`coco.updatesPhases.${view.job.phase}`, view.job.phase) }} {{ view.job.version }}<span v-if="view.job.error" class="text-error"> — {{ t('coco.updatesTaskError') }} ({{ view.job.error }})</span></p>
+      <p v-if="view.job" class="mt-2 break-words text-sm" role="status">{{ t('coco.updatesJob') }}: {{ t(`coco.updatesPhases.${view.job.phase}`, view.job.phase) }} {{ view.job.version }}</p>
+      <p v-if="view.job?.error" class="mt-1 break-words text-sm text-error" role="alert">{{ taskError(view.job.error) }} <span class="text-xs">({{ view.job.error }})</span></p>
       <form v-if="draft" class="mt-4 space-y-3" @submit.prevent="save">
         <label class="flex min-h-11 items-center justify-between gap-3 text-sm"><span>{{ t('coco.updatesAutomatic') }}</span><input v-model="draft.enabled" type="checkbox" role="switch" class="toggle toggle-primary" :disabled="busy || !view.available" /></label>
         <div class="grid gap-3 sm:grid-cols-2">
