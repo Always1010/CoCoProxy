@@ -167,12 +167,11 @@ watch(
           />
           <!-- Theme/Lang switchers (desktop only) -->
           <div
-            class="mb-2 hidden flex-row items-center gap-1 lg:flex"
+            class="hidden flex-row items-center gap-1 lg:flex"
           >
             <LangSwitcher />
             <ThemeSwitcher />
           </div>
-          <Versions :collapsed="false" />
         </div>
       </div>
     </div>

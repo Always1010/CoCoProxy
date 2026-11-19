@@ -17,6 +17,6 @@ export default defineNuxtRouteMiddleware(async (to) => {
     return navigateTo('/overview', { replace: true })
   if (to.path === '/profiles' || /^\/profiles\/[^/]+\/edit\/?$/.test(to.path))
     return navigateTo('/subscriptions', { replace: true })
-  if (['/config', '/control'].includes(to.path))
+  if (to.path === '/control')
     return navigateTo('/cocoproxy', { replace: true })
 })

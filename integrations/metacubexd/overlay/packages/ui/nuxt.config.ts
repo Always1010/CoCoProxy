@@ -144,6 +144,7 @@ export default defineNuxtConfig({
     {
       path: '~/components',
       pathPrefix: false,
+      ignore: ['Versions.vue'],
     },
   ],
 
